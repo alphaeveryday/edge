@@ -2,6 +2,7 @@
 from copy import deepcopy
 from hashlib import sha256
 import json
+import warnings
 
 
 def material_key(material):
@@ -25,6 +26,15 @@ class ResearchState:
                 or set(previous['materials']) & set(previous['removed'])):
             raise ValueError('Invalid research state; do not reset an existing analysis')
         self.value = deepcopy(previous)
+        order = self.value.setdefault('material_order', sorted(self.value['materials']))
+        if (not isinstance(order, list) or any(not isinstance(key, str) for key in order)
+                or len(order) != len(set(order))):
+            raise ValueError('Invalid research material order')
+        if set(order) != set(self.value['materials']):
+            # Older writers retain this optional hint but do not update it; originals remain authoritative.
+            warnings.warn('Research material order was stale; rebuilt from active originals', RuntimeWarning)
+            self.value['material_order'] = ([key for key in order if key in self.value['materials']]
+                                           + sorted(set(self.value['materials']) - set(order)))
         self._by_key = {key: identity for identity, key in self.value['material_keys'].items()}
 
     def add(self, identity, material):
@@ -45,6 +55,8 @@ class ResearchState:
             return
         self.value['material_keys'][identity] = fingerprint
         self._by_key[fingerprint] = identity
+        if identity not in self.value['materials']:
+            self.value['material_order'].append(identity)
         self.value['materials'][identity] = deepcopy(material)
 
     def remove(self, changes):
@@ -68,6 +80,7 @@ class ResearchState:
                 raise ValueError('Remove an active material with a reason and an active replacement, if any')
         for change in changes:
             self.value['materials'].pop(change['id'])
+            self.value['material_order'].remove(change['id'])
             self.value['removed'][change['id']] = {k: deepcopy(v) for k, v in change.items() if k != 'id'}
 
     def snapshot(self):

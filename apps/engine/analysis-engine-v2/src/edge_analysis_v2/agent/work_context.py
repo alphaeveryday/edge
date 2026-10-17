@@ -22,7 +22,14 @@ class WorkContext:
         self.tool_results = {}
         self.consulted = []
         self.removals = []
-        self.initial = {k: deepcopy(initial[k]) for k in ('context', 'holdings', 'web_research', 'source_notes', 'news_scope', 'news_discovery', 'news_research', 'source_gaps', 'history_preview', 'current_flow', 'previous_analysis', 'previous_items', 'research_state') if k in initial}
+        self.initial = {k: deepcopy(initial[k]) for k in ('research_state', 'context', 'holdings', 'web_research', 'source_notes', 'news_scope', 'news_discovery', 'news_research', 'source_gaps', 'history_preview', 'current_flow', 'previous_analysis', 'previous_items') if k in initial}
+        if 'research_state' in self.initial:
+            state = self.initial['research_state']
+            # JSONB changes object key order. Keep old originals first and append new ones across revisions.
+            materials = state['materials']
+            order = state.get('material_order', sorted(materials))
+            self.initial['research_state'] = {'materials': {key: self._stable(materials[key]) for key in order}}
+            self.initial['research_state'].update({key: self._stable(value) for key, value in sorted(state.items()) if key != 'materials'})
         self.initial['available_sources'] = {k: self._describe(v) for k, v in initial.items()}
         self.initial['retrieval'] = 'Use workspace.read_source with source from available_sources; source is the only required field. Use a returned next_offset to read another page. These are exploration data, not final evidence IDs.'
 
@@ -31,6 +38,14 @@ class WorkContext:
         state.remove(self.removals + changes)
         self.removals.extend(deepcopy(changes))
         return {'removed': self.removals, 'active_materials': len(state.snapshot()['materials'])}
+
+    @staticmethod
+    def _stable(value):
+        if isinstance(value, dict):
+            return {key: WorkContext._stable(value[key]) for key in sorted(value)}
+        if isinstance(value, list):
+            return [WorkContext._stable(item) for item in value]
+        return value
 
     def tool_response(self, result):
         text = json.dumps(result, ensure_ascii=False)

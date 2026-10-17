@@ -5,6 +5,57 @@ import json
 from edge_analysis_v2.analysis.research_state import ResearchState
 
 
+def test_material_order_survives_jsonb_sorting_and_appends_only_new_active_originals():
+    state = ResearchState()
+    state.add('z', {'text': 'first original'})
+    state.add('m', {'text': 'second original'})
+    saved = json.loads(json.dumps(state.snapshot(), sort_keys=True))
+    restored = ResearchState(saved)
+    restored.add('a', {'text': 'new original'})
+    restored.add('duplicate', {'text': 'first original'})
+    assert restored.snapshot()['material_order'] == ['z', 'm', 'a']
+    restored.remove([{'id': 'm', 'reason': 'superseded'}])
+    restored.add('reread', {'text': 'second original'})
+    assert restored.snapshot()['material_order'] == ['z', 'a']
+    assert saved['materials'] == {'m': {'text': 'second original'}, 'z': {'text': 'first original'}}
+
+
+def test_legacy_state_without_order_keeps_every_original_in_a_deterministic_order():
+    state = ResearchState()
+    state.add('z', {'text': 'last'})
+    state.add('a', {'text': 'first'})
+    legacy = state.snapshot()
+    legacy.pop('material_order', None)
+    migrated = ResearchState(legacy).snapshot()
+    assert migrated['material_order'] == ['a', 'z']
+    assert migrated['materials'] == legacy['materials']
+
+
+@pytest.mark.parametrize('order', [['a', 'a'], [None], 'a'])
+def test_corrupt_material_order_is_reported_instead_of_hiding_originals(order):
+    state = ResearchState()
+    state.add('a', {'text': 'original'})
+    value = state.snapshot() | {'material_order': order}
+    with pytest.raises(ValueError, match='order'):
+        ResearchState(value)
+
+
+def test_old_writer_rollback_repairs_stale_order_without_resurrecting_or_losing_originals():
+    state = ResearchState()
+    state.add('z', {'text': 'keep'})
+    state.add('m', {'text': 'retire'})
+    saved = state.snapshot()
+    # A previous version edits materials but preserves the unknown order field as-is.
+    saved['materials'].pop('m')
+    saved['removed']['m'] = {'reason': 'old writer explicitly retired'}
+    saved['materials']['a'] = {'text': 'old writer added'}
+    with pytest.warns(RuntimeWarning, match='order was stale'):
+        restored = ResearchState(saved).snapshot()
+    assert restored['material_order'] == ['z', 'a']
+    assert restored['materials'] == saved['materials']
+    assert restored['removed'] == saved['removed']
+
+
 def test_omission_keeps_initial_and_revision_material_without_mutating_parent():
     first = ResearchState()
     first.add('a', {'text': 'initial original'})
