@@ -77,7 +77,7 @@ def test_contract_audit_reads_committed_assembly_and_detects_stored_regression(r
 def run_context(tmp_path):
     dsn=os.environ['V2_FACTOR_TEST_DSN']
     config=conninfo_to_dict(dsn)
-    assert config.get('host')=='127.0.0.1' and config.get('port')=='55440' and config.get('dbname')=='analysis_v2'
+    assert config.get('host')=='127.0.0.1' and config.get('port') in {'55440', '15449'} and config.get('dbname')=='analysis_v2'
     identities=[]
     def factory():
         return psycopg.connect(dsn,autocommit=True)
