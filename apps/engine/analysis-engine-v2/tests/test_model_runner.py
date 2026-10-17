@@ -97,6 +97,7 @@ def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_p
         # A short explanation or update must not inherit the full outlook drafting quota.
         assert '논점은 여섯 개 이상' not in task
         assert '네 단락에서 여섯 단락' not in task
+        assert '6개 이상의 논점' not in task
         assert 'analysis-report-writing' not in selected_skills
     else:
         assert '논점은 여섯 개 이상' in task
