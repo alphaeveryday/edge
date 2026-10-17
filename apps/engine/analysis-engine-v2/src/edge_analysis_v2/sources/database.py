@@ -114,6 +114,7 @@ def load_source(connection, ticker, analysis_at):
     targets = [etf['instrument_id']]+[source_ids[r['instrument_id']] for r in members]
     targets += [actors[r['instrument_id']] for r in members if actors.get(r['instrument_id'])]
     issuers = sorted({actors[r['instrument_id']] for r in members if actors.get(r['instrument_id'])})
+    data['source_issuer_ids'] = actors
     data.update(load_news(connection, at, targets, issuers))
     return data
 
@@ -266,7 +267,8 @@ class DatabaseTools(FixtureTools):
             page = {'cursor': {'type': 'string'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 50}}
             self._register('list_events', '사건 목록부터 조사합니다. 저장된 스레드만 묶고 반복 보도는 수로 표시합니다. 날짜는 새 사실의 확보시각(UTC 날짜)입니다. next_cursor로 다음 사건을 읽습니다. 필요한 사건은 get_event_timeline으로 확인하세요.',
                 {'start_date': {'type': 'string'}, 'end_date': {'type': 'string'},
-                 'event_types': {'type': 'array', 'items': {'type': 'string'}}, **page},
+                 'event_types': {'type': 'array', 'items': {'type': 'string'}},
+                 'instrument_ids': {'type': 'array', 'items': {'type': 'string'}, 'description': 'ETF 또는 구성종목 티커. 생략하면 전체 관련 사건.'}, **page},
                 self.news_events.listing, '', ['source_event', 'event_thread_link'], required=[])
             self._register('get_event_timeline', '선택한 event_key의 최초 사실·후속 단계·정정을 읽고 기록된 반복만 접습니다. news_ids로 get_issue_evidence를 읽고 최종 근거를 확정하세요.',
                 {'event_key': {'type': 'string'}, **page}, self.news_events.timeline, '', ['source_event', 'event_thread_link', 'document'], required=['event_key'])

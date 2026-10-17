@@ -48,7 +48,7 @@ class NewsEvents:
         for row in events:
             if row['status'] == 'ACTIVE':
                 self.groups.setdefault(event_key(row), []).append(row)
-        linked = {n for row in events for n in row['news_ids']}
+        linked = {n for row in events if row['status'] == 'ACTIVE' for n in row['news_ids']}
         self.unlinked = self.articles.keys() - linked
 
     def public_scope(self):
@@ -91,7 +91,7 @@ class NewsEvents:
                 'remaining_count': len(rows) - end, 'next_cursor': next_cursor,
                 'scope': self.public_scope(), **metadata}
 
-    def listing(self, start_date=None, end_date=None, event_types=None, cursor=None, limit=20):
+    def listing(self, start_date=None, end_date=None, event_types=None, instrument_ids=None, cursor=None, limit=20):
         try:
             start = date.fromisoformat(start_date) if start_date else None
             end = date.fromisoformat(end_date) if end_date else None
@@ -101,22 +101,36 @@ class NewsEvents:
             raise ToolInputError('Use ordered YYYY-MM-DD start_date/end_date.') from None
         if event_types is not None and (not isinstance(event_types, list) or not all(isinstance(t, str) for t in event_types)):
             raise ToolInputError('event_types must be an array of event type codes')
+        sources = self.fixture.get('source_instrument_ids', {})
+        issuers = self.fixture.get('source_issuer_ids', {})
+        mapped = {symbol: {identity, issuers.get(symbol)} - {None} for symbol, identity in sources.items()}
+        if instrument_ids is not None:
+            if not sources or 'source_issuer_ids' not in self.fixture:
+                raise ToolInputError('Instrument filter unavailable in this snapshot: issuer mapping was not captured.')
+            if not isinstance(instrument_ids, list) or not instrument_ids or any(not isinstance(s, str) or s not in mapped for s in instrument_ids):
+                raise ToolInputError('instrument_ids must be a nonempty ticker array. Allowed: ' + ', '.join(sorted(mapped)))
         rows = []
         for key, reports in self.groups.items():
+            participants = {identity for row in reports for identity in row.get('related_entity_ids', row.get('issuer_ids', []))}
+            symbols = sorted(symbol for symbol, identities in mapped.items() if identities & participants)
+            if instrument_ids is not None and not set(instrument_ids) & set(symbols):
+                continue
             changed = [r for r in reports if r.get('novelty') != 'DUPLICATE_REBROADCAST'] or reports
             latest = max(changed, key=lambda r: (instant(r['available_at']), r['event_id']))
             day = instant(latest['available_at']).date()
             if start and day < start or end and day > end or event_types is not None and latest['event_type'] not in event_types:
                 continue
-            ids = list(dict.fromkeys(n for r in changed for n in r['news_ids']))
+            ids = latest['news_ids']
             title = self.articles[ids[0]]['title'] if ids else latest['event_type']
             rows.append({'event_key': key, 'event_type': latest['event_type'], 'title': title[:180],
+                         'title_source': 'latest_event_article' if ids else 'event_type_no_visible_article',
+                         'related_instrument_ids': symbols[:10], 'related_instrument_count': len(symbols),
                          'last_change_at': latest['available_at'], 'stage': latest.get('stage'),
                          'report_count': len(reports), 'novelty_counts': dict(Counter(r.get('novelty', 'UNKNOWN') for r in reports)),
                          'news_ids': ids[:2]})
         rows.sort(key=lambda r: r['event_key'])
         rows.sort(key=lambda r: instant(r['last_change_at']), reverse=True)
-        return self.page(rows, ['events', start_date, end_date, event_types], cursor, limit,
+        return self.page(rows, ['events', start_date, end_date, event_types, instrument_ids], cursor, limit,
                          unlinked_article_count=len(self.unlinked),
                          unlinked_by_publication_month=dict(sorted(Counter(self.articles[n]['published_at'][:7] for n in self.unlinked).items())),
                          date_filter='UTC date of latest non-rebroadcast availability; unknown novelty retained')
@@ -126,13 +140,15 @@ class NewsEvents:
             raise ToolInputError('Unknown event_key. Select one from list_events.')
         reports = sorted(self.groups[event_key], key=lambda r: (instant(r['available_at']), r['event_id']))
         rows = []
+        folded = 0
         for row in reports:
-            if row.get('novelty') == 'DUPLICATE_REBROADCAST' and rows:
-                rows[-1]['repeated_by'] += 1
+            if row.get('novelty') == 'DUPLICATE_REBROADCAST':
+                folded += 1
                 continue
-            rows.append({k: row.get(k) for k in ('event_id', 'event_type', 'event_date', 'stage', 'available_at', 'novelty', 'unknown_reason', 'news_ids')} | {'repeated_by': 0})
+            rows.append({k: row.get(k) for k in ('event_id', 'event_type', 'event_date', 'stage', 'available_at', 'novelty', 'unknown_reason', 'news_ids')})
         return self.page(rows, ['timeline', event_key], cursor, limit, event_key=event_key,
-                         interpretation='Only recorded rebroadcasts are folded; stages are reported, not independently verified.')
+                         folded_rebroadcast_count=folded,
+                         interpretation='Recorded rebroadcasts counted for the thread, not attributed to a particular fact. Stages are reported, not independently verified.')
 
     def search_articles(self, query, offset, unlinked_only=False):
         if type(unlinked_only) is not bool:
@@ -165,7 +181,7 @@ class NewsEvents:
                 rows.append({'event_id': identity, 'event_key': key, 'change': 'rejected' if row['status'] == 'REJECTED' else 'status_changed'})
             if any(row.get(k) != previous.get(k) for k in ('thread_id', 'novelty', 'unknown_reason')):
                 rows.append({'event_id': identity, 'event_key': key, 'change': 'link_changed', 'previous_event_key': event_key(previous)})
-            if any(row.get(k) != previous.get(k) for k in ('stage', 'event_type', 'event_date', 'news_ids')):
+            if any(row.get(k) != previous.get(k) for k in ('stage', 'event_type', 'event_date', 'news_ids', 'issuer_ids', 'related_entity_ids')):
                 rows.append({'event_id': identity, 'event_key': key, 'change': 'facts_or_evidence_changed', 'news_ids': row['news_ids']})
         for identity in old.keys() - self.events.keys():
             rows.append({'event_id': identity, 'event_key': event_key(old[identity]), 'change': 'scope_exit_or_missing',
@@ -178,11 +194,19 @@ class NewsEvents:
                     rows.append({'news_id': identity, 'change': 'new_unlinked_article',
                                  'published_at': document['published_at'], 'available_at': document['available_at'],
                                  'late_acquisition': instant(document['published_at']) <= instant(self.previous['analysis_at']) < instant(document['available_at'])})
-            elif document['content_hash'] != docs[identity]['content_hash']:
+            elif document != docs[identity]:
                 rows.append({'news_id': identity, 'change': 'document_changed'})
-        rows.sort(key=lambda r: (r.get('event_id', ''), r.get('news_id', ''), r['change']))
+        for identity in docs.keys() - self.articles.keys():
+            rows.append({'news_id': identity, 'change': 'document_scope_exit_or_missing',
+                         'meaning': 'Outside current window/universe or missing; not proof of deletion or retraction.'})
+        priority = {'correction': 0, 'rejected': 1, 'status_changed': 1, 'link_changed': 2,
+                    'facts_or_evidence_changed': 3, 'document_changed': 3, 'new_fact': 4,
+                    'new_event': 5, 'scope_exit_or_missing': 6, 'document_scope_exit_or_missing': 7,
+                    'new_unlinked_article': 8, 'repeat_only': 9}
+        rows.sort(key=lambda r: (priority[r['change']], r.get('event_id', ''), r.get('news_id', '')))
         scope_keys = ('target_ids', 'issuer_ids', 'lookback_days', 'universe')
         return self.page(rows, ['changes', self.previous['snapshot_id']], cursor, limit, baseline_status='ready',
+                         change_counts=dict(Counter(row['change'] for row in rows)),
                          previous_snapshot_id=self.previous['snapshot_id'],
                          scope_changed=any(self.previous['scope'].get(k) != self.snapshot['scope'].get(k) for k in scope_keys),
                          window_shifted=self.previous['scope'].get('start_at') != self.snapshot['scope'].get('start_at'))

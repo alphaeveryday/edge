@@ -16,12 +16,14 @@ def load_news(connection, at, targets, issuers):
         s.event_date,s.lifecycle_stage AS stage,s.event_status AS status,s.available_at,
         l.thread_id,l.novelty_status AS novelty,l.evaluated_at,l.unknown_reason,
         ARRAY(SELECT DISTINCT a.entity_id FROM event_argument a
-              WHERE a.source_event_id=s.source_event_id AND a.entity_id=ANY(%s) ORDER BY a.entity_id) AS issuer_ids
+              WHERE a.source_event_id=s.source_event_id AND a.entity_id=ANY(%s) ORDER BY a.entity_id) AS issuer_ids,
+        ARRAY(SELECT DISTINCT a.entity_id FROM event_argument a
+              WHERE a.source_event_id=s.source_event_id AND a.entity_id=ANY(%s) ORDER BY a.entity_id) AS related_entity_ids
         FROM source_event s LEFT JOIN event_thread_link l
           ON l.source_event_id=s.source_event_id AND l.source_class='NEWS' AND l.evaluated_at<=%s
         WHERE s.source_class='NEWS' AND s.available_at BETWEEN %s AND %s
           AND EXISTS(SELECT 1 FROM event_argument a WHERE a.source_event_id=s.source_event_id AND a.entity_id=ANY(%s))
-        ORDER BY s.source_event_id""", (issuers, at, start, at, issuers))
+        ORDER BY s.source_event_id""", (issuers, targets, at, start, at, targets))
     identities = [r['event_id'] for r in events]
     evidence = rows(connection, """SELECT DISTINCT e.source_event_id AS event_id,a.document_id AS news_id
         FROM event_evidence e JOIN document_assertion a USING(assertion_id)
@@ -57,4 +59,4 @@ def load_news(connection, at, targets, issuers):
                            'target_ids': sorted(set(targets)), 'issuer_ids': sorted(set(issuers)),
                            'event_time_field': 'available_at', 'historical_relation_state': 'current_rows_filtered_by_evaluated_at; older revisions unavailable',
                            'max_articles': None, 'limit_reached': False,
-                           'universe': 'issuer-linked NEWS events plus related articles; one repeatable-read snapshot'}}
+                           'universe': 'ETF/constituent/issuer-linked NEWS events plus related articles; one repeatable-read snapshot'}}

@@ -43,7 +43,8 @@ def test_rebroadcasts_cannot_displace_a_distinct_event_or_hide_a_correction():
     assert {row['event_key'] for row in listing['items']} == {'thread:t', 'event:independent'}
     timeline = result(tools, 'get_event_timeline', event_key='thread:t')
     assert {row['event_id'] for row in timeline['items']} >= {'first', 'correction'}
-    assert sum(row['repeated_by'] for row in timeline['items']) == 1001
+    assert timeline['folded_rebroadcast_count'] == 1001
+    assert all('repeated_by' not in row for row in timeline['items'])
     assert result(tools, 'get_issue_evidence', news_ids=['correction'], include_body=True)['news'][0]['body']
     assert result(tools, 'get_issue_evidence', news_ids=['correction'], include_body=False)['news'][0]['news_id'] == 'correction'
     assert 'search_news_threads' not in {s['function']['name'] for s in tools.schemas}
@@ -95,6 +96,7 @@ def test_scope_exit_is_not_retraction_and_snapshot_has_no_body():
     current['news_scope'].update(target_ids=['other'], issuer_ids=['other'], end_at=current['context']['analysis_at'])
     tools = DatabaseTools(current); tools.set_previous_news_snapshot(old)
     assert result(tools, 'get_event_changes')['items'][0]['change'] == 'scope_exit_or_missing'
+    assert any(row['change'] == 'document_scope_exit_or_missing' for row in result(tools, 'get_event_changes')['items'])
     assert old == DatabaseTools(before).news_snapshot()
 
 
@@ -136,6 +138,52 @@ def test_diff_marks_late_acquisition_and_rejects_invalid_comparison_or_cursor():
     old['documents'].append({'tampered': True})
     with pytest.raises(ValueError, match='integrity'):
         tools.set_previous_news_snapshot(old)
-    for bad in ('?', 'e30=', 'W10='):
+    for bad in ('?', 'e30=', 'W10=', '/w==', 'a'):
         with pytest.raises(ToolInputError):
             result(tools, 'list_events', cursor=bad)
+
+
+def test_latest_fact_supplies_summary_and_rejected_evidence_remains_searchable():
+    data = source()
+    add(data, 'a-first', thread='t', novelty='FIRST_IN_THREAD', when='2026-10-14T00:00:00+00:00')
+    add(data, 'z-correction', thread='t', novelty='CORRECTION')
+    add(data, 'rejected', status='REJECTED')
+    tools = DatabaseTools(data)
+    listing = result(tools, 'list_events')
+    assert listing['items'][0]['title'] == 'z-correction'
+    assert listing['items'][0]['news_ids'][0] == 'z-correction'
+    assert listing['unlinked_article_count'] == 1
+    assert result(tools, 'search_news_articles', query='', offset=0, unlinked_only=True)['articles'][0]['news_id'] == 'rejected'
+
+
+def test_corrections_precede_repeat_only_changes_and_repeats_are_counted():
+    before = source(); add(before, 'first', thread='t', novelty='FIRST_IN_THREAD')
+    current = deepcopy(before)
+    current['context']['analysis_at'] = '2026-10-17T00:00:00+00:00'
+    for index in range(30):
+        add(current, f'a-repeat-{index}', thread='t', novelty='DUPLICATE_REBROADCAST')
+    add(current, 'z-correction', thread='t', novelty='CORRECTION')
+    tools = DatabaseTools(current)
+    tools.set_previous_news_snapshot(DatabaseTools(before).news_snapshot())
+    page = result(tools, 'get_event_changes', limit=1)
+    assert page['items'][0]['change'] == 'correction'
+    assert page['change_counts']['repeat_only'] == 30
+
+
+def test_company_filter_uses_captured_issuer_mapping_and_binds_cursor():
+    data = source()
+    data['source_instrument_ids'] = {'091160': 'etf', '000001': 'stock', '000002': 'other'}
+    data['source_issuer_ids'] = {'000001': 'issuer', '000002': 'other-issuer'}
+    for index in range(3): add(data, str(index))
+    add(data, 'other')
+    data['news_events'][-1]['issuer_ids'] = ['other-issuer']
+    tools = DatabaseTools(data)
+    page = result(tools, 'list_events', instrument_ids=['000001'], limit=1)
+    assert page['total_count'] == 3
+    assert page['items'][0]['related_instrument_ids'] == ['000001']
+    with pytest.raises(ToolInputError):
+        result(tools, 'list_events', instrument_ids=['000002'], cursor=page['next_cursor'])
+    with pytest.raises(ToolInputError, match='Allowed'):
+        result(tools, 'list_events', instrument_ids=['BAD'])
+    with pytest.raises(ToolInputError, match='unavailable'):
+        result(DatabaseTools(source()), 'list_events', instrument_ids=['000001'])
