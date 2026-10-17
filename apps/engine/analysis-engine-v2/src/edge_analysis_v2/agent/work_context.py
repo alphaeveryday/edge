@@ -39,6 +39,14 @@ class WorkContext:
         self.removals.extend(deepcopy(changes))
         return {'removed': self.removals, 'active_materials': len(state.snapshot()['materials'])}
 
+    @staticmethod
+    def _stable(value):
+        if isinstance(value, dict):
+            return {key: WorkContext._stable(value[key]) for key in sorted(value)}
+        if isinstance(value, list):
+            return [WorkContext._stable(item) for item in value]
+        return value
+
     def tool_response(self, result):
         text = json.dumps(result, ensure_ascii=False)
         if len(text) <= TOOL_PAGE_CHARACTERS:
@@ -65,14 +73,6 @@ class WorkContext:
                 'retrieval': 'Partial original JSON, not a summary. Use workspace.read_tool_result with result_id '
                              'and next_offset to read more; concatenate text pages for the exact result. '
                              'Do not infer missing evidence from an unread page. result_id is not an evidence ID.'}
-
-    @staticmethod
-    def _stable(value):
-        if isinstance(value, dict):
-            return {key: WorkContext._stable(value[key]) for key in sorted(value)}
-        if isinstance(value, list):
-            return [WorkContext._stable(item) for item in value]
-        return value
 
     @staticmethod
     def _describe(value):
