@@ -1,0 +1,31 @@
+# 그래프 도구의 PuppyGraph(ALPHA-1342). 평일 05:30 KST에 켜서(06:00 전망 배치 전) 16:00 KST에 끈다(사용자 결정 2026-10-14).
+# 하루 10.5시간 × 평일 약 22일 × 시간당 약 0.175달러(2 vCPU·16GB) = 월 약 40달러.
+# 주말 배치(06:00 매일) 시간에는 꺼져 있다. 그래프 도구는 아직 운영 분석 경로에 붙지 않았다.
+# 비밀번호 매개변수는 Terraform 밖에서 만든다. 첫 기동 뒤 스키마를 한 번 올리면 EFS에 남는다.
+module "ontology_graph" {
+  source       = "../../modules/ontology-graph"
+  name         = "edge-dev-ontology-graph"
+  region       = var.region
+  cluster_arn  = module.worker_cluster.cluster_arn
+  vpc_id       = module.network.vpc_id
+  subnet_ids   = module.network.private_subnet_ids
+  image        = "puppygraph/puppygraph@sha256:8e362b158d8dde1ae9ed6df54f6751630af72a47d061bb2db42fa16547b368f7"
+  username     = "ontology"
+  on_schedule  = "cron(30 5 ? * MON-FRI *)"
+  off_schedule = "cron(0 16 ? * MON-FRI *)"
+
+  password_parameter_arn = "arn:aws:ssm:${var.region}:393229433969:parameter/edge/dev/ontology-graph/password"
+  # 지금은 SSM 터널용 임시 바스천(edge-dev-tmp-bastion-view, Terraform 밖)만. 분석 워커를 붙일 때 워커 보안 그룹을 더한다.
+  client_security_group_ids = ["sg-0d7392109fd270848"]
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_from_ontology_graph" {
+  security_group_id            = module.rds.security_group_id
+  referenced_security_group_id = module.ontology_graph.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "ontology graph to postgres"
+}
+
+output "ontology_graph_service_name" { value = module.ontology_graph.service_name }
