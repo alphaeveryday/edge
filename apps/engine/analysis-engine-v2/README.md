@@ -79,6 +79,7 @@ API 계약: [Search](https://docs.tinyfish.ai/api-reference/search-the-web),
 ## 검증
 
 문서 스킬과 실행 권한, 컨테이너 검증 방법은 [분석 스킬 실행 계약](docs/agent-skills.md)을 참고한다.
+사건 조회·뉴스 근거·이전 전망 비교는 [뉴스 조사 계약](docs/news-discovery.md)을 참고한다.
 API·가격 사건의 실행 접수와 운영 연결 전 범위는 [v2 실행 접수 계약](../../../docs/contracts/analysis-v2-admission.md)을 참고한다.
 
 ```sh
@@ -87,6 +88,8 @@ node --test integration_tests/test_review_refresh.cjs integration_tests/test_pro
 ```
 
 DB 통합 테스트는 Flyway 마이그레이션이 적용된 로컬 테스트 DB가 필요하다. `V2_TEST_DSN`은 `127.0.0.1:55439/analysis_v2`, `V2_FACTOR_TEST_DSN`은 `127.0.0.1:55440/analysis_v2`, `V2_SOURCE_TEST_DSN`은 `127.0.0.1:55445/edge`(cloud 스키마)를 가리켜야 한다. 실제 분석 DB를 테스트 대상으로 허용하지 않는다.
+
+뉴스 사건 탐색·전망 갱신 검증은 독립 로컬 PostgreSQL `127.0.0.1:15449/analysis_v2`도 사용한다. `V2_NEWS_TEST_DSN`을 지정해 `test_event_research_service.py`와 `test_postgres_news_snapshots.py`를 실행한다. 같은 주소를 `V2_FACTOR_TEST_DSN`에 지정하면 뉴스 SQL·분석 서비스 테스트를, `V2_EVIDENCE_TEST_DSN`에 지정하면 선택 근거 테스트를, `V2_TEST_DSN`에 지정하면 클라우드 연결 수명 테스트를 실행할 수 있다. 다른 통합 테스트의 전용 주소 조건은 그대로다.
 
 접수 통합 테스트는 `V2_ADMISSION_TEST_DSN=postgresql://v2_local:local_only@127.0.0.1:55446/analysis_v2`인 별도 로컬 PostgreSQL을 사용한다. 테스트가 임시 스키마에 새 접수 테이블을 만들고 제거하므로 전체 원천 적재는 필요 없다.
 

@@ -1,6 +1,6 @@
 import type { Holding } from './api';
 
-const colors = ['#9fd0ff', '#5b7cfa', '#f2b866', '#aebdfd', '#7089fb'];
+const colors = ['#344c45', '#8b9e91', '#bf9a5f', '#a4abb4', '#d3cbbb'];
 export function PortfolioPreview({ holdings, mode }: { holdings: Holding[]; mode: string }) {
   if (!holdings.length) return null;
   const total = holdings.reduce((sum, h) => sum + Number(h.amount_krw), 0);
