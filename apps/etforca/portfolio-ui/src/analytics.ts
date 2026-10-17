@@ -1,4 +1,5 @@
 import posthog from 'posthog-js';
+import { preview } from './preview';
 
 export type Screen = 'input_holdings' | 'input_funding' | 'input_horizon' | 'input_interests' | 'input_question' | 'loading' | 'queued' | 'running' | 'result' | 'failed';
 const events = new Set(['$pageview', '$pageleave', 'portfolio_screen_engagement', 'portfolio_scroll_pause', 'portfolio_feedback']);
@@ -14,6 +15,7 @@ export function trackFeedback(action: 'shown' | 'dismissed' | 'submitted', ratin
 }
 
 function initialize() {
+  if (preview) return false;
   if (!['etforca.com', 'www.etforca.com'].includes(location.hostname) || location.pathname !== '/portfolio/') return false;
   if (!initialized) {
     try {

@@ -17,6 +17,7 @@ pnpm --filter portfolio-ui dev
 
 `http://localhost:5180/portfolio/`에서 사용한다. API는 localhost:8092, PostgreSQL은 localhost:55439다.
 기존 Edge 서비스의 DB·포트를 사용하지 않는다. 개발 화면 origin 기본값은 `http://localhost:5180`이다.
+
 HTTPS 배포 시 `PORTFOLIO_ORIGIN`과 `PORTFOLIO_COOKIE_SECURE=1`을 함께 지정한다.
 
 Python만 실행할 때는 이 폴더에서 `uv sync` 후 아래 명령을 각각 실행한다.
@@ -26,6 +27,21 @@ Python만 실행할 때는 이 폴더에서 `uv sync` 후 아래 명령을 각�
 uv run uvicorn edge_portfolio.api:app --host 127.0.0.1 --port 8092
 uv run python -m edge_portfolio.worker
 ```
+
+## 포트폴리오 대시보드와 화면 테스트
+
+`/portfolio/?view=dashboard`는 같은 브라우저 세션의 보유 자산·배당·월 기록을 관리한다.
+분석 결과의 저장 버튼은 입력했던 보유 종목을 가져오며 추천안을 실제 매매로 반영하지 않는다.
+`portfolio_workbooks`는 소유자별 문서와 버전을 전용 DB에 저장한다. `GET/POST /api/portfolio/workbook`은 기존 세션 소유권과 POST origin 검사를 사용하며 오래된 저장 버전은 409로 거절한다.
+`GET /api/portfolio/analyses/{job_id}/workbook`은 소유한 분석의 입력을 변환한다.
+로그인·기기 간 동기화는 제공하지 않는다. 세션 쿠키가 없어지면 기존 저장본에 접근할 수 없으므로 브라우저 데이터를 지우지 않는다.
+가격과 환율은 수동 기록이며 실시간 시세가 아니다. 입출금이 있는 월의 수익률은 증권사 값을 입력하고, 누락 월을 연결해 누적 수익률을 꾸미지 않는다.
+
+배포 사이트에서 `/portfolio/?preview=result`로 분석 없이 결과·저장 팝업을 확인한다.
+상단 선택기에서 `input`, `queued`, `running`, `result`, `partial`, `failed`, `dashboard`, `empty`, `newsletter` 화면을 전환한다.
+테스트 응답은 실제 컴포넌트를 사용하되 분석·메일·고객 API 및 PostHog/presence를 호출하지 않는다.
+테스트 저장은 `edge-preview-*` 로컬 영역만 사용한다. 버전은 빌드 커밋이며 초기화 버튼으로 테스트 기록을 지운다.
+이 모드는 UI 검증용이며 실제 모델 응답 품질이나 메일 도착을 검증하지 않는다.
 
 ## 검증
 
