@@ -16,7 +16,7 @@ export function AllocationChart({ assets, fx }: { assets: Asset[]; fx: number | 
   for (const a of assets) groups.set(a.category, (groups.get(a.category) ?? 0) + value(a, fx)!);
   const total = [...groups.values()].reduce((s, n) => s + n, 0);
   if (!total) return null;
-  const colors = ['#859cff', '#62b9b1', '#d7b269', '#b695d4', '#9aa7bc'];
+  const colors = ['#344c45', '#8b9e91', '#bf9a5f', '#a4abb4', '#d3cbbb'];
   return <section className="dashboard-card"><h2>자산 구성</h2><div className="allocation-bar" aria-hidden="true">{[...groups].map(([name, n], i) => <span key={name} style={{ width: `${n / total * 100}%`, background: colors[i] }} />)}</div><ul className="allocation-legend">{[...groups].map(([name, n], i) => <li key={name}><i style={{ background: colors[i] }} /><b>{name}</b><span>{(n / total * 100).toFixed(1)}%</span><small>{money(n)}</small></li>)}</ul></section>;
 }
 
