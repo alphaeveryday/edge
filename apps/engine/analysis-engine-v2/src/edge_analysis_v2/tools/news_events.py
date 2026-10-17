@@ -211,10 +211,10 @@ class NewsEvents:
         for document in self.snapshot['documents']:
             identity = document['news_id']
             if identity not in docs:
-                if identity in self.unlinked:
-                    rows.append({'news_id': identity, 'change': 'new_unlinked_article',
-                                 'published_at': document['published_at'], 'available_at': document['available_at'],
-                                 'late_acquisition': instant(document['published_at']) <= instant(self.previous['analysis_at']) < instant(document['available_at'])})
+                rows.append({'news_id': identity,
+                             'change': 'new_unlinked_article' if identity in self.unlinked else 'new_linked_article',
+                             'published_at': document['published_at'], 'available_at': document['available_at'],
+                             'late_acquisition': instant(document['published_at']) <= instant(self.previous['analysis_at']) < instant(document['available_at'])})
             elif document != docs[identity]:
                 rows.append({'news_id': identity, 'change': 'document_changed'})
         for identity in docs.keys() - self.articles.keys():
@@ -223,7 +223,7 @@ class NewsEvents:
         priority = {'correction': 0, 'rejected': 1, 'status_changed': 1, 'link_changed': 2,
                     'facts_or_evidence_changed': 3, 'document_changed': 3, 'new_fact': 4,
                     'new_event': 5, 'scope_exit_or_missing': 6, 'document_scope_exit_or_missing': 7,
-                    'new_unlinked_article': 8, 'repeat_only': 9}
+                    'new_unlinked_article': 8, 'new_linked_article': 8, 'repeat_only': 9}
         rows.sort(key=lambda r: (0 if r.get('novelty') == 'CORRECTION' else priority[r['change']],
                                  r.get('event_id', ''), r.get('news_id', '')))
         scope_keys = ('target_ids', 'issuer_ids', 'lookback_days', 'universe')

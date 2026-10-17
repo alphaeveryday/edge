@@ -143,6 +143,26 @@ def test_diff_marks_late_acquisition_and_rejects_invalid_comparison_or_cursor():
             result(tools, 'list_events', cursor=bad)
 
 
+def test_late_article_linked_to_an_existing_event_keeps_its_document_timing():
+    before = source()
+    add(before, 'existing', thread='t', novelty='FIRST_IN_THREAD')
+    current = deepcopy(before)
+    current['context']['analysis_at'] = '2026-10-17T00:00:00+00:00'
+    current['news'].append({'news_id': 'late', 'title': 'old reporting acquired later', 'body': None,
+                            'published_at': '2026-10-15T00:00:00+00:00',
+                            'available_at': '2026-10-16T12:00:00+00:00'})
+    current['news_events'][0]['news_ids'].append('late')
+    tools = DatabaseTools(current)
+    tools.set_previous_news_snapshot(DatabaseTools(before).news_snapshot())
+    changes = result(tools, 'get_event_changes')['items']
+    linked = next(row for row in changes if row.get('news_id') == 'late')
+    assert linked['change'] == 'new_linked_article'
+    assert linked['late_acquisition'] is True
+    assert linked['published_at'] == current['news'][-1]['published_at']
+    assert linked['available_at'] == current['news'][-1]['available_at']
+    assert any(row['change'] == 'facts_or_evidence_changed' for row in changes)
+
+
 def test_latest_fact_supplies_summary_and_rejected_evidence_remains_searchable():
     data = source()
     add(data, 'a-first', thread='t', novelty='FIRST_IN_THREAD', when='2026-10-14T00:00:00+00:00')
