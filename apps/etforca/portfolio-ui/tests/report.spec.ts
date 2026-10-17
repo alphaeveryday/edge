@@ -96,6 +96,13 @@ test('rebalance instructions show cash amounts and hide transactions when execut
   await expect(page.locator('.improvements .weight-change')).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   await page.locator('.improvements').screenshot({ path: `test-results/rebalance-${test.info().project.name}.png` });
+  execution.rows[0].buy_krw = '10000000000';
+  await page.reload();
+  await expect(page.locator('.improvements [data-trade=buy]')).toContainText('10,000,000,000원');
+  await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+  expect(await page.locator('.improvements [data-trade=buy]').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  execution.rows[0].buy_krw = '600000';
   execution.status = 'infeasible';
   execution.reasons = ['NO_SELL_ZERO_TARGET'];
   await page.reload();

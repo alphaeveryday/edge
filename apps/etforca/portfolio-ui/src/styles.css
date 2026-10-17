@@ -1476,12 +1476,14 @@ to {
 }
 #report .trade-amount {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   align-items: baseline;
   gap: 7px;
   margin: 0;
   font-size: var(--text-label);
-  white-space: nowrap;
+  white-space: normal;
+  overflow-wrap: anywhere;
   font-variant-numeric: tabular-nums
 }
 #report .trade-amount strong {
