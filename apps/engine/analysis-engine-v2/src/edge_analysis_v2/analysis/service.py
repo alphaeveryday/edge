@@ -140,8 +140,7 @@ def execute_request(*, kind: str, fixture: dict | None = None, source_tools=None
             from the report alone, fill the remaining fields from the body) instead of one. A pinned
             system_prompt is one conversation's instructions, so it cannot be combined with this.
             Only an outlook without a predecessor is staged; one that follows another edits it in one conversation.
-        staged_since: A predecessor analysed before this instant was written in one conversation; a staged
-            outlook does not continue it and starts fresh. None continues every predecessor.
+        staged_since: Retained for old callers. A deployment cutoff no longer discards a completed predecessor.
 
     Returns:
         Final screen objects reassembled from committed database rows.
@@ -189,8 +188,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
     read = lambda connection, identity: (store(connection).get_movement if kind == 'movement' else store(connection).get_outlook)(identity)
     definitions = [*tools.definitions, RESEARCH_DEFINITION]
     if kind == 'outlook':
-        definitions += [dict(tool_id=s['function']['name']+':v2',function_name=s['function']['name'],
-            version='v2',description=s['function']['description'],source_names=['직전 전망과 이번 편집 초안']) for s in EDIT_SCHEMAS]
+        definitions += [dict(tool_id=s['function']['name']+':v3',function_name=s['function']['name'],
+            version='v3',description=s['function']['description'],source_names=['직전 전망과 이번 편집 초안']) for s in EDIT_SCHEMAS]
 
     def begin(connection):
         with connection.cursor(row_factory=dict_row) as cur:
@@ -198,12 +197,6 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             existing = cur.fetchone()
         previous_id = existing['previous_analysis_id'] if existing else (
             _previous(connection, kind, context['etf_code'], cutoff, data_source) if previous_analysis_id is _LATEST else previous_analysis_id)
-        if staged and previous_id and not existing and staged_since:
-            with connection.cursor(row_factory=dict_row) as cur:
-                cur.execute('SELECT analysis_at FROM outlook_analyses WHERE analysis_id=%s', (previous_id,))
-                written = cur.fetchone()
-            if written and written['analysis_at'] < staged_since:
-                previous_id = None
         parent = store(connection).begin(kind, analysis_id, context['etf_code'], cutoff, previous_id, data_source=data_source)
         return previous_id, parent, read(connection, analysis_id) if parent['status'] == 'completed' else None
     previous_id, parent, completed = run(begin)
@@ -278,7 +271,7 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             # Otherwise the run investigates fully and then fails at publication on text it never touched.
             initial['source_notes'] = [*initial.get('source_notes', []),
                 f'이전 본문이 현재 화면 상한을 {len(inherited_over)}곳에서 넘습니다. 그대로는 발행되지 않습니다. '
-                'write_outlook_body로 본문 전체를 상한 안에서 다시 쓰세요.']
+                '상한을 넘은 부분만 apply_outlook_body_changes 한 호출로 고치고 다른 논점과 ID는 유지하세요.']
         if kind == 'movement':
             initial['previous_items'] = previous_items
         schemas = deepcopy(tools.schemas)
@@ -420,7 +413,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
         research_snapshot = collect_research(research, run(lambda connection: read_storage(connection, kind, analysis_id)), artifacts, references)
         published_references = set(listed_references(response))
         if kind == 'outlook':
-            published_references.update(listed_references(body))
+            # Deleted-topic audit rows keep old citations without making that research active again.
+            published_references.update(listed_references(body['items']))
         elif previous:
             inherited = [item for item in previous_items if item['item_id'] in response['selected_item_ids']]
             published_references.update(listed_references(inherited if response['selected_item_ids'] else previous))

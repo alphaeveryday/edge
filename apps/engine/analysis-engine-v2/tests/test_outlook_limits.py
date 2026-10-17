@@ -111,7 +111,7 @@ def test_the_editor_names_the_overlong_bullet_and_an_inherited_long_body_must_be
     editor = BodyEditor(old_body, at)
     from edge_analysis_v2.tools.execution import ToolInputError
     # ToolInputError is the only failure whose text the audited executor passes on to the model.
-    with pytest.raises(ToolInputError, match='rewrite the whole body'):
+    with pytest.raises(ToolInputError, match='preserve unaffected topics'):
         editor.apply([{'action': 'add', 'id': 't2', 'title_keyword': '새 논점', 'sentences': ['짧은 문장'], 'sentiment': 'neutral', 'tool_run_ids': ['r2']}])
     assert len(editor.write('제목', [topic | {'sentences': ['마' * 60]}])['items']) == 1
 

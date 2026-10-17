@@ -60,15 +60,14 @@ def test_invalid_second_edit_keeps_entire_draft_unchanged():
     assert editor.result() == before
 
 
-def test_tenth_distinct_change_requires_rewrite_across_calls():
-    editor = BodyEditor(base(10), NOW)
-    for n in range(9):
-        editor.apply([{"action": "remove", "id": str(n)}])
-    with pytest.raises(ValueError, match="rewrite"):
-        editor.apply([{"action": "remove", "id": "9"}])
-    assert len(editor.result()["items"]) == 1
-    editor.write("rewritten", [])
-    assert editor.result()["mode"] == "rewrite"
+def test_ten_changed_topics_do_not_force_rewriting_the_untouched_topic():
+    original = base(11)
+    editor = BodyEditor(original, NOW)
+    for n in range(10):
+        editor.apply([{'action': 'update', 'id': str(n), 'sentences': ['changed'],
+                      'sentiment': 'positive', 'tool_run_ids': ['new-evidence'], 'updated_sentence_numbers': [1]}])
+    assert editor.result()['mode'] == 'update'
+    assert editor.result()['items'][-1] == original['items'][-1]
 
 
 def test_reordering_only_and_evidence_refresh_are_not_updates():

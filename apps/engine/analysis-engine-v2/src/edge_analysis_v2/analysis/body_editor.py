@@ -141,8 +141,7 @@ class BodyEditor:
     def _commit(self, draft, mode):
         over = violations({'detail': draft})
         if over:
-            # A body inherited from before the limits existed is over in many topics; one rewrite is the short way out.
-            hint = '; rewrite the whole body with write_outlook_body' if mode == 'update' else ''
+            hint = '; fix all over-limit fields in one edit batch; preserve unaffected topics' if mode == 'update' else ''
             raise ToolInputError('Body exceeds limits: ' + ', '.join(
                 f"{v['location']} {v['actual']}>{v['limit']} {v['kind']}" for v in over[:8])
                 + (f' and {len(over) - 8} more' if len(over) > 8 else '') + hint)
@@ -161,8 +160,6 @@ class BodyEditor:
                     raise ToolInputError("Sentiment cannot change without a sentence change")
         changed = set(base) ^ set(current)
         changed.update(identity for identity in base.keys() & current.keys() if _different(base[identity], current[identity]))
-        if mode == "update" and len(changed) >= 10:
-            raise ValueError("Ten changed topics require rewrite")
         for identity in previous.keys() & current.keys():
             flags = {}
             for sentence in previous[identity]["sentences"]:
