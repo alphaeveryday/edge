@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from edge_analysis_v2.contracts.outlook_limits import TEXT_LIMITS, violations
 from edge_analysis_v2.tools.execution import ToolInputError
+from edge_analysis_v2.analysis.text_replacement import replace_exact
 
 
 KST = timezone(timedelta(hours=9))
@@ -126,12 +127,7 @@ class BodyEditor:
                         number, old, new = edit["sentence_number"], edit["old_text"], edit["new_text"]
                         if type(number) is not int or not 1 <= number <= len(sentences) or number in numbers:
                             raise ToolInputError("Each replacement requires a distinct existing sentence number")
-                        if not isinstance(old, str) or not old or not isinstance(new, str) or old == new:
-                            raise ToolInputError("Replacement requires nonempty old_text and different string new_text")
-                        position = sentences[number - 1].find(old)
-                        if position < 0 or sentences[number - 1].find(old, position + 1) >= 0:
-                            raise ToolInputError("old_text must match exactly once in the selected sentence")
-                        sentences[number - 1] = sentences[number - 1].replace(old, new, 1)
+                        sentences[number - 1] = replace_exact(sentences[number - 1], old, new)
                         numbers.append(number)
                     change = {key: value for key, value in change.items() if key != "text_replacements"}
                     change.update(sentences=sentences, updated_sentence_numbers=numbers)

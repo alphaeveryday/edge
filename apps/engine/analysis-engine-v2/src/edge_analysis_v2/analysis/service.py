@@ -411,7 +411,10 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                 # A cited call the store refuses was found only at publication, where it lost the whole analysis:
                 # 5 of 45 movement analyses on the first morning. Named here, it costs the agent one correction.
                 problems = []
-                candidate = merge_outlook_revision(previous_fields, final) if previous_fields is not None else final
+                try:
+                    candidate = merge_outlook_revision(previous_fields, final) if previous_fields is not None else final
+                except ValueError as error:
+                    return str(error) + '\n이번 수정에서 의도한 변경 속성을 모두 다시 내세요. 직전 시도에서 유효했던 변경도 포함하세요.'
                 for reference in sorted(set(listed_references(candidate)), key=str):
                     actual = references.get(reference, reference)
                     try:
@@ -437,7 +440,11 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                     '전망·요약·5요인·결론·이슈 상세는 바뀐 속성만 보낸다. 생략한 속성은 직전 값을 유지한다. '
                     '객체 안에서도 바뀐 속성만 보내고, 배열을 바꾸면 유지할 항목까지 포함한 전체 배열을 보낸다. '
                     '변경이 없으면 {}를 보낸다. 이전 이슈 상세가 있으면 previous_issue_detail에 있다. '
-                    '직전 이슈 상세가 없는 경우에는 응답 스키마가 요구하는 issue_detail 완성 객체를 보낸다.')
+                    '직전 이슈 상세가 없는 경우에는 응답 스키마가 요구하는 issue_detail 완성 객체를 보낸다. '
+                    '요약·결론·요인·이슈 상세의 기존 문구 정정은 최종 JSON의 text_replacements를 우선 사용한다. '
+                    'field와 배열 항목의 item_number(1부터), 바뀌는 부분의 old_text/new_text를 지정한다. '
+                    '모든 치환은 직전 발행본 기준이며 대상 밖 문구는 유지한다. 같은 필드나 상위 배열을 일반 수정과 함께 보내지 않는다. '
+                    '이슈 항목·결론 키워드에는 유지할 유효한 기존 근거와 새 근거를 모두 tool_run_ids로 함께 보낸다.')
             response = swap_references(asyncio.run(model_call(initial=initial,prompt=prompt,
                 schemas=schemas,call=cited_call,output_schema=MOVEMENT if kind=='movement' else revision_schema if previous_fields is not None else OUTLOOK,
                 artifacts=artifacts,key=key,model=model,skills=REVISION_SKILLS if previous else MOVEMENT_SKILLS if kind == 'movement' else TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,timeout_seconds=600 if kind=='outlook' else MOVEMENT_SECONDS,
