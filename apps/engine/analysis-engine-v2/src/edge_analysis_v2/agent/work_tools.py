@@ -13,15 +13,16 @@ def make_workspace_server(context, session):
     if context.sources:
         source_rule['enum'] = list(context.sources)
 
-    @tool('read_source', 'Read a page of initial observations from available_sources. Only source is required. Omit subject for lists; use it only for a listed dictionary key. On invalid_argument, use retry_arguments or allowed_values instead of guessing. Empty rows mean an empty source/page, not a tool failure. Exploration only; not a final evidence ID.',
+    @tool('read_source', 'Read a page of initial observations from available_sources. Only source is required. Omit subject for lists; use a listed dictionary key or a research_state catalog material ID. Large research originals return result_id/next_offset for read_tool_result. On invalid_argument, use retry_arguments or allowed_values instead of guessing. Empty rows mean an empty source/page, not a tool failure. Exploration only; not a final evidence ID.',
           {'type':'object', 'properties':{'source':source_rule,
-           'subject':{'type':'string','default':'','description':'Optional dictionary key; omit for list sources.'},
+           'subject':{'type':'string','default':'','description':'Optional dictionary key or research_state catalog material ID; omit for list sources.'},
            'offset':{'type':'integer','minimum':0,'default':0},
            'limit':{'type':'integer','minimum':1,'maximum':100,'default':50}},
            'required':['source'], 'additionalProperties':False})
     async def read_source(args):
         try:
-            return response(context.read(**args))
+            page = context.read(**args)
+            return response(context.tool_response(page) if args['source'] == 'research_state' else page)
         except SourceInputError as error:
             return response({'error': error.details}) | {'is_error': True}
 

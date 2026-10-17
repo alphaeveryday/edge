@@ -89,3 +89,26 @@ def test_internal_failure_is_not_misrepresented_as_bad_model_input(monkeypatch):
     monkeypatch.setattr(WorkContext, 'read', broken_read)
     with pytest.raises(RuntimeError, match='Internal fixture failure'):
         asyncio.run(tool.handler({'source':'news'}))
+
+
+def test_large_original_roundtrip_includes_correction_beyond_first_page(monkeypatch):
+    from edge_analysis_v2.agent import work_tools
+    from edge_analysis_v2.agent.work_context import TOOL_PAGE_CHARACTERS
+    original = {'kind': 'note', 'text': '기존 문장\n' * 3000 + '계약은 확정되지 않았음',
+                'reference_ids': {'f1': 'prior-evidence'}}
+    context = WorkContext({'research_state': {'materials': {'original': original}}})
+    monkeypatch.setattr(work_tools, 'create_sdk_mcp_server', lambda **kwargs: kwargs)
+    tools = {t.name: t for t in make_workspace_server(context, None)['tools']}
+    result = asyncio.run(tools['read_source'].handler({'source': 'research_state', 'subject': 'original'}))
+    page = json.loads(result['content'][0]['text'])
+    assert '계약은 확정되지 않았음' not in page['text']
+    parts = []
+    while True:
+        assert len(page['text']) <= TOOL_PAGE_CHARACTERS
+        parts.append(page['text'])
+        if page['next_offset'] is None:
+            break
+        result = asyncio.run(tools['read_tool_result'].handler({'result_id': page['result_id'], 'offset': page['next_offset']}))
+        page = json.loads(result['content'][0]['text'])
+    assert json.loads(''.join(parts))['rows'] == [original]
+    assert context.consulted == []
