@@ -9,6 +9,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from . import newsletter_email
+from .newsletter_agent import DEFAULT_FORMAT
 from .store import connect
 
 LIST = 'edge-portfolio-newsletter'
@@ -190,14 +191,13 @@ def process_daily(ses, now, *, deadline=float('inf')):
                 if item['state'] == 'ready':
                     cards.append(item['content'])
                 elif item['state'] == 'failed' and item['attempts'] >= 3:
-                    cards.append({**holding, 'headline': '오늘의 소식을 확인하지 못했어요',
-                                  'issue': '최신 자료를 확보하지 못해 이 종목의 오늘 소식은 비워뒀어요. 다음 발행에서 다시 확인할게요.',
-                                  'why_moved': '', 'watch_next': '', 'sources': []})
+                    cards.append({**holding, 'unavailable': True, 'headline': '오늘의 소식을 확인하지 못했어요',
+                                  'dek': '최신 자료를 확보하지 못해 이 종목의 오늘 소식은 비워뒀어요. 다음 발행에서 다시 확인할게요.', 'sources': []})
         if len(cards) != len(row['holdings']):
             # Keep the complete watchlist; do not silently omit an ETF or send stale content as today's news.
             log.info('subscription=%s edition=%s newsletter=waiting_content ready=%s total=%s', row['id'], edition, len(cards), len(row['holdings']))
             continue
-        rendered = newsletter_email.daily(edition, cards)
+        rendered = newsletter_email.daily(edition, cards, DEFAULT_FORMAT)
         if time.monotonic() >= deadline:
             # A contact lookup or rendering can cross midnight after the loop's initial check.
             break
