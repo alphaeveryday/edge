@@ -1,6 +1,7 @@
+import { chartPalette } from './design-system/components';
 import type { Holding } from './api';
 
-const colors = ['#344c45', '#8b9e91', '#bf9a5f', '#a4abb4', '#d3cbbb'];
+const colors = chartPalette;
 export function PortfolioPreview({ holdings, mode }: { holdings: Holding[]; mode: string }) {
   if (!holdings.length) return null;
   const total = holdings.reduce((sum, h) => sum + Number(h.amount_krw), 0);

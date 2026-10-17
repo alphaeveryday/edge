@@ -64,6 +64,7 @@ JVM은 `settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs
 ## apps — 배포 단위
 
 포트폴리오 서비스는 `apps/etforca/portfolio-ui`(React 19)와 `apps/etforca/portfolio-worker`(독립 Python 워크스페이스)로 구성한다. 후자는 API·워커를 별도 프로세스로 실행하고 전용 PostgreSQL을 사용한다. 분석 실행은 기존 분석 엔진·온톨로지와 독립적이며, 보유 ETF 뉴스레터는 공개된 기존 전망을 우선 재사용하고 없는 종목은 워커에서 조사한다. 이메일 발송은 같은 호스트의 별도 예약 프로세스가 담당한다. [설계와 실행 경계](design/portfolio-worker.md).
+포폴 고객·관리자 UI의 토큰·공통 조작부·확인 팝업은 `portfolio-ui/src/design-system`에서 관리한다. 기존 `ui-kit` 아이콘을 재사용한다. 전시 화면과 변경 절차는 [Orca UI](design/portfolio-design-system.md)를 따른다.
 
 | 앱 | 런타임 | 아티팩트 | 역할 |
 |---|---|---|---|

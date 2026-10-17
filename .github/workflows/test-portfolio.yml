@@ -5,6 +5,7 @@ on:
     paths:
       - 'apps/etforca/portfolio-ui/**'
       - 'apps/etforca/portfolio-worker/**'
+      - 'libs/ui-kit/**'
       - 'pnpm-lock.yaml'
       - 'package.json'
       - 'pnpm-workspace.yaml'

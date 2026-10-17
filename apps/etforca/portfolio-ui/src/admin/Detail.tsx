@@ -1,3 +1,4 @@
+import { Button } from '../design-system/components';
 import { useState } from 'react';
 import { CustomerReport } from './CustomerReport';
 import { Sources } from './Sources';
@@ -18,11 +19,11 @@ export function Detail({ data, onClose }: { data: Data; onClose: () => void }) {
   const result = data.result;
   const [tab, setTab] = useState(result ? 'result' : 'input');
   return <section className="detail" aria-label="입력 상세">
-    <header><div><span className="eyebrow">방문자 {data.visitor}</span><h2>요청 상세</h2></div><button className="quiet" onClick={onClose} aria-label="상세 닫기">닫기 ×</button></header>
+    <header><div><span className="eyebrow">방문자 {data.visitor}</span><h2>요청 상세</h2></div><Button className="quiet" onClick={onClose} aria-label="상세 닫기">닫기 ×</Button></header>
     {data.test_label && <p className="badge test">테스트 · {data.test_label}</p>}
     {data.state && <p className="muted">{progress(data)}</p>}
     {data.failure && <p className="error">실패 사유 · {data.failure}</p>}
-    <div className="detail-tabs" role="tablist" aria-label="상세 구분">{[['result', '고객 결과'], ['input', '고객 입력'], ['sources', '출처와 인용']].map(([id, label]) => <button key={id} id={'tab-' + id} role="tab" aria-selected={tab === id} aria-controls={'panel-' + id} onClick={() => setTab(id)}>{label}</button>)}</div>
+    <div className="detail-tabs" role="tablist" aria-label="상세 구분">{[['result', '고객 결과'], ['input', '고객 입력'], ['sources', '출처와 인용']].map(([id, label]) => <Button key={id} id={'tab-' + id} role="tab" aria-selected={tab === id} aria-controls={'panel-' + id} onClick={() => setTab(id)}>{label}</Button>)}</div>
     <div role="tabpanel" id="panel-input" aria-labelledby="tab-input" hidden={tab !== 'input'}>
     <section><h3>포트폴리오</h3><p>{input.planning ? '종목부터 추천받기' : '기존 구성 분석'}</p>
       <div className="table-wrap"><table><thead><tr><th>종목</th><th>계좌</th><th>{input.input_mode === 'percent' ? '비중' : input.input_mode === 'names' ? '금액' : '금액 · 원'}</th></tr></thead><tbody>{input.holdings.map((h, i) => <tr key={i}><td><b>{h.name}</b><small>{h.instrument_id}</small></td><td>{h.account || '일반 계좌'}</td><td>{h.amount_krw === null || h.amount_krw === undefined || input.input_mode === 'names' ? '미입력' : Number(h.amount_krw).toLocaleString('ko-KR') + (input.input_mode === 'percent' ? '%' : '')}</td></tr>)}</tbody></table></div>

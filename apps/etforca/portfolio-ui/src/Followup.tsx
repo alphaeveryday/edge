@@ -1,3 +1,4 @@
+import { Button, TextInput, Select } from './design-system/components';
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { request, type Section, type Report } from './api';
 import { ReportView } from './ReportView';
@@ -61,16 +62,16 @@ export function Followup({ jobId, recoveryOnly = false }: { jobId: string; recov
   }
   return <>
     <section className="followup" data-analytics-section="followup"><h3>AI에게 추가로 묻기</h3>
-      {!recoveryOnly && <label>요청 종류 <select aria-label="질문 종류" value={mode} disabled={busy} onChange={e => changeMode(e.target.value as 'question' | 'recovery')}><option value="question">추가 질문</option><option value="recovery">누락·오류 보완</option></select></label>}
+      {!recoveryOnly && <label>요청 종류 <Select aria-label="질문 종류" value={mode} disabled={busy} onChange={e => changeMode(e.target.value as 'question' | 'recovery')}><option value="question">추가 질문</option><option value="recovery">누락·오류 보완</option></Select></label>}
       {answer && <div className="chat-answer">{answer.paragraphs.map((p, i) => <p key={i}>{p}</p>)}</div>}
       {revision && <details className="followup-revision"><summary>보완 분석과 계산표 보기</summary><p className="notice">원본 분석은 유지되며 아래는 이 질문에 대한 별도 분석이에요.</p><ReportView key={revisionId} report={revision} /></details>}
-      <form className="report-chat" onSubmit={ask}><input aria-label="추가 질문" placeholder={mode === 'recovery' ? '빠진 답변이나 보완할 조건을 알려 주세요.' : '이 추천안에서 더 궁금한 점이 있나요?'} required maxLength={1000} value={question} disabled={busy || blocked} onChange={e => setQuestion(e.target.value)} /><button aria-label="질문 보내기" disabled={busy || blocked}>{busy ? '…' : '↑'}</button></form><p className="notice">{busy ? '자료를 확인하고 답변을 작성하고 있어요…' : mode === 'recovery' ? '이 분석의 누락·오류 보완 2회 · 실패한 요청은 차감하지 않아요.' : '추가 질문 1회 · 누락·오류 보완은 별도예요.'}</p>
+      <form className="report-chat" onSubmit={ask}><TextInput aria-label="추가 질문" placeholder={mode === 'recovery' ? '빠진 답변이나 보완할 조건을 알려 주세요.' : '이 추천안에서 더 궁금한 점이 있나요?'} required maxLength={1000} value={question} disabled={busy || blocked} onChange={e => setQuestion(e.target.value)} /><Button aria-label="질문 보내기" disabled={busy || blocked}>{busy ? '…' : '↑'}</Button></form><p className="notice">{busy ? '자료를 확인하고 답변을 작성하고 있어요…' : mode === 'recovery' ? '이 분석의 누락·오류 보완 2회 · 실패한 요청은 차감하지 않아요.' : '추가 질문 1회 · 누락·오류 보완은 별도예요.'}</p>
       {error && <p role="alert">{error}</p>}
     </section>
     {!recoveryOnly && <>
-    <button className="premium report-premium" onClick={() => premium.current!.showModal()}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="m3 8 4-4h10l4 4-9 13zM3 8h18M7 4l5 17 5-17" /></svg>프리미엄 투자 전략 설계 리포트 받기</button><p className="report-footnote">신청 후 1일 이내에 이메일로 보내드려요.</p>
+    <Button className="premium report-premium" onClick={() => premium.current!.showModal()}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="m3 8 4-4h10l4 4-9 13zM3 8h18M7 4l5 17 5-17" /></svg>프리미엄 투자 전략 설계 리포트 받기</Button><p className="report-footnote">신청 후 1일 이내에 이메일로 보내드려요.</p>
     </>}
-    <dialog className="followup-dialog" ref={limit} aria-labelledby="limit-title" onClose={() => { window.scrollTo({ top: 0, behavior: 'smooth' }); document.querySelector('h1')?.focus(); }}><h2 id="limit-title">추가 채팅은 아직 준비 중이에요</h2><p>무료 질문 1회를 모두 사용했어요.</p><button className="primary" onClick={() => limit.current!.close()}>포트폴리오로 돌아가기</button></dialog>
-    <dialog className="followup-dialog" ref={premium} aria-labelledby="premium-title"><button className="dialog-close" aria-label="닫기" onClick={() => premium.current!.close()}>×</button><h2 id="premium-title">프리미엄 투자 전략 리포트</h2>{received ? <><p>신청을 접수했어요.</p><p className="notice">입력하신 이메일로 1일 이내에 리포트를 보내드려요.</p></> : <form onSubmit={register}><label>이메일 주소<input type="email" required maxLength={254} value={email} onChange={e => setEmail(e.target.value)} /></label><p className="notice">리포트를 1일 이내에 보내드려요. 리포트 안내를 위해 이메일과 분석 번호를 저장하며, 별도 마케팅에는 사용하지 않아요.</p><button className="primary" disabled={sending}>{sending ? '접수 중…' : '리포트 신청하기'}</button>{emailError && <p role="alert">{emailError}</p>}</form>}</dialog>
+    <dialog className="followup-dialog" ref={limit} aria-labelledby="limit-title" onClose={() => { window.scrollTo(0, 0); document.querySelector('h1')?.focus(); }}><h2 id="limit-title">추가 채팅은 아직 준비 중이에요</h2><p>무료 질문 1회를 모두 사용했어요.</p><Button variant="primary" className="primary" onClick={() => limit.current!.close()}>포트폴리오로 돌아가기</Button></dialog>
+    <dialog className="followup-dialog" ref={premium} aria-labelledby="premium-title"><Button className="dialog-close" aria-label="닫기" onClick={() => premium.current!.close()}>×</Button><h2 id="premium-title">프리미엄 투자 전략 리포트</h2>{received ? <><p>신청을 접수했어요.</p><p className="notice">입력하신 이메일로 1일 이내에 리포트를 보내드려요.</p></> : <form onSubmit={register}><label>이메일 주소<TextInput type="email" required maxLength={254} value={email} onChange={e => setEmail(e.target.value)} /></label><p className="notice">리포트를 1일 이내에 보내드려요. 리포트 안내를 위해 이메일과 분석 번호를 저장하며, 별도 마케팅에는 사용하지 않아요.</p><Button variant="primary" className="primary" disabled={sending}>{sending ? '접수 중…' : '리포트 신청하기'}</Button>{emailError && <p role="alert">{emailError}</p>}</form>}</dialog>
   </>;
 }

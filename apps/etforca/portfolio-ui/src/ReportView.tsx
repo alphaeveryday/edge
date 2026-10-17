@@ -76,7 +76,7 @@ export function ReportView({ report, separateEvidence = false, allSections = fal
   const sections = report.sections ?? {};
   const colors = new Map<string, string>();
   allocations.forEach(h => { if (!colors.has(h.instrument_id)) colors.set(h.instrument_id, chartColors[colors.size % chartColors.length]); });
-  const color = (id: string) => colors.get(id) || '#929daf';
+  const color = (id: string) => colors.get(id) || 'var(--color-text-muted)';
   const composition = [...colors.keys()].map(id => {
     const rows = allocations.filter(h => h.instrument_id === id);
     return { ...rows[0], weight_pct: rows.every(h => Number.isFinite(h.weight_pct)) ? Number(rows.reduce((sum, h) => sum + h.weight_pct, 0).toFixed(2)) : null };

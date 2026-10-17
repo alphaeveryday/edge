@@ -111,6 +111,9 @@ importers:
       three:
         specifier: 0.128.0
         version: 0.128.0
+      ui-kit:
+        specifier: workspace:*
+        version: link:../../../libs/ui-kit
     devDependencies:
       '@playwright/test':
         specifier: ^1.64.0

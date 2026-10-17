@@ -1,3 +1,4 @@
+import { Notice, Button, TextInput } from './design-system/components';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { trackFeedback, type FeedbackRating } from './analytics';
 import { request } from './api';
@@ -81,24 +82,24 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
   }
   return <div ref={anchor} className="feedback-anchor">
     <SavePortfolio jobId={jobId} />
-    <button className="secondary" aria-expanded={open} onClick={() => { if (open) return; setNewsletterOnly(true); setSubscription(''); setOpen(true); }}>보유 종목 뉴스레터 받기</button>
+    <Button variant="secondary" className="secondary" aria-expanded={open} onClick={() => { if (open) return; setNewsletterOnly(true); setSubscription(''); setOpen(true); }}>보유 종목 뉴스레터 받기</Button>
     {open && <aside ref={popup} tabIndex={-1} className="report-feedback" role="dialog" aria-label={newsletterOnly ? '내 ETF 소식, 매일 메일로' : '포트폴리오 저장'} aria-modal="false" data-analytics-section="feedback">
-      <button className="feedback-close" aria-label="평가 팝업 닫기" onClick={close}>×</button>
+      <Button className="feedback-close" aria-label="평가 팝업 닫기" onClick={close}>×</Button>
       {!newsletterOnly && <SavePortfolio jobId={jobId} />}
       <div className="feedback-newsletter">
         <h3 id="newsletter-title">내 ETF 소식, 매일 메일로</h3>
         <p>보유 종목의 핵심 이슈와 가격이 움직인 이유를 쉽고 짧게 정리해 드려요.</p>
         {subscription ? <p role="status">{subscription}</p> : <form onSubmit={subscribe}>
           <label className="sr-only" htmlFor="newsletter-email">뉴스레터 이메일</label>
-          <input id="newsletter-email" type="email" autoComplete="email" placeholder="이메일 주소" maxLength={254} required value={email} onChange={e => setEmail(e.target.value)} />
-          <button className="newsletter-submit" type="submit" disabled={sending}>{sending ? '신청 중…' : '매일 핵심 소식 받기'}</button>
+          <TextInput id="newsletter-email" type="email" autoComplete="email" placeholder="이메일 주소" maxLength={254} required value={email} onChange={e => setEmail(e.target.value)} />
+          <Button variant="secondary" className="newsletter-submit" type="submit" disabled={sending}>{sending ? '신청 중…' : '매일 핵심 소식 받기'}</Button>
           <small className="newsletter-consent">신청하면 이메일·보유 종목 이용과 뉴스레터 수신에 동의합니다.</small>
-          {error && <p role="alert">{error}</p>}
+          {error && <Notice tone="error">{error}</Notice>}
         </form>}
         <small>언제든 메일에서 수신 거부할 수 있어요.</small>
       </div>
       {!newsletterOnly && <><h3 id="feedback-title">이번 분석은 어떠셨나요?</h3>
-      {answered ? <p role="status">의견 감사합니다!</p> : <div className="feedback-choices">{choices.map(([rating, emoji, label]) => <button key={rating} onClick={() => choose(rating)}><span aria-hidden="true">{emoji}</span>{label}</button>)}</div>}</>}
+      {answered ? <p role="status">의견 감사합니다!</p> : <div className="feedback-choices">{choices.map(([rating, emoji, label]) => <Button key={rating} onClick={() => choose(rating)}><span aria-hidden="true">{emoji}</span>{label}</Button>)}</div>}</>}
     </aside>}
   </div>;
 }
