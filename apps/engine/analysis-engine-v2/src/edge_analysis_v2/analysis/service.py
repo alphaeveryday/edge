@@ -329,7 +329,7 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                 # their measurements added up, which is what an observer of a single-stage run already reads.
                 try:
                     return asyncio.run(model_call(prompt=load_prompt(prompts/f'outlook_{name}.yaml'), call=cited_call,
-                                                  artifacts=artifacts/name, key=key, model=model, cache_scope=cache_scope,
+                                                  artifacts=artifacts/name, key=key, model=model, effort='high', cache_scope=cache_scope,
                                                   events_log=artifacts/'events.jsonl', **settings))
                 finally:
                     measured = {stage: json.loads(path.read_text(encoding='utf-8')) for stage in STAGES
@@ -405,7 +405,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             response = swap_references(asyncio.run(model_call(initial=initial,prompt=system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml')),
                 schemas=schemas,call=cited_call,output_schema=MOVEMENT if kind=='movement' else OUTLOOK,
                 artifacts=artifacts,key=key,model=model,skills=REVISION_SKILLS if previous else MOVEMENT_SKILLS if kind == 'movement' else TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,timeout_seconds=600 if kind=='outlook' else MOVEMENT_SECONDS,
-                compare_explanations=kind=='outlook' and not previous, final_check=unciteable, cache_scope=cache_scope)), references)
+                compare_explanations=kind=='outlook' and not previous, final_check=unciteable,
+                effort='low' if previous else 'high', cache_scope=cache_scope)), references)
         if kind == 'outlook':
             issue = response['issue_detail']
             metrics = project_factor_metrics(factor_output, context['etf_code'])
