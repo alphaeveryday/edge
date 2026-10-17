@@ -288,6 +288,7 @@ class DatabaseTools(FixtureTools):
         for name,tool in self._tools.items():
             # Source definitions are immutable; connecting stored observations needs a new factor version.
             tool['version'] = {'calculate_valuation': 'database-v3', 'get_instrument_factors': 'database-v6',
+                               'list_events': 'database-v2',
                                'get_instrument_factor_table': 'database-v2',
                                'get_issue_evidence': 'database-v3', 'get_etf_holdings': 'database-v2',
                                'calculate_weighted_valuation': 'database-v3', 'calculate_weighted_flow': 'database-v3',

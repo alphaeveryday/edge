@@ -252,6 +252,7 @@ def test_event_keyword_search_groups_repeats_and_preserves_later_correction():
     data['news'][-1].update(title='효성', body='미국 관세 소송')
     add(data, 'irrelevant')
     tools = DatabaseTools(data)
+    assert next(d['tool_id'] for d in tools.definitions if d['function_name'] == 'list_events') == 'list_events:database-v2'
     page = result(tools, 'list_events', query='효성 관세', limit=1)
     assert page['total_count'] == 2
     with pytest.raises(ToolInputError):
