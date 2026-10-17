@@ -31,7 +31,8 @@ LOG = logging.getLogger(__name__)
 KST = timezone(timedelta(hours=9))
 HYPOTHESIS_SKILLS = ('hypothesis-analysis-workflow', 'etf-hypothesis-analysis')
 TASK_SKILLS = ('cause-investigation', *HYPOTHESIS_SKILLS, 'analysis-report-writing')
-REVISION_SKILLS = ('revision-investigation', *HYPOTHESIS_SKILLS, 'analysis-report-writing')
+MOVEMENT_SKILLS = ('cause-investigation', *HYPOTHESIS_SKILLS, 'focused-analysis-writing')
+REVISION_SKILLS = ('revision-investigation', *HYPOTHESIS_SKILLS, 'focused-analysis-writing')
 OPTIONAL_SKILLS = ()
 
 _LATEST = object()
@@ -371,7 +372,7 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                 return message + '전체 응답을 다시 내세요.' if message else None
             response = swap_references(asyncio.run(model_call(initial=initial,prompt=system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml')),
                 schemas=schemas,call=cited_call,output_schema=MOVEMENT if kind=='movement' else OUTLOOK,
-                artifacts=artifacts,key=key,model=model,skills=REVISION_SKILLS if previous else TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,timeout_seconds=600 if kind=='outlook' else MOVEMENT_SECONDS,
+                artifacts=artifacts,key=key,model=model,skills=REVISION_SKILLS if previous else MOVEMENT_SKILLS if kind == 'movement' else TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,timeout_seconds=600 if kind=='outlook' else MOVEMENT_SECONDS,
                 compare_explanations=kind=='outlook' and not previous, final_check=unciteable)), references)
         if kind == 'outlook':
             issue = response['issue_detail']
