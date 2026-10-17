@@ -1,3 +1,4 @@
+import { preview, previewRequest } from './preview';
 export const roles = ['question', 'portfolio', 'outlook', 'opinion'] as const;
 export type Role = typeof roles[number];
 export const titles: Record<Role, string> = { question: '질문에 대한 답', portfolio: '현재 포트폴리오 분석', outlook: '앞으로의 전망', opinion: '투자 의견' };
@@ -37,9 +38,12 @@ export function ensureVisitorSession() {
 }
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  if (preview) return previewRequest<T>(path, init);
   const response = await fetch('/api/portfolio' + path, { ...init, signal: AbortSignal.timeout(15000), headers: { 'Content-Type': 'application/json', ...init?.headers } });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
+    if (body.detail === 'WORKBOOK_CONFLICT') throw new Error('다른 탭에서 수정했어요. 저장된 내용을 다시 불러와 주세요.');
+    if (path === '/workbook' && response.status === 422) throw new Error('종목·배당·월 기록의 입력값과 최대 기록 수를 확인해 주세요.');
     if (body.detail === 'CHAT_LIMIT') throw new Error('CHAT_LIMIT');
     if (body.detail === 'RECOVERY_LIMIT') throw new Error('RECOVERY_LIMIT');
     if (body.detail === 'NO_HOLDINGS') throw new Error('보유 ETF를 입력한 분석에서 뉴스레터를 신청해 주세요.');

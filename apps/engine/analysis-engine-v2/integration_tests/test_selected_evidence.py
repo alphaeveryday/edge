@@ -18,8 +18,8 @@ from edge_analysis_v2.storage.tool_runs import ToolStore
 def saved():
     dsn = os.environ['V2_EVIDENCE_TEST_DSN']
     args = conninfo_to_dict(dsn)
-    if (args.get('host'), args.get('port'), args.get('dbname')) != (
-            '127.0.0.1', '55446', 'analysis_v2'):
+    if (args.get('host') != '127.0.0.1' or args.get('port') not in {'55446', '15449'}
+            or args.get('dbname') != 'analysis_v2'):
         raise ValueError('Dedicated local evidence test database required')
     key = uuid4().hex
     now = datetime.fromisoformat('2026-10-02T10:00:00+09:00')
