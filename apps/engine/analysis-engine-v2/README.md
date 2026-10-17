@@ -79,6 +79,7 @@ API 계약: [Search](https://docs.tinyfish.ai/api-reference/search-the-web),
 ## 검증
 
 문서 스킬과 실행 권한, 컨테이너 검증 방법은 [분석 스킬 실행 계약](docs/agent-skills.md)을 참고한다.
+사건 조회·뉴스 근거·이전 전망 비교는 [뉴스 조사 계약](docs/news-discovery.md)을 참고한다.
 API·가격 사건의 실행 접수와 운영 연결 전 범위는 [v2 실행 접수 계약](../../../docs/contracts/analysis-v2-admission.md)을 참고한다.
 
 ```sh
