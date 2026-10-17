@@ -2,7 +2,7 @@
 from edge_analysis_v2.agent.work_context import WorkContext
 
 
-def test_unchanged_originals_precede_clock_and_new_material_after_database_roundtrip():
+def test_catalog_order_is_stable_without_repeating_originals_after_database_roundtrip():
     import json
     from edge_analysis_v2.analysis.research_state import ResearchState
     state = ResearchState()
@@ -14,24 +14,85 @@ def test_unchanged_originals_precede_clock_and_new_material_after_database_round
     second = {'context': {'analysis_at': '2026-10-17'}, 'research_state': restored.snapshot()}
     projected = [WorkContext(value).initial for value in (first, second)]
     for raw, value in zip((first, second), projected):
-        assert value['research_state'] == raw['research_state']
+        assert WorkContext(raw).sources['research_state'] == raw['research_state']
         assert next(iter(value)) == 'research_state'
-        assert next(iter(value['research_state'])) == 'materials'
+        assert next(iter(value['research_state'])) == 'catalog'
     encode = lambda value: json.dumps(value, ensure_ascii=False, separators=(',', ':'))
-    prefix = encode(projected[0]['research_state']['materials'])[:-1]
-    assert encode(projected[1]['research_state']['materials']).startswith(prefix)
+    prefix = encode(projected[0]['research_state']['catalog'])[:-1]
+    assert encode(projected[1]['research_state']['catalog']).startswith(prefix)
     assert first['research_state']['materials']['z']['nested'] == {'z': 1, 'a': [2, 1]}
 
 
-def test_revision_body_and_current_research_are_in_first_input_without_retrieval():
+def test_revision_body_stays_in_first_input_while_originals_remain_retrievable():
     initial = {'previous_analysis': {'detail': {'original': 'unchanged'}},
                'previous_items': [{'item_id': 'kept'}],
                'research_state': {'version': 1, 'materials': {'a': {'text': 'original'}}}}
     context = WorkContext(initial)
-    for key in initial:
+    for key in ('previous_analysis', 'previous_items'):
         assert context.initial[key] == initial[key]
+    assert 'materials' not in context.initial['research_state']
+    assert context.read('research_state', 'a')['rows'] == [{'text': 'original'}]
+    assert context.consulted == []
     context.initial['previous_analysis']['detail']['original'] = 'changed'
     assert initial['previous_analysis']['detail']['original'] == 'unchanged'
+
+
+def test_only_current_unresolved_questions_are_inlined_and_stale_pointers_are_not_current():
+    raw = {'analysis': {'analysis_id': 'parent'}, 'materials': {
+        'q': {'kind': 'questions', 'todos': [
+            {'content': 'unconfirmed contract', 'status': 'pending'},
+            {'content': 'await next filing', 'status': 'completed', 'closure': 'structural_limit'},
+            {'content': 'immaterial question', 'status': 'completed', 'closure': 'no_effect'},
+            {'content': 'old solved question', 'status': 'completed', 'answer': 'large old answer'}]},
+        'n': {'kind': 'note', 'path': 'answer.md', 'text': 'large old report'}},
+        'current_work': {'analysis_id': 'parent', 'stages': {'root': {'questions': 'q', 'notes': {'answer.md': 'n'}}}}}
+    current = WorkContext({'research_state': raw}).initial['research_state']['current_work']
+    assert current['status'] == 'recorded'
+    assert current['stages']['root']['open_questions'] == [
+        {'content': 'unconfirmed contract', 'status': 'pending'},
+        {'content': 'await next filing', 'status': 'completed', 'closure': 'structural_limit'}]
+    raw['current_work']['analysis_id'] = 'older-parent'
+    stale = WorkContext({'research_state': raw}).initial['research_state']
+    assert stale['current_work']['status'] == 'unavailable'
+    assert set(stale['catalog']) == {'q', 'n'}
+
+
+def test_alias_reads_original_and_retired_material_is_not_reintroduced():
+    import pytest
+    from edge_analysis_v2.analysis.research_state import ResearchState
+    state = ResearchState()
+    state.add('a', {'text': 'kept'})
+    state.add('alias', {'text': 'kept'})
+    context = WorkContext({'research_state': state.snapshot()})
+    assert context.read('research_state', 'alias')['rows'] == [{'text': 'kept'}]
+    state.remove([{'id': 'a', 'reason': 'superseded'}])
+    context = WorkContext({'research_state': state.snapshot()})
+    assert context.initial['research_state']['catalog'] == {}
+    with pytest.raises(ValueError):
+        context.read('research_state', 'alias')
+
+
+def test_research_pagination_recovery_preserves_selected_original():
+    import pytest
+    from edge_analysis_v2.agent.work_context import SourceInputError
+    context = WorkContext({'research_state': {'materials': {'a': {'text': 'original'}}}})
+    for invalid in ({'limit': 0}, {'offset': -1}):
+        with pytest.raises(SourceInputError) as error:
+            context.read('research_state', 'a', **invalid)
+        assert context.read(**error.value.details['retry_arguments'])['rows'] == [{'text': 'original'}]
+
+
+def test_research_lookup_cannot_accidentally_reload_the_entire_archive():
+    import pytest
+    from edge_analysis_v2.agent.work_context import SourceInputError
+    context = WorkContext({'research_state': {'materials': {'a': {'text': 'original'}}}})
+    assert 'keys' not in context.initial['available_sources']['research_state']
+    for subject in ('', 'materials', 'unknown'):
+        with pytest.raises(SourceInputError) as error:
+            context.read('research_state', subject)
+        assert error.value.details['allowed_values'] == ['a']
+        assert 'retry_arguments' not in error.value.details
+    assert context.read('research_state', 'a')['rows'] == [{'text': 'original'}]
 
 
 def test_research_records_only_pages_actually_read_not_the_unread_database():
@@ -46,10 +107,10 @@ def test_reading_previous_analysis_does_not_reclassify_authored_text_as_source_m
     previous = {'previous_analysis': {'summary_card': {'summary': 'Prior judgment'}},
                 'previous_issue_detail': {'headline': 'Prior issue', 'items': []},
                 'previous_items': [{'sentence': 'Prior explanation'}],
-                'research_state': {'version': 1, 'materials': {}}}
+                'research_state': {'version': 1, 'materials': {'a': {'text': 'previous observation'}}}}
     context = WorkContext(previous | {'news': [{'title': 'New source'}]})
     for source in previous:
-        assert context.read(source)['rows']
+        assert context.read(source, 'a' if source == 'research_state' else '')['rows']
     assert context.consulted == []
     news = context.read('news')
     assert context.consulted == [news]
