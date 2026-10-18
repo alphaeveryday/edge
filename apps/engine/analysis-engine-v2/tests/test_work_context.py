@@ -25,10 +25,11 @@ def test_catalog_order_is_stable_without_repeating_originals_after_database_roun
 
 def test_revision_body_stays_in_first_input_while_originals_remain_retrievable():
     initial = {'previous_analysis': {'detail': {'original': 'unchanged'}},
-               'previous_items': [{'item_id': 'kept'}],
+               'previous_items': [{'item_id': 'retired'}, {'item_id': 'kept'}],
+               'previous_selected_item_ids': ['kept'],
                'research_state': {'version': 1, 'materials': {'a': {'text': 'original'}}}}
     context = WorkContext(initial)
-    for key in ('previous_analysis', 'previous_items'):
+    for key in ('previous_analysis', 'previous_items', 'previous_selected_item_ids'):
         assert context.initial[key] == initial[key]
     assert 'materials' not in context.initial['research_state']
     assert context.read('research_state', 'a')['rows'] == [{'text': 'original'}]

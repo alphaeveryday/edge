@@ -218,8 +218,12 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                     cur.execute('SELECT analysis_at FROM outlook_analyses WHERE analysis_id=%s', (previous_id,))
                     previous_at = cur.fetchone()[0]
             items = None
+            selected = []
             if kind == 'movement':
                 with connection.cursor(row_factory=dict_row) as cur:
+                    if previous_id:
+                        cur.execute('SELECT selected_item_ids FROM movement_analyses WHERE analysis_id=%s', (previous_id,))
+                        selected = cur.fetchone()['selected_item_ids']
                     cur.execute('''WITH RECURSIVE history AS (
                         SELECT analysis_id,previous_analysis_id FROM movement_analyses WHERE analysis_id=%s
                         UNION ALL SELECT a.analysis_id,a.previous_analysis_id FROM movement_analyses a
@@ -234,8 +238,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
             if tool_store is None:
                 for definition in definitions:  # one connection instead of one per definition
                     ToolStore(connection).register_definition(**definition)
-            return previous, items, previous_at, load_research(connection, kind, previous_id)
-        previous, previous_items, previous_at, research = run(load)
+            return previous, items, selected, previous_at, load_research(connection, kind, previous_id)
+        previous, previous_items, previous_selected, previous_at, research = run(load)
         editor = BodyEditor(previous['detail'] if previous and kind == 'outlook' else None, cutoff)
         initial = tools.initial_input() | {'previous_analysis': previous}
         previous_fields = None
@@ -297,6 +301,7 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                 '상한을 넘은 부분만 apply_outlook_body_changes 한 호출로 고치고 다른 논점과 ID는 유지하세요.']
         if kind == 'movement':
             initial['previous_items'] = previous_items
+            initial['previous_selected_item_ids'] = previous_selected
         schemas = deepcopy(tools.schemas)
         for schema in schemas:
             function = schema['function']
@@ -434,7 +439,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                          '생략한 속성은 직전 발행본 값을 유지합니다.'
                          if previous_fields is not None else '전체 응답을 다시 내세요.')
                 return message + retry if message else None
-            prompt = system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(kind+'.yaml'))
+            prompt_name = 'movement_revision' if kind == 'movement' and previous else kind
+            prompt = system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(prompt_name+'.yaml'))
             if previous_fields is not None:
                 prompt = prompt.replace('전망·요약·5요인·결론·이슈 상세는 각각 완성 객체로 보낸다.', '') + (
                     '\n이번 실행은 전망 수정이다. 위의 완성 응답 지시보다 다음 제출 규칙을 우선한다. '
