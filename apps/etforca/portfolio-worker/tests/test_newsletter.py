@@ -323,7 +323,7 @@ def test_failed_holding_does_not_suppress_all_other_daily_news(newsletter_db, mo
     sender.process_daily(ses, now)
     assert len(sends) == 1
     html = sends[0]['Content']['Simple']['Body']['Html']['Data']
-    assert 'QQQ' in html and '오늘의 소식을 확인하지 못했어요' in html
+    assert 'QQQ' in html and '자료 없음' in html, 'A holding whose research failed is marked, not silently dropped'
     assert '변동 요인 후보' not in html, 'A missing holding must not render empty analysis sections'
     with store.connect() as db:
         row = db.execute("""SELECT d.subscription_id=s.id AS correct_subscription FROM portfolio_newsletter_deliveries d
@@ -526,15 +526,16 @@ def test_sources_are_short_article_titles_not_links_and_the_letter_ends_with_a_k
     assert sum(cheer in plain for cheer in email.CHEERS) == 1, 'Exactly one closing line, chosen by date'
 
 
-def test_core_letter_reports_the_portfolio_then_only_what_touches_the_thesis():
+def test_core_letter_is_a_dashboard_then_only_the_holdings_whose_thesis_moved():
     shaken = letter_card('H', 'US:A', 'A', headline='보유 이유 흔들림', verdict='악화')
     calm = letter_card('H', 'US:B', 'B', important=False, positives=[], impact='업종 흐름 안의 등락이에요.')
     subject, html, text = email.daily(date(2026, 10, 18), [calm, shaken], 'H')
     assert '보유 이유 흔들림' in subject
-    order = [text.index(part) for part in ('포트폴리오 보고:', '오늘 주요 보고 종목 1개', '내 보유 이유:', '오늘의 이유 브리핑', '변화 없음:', '앞으로 예정된 주요 이벤트:')]
-    assert order == sorted(order), 'Sections must follow the agreed reading order'
-    assert 'B ▲ 5.00% — 🛡️ 견고 · 업종 흐름 안의 등락이에요.' in text and text.count('내 보유 이유:') == 1
-    assert '오늘 판정: ⚠️ 악화' in text and '오늘 오른 이유: 업종 강세에 함께 올랐어요.' in text
+    assert '  B ▲ 5.00% · 🛡️ 견고' in text and '  A ▲ 5.00% · ⚠️ 악화' in text, 'Every holding shows its move and verdict at a glance'
+    assert 'A ▲ 5.00% · ⚠️ 악화\n  💭 AI 수요가 이어진다' in text, 'Only the shaken holding gets a block'
+    assert '업종 흐름 안의 등락이에요' not in text, 'A calm holding is the dashboard row only'
+    order = [text.index(part) for part in ('  A ▲ 5.00% · ⚠️ 악화', '💭 AI 수요가 이어진다', '앞으로 예정된 일정:')]
+    assert order == sorted(order)
     subject, _, _ = email.daily(date(2026, 10, 18), [calm], 'H')
     assert '보유 이유를 흔드는 변화가 없어요' in subject
 
@@ -542,7 +543,7 @@ def test_core_letter_reports_the_portfolio_then_only_what_touches_the_thesis():
 def test_core_letter_names_the_direction_of_the_move():
     down = letter_card('H', quote={**QUOTE, 'change_pct': -2.0})
     _, _, text = email.daily(date(2026, 10, 18), [down], 'H')
-    assert '오늘 떨어진 이유:' in text and '오늘 오른 이유' not in text
+    assert '📉 업종 강세에 함께 올랐어요.' in text and '📈' not in text
 
 
 def test_event_table_merges_holdings_sorts_by_date_and_drops_past_events():
@@ -554,7 +555,7 @@ def test_event_table_merges_holdings_sorts_by_date_and_drops_past_events():
     _, html, text = email.daily(date(2026, 10, 18), [a, b], 'H')
     assert '지난 일정' not in text
     assert text.index('미국 9월 CPI 발표') < text.index('3분기 실적 발표'), 'Calendar reads in date order'
-    assert '10월 23일 · 3분기 실적 발표 (SK하이닉스) — A, B' in text, 'One row per event, listing every holding it touches'
+    assert text.count('10월 23일 · SK하이닉스 3분기 실적 발표') == 1, 'One row per event even when two holdings cite it'
     assert 'src="https://www.google.com/s2/favicons?domain=bls.gov&amp;sz=64"' in html and '🧾' in html, 'Logo when resolved, emoji otherwise'
 
 
@@ -866,13 +867,14 @@ def test_twenty_worst_case_holdings_stay_under_gmail_clipping(fmt):
     # 20 is the most holdings a subscription can carry (contracts.Holding list max_length).
     schema = agent.FORMATS[fmt][1].model_json_schema()
     worst = {'significant': True} if fmt == 'F' else {}  # a quiet F day is all one-liners; every holding flagged is the long case
-    cards = [padded(letter_card(fmt, f'US:E{i}', f'ETF{i}', sources=[{'url': f'https://news{j}.example/{i}'} for j in range(5)], **worst),
+    cards = [padded(letter_card(fmt, f'US:E{i}', f'ETF{i}', sources=[{'url': f'https://news{j}.example/{i}', 'title': f'{i}번 종목 {j}번 기사 제목이 꽤 길어요'} for j in range(5)], **worst),
                     schema, schema.get('$defs', {}))
              for i in range(20)]
     _, html, text = email.daily(date(2026, 10, 18), cards, fmt, weights={f'US:E{i}': .05 for i in range(20)})
     assert len(html.encode()) <= email.BUDGET, 'Over ~102KB Gmail hides the footer: disclaimer and unsubscribe link'
     assert html.count(email.UNSUBSCRIBE) == 1 and '매매 지시가 아닙니다' in html
-    assert '나머지 종목은 제목과 요약만 실었어요' in text, 'Trimmed holdings must say so instead of vanishing'
+    trimmed = '메일이 길어 일부 소식의 자세한 내용은 뺐어요' if fmt == 'H' else '나머지 종목은 제목과 요약만 실었어요'
+    assert trimmed in text, 'Trimmed holdings must say so instead of vanishing'
     assert all(f'ETF{i}' in text for i in range(20)), 'Every holding stays in the letter, at least as a brief'
 
 
@@ -937,7 +939,7 @@ def test_event_titles_differing_only_in_spacing_are_one_row():
     a = letter_card('H', 'US:A', 'A', events=[{**EVENT, 'icon': None}])
     b = letter_card('H', 'US:B', 'B', events=[{**EVENT, 'title': '3분기 실적발표', 'icon': None}])
     _, _, text = email.daily(date(2026, 10, 18), [a, b], 'H')
-    assert text.count('3분기 실적') == 1 and '— A, B' in text
+    assert text.count('3분기 실적') == 1
 
 
 async def test_news_item_citing_the_price_row_is_sent_back_for_a_text_source():
@@ -957,7 +959,7 @@ def test_same_title_from_two_companies_stays_two_rows():
     a = letter_card('H', 'US:A', 'A', events=[{**EVENT, 'icon': None}])
     b = letter_card('H', 'US:B', 'B', events=[{**EVENT, 'org': '삼성전자', 'icon': None}])
     _, _, text = email.daily(date(2026, 10, 18), [a, b], 'H')
-    assert '(SK하이닉스) — A' in text and '(삼성전자) — B' in text
+    assert 'SK하이닉스 3분기 실적 발표' in text and '삼성전자 3분기 실적 발표' in text
 
 
 async def test_a_source_cited_only_by_a_news_item_still_gets_its_button():
@@ -975,15 +977,15 @@ def test_news_item_shows_its_company_move_or_its_importance_never_a_certainty_ta
     company = {**STORED_NEWS, 'title': '삼성전자 실적', 'org': '삼성전자', 'change_pct': 2.62}
     macro = {**STORED_NEWS, 'title': '미국 CPI 상회', 'kind': '물가', 'importance': '최상'}
     _, html, text = email.daily(date(2026, 10, 18), [letter_card('H', positives=[company], negatives=[macro])], 'H')
-    assert '🤝 삼성전자 실적 · 삼성전자 ▲ 2.62%' in text and '📊 미국 CPI 상회 · 🔥 중요도 최상' in text
+    assert '＋ 삼성전자 실적 · 삼성전자 ▲ 2.62%' in text and '－ 미국 CPI 상회 · 🔥 중요도 최상' in text
     assert '· 확인' not in html and '‘확인’은' not in html, 'H no longer shows certainty labels or explains them'
-    assert f'background:{email.UP};color:#ffffff' in html and f'background:{email.DOWN};color:#ffffff' in html, 'Good news red, bad news blue'
+    assert f'border-left:3px solid {email.UP}' in html and f'border-left:3px solid {email.DOWN}' in html, 'Good news red, bad news blue'
 
 
 def test_us_events_are_labelled_korean_time():
     us = {**EVENT, 'when': '10월 30일(목) 오전 5시', 'title': '3분기 실적 발표', 'org': '엔비디아', 'market': '미국', 'icon': None}
     _, _, text = email.daily(date(2026, 10, 18), [letter_card('H', events=[us])], 'H')
-    assert '10월 30일(목) 오전 5시 (한국시간) · 3분기 실적 발표 (엔비디아)' in text
+    assert '10월 30일(목) 오전 5시 (한국시간) · 엔비디아 3분기 실적 발표' in text
 
 
 def test_article_title_comes_from_the_fetched_page_not_the_model():
@@ -1049,3 +1051,39 @@ async def test_company_moves_are_looked_up_once_per_ticker_two_at_a_time():
 def test_headline_keeps_a_spaced_dash_inside_the_title():
     assert agent.headline({'id': 's', 'url': 'https://a.example/', 'excerpt': '# 삼성전자 - SK하이닉스 격차 확대'}) == '삼성전자 - SK하이닉스 격차 확대'
     assert agent.headline({'id': 's', 'url': 'https://a.example/', 'excerpt': '# LG엔솔-엘앤에프, LFP 첫 공급계약 - 머니투데이'}) == 'LG엔솔-엘앤에프, LFP 첫 공급계약'
+
+
+def test_news_detail_folds_under_its_own_headline():
+    item = {**STORED_NEWS, 'title': '삼성전자 실적', 'org': '삼성전자', 'change_pct': 2.62}
+    _, html, text = email.daily(date(2026, 10, 18), [letter_card('H', positives=[item])], 'H')
+    summary = html[html.index('<summary'):html.index('</summary>')]
+    assert '삼성전자 실적' in summary and '자세히' not in html, 'The headline itself opens the detail; no repeated "more" links'
+    assert html.index('</summary>') < html.index('새 계약이 수요 가정을 뒷받침해요.') < html.index('</details>')
+    assert '새 계약이 수요 가정을 뒷받침해요.' in text, 'The plain-text edition never folds anything away'
+
+
+def test_good_and_bad_news_differ_by_sign_not_only_colour():
+    good = {**STORED_NEWS, 'title': '좋은 소식'}
+    bad = {**STORED_NEWS, 'title': '나쁜 소식'}
+    _, html, _ = email.daily(date(2026, 10, 18), [letter_card('H', positives=[good], negatives=[bad])], 'H')
+    assert html.index('＋</b>') < html.index('좋은 소식') < html.index('－</b>') < html.index('나쁜 소식')
+
+
+def test_calendar_merges_an_event_whose_title_repeats_the_company():
+    a = letter_card('H', 'US:A', 'A', events=[{**EVENT, 'icon': None}])
+    b = letter_card('H', 'US:B', 'B', events=[{**EVENT, 'title': 'SK하이닉스 3분기 실적 발표', 'icon': None}])
+    _, _, text = email.daily(date(2026, 10, 18), [a, b], 'H')
+    assert text.count('3분기 실적 발표') == 1
+
+
+def test_calm_day_still_says_which_holdings_went_unchecked():
+    calm = letter_card('H', 'US:A', 'A', important=False, positives=[])
+    missing = {'instrument_id': 'US:X', 'name': 'X', 'unavailable': True, 'headline': '확인하지 못했어요', 'dek': '', 'sources': []}
+    _, html, _ = email.daily(date(2026, 10, 18), [calm, missing], 'H')
+    assert '1종목은 오늘 자료를 확보하지 못했어요' in html, 'A quiet headline must not vouch for a holding nobody checked'
+
+
+def test_event_title_that_already_names_the_company_is_not_prefixed_again():
+    spaced = {**EVENT, 'title': 'SK 하이닉스 3분기 실적 발표', 'icon': None}
+    _, _, text = email.daily(date(2026, 10, 18), [letter_card('H', events=[spaced])], 'H')
+    assert '10월 23일 · SK 하이닉스 3분기 실적 발표' in text and 'SK하이닉스 SK 하이닉스' not in text
