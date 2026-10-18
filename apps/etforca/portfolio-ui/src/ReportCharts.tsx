@@ -15,7 +15,7 @@ export function PortfolioDonut({ holdings }: { holdings: { name: string; weight_
   })}</svg><div className="donut__c"><b>{holdings.length}개</b></div></div>;
 }
 
-export function PerformanceChart({ history, label = '추천 구성' }: { history: History; label?: string }) {
+export function PerformanceChart({ history, label = '추천 구성', showSources = true }: { history: History; label?: string; showSources?: boolean }) {
   const ref = useRef<HTMLElement>(null);
   const [width, setWidth] = useState(320);
   const [labelWidth, setLabelWidth] = useState(0);
@@ -89,6 +89,6 @@ export function PerformanceChart({ history, label = '추천 구성' }: { history
     </svg></div>
     <TextInput className="history-slider" type="range" min="0" max={points.length - 1} value={active} onChange={event => setSelected(Number(event.target.value))} aria-label="과거 성과 날짜 선택" aria-valuetext={points[active].date} />
     <p className="history-date">{points[active].date}</p><div className="history-values"><span>{label} <b>{valueLabel(points[active].recommended)}</b></span>{hasCurrent && <span>{baselineLabel} <b>{valueLabel(points[active].current!)}</b></span>}</div>
-    {history.current_unavailable_reason && <p className="notice">{history.current_unavailable_reason}</p>}<details><summary>계산 기준과 출처</summary><p>{history.method}</p>{history.sources?.length ? history.sources.map(source => <a key={source.instrument_id} href={safeReportUrl(source.url)} target="_blank" rel="noreferrer">{source.instrument_id} ↗</a>) : <a href={safeReportUrl(history.source_url)} target="_blank" rel="noreferrer">성과 자료 출처 ↗</a>}</details>
+    {history.current_unavailable_reason && <p className="notice">{history.current_unavailable_reason}</p>}{showSources && <details><summary>계산 기준과 출처</summary><p>{history.method}</p>{history.sources?.length ? history.sources.map(source => <a key={source.instrument_id} href={safeReportUrl(source.url)} target="_blank" rel="noreferrer">{source.instrument_id} ↗</a>) : <a href={safeReportUrl(history.source_url)} target="_blank" rel="noreferrer">성과 자료 출처 ↗</a>}</details>}
   </figure>;
 }

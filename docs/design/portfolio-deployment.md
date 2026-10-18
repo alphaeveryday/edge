@@ -16,9 +16,9 @@
 
 포트폴리오 UI는 기존 [PostHog 웹 프로젝트 658097](https://us.posthog.com/project/658097)에 수집한다. `analytics.ts`의 공개 프로젝트 키는 랜딩과 같고, 개인 API 키나 추가 서버 환경변수는 필요 없다. `etforca.com/portfolio/`와 www 도메인의 같은 경로에서만 실행한다. 로컬 미리보기·관리자 진입점에서는 수집하지 않는다. SDK의 봇 제외는 유지한다.
 
-Web analytics의 Top paths에서 `/portfolio/`를 선택하면 랜딩(`/`)과 분리한다. www 방문도 공개 주소인 `etforca.com`으로 합쳐 집계한다. 익명 방문·세션을 서버에서 생성할 수 있도록 `$cookieless_mode`를 보존하고 `$host`를 고정된 `etforca.com`으로 전송한다. 경로가 안 보이면 프로젝트·조회 기간·호스트 필터와 실제 `$pageview` 적재를 확인한다. 브라우저 전송 테스트나 수집 API의 성공 응답만으로 집계 완료를 판정하지 않는다.
+Web analytics의 Top paths에서 `/portfolio/`로 시작하는 경로를 선택하면 랜딩(`/`)과 분리한다. 화면 이름을 `/portfolio/input/holdings`, `/portfolio/dashboard/overview` 등의 논리 경로로 보내며 www도 `etforca.com`으로 합쳐 집계한다. 쿼리·해시는 보내지 않는다. 경로가 안 보이면 프로젝트·조회 기간·호스트 필터와 실제 `$pageview` 적재를 확인한다. 브라우저 전송 테스트나 수집 API의 성공 응답만으로 집계 완료를 판정하지 않는다.
 
-PostHog **Product analytics → New insight → Trends**에서 아래 이벤트와 속성을 사용한다. 모든 포트폴리오 이벤트에 `screen`이 있으므로 랜딩과 분리할 수 있다.
+PostHog **Product analytics → New insight → Trends**에서 아래 이벤트와 속성을 사용한다. 화면 이벤트는 `screen`, 조작 이벤트는 `portfolio_action`과 고정된 `action` 값으로 구분한다.
 
 | 확인할 내용 | 이벤트·집계 |
 |---|---|
@@ -28,8 +28,10 @@ PostHog **Product analytics → New insight → Trends**에서 아래 이벤트�
 | 스크롤이 멈춘 구간 | `portfolio_scroll_pause`의 Total count 또는 Sum `pause_seconds`, Breakdown `section`, 필요시 `screen = result` 필터 |
 | 분석 만족도 | `portfolio_feedback`, Filter `action = submitted`, Total count, Breakdown `rating` (`good` 좋아요 / `okay` 그냥 그래요 / `needs_improvement` 개선이 필요해요) |
 | 정체 위치·도달 깊이 | 정체 이벤트의 `scroll_y`(뷰포트 상단 px), `scroll_depth_pct`(뷰포트 하단 기준 %), 체류 이벤트의 `max_scroll_depth_pct` |
+| 보유 편집·저장·백테스트 흐름 | `portfolio_action`, Breakdown `action`: `holding_add_opened`, `holding_edit_opened`, `holdings_saved`, `holdings_save_failed`, `portfolio_saved`, `backtest_requested`, `backtest_completed`, `backtest_failed` |
+| 화면 조작 재생 | Session replay에서 `/portfolio/` 방문을 선택. 마스킹된 화면의 스크롤·클릭·이동을 재생 |
 
-`screen`은 입력 5단계(`input_holdings`, `input_funding`, `input_horizon`, `input_interests`, `input_question`), `loading`, `queued`, `running`, `result`, `failed`이다. `section`은 `answers`, `current_portfolio`, `recommendation`, `changes`, `account_plans`, `execution`, `performance`, `conclusion`, `outlook`, `insights`, `evaluation`, `scenarios`, `followup`, `feedback`이며 그 밖의 위치는 화면 이름으로 집계한다.
+`screen`은 입력 5단계(`input_holdings`, `input_funding`, `input_horizon`, `input_interests`, `input_question`), `loading`, `queued`, `running`, `result`, `failed`, 대시보드의 `dashboard_overview`, `dashboard_dividends`, `dashboard_returns`, `dashboard_backtest`이다. `section`은 `answers`, `current_portfolio`, `recommendation`, `changes`, `account_plans`, `execution`, `performance`, `conclusion`, `outlook`, `insights`, `evaluation`, `scenarios`, `followup`, `feedback`이며 그 밖의 위치는 화면 이름으로 집계한다.
 
 만족도 팝업은 완료된 고객 보고서에서 과거 성과 다음 핵심 평가 구간에 도달하면 표시한다. 이모지 3지 선택이며 닫기·Escape를 지원한다. 같은 분석의 응답·닫기는 브라우저 로컬 저장소에 표시해 다시 묻지 않는다(저장소 차단 시 현재 페이지에서만 유지). `portfolio_feedback`의 `action`은 `shown`, `submitted`, `dismissed`이고, `rating`은 응답에만 들어간다. 관리자·중단된 보고서에는 팝업이 없다. SDK Surveys 대신 앱의 고정 선택 UI와 기존 이벤트 수집 경로를 사용한다.
 
@@ -39,7 +41,11 @@ PostHog **Product analytics → New insight → Trends**에서 아래 이벤트�
 
 체류는 탭이 보이는 시간이며 실제 독서·집중 시간을 뜻하지 않는다. 숨긴 화면은 방문으로도 세지 않는다. 스크롤·레이아웃 변화 없이 2초 이상 머문 구간을 다음 이동·숨김·종료 때 기록한다. 화면 가운데의 구간을 기준으로 하며, 펼치기 등으로 레이아웃이 바뀌면 위치를 갱신한다. 앱 전환·페이지 이탈의 마지막 이벤트는 즉시 Beacon으로 넘기지만 네트워크 차단이나 브라우저 강제 종료 시 전달을 보장하지 않는다.
 
-기존 `cookieless_mode: always` 정책을 유지한다. 자동 클릭·본문 수집, 세션 녹화, SDK 설문·기능 플래그는 끄고 이벤트·속성 허용 목록만 전송한다. 입력 내용·이메일·보유 종목·보고서 본문·분석 ID·URL 쿼리·해시는 보내지 않는다. 사용자 식별자를 연결하지 않으며 날짜를 넘긴 동일 사용자 추적은 하지 않는다. 결과별 배치가 달라지는 보고서는 구간별 이벤트로 비교한다. 프로젝트의 세션 녹화·히트맵 설정을 바꾸거나 저장된 대시보드를 자동 생성하지 않는다.
+사용자 요청에 따라 익명 재방문 연결용 `localStorage+cookie` 저장과 세션 리플레이를 사용한다. `ph_orca_portfolio`는 Secure·호스트 전용·365일 쿠키이며 고객 계정 ID와 연결하지 않는다. 서비스 인증 쿠키를 수집하거나 복사하지 않는다. 페이지 하단 ‘이용 통계 설정’에서 끄면 수집·녹화를 중지하고 분석 쿠키를 제거한다. 다시 켜면 현재 화면부터 수집을 재개하며 Do Not Track 설정을 존중한다.
+
+리플레이는 카메라 영상이 아니라 마스킹된 DOM과 조작 기록이다. 모든 본문·입력값을 가리고 이미지·SVG·캔버스·배당 그래프·손익 요소를 차단한다. 손익 클래스도 중립화한다. URL·속성은 허용 목록으로 제한하고 네트워크 본문·헤더·콘솔 로그는 수집하지 않는다. 공개 CSS는 레이아웃 재구성을 위해 유지한다. 자동 클릭 분석·SDK 설문·기능 플래그·히트맵은 사용하지 않는다. 직접 보내는 이벤트에도 이메일·종목·분석 ID·보고서 본문을 넣지 않는다. 테스트 미리보기는 쿠키·녹화를 포함한 수집을 시작하지 않는다. 이미 녹화 중인 세션의 화면 이동은 마스킹 정책을 유지한다.
+
+SDK 원격 설정은 리플레이 스크립트 로드에 필요하므로 전체 설정 조회를 차단하지 않는다. 개인정보 마스킹과 저장 설정은 [PostHog 리플레이 지침](https://posthog.com/docs/session-replay/privacy)과 [브라우저 저장 지침](https://posthog.com/docs/libraries/js/persistence)을 따른다. 새 AWS 자원은 추가하지 않으며 PostHog 사용량은 해당 프로젝트 요금에 반영된다.
 
 ## 권한
 

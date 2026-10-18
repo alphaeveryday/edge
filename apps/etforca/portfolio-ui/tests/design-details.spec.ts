@@ -4,7 +4,7 @@ test('Korean text and financial figures use the bundled font without a font CDN'
   const externalFonts: string[] = [];
   page.on('request', r => { if (/fonts\.(googleapis|gstatic)\.com/.test(r.url())) externalFonts.push(r.url()); });
   await page.goto('/portfolio/?preview=dashboard');
-  await expect(page.locator('.asset-row').first()).toBeVisible();
+  await expect(page.locator('.holding-edit').first()).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   expect(await page.evaluate(() => [...document.fonts].some(f => f.family.replace(/["']/g, '') === 'Pretendard Variable' && f.status === 'loaded'))).toBe(true);
   await expect(page.locator('.dashboard-stats strong').first()).toHaveCSS('font-variant-numeric', 'tabular-nums');
@@ -13,20 +13,20 @@ test('Korean text and financial figures use the bundled font without a font CDN'
 
 test('financial column headings align with their values and chart headings share a baseline', async ({ page, isMobile }) => {
   await page.goto('/portfolio/?preview=dashboard');
-  await expect(page.locator('.asset-row').first()).toBeVisible();
+  await expect(page.locator('.holding-edit').first()).toBeVisible();
   if (!isMobile && page.viewportSize()!.width > 1000) {
     const geometry = await page.evaluate(() => {
-      const headers = [...document.querySelectorAll('.asset-list-heading span')].map(e => e.getBoundingClientRect());
-      const cells = [...document.querySelector('.asset-row')!.children].map(e => e.getBoundingClientRect());
+      const headers = [...document.querySelectorAll('.holdings-table thead th')].map(e => e.getBoundingClientRect());
+      const cells = [...document.querySelector('.holdings-table tbody tr')!.children].map(e => e.getBoundingClientRect());
       const titles = [...document.querySelectorAll('.dashboard-overview h2')].map(e => e.getBoundingClientRect());
-      return [Math.abs(headers[0].left - cells[1].left), Math.abs(headers[1].right - cells[2].right), Math.abs(headers[2].right - cells[3].right), Math.abs(titles[0].top - titles[1].top)];
+      return [Math.abs(headers[0].left - cells[0].left), Math.abs(headers[1].right - cells[1].right), Math.abs(headers[2].right - cells[2].right), Math.abs(titles[0].top - titles[1].top)];
     });
     expect(geometry.every(gap => gap <= 1)).toBe(true);
   }
-  await expect(page.locator('.asset-row').first().locator('span').nth(3)).toContainText('+877,000원');
-  await expect(page.getByRole('button', { name: /^2026-10 실수령/ })).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('button', { name: /^2027-09 실수령/ }).click();
-  await expect(page.getByRole('button', { name: /^2027-09 실수령/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.holdings-table tbody tr').filter({ hasText: '미국시장 ETF 예시' }).locator('[data-label=평가손익]')).toContainText('+877,000원');
+  await expect(page.getByRole('button', { name: /^2026-10 예상/ })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: /^2027-09 예상/ }).click();
+  await expect(page.getByRole('button', { name: /^2027-09 예상/ }).first()).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('input guidance describes the current decision and the optional selection limit is visible', async ({ page }) => {
@@ -67,7 +67,7 @@ test('adding and editing a holding have distinct titles and a saved result', asy
   await page.getByLabel('보유 수량', { exact: true }).fill('2');
   await page.getByRole('button', { name: '저장', exact: true }).last().click();
   await expect(page.locator('.dashboard-save-status')).toContainText('저장했어요');
-  await page.locator('.asset-row').filter({ hasText: 'KODEX 200' }).click();
+  await page.locator('.holding-edit').filter({ hasText: 'KODEX 200' }).click();
   await expect(page.getByRole('heading', { name: '보유 자산 수정' })).toBeVisible();
 });
 

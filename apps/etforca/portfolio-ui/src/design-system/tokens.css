@@ -27,6 +27,8 @@
   --text-chart: 12px;
   --chart-1: #3182f6; --chart-2: #6b7684; --chart-3: #b16b00;
   --chart-4: #029359; --chart-5: #bc1b2a; --chart-6: #8222a2;
+  --chart-coral: #fb806b; --chart-ocean: #206985; --chart-violet: #8b5cf6;
+  --chart-slate: #94a3b8; --chart-teal: #007780;
   --font: 'Pretendard Variable', 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
   --num: var(--font);
   --text-display: 2.25rem; --text-title: 1.875rem; --text-heading: 1.375rem;

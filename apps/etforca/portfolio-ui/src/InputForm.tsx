@@ -17,13 +17,13 @@ export function InputForm({ onSubmit, busy }: { onSubmit: (input: Input) => void
   const heading = useRef<HTMLElement>(null);
   const bar = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    const element = bar.current, app = element?.closest<HTMLElement>('.app');
-    if (!element || !app) return;
-    const reserve = () => app.style.setProperty('--input-cta-height', `${element.getBoundingClientRect().height + 24}px`);
+    const element = bar.current, root = document.documentElement;
+    if (!element) return;
+    const reserve = () => root.style.setProperty('--input-cta-height', `${element.getBoundingClientRect().height + 24}px`);
     reserve();
     const observer = new ResizeObserver(reserve);
     observer.observe(element);
-    return () => { observer.disconnect(); app.style.removeProperty('--input-cta-height'); };
+    return () => { observer.disconnect(); root.style.removeProperty('--input-cta-height'); };
   }, []);
   const [step, setStep] = useState(initial?.step ?? 0);
   useEffect(() => trackScreen((['input_holdings', 'input_funding', 'input_horizon', 'input_interests', 'input_question'] as const)[step]), [step]);

@@ -3,7 +3,7 @@ export type Dividend = { id: string; asset_id: string; date: string; status: 'ì‹
 export type Month = { month: string; value: number; deposit: number; withdrawal: number; return_pct: number | null };
 export type Workbook = { title: string; fx: number | null; assets: Asset[]; dividends: Dividend[]; months: Month[] };
 export type Saved = { version: number; workbook: Workbook | null };
-export type Quote = { id: string; value: number | null; profit: number | null; price: number | null; price_date: string | null; quantity: number | null; average?: number | null; estimated_quantity?: boolean };
+export type Quote = { id: string; value: number | null; profit: number | null; price: number | null; price_date: string | null; quantity: number | null; average?: number | null; estimated_quantity?: boolean; dividend_yield_pct?: number | null; dividend_cycle?: string };
 export type Forecast = { asset_id: string; month: string; amount: number };
 export type Tracking = { market: { version: number; payload: { date: string; assets: Quote[]; fx: number | null; forecasts: Forecast[]; missing: string[]; dividend_missing: string[]; pending_splits?: string[] } } | null; days: { date: string; value: number; assets: Quote[]; fx: number | null }[]; archives?: { version: number; payload: Workbook }[] };
 export function needsSeed(w: Workbook) { return w.assets.some(a => a.amount === null && a.quantity === null && a.weight !== null); }

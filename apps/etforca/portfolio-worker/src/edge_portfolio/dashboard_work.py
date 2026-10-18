@@ -234,6 +234,28 @@ def zero_exposure(asset):
     return asset.get('quantity') == 0 or (asset.get('quantity') is None and asset.get('amount') == 0)
 
 
+def dividend_details(record, instrument_id):
+    from .market_data import dividend_observation
+    observation = dividend_observation(record, instrument_id)
+    if observation is None:
+        return {'dividend_yield_pct': None, 'dividend_cycle': '미확인'}
+    months = sorted({event['date'][:7] for event in observation['events']})
+    indices = [int(m[:4]) * 12 + int(m[5:]) for m in months]
+    gaps = [b - a for a, b in zip(indices, indices[1:])]
+    count = len(months)
+    cycle = '최근 1년 지급 없음' if not count else '비정기'
+    single_payment = len(observation['events']) == count
+    if single_payment and count in (12, 13) and all(gap == 1 for gap in gaps):
+        cycle = '매월'
+    elif single_payment and count == 4 and all(gap == 3 for gap in gaps):
+        cycle = '분기'
+    elif single_payment and count == 2 and gaps == [6]:
+        cycle = '반기'
+    elif single_payment and count == 1:
+        cycle = '연 1회'
+    return {'dividend_yield_pct': observation['trailing_yield_pct'], 'dividend_cycle': cycle + (' · 최근 1년' if count else '')}
+
+
 def valuation(workbook, records, prior, day):
     fx = last_close(records['FX'])[0] if 'FX' in records else None
     assets, forecasts, missing, dividend_missing = [], [], [], []
@@ -285,7 +307,8 @@ def valuation(workbook, records, prior, day):
         average = a['average'] / average_factor if a.get('average') is not None else None
         amount = quantity * price * rate if quantity is not None else None
         profit = quantity * (price - average) * rate - a.get('fee', 0) if quantity is not None and average is not None else None
-        assets.append({'id': a['id'], 'value': amount, 'profit': profit, 'price': price, 'price_date': price_date, 'quantity': quantity, 'average': average, 'estimated_quantity': estimated})
+        assets.append({'id': a['id'], 'value': amount, 'profit': profit, 'price': price, 'price_date': price_date, 'quantity': quantity, 'average': average, 'estimated_quantity': estimated,
+                       **dividend_details(record, key)})
         if amount is None:
             missing.append(a['id'])
         projected = forecast(a, record, quantity, rate, day)

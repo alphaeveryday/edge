@@ -16,11 +16,11 @@ test('save popup shows the actual dashboard preview and newsletter needs only em
 });
 test('chart motion respects reduced motion and monthly bars open the chosen month', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
-  await expect(page.locator('.allocation-bar>span').first()).toHaveCSS('animation-name', 'none');
+  await expect(page.locator('.allocation-donut').first()).toHaveCSS('animation-name', 'none');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.reload();
-  await expect(page.locator('.allocation-bar>span').first()).toHaveCSS('animation-name', 'allocation-enter');
-  await page.getByRole('button', { name: /^2026-10 실수령/ }).click();
+  await expect(page.locator('.allocation-donut').first()).toHaveCSS('animation-name', 'donut-enter');
+  await page.getByRole('button', { name: /^2026-10 예상/ }).click();
   await expect(page.getByRole('heading', { name: /2026년 10월/ })).toBeVisible();
   await expect(page.locator('.dividend-records')).not.toBeEmpty();
   await page.goto('/portfolio/?preview=running');
@@ -77,12 +77,12 @@ test('preview edits and reloads without sending customer API or analytics traffi
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '종목 추가', exact: true })).toBeFocused();
   await page.reload();
-  await expect(page.locator('.asset-list')).toContainText('KODEX 200');
+  await expect(page.locator('.holdings-table')).toContainText('KODEX 200');
   await expect(page.locator('.dashboard-stats')).toContainText('25,686,400원');
   await page.getByRole('button', { name: '배당 달력', exact: true }).click();
   await expect(page.getByRole('heading', { name: '배당 달력', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '수익 기록', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '자동 수익 기록' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '일별 수익 기록' })).toBeVisible();
   await page.getByRole('button', { name: '백테스트', exact: true }).click();
   await expect(page.locator('.dashboard-main')).toContainText('내 조합 백테스트');
   expect(calls).toEqual([]);
@@ -92,7 +92,7 @@ test('result can save original holdings into the dashboard without analysis', as
   await page.goto('/portfolio/?preview=result');
   await page.locator('.feedback-anchor > .save-portfolio button').click();
   await expect(page).toHaveURL(/preview=dashboard/);
-  await expect(page.locator('.asset-list')).toContainText('금 ETF 예시');
+  await expect(page.locator('.holdings-table')).toContainText('금 ETF 예시');
   await expect(page.locator('.dashboard-stats')).toContainText('25,586,400원');
 });
 
