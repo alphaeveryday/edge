@@ -5,6 +5,10 @@ export type Workbook = { title: string; fx: number | null; assets: Asset[]; divi
 export type Saved = { version: number; workbook: Workbook | null };
 export type Quote = { id: string; value: number | null; profit: number | null; price: number | null; price_date: string | null; quantity: number | null; average?: number | null; estimated_quantity?: boolean; dividend_yield_pct?: number | null; dividend_cycle?: string };
 export type Forecast = { asset_id: string; month: string; amount: number };
+export function annualDividend(asset: Asset, quote: Quote | undefined): number | null {
+  if (asset.category === '현금' || asset.quantity === 0 || asset.quantity === null && asset.amount === 0) return 0;
+  return quote?.dividend_yield_pct != null && quote.value != null ? quote.value * quote.dividend_yield_pct / 100 : null;
+}
 export function dividendMonthCovered(asset: Asset, quote: Quote | undefined, month: string, start: string | null) {
   if (asset.category === '현금' || asset.quantity === 0 || asset.quantity === null && asset.amount === 0) return true;
   const observed = quote?.price_date;

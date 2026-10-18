@@ -39,8 +39,9 @@ export function AllocationChart({ assets, fx }: { assets: Asset[]; fx: number | 
   </section>;
 }
 
-export function DividendSummary({ forecasts, complete, total }: { forecasts: Forecast[]; complete: boolean; total: number | null }) {
-  const annual = complete || forecasts.length ? forecasts.reduce((sum, d) => sum + d.amount, 0) : null;
+export function DividendSummary({ forecasts, annualEstimate, total }: { forecasts: Forecast[]; annualEstimate: number | null; total: number | null }) {
+  const complete = annualEstimate !== null;
+  const annual = annualEstimate ?? (forecasts.length ? forecasts.reduce((sum, d) => sum + d.amount, 0) : null);
   return <div className="dividend-metrics"><div><span>예상 배당률</span><strong>{complete && annual !== null && total !== null && total > 0 ? (annual / total * 100).toFixed(1) + '%' : '—'}</strong></div><div><span>{complete ? '예상 연간' : '확인된 예상'}</span><strong>{money(annual)}</strong></div><div><span>월평균</span><strong>{complete && annual !== null ? money(annual / 12) : '—'}</strong></div></div>;
 }
 

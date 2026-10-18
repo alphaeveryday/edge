@@ -1,12 +1,12 @@
 import { useState } from 'react';
 import { Button } from './design-system/components';
 import { classifyAsset } from './assetClassification';
-import { money, type Asset, type Quote, type Forecast } from './workbook';
+import { money, annualDividend, type Asset, type Quote } from './workbook';
 
 const number = (n: number | null | undefined) => n == null ? '—' : n.toLocaleString('ko-KR', { maximumFractionDigits: 4 });
 const signed = (n: number | null | undefined) => n == null ? '—' : `${n > 0 ? '+' : ''}${money(n)}`;
-export function Holdings({ assets, quotes, forecasts, missing, total, fx, amountOf, disabled, onEdit }: {
-  assets: Asset[]; quotes: Map<string, Quote>; forecasts: Forecast[]; missing: string[];
+export function Holdings({ assets, quotes, missing, total, fx, amountOf, disabled, onEdit }: {
+  assets: Asset[]; quotes: Map<string, Quote>; missing: string[];
   total: number | null; fx: number | null; amountOf: (a: Asset) => number | null; disabled: boolean; onEdit: (a: Asset) => void;
 }) {
   const [descending, setDescending] = useState(true);
@@ -28,7 +28,7 @@ export function Holdings({ assets, quotes, forecasts, missing, total, fx, amount
     const basis = amount !== null && gain !== null ? amount - gain : null;
     const pct = gain !== null && basis !== null && basis > 0 ? gain / basis * 100 : null;
     const cash = a.category === '현금', classification = classifyAsset(a);
-    const annual = missing.includes(a.id) ? null : forecasts.filter(d => d.asset_id === a.id).reduce((s, d) => s + d.amount, 0);
+    const annual = missing.includes(a.id) ? null : annualDividend(a, q);
     const tone = gain === null ? '' : gain >= 0 ? 'gain' : 'loss';
     return <tr key={a.id}>
       <th scope="row"><Button className="holding-edit" disabled={disabled} onClick={() => onEdit(a)}><b>{a.name}</b><small>{a.instrument_id?.split(':')[1]} · {a.account}</small>{q?.estimated_quantity && <small>금액 기준 추적</small>}</Button></th>
