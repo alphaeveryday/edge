@@ -36,6 +36,8 @@ for (const [id, name, region, theme] of [
   ['US:EMXC', 'iShares MSCI Emerging Markets ex China ETF', '미분류', '미분류'],
   ['US:QYLD', 'Global X Nasdaq 100 Covered Call ETF', '미국', '커버드콜'],
   ['US:IBB', 'iShares Biotechnology ETF', '미분류', '헬스케어'],
+  ['KR:203780', 'TIGER 미국나스닥바이오', '미국', '헬스케어'],
+  ['US:QCLN', 'First Trust NASDAQ Clean Edge Green Energy ETF', '미국', '친환경·에너지'],
   ['US:GSLC', 'Goldman Sachs ActiveBeta U.S. Large Cap Equity ETF', '미국', '미분류'],
   ['US:VXUS', 'Vanguard Total International Stock ETF', '미국 외', '시장 대표'],
   ['US:SCHD', 'SCHD', '미국', '배당'], ['US:VT', 'VT', '글로벌', '시장 대표'],

@@ -15,7 +15,7 @@ const regions: [string, RegExp][] = [
 const themes: [string, RegExp][] = [
   ['커버드콜', /커버드콜|COVERED CALL|EQUITY PREMIUM|BUYWRITE/i],
   ['반도체', /반도체|SEMICONDUCTOR/i],
-  ['AI·기술', /인공지능|\bAI\b|테크|\bTECH|로봇|ROBOT|나스닥|NASDAQ|소프트웨어|SOFTWARE/i],
+  ['AI·기술', /인공지능|\bAI\b|테크|\bTECH|로봇|ROBOT|나스닥\s*100|NASDAQ\s*-?\s*100|소프트웨어|SOFTWARE/i],
   ['배당', /배당|DIVIDEND/i],
   ['채권', /채권|국채|회사채|BOND|TREASURY|국고채/i],
   ['금·원자재', /금현물|금선물|골드|\bGOLD\b|원자재|\bCOMMODIT(?:Y|IES)\b|원유|\bCRUDE\b|\bSILVER\b|은선물/i],
