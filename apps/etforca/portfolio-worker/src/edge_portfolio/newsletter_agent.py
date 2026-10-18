@@ -128,7 +128,11 @@ class PurposeCard(Card):
 class NewsItem(StrictModel):
     title: str = text(40)
     detail: str = text(140)
-    certainty: Literal['확인', '추정']
+    kind: Literal['실적', '물가', '금리', '정책', '제품', '계약', '수급', '기타']
+    org: str = text(20)
+    domain: str = Field(max_length=60)  # official site of `org`, for its logo; '' if unknown
+    ticker: str = Field(max_length=12)  # 'KR:005930' or 'US:NVDA' when the item is about one listed company, else ''
+    importance: Literal['최상', '상', '중']  # shown when there is no company move to show
     source_id: str = text(40)
 
 
@@ -139,6 +143,7 @@ class UpcomingEvent(StrictModel):
     kind: Literal['실적', '물가', '금리', '정책', '제품', '기타']
     org: str = text(20)
     domain: str = Field(max_length=60)  # official site of `org`, for its logo; '' if unknown
+    market: Literal['국내', '미국', '기타']  # 미국: `when` is written in Korean time and labelled so
 
 
 class CoreCard(Card):
@@ -173,22 +178,69 @@ async def event_icon(client, domain):
     return url if response.status_code == 200 else None  # unknown domains get a 404 globe; the renderer uses an emoji
 
 
-async def illustrate(client, card, sources):
-    """Code, not the model, turns source ids and domains into links and logos: https only, and only logos that exist.
+TICKER = re.compile(r'KR:\d{6}|US:[A-Z][A-Z.]{0,5}')
 
-    Logos are decoration: a slow or failing lookup costs the logo, never the researched card."""
-    for item in card['positives'] + card['negatives']:
-        item['url'] = sources[item['source_id']]['url']
-    for event in card['events']:
-        event['icon'], event['domain'] = None, event.get('domain')
+
+async def company_move(ticker, edition, quote_loader):
+    """The related company's own last completed move, from the same price source as the ETF; never the model's number.
+
+    ponytail: the ticker is the model's claim of which company it means; nothing checks it against `org` (no local
+    KRX code list). KOSDAQ codes miss too ('.KS' only) and fall back to the importance tag."""
+    if quote_loader is None or not TICKER.fullmatch(ticker or ''):
+        return None
     try:
-        async with asyncio.timeout(20):
-            for event in card['events']:
-                event['icon'] = await event_icon(client, event['domain'])
+        quote = quote_loader(ticker, edition)
+        quote = await quote if inspect.isawaitable(quote) else quote
+        return json.loads(quote['excerpt'])['change_pct'] if quote else None
+    except (ValueError, KeyError, TypeError, OSError, TimeoutError) as error:  # a missing quote costs the tag, not the card
+        log.info('ticker=%s newsletter_company_quote_unavailable code=%s', ticker, type(error).__name__)
+        return None
+
+
+def headline(source):
+    """Article title from the fetched page's first line ('# 제목 | 매체'); our outlook and price rows have fixed names."""
+    if source['id'] == 'outlook':
+        return 'ETF ORCA 전망'
+    if source['id'] == 'price':
+        return None
+    first = (source.get('excerpt') or '').split('\n', 1)[0]
+    title = first.removeprefix('# ').strip() if first.startswith('# ') else ''
+    # Drop only a trailing outlet name: a short last segment after ' | ' or ' - '. '삼성전자 - SK하이닉스 격차 확대' stays whole.
+    head, sep, outlet = max((title.rpartition(mark) for mark in (' | ', ' - ', ' – ', ' — ')), key=lambda part: len(part[0]))
+    if sep and head and len(outlet) <= 12 and ' ' not in outlet.strip():
+        title = head.strip()
+    return title or urlsplit(source['url']).hostname.removeprefix('www.')
+
+
+async def illustrate(client, card, sources, edition, quote_loader):
+    """Code, not the model, turns ids, domains and tickers into links, logos and moves: only what really exists.
+
+    Decoration and tags: a slow or failing lookup costs that detail, never the researched card."""
+    items = card['positives'] + card['negatives']
+    for item in items:
+        item['url'] = sources[item['source_id']]['url']
+    for thing in items + card['events']:
+        thing['icon'], thing['domain'] = None, thing.get('domain')
+    for item in items:
+        item['change_pct'], item['ticker'] = None, item.get('ticker')
+    # Each quote is a child process importing pandas/yfinance; the worker has 512 MiB, so the same cap of two as
+    # market_data's Yahoo children, and one lookup per distinct ticker.
+    gate = asyncio.Semaphore(2)
+    moves = {}
+    async def icon(thing):
+        thing['icon'] = await event_icon(client, thing['domain'])
+    async def move(ticker):
+        async with gate:
+            moves[ticker] = await company_move(ticker, edition, quote_loader)
+    try:
+        async with asyncio.timeout(40):
+            await asyncio.gather(*[icon(t) for t in items + card['events']], *[move(t) for t in {i['ticker'] for i in items if i['ticker']}])
     except TimeoutError:
         log.warning('newsletter_illustration_timeout')
-    for event in card['events']:
-        event.pop('domain')
+    for thing in items + card['events']:
+        thing.pop('domain')
+    for item in items:
+        item['change_pct'] = moves.get(item.pop('ticker'))
     return card
 
 
@@ -248,6 +300,7 @@ async def write_card(holding, edition, key, *, fmt=DEFAULT_FORMAT, model_call=No
     card_model = FORMATS[fmt][1]
     async with asyncio.timeout(600), AsyncExitStack() as stack:
         client = await stack.enter_async_context(httpx.AsyncClient(timeout=90))
+        company_quotes = quote_loader if research else None  # fixed evidence: no live lookups at all, so no company moves
         if not research:
             # Fixed evidence: no live outlook or quote lookups, or formats could see different data.
             if evidence is None:
@@ -327,10 +380,10 @@ async def write_card(holding, edition, key, *, fmt=DEFAULT_FORMAT, model_call=No
                         raise ValueError('NEWS_EVIDENCE_REQUIRED')
                     value = card.model_dump(exclude={'source_ids'})
                     if fmt == 'H':
-                        value = await illustrate(client, value, sources)
+                        value = await illustrate(client, value, sources, edition, company_quotes)
                     return {**{k: holding[k] for k in ('instrument_id', 'name')}, **value, 'format': fmt, 'edition': edition.isoformat(),
-                            # Every claim gets its source button, including sources cited only by a news item.
-                            'sources': [{'url': sources[s]['url']} for s in dict.fromkeys([*card.source_ids, *sorted(cited)])],
+                            # Every claim gets its source, including sources cited only by a news item.
+                            'sources': [{'url': sources[s]['url'], 'title': headline(sources[s])} for s in dict.fromkeys([*card.source_ids, *sorted(cited)])],
                             'quote': json.loads(quote['excerpt']) if quote else None,
                             'outlook_at': outlook.get('analysis_at') if outlook else None,
                             'basis': 'published_outlook' if outlook else 'newsletter_research'}
