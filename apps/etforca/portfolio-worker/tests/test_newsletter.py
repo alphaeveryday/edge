@@ -1049,3 +1049,13 @@ async def test_company_moves_are_looked_up_once_per_ticker_two_at_a_time():
 def test_headline_keeps_a_spaced_dash_inside_the_title():
     assert agent.headline({'id': 's', 'url': 'https://a.example/', 'excerpt': '# 삼성전자 - SK하이닉스 격차 확대'}) == '삼성전자 - SK하이닉스 격차 확대'
     assert agent.headline({'id': 's', 'url': 'https://a.example/', 'excerpt': '# LG엔솔-엘앤에프, LFP 첫 공급계약 - 머니투데이'}) == 'LG엔솔-엘앤에프, LFP 첫 공급계약'
+
+
+def test_news_detail_folds_away_and_the_card_leads_with_kind_title_and_who():
+    item = {**STORED_NEWS, 'title': '삼성전자 실적', 'org': '삼성전자', 'change_pct': 2.62}
+    _, html, text = email.daily(date(2026, 10, 18), [letter_card('H', positives=[item])], 'H')
+    card = html[html.index('삼성전자 실적') - 900:]
+    assert card.index('>계약</span>') < card.index('삼성전자 실적') < card.index('<details>') < card.index('새 계약이 수요 가정을')
+    assert '<summary' in html and '자세히 보기' in html, 'Detail sits behind a fold where the client supports it'
+    assert '새 계약이 수요 가정을 뒷받침해요.' in text, 'The plain-text edition never folds anything away'
+    assert '💭 내 보유 이유' in html and '🎯 내 투자 판단에 주는 영향' in html

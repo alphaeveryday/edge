@@ -79,16 +79,16 @@ def row(inner, pad='0 32px'):
 
 
 def label(text, colour=INK):
-    return f'<p style="{P};margin:0 0 6px;color:{colour};font-size:15px;font-weight:700;letter-spacing:.2px">{e(text)}</p>'
+    return f'<p style="{P};margin:0 0 10px;color:{colour};font-size:15px;font-weight:700;letter-spacing:.2px">{e(text)}</p>'
 
 
 def section_title(text):
     """Section title: one step above labels so the reader can scan the letter by its sections."""
-    return f'<p style="margin:0 0 10px;font-family:{SERIF};font-size:21px;line-height:1.4;font-weight:700;color:{INK};word-break:keep-all">{e(text)}</p>'
+    return f'<p style="margin:0 0 16px;font-family:{SERIF};font-size:21px;line-height:1.4;font-weight:700;color:{INK};word-break:keep-all">{e(text)}</p>'
 
 
-def para(text, size=17, colour=BODY, bottom=20):
-    return f'<p style="{P};margin:0 0 {bottom}px;color:{colour};font-size:{size}px;line-height:1.75">{e(text)}</p>'
+def para(text, size=17, colour=BODY, bottom=28):
+    return f'<p style="{P};margin:0 0 {bottom}px;color:{colour};font-size:{size}px;line-height:1.85">{e(text)}</p>'
 
 
 def rule(weight=1, colour=HAIR, space=0):
@@ -220,7 +220,7 @@ def story(letter, number, card, body, text, lead=False, brief=False):
 <td width="44" valign="top" style="padding-top:2px;font-family:{SERIF};font-size:22px;color:{BRASS};font-weight:700">{number:02d}</td>
 <td valign="top" style="border-top:1px solid {INK};padding-top:10px"><p style="{P};color:{INK};font-size:17px;font-weight:700">{e(card['name'])} &nbsp;{move(change)[0] if change is not None else ''}</p></td></tr></table>
 {'<div style="height:22px"></div>' if lead else heading}
-{body}{sources_html}''', '0 32px 40px'),
+{body}{sources_html}''', '0 32px 56px'),
                f'{number:02d}. {card["name"]}' + (f' {move(change)[1]}' if change is not None else '') + ('' if lead else f' — {card["headline"]}'),
                *([] if lead else [card.get('dek', '')]), *text, *sources_text, '')
 
@@ -343,32 +343,59 @@ def tag(item):
     return '', f"{IMPORTANCE[item['importance']]} 중요도 {item['importance']}", f"{IMPORTANCE[item['importance']]} 중요도 {e(item['importance'])}"
 
 
+TINTS = {UP: '#fbe9e6', DOWN: '#e8eefb'}  # pill backgrounds in the heading's colour family
+
+
 def news(heading, items, colour):
-    """Filled red (good) or blue (bad) heading, the Korean market's colours, then one row per item."""
+    """Filled red (good) or blue (bad) heading, the Korean market's colours, then one card per item: a kind pill,
+    the headline, a meta line (who, and the company's move or the importance), and the detail folded away.
+
+    Folding uses <details>: Apple Mail, Samsung Email and Outlook for Windows fold it; Gmail swaps the tags for <u>
+    and simply shows the detail open under an underlined '자세히 보기' (caniemail, HTML5 semantics)."""
     if not items:
         return '', []
     rows, text = '', [f'{heading}:']
     for item in items:
         moved, plain, prefix = tag(item)
-        rows += f'''<tr><td valign="top" style="padding:14px 0;border-top:1px solid {HAIR}"><p style="{P};color:{INK};font-size:17px;font-weight:700;line-height:1.55">{mark_of(item, NEWS_ICONS)}{e(item['title'])} <span style="font-size:15px;white-space:nowrap">· {prefix}{moved}</span></p>
-<p style="{P};margin:5px 0 0;color:{BODY};font-size:16px;line-height:1.7">{e(item['detail'])}</p></td></tr>'''
+        meta = (f"{mark_of(item, NEWS_ICONS)}{e(item['org'])} &nbsp;·&nbsp; {moved}" if moved
+                else f"{mark_of(item, NEWS_ICONS)}{e(item['org'])} &nbsp;·&nbsp; {prefix}")
+        rows += f'''<tr><td valign="top" style="padding:22px 0 24px;border-top:1px solid {HAIR}">
+<span style="display:inline-block;padding:4px 10px;border-radius:6px;background:{TINTS[colour]};color:{colour};font-family:{SANS};font-size:13px;font-weight:700">{e(item['kind'])}</span>
+<p style="{P};margin:12px 0 10px;color:{INK};font-size:19px;font-weight:700;line-height:1.5">{e(item['title'])}</p>
+<p style="{P};margin:0 0 12px;color:{MUTED};font-size:15px;line-height:1.6">{meta}</p>
+<details><summary style="font-family:{SANS};font-size:14px;font-weight:700;color:{BRASS};cursor:pointer">자세히 보기</summary>
+<p style="{P};margin:10px 0 0;color:{BODY};font-size:16px;line-height:1.85">{e(item['detail'])}</p></details></td></tr>'''
         text.append(f"  {NEWS_ICONS[item['kind']]} {item['title']} · {plain} — {item['detail']}")
-    html = (f'<p style="{P};margin:0;padding:9px 14px;background:{colour};color:#ffffff;font-size:17px;font-weight:700">{e(heading)}</p>'
-            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 26px;border-bottom:1px solid {HAIR}">{rows}</table>')
+    html = (f'<p style="{P};margin:0;padding:11px 16px;background:{colour};color:#ffffff;font-size:17px;font-weight:700;border-radius:6px">{e(heading)}</p>'
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 36px;border-bottom:1px solid {HAIR}">{rows}</table>')
     return html, text
+
+
+def boxed(caption, text):
+    """Light rounded panel for the standing thesis: the thing every other line is read against."""
+    return f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 26px"><tr>
+<td style="background:#f3f1ea;border-radius:12px;padding:20px 22px"><p style="{P};margin:0 0 10px;color:{MUTED};font-size:15px;font-weight:700">{e(caption)}</p>
+<p style="margin:0;font-family:{SERIF};font-size:20px;line-height:1.65;color:{INK};word-break:keep-all">{e(text)}</p></td></tr></table>'''
+
+
+def callout(caption, text):
+    """Accent bar for the one conclusion the reader should keep."""
+    return f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 30px"><tr>
+<td style="border-left:4px solid {BRASS};padding:6px 0 6px 20px"><p style="{P};margin:0 0 8px;color:{BRASS};font-size:15px;font-weight:700">{e(caption)}</p>
+<p style="{P};color:{INK};font-size:17px;line-height:1.85">{e(text)}</p></td></tr></table>'''
 
 
 def write_h(number, card, purpose):
     change = quote_of(card).get('change_pct') or 0
-    moved = '오늘 오른 이유' if change > 0 else '오늘 떨어진 이유' if change < 0 else '오늘의 움직임'
+    moved = '📈 오늘 오른 이유' if change > 0 else '📉 오늘 떨어진 이유' if change < 0 else '오늘의 움직임'
     note = '하루 변동이 평소 변동 폭의 2배를 넘었어요.' if alert(card) else ''
     good, good_text = news('새로운 긍정적 소식', card['positives'], UP)
     bad, bad_text = news('새로운 부정적 소식', card['negatives'], DOWN)
-    body = (pull(card['thesis'], '내 보유 이유')
-            + f'<p style="{P};margin:0 0 32px;color:{INK};font-size:19px;font-weight:700">오늘 판정 &nbsp;{chip(card["verdict"])}</p>'
-            + section_title('오늘의 이유 브리핑') + rule(1, INK) + '<div style="height:14px"></div>'
-            + section(moved, card['move_reason']) + good + bad + section('내 투자 판단에 주는 영향', card['impact'])
-            + (para(note, 13, MUTED) if note else ''))
+    body = (boxed('💭 내 보유 이유', card['thesis'])
+            + f'<p style="{P};margin:0 0 44px;color:{INK};font-size:19px;font-weight:700">오늘 판정 &nbsp;{chip(card["verdict"])}</p>'
+            + section_title('오늘의 이유 브리핑') + rule(1, INK) + '<div style="height:22px"></div>'
+            + section(moved, card['move_reason']) + good + bad + callout('🎯 내 투자 판단에 주는 영향', card['impact'])
+            + (para(note, 14, MUTED) if note else ''))
     return body, [f"내 보유 이유: {card['thesis']}", f"오늘 판정: {VERDICTS[card['verdict']]} {card['verdict']}", '오늘의 이유 브리핑',
                   f"{moved}: {card['move_reason']}", *good_text, *bad_text, f"내 투자 판단에 주는 영향: {card['impact']}", *([note] if note else [])]
 
@@ -388,8 +415,8 @@ def calendar(letter, edition, cards):
     lines, text = '', []
     for _, (event, names) in sorted(seen.items())[:8]:
         when = event['when'] + (' (한국시간)' if event.get('market') == '미국' else '')
-        lines += f'''<tr><td width="96" valign="top" style="padding:13px 8px 13px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:15px;font-weight:700;color:{INK};word-break:keep-all">{e(when)}</td>
-<td valign="top" style="padding:13px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:16px;line-height:1.6;color:{INK};word-break:keep-all">{mark_of(event, EVENT_ICONS)}<b>{e(event['title'])}</b><br><span style="color:{MUTED};font-size:14px">{e(event['org'])} · {e(', '.join(dict.fromkeys(names)))}</span></td></tr>'''
+        lines += f'''<tr><td width="96" valign="top" style="padding:16px 8px 16px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:15px;font-weight:700;color:{INK};word-break:keep-all">{e(when)}</td>
+<td valign="top" style="padding:16px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:16px;line-height:1.6;color:{INK};word-break:keep-all">{mark_of(event, EVENT_ICONS)}<b>{e(event['title'])}</b><br><span style="color:{MUTED};font-size:14px">{e(event['org'])} · {e(', '.join(dict.fromkeys(names)))}</span></td></tr>'''
         text.append(f"  {when} · {event['title']} ({event['org']}) — {', '.join(dict.fromkeys(names))}")
     letter.add(row(section_title('앞으로 예정된 주요 이벤트') + f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid {HAIR}">{lines}</table>', '0 32px 38px'),
                '앞으로 예정된 주요 이벤트:', *text, '')
