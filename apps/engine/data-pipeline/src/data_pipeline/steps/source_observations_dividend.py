@@ -12,6 +12,7 @@ from .source_observations import (
 
 
 def exact_date(value: str, *, required=False) -> str | None:
+    """Parse a complete calendar date, preserving an optional missing value."""
     if not value and not required:
         return None
     text = str(value).replace("/", "").replace("-", "")
@@ -85,6 +86,7 @@ DIVIDEND = DatasetSpec(
 
 
 def collect_dividends(storage, source, run_id, *, instruments, start: date, end: date):
+    """Write a replay-checked raw run for the requested instruments and dates."""
     scope = {"instruments": sorted(instruments, key=lambda row: (row["market_code"], row["ticker"])),
              "from": start.isoformat(), "to": end.isoformat()}
     producer = "ingest_raw_dividend"

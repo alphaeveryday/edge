@@ -18,6 +18,7 @@ from data_pipeline.sources.kis_auth import KisAuth, domain_for
 
 
 def main() -> int:
+    """Save public KIS probe responses and report coverage without credentials."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--start', default='20250101')

@@ -20,6 +20,7 @@ TR_ID = "HHKDB669102C0"
 
 
 class KisDividendSource:
+    """Collect public domestic dividend responses with shared KIS authentication."""
     def __init__(self, app_key, app_secret, client, env="prod"):
         self.client = client
         self.auth = KisAuth(app_key, app_secret, client, env)
@@ -28,12 +29,14 @@ class KisDividendSource:
                         "tr_id": TR_ID, "custtype": "P"}
 
     def fetch(self, instrument: dict, start: date, end: date) -> list[RawObject]:
+        """Preserve response bytes and split incomplete record-date windows."""
         symbol = instrument["ticker"]
         if not re.fullmatch(r"[0-9A-Z]{6}", symbol) or start > end:
             raise ValueError("Invalid domestic dividend request")
         objects = []
 
         def window(first, last):
+            """Append one response and recursively collect incomplete subwindows."""
             request = {"ticker": symbol,
                        "market_code": instrument["market_code"], "tr_id": TR_ID,
                        "from": first.isoformat(), "to": last.isoformat()}
