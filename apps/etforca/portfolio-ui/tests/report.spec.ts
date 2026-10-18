@@ -55,7 +55,8 @@ test('failed overwrite restores keyboard focus after the save button is enabled 
   await expect(save).toBeFocused();
 });
 
-test('large balances with small changes keep distinct, unclipped performance ticks', async ({ page }) => {
+for (const fallbackFont of [false, true]) test(`large balances with small changes keep distinct, unclipped performance ticks (fallback font: ${fallbackFont})`, async ({ page }) => {
+  if (fallbackFont) await page.route('**/*.woff2', route => route.abort());
   const result = structuredClone(report);
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'precise-ticks'));
   await page.route('**/api/portfolio/analyses/precise-ticks', route => route.fulfill({ json: { id: 'precise-ticks', state: 'succeeded', result } }));
@@ -67,8 +68,15 @@ test('large balances with small changes keep distinct, unclipped performance tic
     expect(new Set(await ticks.allTextContents()).size).toBe(3);
     expect(await ticks.evaluateAll(nodes => nodes.every(node => (node as SVGGraphicsElement).getBBox().x >= 0))).toBe(true);
     await page.evaluate(() => document.fonts.ready);
+    await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+    await expect.poll(() => ticks.evaluateAll(nodes => nodes.every(node => (node as SVGGraphicsElement).getBBox().x >= 0))).toBe(true);
     await page.locator('.report-history').evaluate(el => { el.style.width = '240px'; });
-    await expect.poll(() => page.locator('.report-history svg').getAttribute('viewBox')).toBe('0 0 240 180');
+    await expect.poll(async () => (await page.locator('.report-history svg').getAttribute('viewBox'))?.split(' ')[3]).toBe('180');
+    expect(await page.locator('.report-history svg polyline.b').evaluate(node => {
+      const points = (node as SVGPolylineElement).points;
+      return points.getItem(points.numberOfItems - 1).x - points.getItem(0).x;
+    })).toBeGreaterThanOrEqual(80);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(await page.locator('.report-history svg>text').evaluateAll(nodes => nodes.every((node, i) => {
       if (!i) return true;
       const previous = (nodes[i - 1] as SVGGraphicsElement).getBBox(), current = (node as SVGGraphicsElement).getBBox();
