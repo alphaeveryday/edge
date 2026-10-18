@@ -953,3 +953,14 @@ def test_same_title_from_two_companies_stays_two_rows():
     b = letter_card('H', 'US:B', 'B', events=[{**EVENT, 'org': '삼성전자', 'icon': None}])
     _, _, text = email.daily(date(2026, 10, 18), [a, b], 'H')
     assert '(SK하이닉스) — A' in text and '(삼성전자) — B' in text
+
+
+async def test_a_source_cited_only_by_a_news_item_still_gets_its_button():
+    evidence = SimpleNamespace(sources=[{'id': 'outlook', 'url': 'https://etforca.com/', 'excerpt': '우리 전망'},
+                                        {'id': 'article', 'url': 'https://news.example/a', 'excerpt': '기사 본문'}])
+    async def model(payload):
+        card = {**H_CARD, 'positives': [{**NEWS, 'source_id': 'article'}], 'source_ids': ['outlook']}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(card)}}]}
+    result = await agent.write_card({'instrument_id': 'KR:091160', 'name': '반도체'}, date(2026, 10, 18), 'test', model_call=model,
+                                    evidence=evidence, research=False)
+    assert {'url': 'https://news.example/a'} in result['sources']

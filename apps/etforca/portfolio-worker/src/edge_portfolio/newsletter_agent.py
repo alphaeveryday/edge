@@ -329,7 +329,8 @@ async def write_card(holding, edition, key, *, fmt=DEFAULT_FORMAT, model_call=No
                     if fmt == 'H':
                         value = await illustrate(client, value, sources)
                     return {**{k: holding[k] for k in ('instrument_id', 'name')}, **value, 'format': fmt, 'edition': edition.isoformat(),
-                            'sources': [{'url': sources[s]['url']} for s in dict.fromkeys(card.source_ids)],
+                            # Every claim gets its source button, including sources cited only by a news item.
+                            'sources': [{'url': sources[s]['url']} for s in dict.fromkeys([*card.source_ids, *sorted(cited)])],
                             'quote': json.loads(quote['excerpt']) if quote else None,
                             'outlook_at': outlook.get('analysis_at') if outlook else None,
                             'basis': 'published_outlook' if outlook else 'newsletter_research'}
