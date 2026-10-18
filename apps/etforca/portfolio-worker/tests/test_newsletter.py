@@ -524,10 +524,29 @@ def test_core_letter_explains_only_what_touches_the_thesis():
 
 
 def test_core_card_keeps_changes_only_for_important_days():
-    with pytest.raises(ValueError):
-        agent.CoreCard.model_validate({**H_CARD, 'important': False})
+    assert agent.CoreCard.model_validate({**H_CARD, 'important': False}).changes == [], 'Quiet days carry no change list'
     with pytest.raises(ValueError):
         agent.CoreCard.model_validate({**H_CARD, 'changes': []})
+
+
+def test_weakened_thesis_is_never_filed_as_no_change():
+    weak = letter_card('H', verdict='약화', important=False, changes=[], meaning='약화 이유')
+    subject, html, _ = email.daily(date(2026, 10, 18), [weak], 'H')
+    assert '흔드는 변화가 없어요' not in subject and '변화 없음' not in html
+
+
+def test_closing_lines_rotate_across_weekdays():
+    from datetime import timedelta
+    mondays = {email.daily(date(2026, 10, 19) + timedelta(weeks=w), [letter_card('H')], 'H')[2].split('\n')[-5] for w in range(8)}
+    assert len(mondays) > 1, 'One line per weekday forever reads like a template'
+
+
+def test_cached_legacy_cards_also_shrink_to_stay_under_gmail_clipping():
+    long_url = 'https://news.example/' + 'a' * 180
+    legacy = [{'instrument_id': f'US:L{i}', 'name': f'L{i}', 'headline': '가' * 40, 'issue': '가' * 120, 'why_moved': '가' * 160,
+               'watch_next': '가' * 90, 'sources': [{'url': f'{long_url}{i}{j}'} for j in range(5)]} for i in range(20)]
+    _, html, _ = email.daily(date(2026, 10, 18), legacy, 'H')
+    assert len(html.encode()) <= email.BUDGET
 
 
 def test_profit_letter_never_invents_portfolio_weights():

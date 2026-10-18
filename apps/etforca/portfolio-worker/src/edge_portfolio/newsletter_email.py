@@ -3,10 +3,12 @@
 Inline styles on presentation tables with an equivalent plain-text edition. Gmail drops web fonts,
 so the hierarchy must hold in system Korean serif/sans faces alone.
 """
+import logging
 from html import escape
 from datetime import date
 from urllib.parse import urlsplit
 
+log = logging.getLogger('portfolio-newsletter-email')
 UNSUBSCRIBE = '{{amazonSESUnsubscribeUrl}}'
 SITE = 'https://etforca.com/portfolio/'
 SERIF = "'Noto Serif KR','Nanum Myeongjo',AppleMyungjo,Batang,Georgia,serif"
@@ -21,11 +23,12 @@ FORMATS = {'H': ('보유 가설 브리핑', '내 보유 이유에 중요한 것�
 DEFAULT_FORMAT = 'H'
 PURPOSES = {'long_term': '장기 적립', 'mid_term': '중기 보유', 'short_term': '단기 매매'}
 LEAN = {'약화': 0, '강화': 1, '유지': 2}
-# One line to close each letter, picked by date so every edition differs but re-renders stay identical.
-CHEERS = ('오늘도 수고 많으셨어요. 시장은 내일 또 열려요.', '흔들리는 날에도 기준을 지키는 당신, 충분히 잘하고 있어요.',
-          '좋은 투자는 매일 조금씩 쌓여요. 오늘도 힘내세요.', '숫자보다 내 기준을 믿는 하루가 되길 바라요.',
-          '바쁜 하루 끝, 잠깐의 확인이면 충분해요. 푹 쉬세요.', '급할 것 없어요. 오늘도 차분하게, 수고 많았어요.',
-          '내일의 시장은 내일의 일. 오늘 하루도 고생 많으셨어요.')
+# One line to close each letter, picked by date: re-renders stay identical. Eight lines so no weekday is stuck with
+# one, and every line reads right at an 8 AM send on any day, holidays included.
+CHEERS = ('오늘도 힘내세요. 내 기준을 지키는 하루면 충분해요.', '흔들리는 날에도 기준을 지키는 당신, 충분히 잘하고 있어요.',
+          '좋은 투자는 매일 조금씩 쌓여요. 오늘 하루도 응원할게요.', '숫자보다 내 기준을 믿는 하루가 되길 바라요.',
+          '급할 것 없어요. 오늘도 차분하게, 힘내세요.', '어제도 수고 많으셨어요. 오늘도 좋은 하루 보내세요.',
+          '잠깐의 확인이면 충분해요. 나머지 시간은 나를 위해 쓰세요.', '시장은 매일 바뀌어도 원칙은 그대로예요. 오늘도 힘내세요.')
 P = f'margin:0;font-family:{SANS};word-break:keep-all;overflow-wrap:anywhere'
 
 
@@ -195,11 +198,11 @@ def story(letter, number, card, body, text, lead=False, brief=False):
 LEGACY = (('issue', '무슨 일이 있었나'), ('why_moved', '왜 움직였나'), ('watch_next', '다음에 볼 것'))
 
 
-def notice(letter, number, card):
+def notice(letter, number, card, brief=False):
     """Unavailable holdings, or content cached under another format (e.g. written before a deploy): show what exists."""
-    kept = [(name, card[key]) for key, name in LEGACY if card.get(key)]
-    story(letter, number, {**card, 'dek': card.get('dek', '')}, ''.join(section(name, text) for name, text in kept),
-          [f'{name}: {text}' for name, text in kept])
+    kept = [] if brief else [(name, card[key]) for key, name in LEGACY if card.get(key)]
+    story(letter, number, {**card, 'dek': card.get('dek') or ('' if kept else card.get('issue', ''))},
+          ''.join(section(name, text) for name, text in kept), [f'{name}: {text}' for name, text in kept], brief=brief)
 
 
 def pull(text, caption):
@@ -305,6 +308,8 @@ NEXT = {'B': ('다음에 확인할 것', lambda c: c['watch_next']), 'D': ('판�
 
 
 def flags(card, fmt):
+    if fmt == 'H' and card['verdict'] == '약화':
+        return True  # A weakened thesis is never 'no change', whatever the importance flag says.
     return card['significant' if fmt == 'F' else 'important'] or alert(card)
 
 
@@ -364,14 +369,16 @@ def daily(edition, cards, fmt=DEFAULT_FORMAT, *, weights=None, purpose='long_ter
     (headline and dek), the way a magazine runs the remainder as short items."""
     for full in range(len(cards), -1, -1):
         rendered = compose(edition, cards, fmt, weights, purpose, full, issued_at)
-        if len(rendered[1].encode()) <= BUDGET or full == 0:
+        if len(rendered[1].encode()) <= BUDGET:
             return rendered
+    log.warning('newsletter_over_budget bytes=%s holdings=%s', len(rendered[1].encode()), len(cards))
+    return rendered
 
 
 def compose(edition, cards, fmt, weights, purpose, full, at):
     ready = [card for card in cards if not card.get('unavailable') and card.get('format') == fmt]
     top = lead(ready, fmt)
-    missing = len(cards) - len(ready)
+    missing = sum(bool(c.get('unavailable')) for c in cards)
     if fmt in 'FH' and top is None and ready:
         headline = '오늘은 보유 가설을 흔드는 변화가 없어요' if fmt == 'H' else '오늘은 중요한 변화가 없어요'
         dek = (f'자료를 확인한 {len(ready)}종목은 등락이 평소 범위 안이고 보유 이유를 흔드는 새 사건이 없었어요.'
@@ -433,9 +440,10 @@ def compose(edition, cards, fmt, weights, purpose, full, at):
             if number == full + 1:
                 letter.add(row(label('나머지 종목은 제목과 요약만 실었어요', MUTED) + para('메일이 길어 잘리지 않도록 줄였어요.', 13, MUTED), '0 32px 20px'),
                            '나머지 종목은 제목과 요약만 실었어요.', '')
-            story(letter, number, card, '', [], brief=True)
+            story(letter, number, card, '', [], lead=card is top, brief=True)
         else:
-            notice(letter, number, card)
+            # Notices must shrink too, or cached legacy cards could push the letter past Gmail's clip.
+            notice(letter, number, card, brief=number > full)
     if calm:
         lines = ''.join(f'''<tr><td style="padding:12px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:14px;font-weight:700;color:{INK};word-break:keep-all" width="40%">{e(c['name'])} &nbsp;{move(quote_of(c).get('change_pct'))[0]}</td>
 <td style="padding:12px 0 12px 12px;border-top:1px solid {HAIR};font-family:{SANS};font-size:14px;line-height:1.65;color:{BODY};word-break:keep-all">가설 {e(c['verdict'])} · {e(c['meaning'])}</td></tr>''' for c in calm)

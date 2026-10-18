@@ -134,8 +134,10 @@ class CoreCard(Card):
 
     @model_validator(mode='after')
     def changes_only_when_important(self):
-        if self.important != bool(self.changes):
-            raise ValueError('important가 true면 changes를 1~2개, false면 빈 배열로 내세요.')
+        if not self.important:
+            self.changes = []  # Mechanical rule: normalise instead of spending model turns on it.
+        elif not self.changes:
+            raise ValueError('important가 true면 무엇이 바뀌었는지 changes를 1~2개 내세요.')
         return self
 
 
