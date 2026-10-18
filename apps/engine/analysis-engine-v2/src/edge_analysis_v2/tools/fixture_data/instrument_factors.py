@@ -42,11 +42,11 @@ def read(fixture, instrument_id, factors=FACTORS):
         ValueError: Unsupported arguments or inconsistent source observations.
     """
     if not isinstance(factors, (list, tuple)) or not factors or any(not isinstance(f, str) for f in factors) or len(set(factors)) != len(factors) or not set(factors) <= set(FACTORS):
-        raise ValueError('choose unique supported factors')
+        raise ToolInputError('choose unique supported factors')
     instruments = {row['instrument_id']: row for row in fixture.get('instruments', [])}
     scope = {fixture['context']['etf_code']} | set(instruments) | {row['instrument_id'] for row in fixture.get('holdings', [])}
     if not isinstance(instrument_id, str) or instrument_id not in scope:
-        raise ValueError('unknown instrument_id')
+        raise ToolInputError('unknown instrument_id; select the ETF or a constituent from get_etf_holdings.')
     result = {'instrument_id': instrument_id, 'instrument_name': instruments.get(instrument_id, {}).get('name', instrument_id), 'analysis_at': fixture['context']['analysis_at']}
     readers = {'chart': chart_data, 'flow': flow_data, 'valuation': valuation_data, 'macro': macro_data}
     unavailable = {}
@@ -334,22 +334,22 @@ def table(fixture, instrument_ids=None, top_n=None, factors=TABLE_FACTORS):
     Raises:
         ValueError: Unsupported arguments or an instrument outside this analysis.
     """
-    if not isinstance(factors, (list, tuple)) or not factors or len(set(factors)) != len(factors) or not set(factors) <= set(TABLE_FACTORS):
-        raise ValueError('choose unique factors from chart, flow, valuation')
+    if not isinstance(factors, (list, tuple)) or not factors or any(not isinstance(f, str) for f in factors) or len(set(factors)) != len(factors) or not set(factors) <= set(TABLE_FACTORS):
+        raise ToolInputError('choose unique factors from chart, flow, valuation')
     if top_n is not None and (type(top_n) is not int or top_n < 1):
-        raise ValueError('top_n must be a positive integer')
+        raise ToolInputError('top_n must be a positive integer')
     etf_code = fixture['context']['etf_code']
     names = {row['instrument_id']: row.get('name') for row in fixture.get('instruments', [])}
     portfolio = holdings(fixture, require_complete=False)
     weights = {row['instrument_id']: row['weight'] for row in portfolio['holdings']}
     wanted = list(weights) if instrument_ids is None else instrument_ids
     if not isinstance(wanted, (list, tuple)) or not wanted or any(not isinstance(i, str) for i in wanted):
-        raise ValueError('instrument_ids must be a nonempty list of codes')
+        raise ToolInputError('instrument_ids must be a nonempty list of codes')
     selected = []
     for identity in wanted:
         for code in (list(weights) if identity == etf_code else [identity]):
             if code not in weights and code not in names:
-                raise ValueError('unknown instrument_id: ' + code)
+                raise ToolInputError('unknown instrument_id: ' + code + '; select the ETF or a constituent from get_etf_holdings.')
             if code not in selected:
                 selected.append(code)
     selected.sort(key=lambda code: -decimal(weights.get(code, 0)))

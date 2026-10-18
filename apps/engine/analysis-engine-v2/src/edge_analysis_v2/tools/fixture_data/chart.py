@@ -1,6 +1,8 @@
 """Price-derived indicators; intraday values never compound provisional state."""
 from datetime import date, timedelta
 
+from edge_analysis_v2.tools.execution import ToolInputError
+
 from edge_analysis_v2.tools.fixture_data.common import available, decimal, instant, number
 
 METRIC_FORMULAS = (
@@ -28,11 +30,13 @@ def history(fixture, instrument_id=None):
     cutoff = instant(context["analysis_at"])
     target = instrument_id or context["etf_code"]
     rows = sorted([r for r in available(fixture.get("prices", []), cutoff) if r["instrument_id"] == target and date.fromisoformat(r["date"]) < cutoff.date()], key=lambda r: r["date"])
-    if not rows or len({r["date"] for r in rows}) != len(rows):
-        raise ValueError("missing or duplicate price history")
+    if not rows:
+        raise ToolInputError("missing price history. Do not retry this snapshot; use other factors or external evidence.")
+    if len({r["date"] for r in rows}) != len(rows):
+        raise ValueError("duplicate price history")
     expected = sorted(d for d in fixture["trading_dates"] if rows[0]["date"] <= d < cutoff.date().isoformat())
     if [r["date"] for r in rows] != expected:
-        raise ValueError("missing expected daily price")
+        raise ToolInputError('missing expected daily price. Do not retry this snapshot; use other available factors or external evidence.')
     for row in rows:
         validate_price(row)
     return rows
@@ -56,7 +60,7 @@ def snapshots(fixture):
 def rma(values):
     """Seed a fourteen-period Wilder average and carry its finalized state."""
     if len(values) < 14:
-        raise ValueError("missing fourteen changes")
+        raise ToolInputError('missing fourteen changes. Do not retry this snapshot; use other available factors or external evidence.')
     average = sum(values[:14]) / 14
     for value in values[14:]:
         average = (13 * average + value) / 14
@@ -98,7 +102,7 @@ def indicators(fixture):
 def transition(fixture, indicator):
     """Evaluate 80/20 boundaries from independently calculated observations."""
     if indicator not in ("momentum", "bottom"):
-        raise ValueError("unknown indicator")
+        raise ToolInputError("unknown indicator; choose momentum or bottom")
     rows = history(fixture)
     values = [indicator_values(rows, point) for point in snapshots(fixture)]
     observations = {"columns": ["at", "value"], "rows": [[v["observed_at"], v[indicator]] for v in values]}
@@ -123,10 +127,10 @@ def metrics(fixture, selected=None):
     """Calculate detailed chart cards using each card's explicit observation time."""
     rows, points = history(fixture), snapshots(fixture)
     if selected is None and len(rows) < 60:
-        raise ValueError("missing sixty completed prices")
+        raise ToolInputError('missing sixty completed prices. Do not retry this snapshot; use other available factors or external evidence.')
     requested = set(METRICS if selected is None else selected)
     if not requested or not requested <= set(METRICS) or (selected is not None and len(requested) != len(selected)):
-        raise ValueError('choose unique supported chart metrics')
+        raise ToolInputError('choose unique supported chart metrics')
     closes = [decimal(r["close"]) for r in rows]
     price = decimal(points[-1]["price"]) if points else closes[-1]
     observed = points[-1]["observed_at"] if points else rows[-1]["available_at"]
@@ -135,7 +139,7 @@ def metrics(fixture, selected=None):
     result = []
     if 'ma20_distance_pct' in requested:
         if len(current_window) < 20:
-            raise ValueError('twenty prices required for 20-day average')
+            raise ToolInputError('twenty prices required for 20-day average. Do not retry this snapshot; use other available factors or external evidence.')
         average20 = sum(current_window[-20:])/20
         result.append({"key": "ma20_distance_pct", "value": number(100*(price/average20-1)), "observed_at": observed})
     if 'ma60_direction' in requested and len(current_window) >= 61:
@@ -144,7 +148,7 @@ def metrics(fixture, selected=None):
         result.append({"key": "ma60_direction", "value": "상승" if average60 > previous60 else "하락" if average60 < previous60 else "횡보", "observed_at": observed})
     if 'new_closing_high_count_20d' in requested:
         if len(closes) < 40:
-            raise ValueError('forty completed prices required for twenty high comparisons')
+            raise ToolInputError('forty completed prices required for twenty high comparisons. Do not retry this snapshot; use other available factors or external evidence.')
         count = sum(closes[i] > max(closes[i-20:i]) for i in range(len(closes)-20, len(closes)))
         result.append({"key": "new_closing_high_count_20d", "value": count, "observed_at": rows[-1]["available_at"]})
     start = instant(fixture["context"]["analysis_at"]).date()-timedelta(days=364)
@@ -153,7 +157,7 @@ def metrics(fixture, selected=None):
         result.append({"key": "distance_from_52w_closing_high_pct", "value": number(100*(price/high-1)), "observed_at": observed})
     if 'turnover_ratio_previous_day' in requested:
         if len(rows) < 21:
-            raise ValueError('twenty-one completed turnover observations required')
+            raise ToolInputError('twenty-one completed turnover observations required. Do not retry this snapshot; use other available factors or external evidence.')
         amounts = [decimal(r['turnover']) for r in rows[-21:]]
         if any(v < 0 for v in amounts):
             raise ValueError('negative turnover')
@@ -163,5 +167,5 @@ def metrics(fixture, selected=None):
         ranges = [max(decimal(r["high"])-decimal(r["low"]), abs(decimal(r["high"])-closes[i-1]), abs(decimal(r["low"])-closes[i-1])) for i, r in enumerate(rows) if i]
         result.append({"key": "atr14_pct", "value": number(100*rma(ranges)/closes[-1]), "observed_at": rows[-1]["available_at"]})
     if selected is not None and requested != {r['key'] for r in result}:
-        raise ValueError('requested metric lacks sufficient history or a valid denominator')
+        raise ToolInputError('requested metric lacks sufficient history or a valid denominator. Do not retry this snapshot; use other available factors or external evidence.')
     return result

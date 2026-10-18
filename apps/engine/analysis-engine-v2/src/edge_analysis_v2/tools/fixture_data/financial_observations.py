@@ -1,5 +1,8 @@
 """Released financial observations and explicitly conditional valuation math."""
 from copy import deepcopy
+from decimal import InvalidOperation
+
+from edge_analysis_v2.tools.execution import ToolInputError
 
 from edge_analysis_v2.tools.fixture_data.common import available, decimal, holdings, instant, number, table
 
@@ -30,8 +33,8 @@ def read(fixture, instrument_id):
     Returns:
         Table of actuals and forecasts with issuer, period and source identity.
     """
-    if instrument_id not in {r['instrument_id'] for r in holdings(fixture)['holdings']}:
-        raise ValueError('instrument outside current holdings')
+    if not isinstance(instrument_id, str) or instrument_id not in {r['instrument_id'] for r in holdings(fixture)['holdings']}:
+        raise ToolInputError('instrument outside current holdings; select a constituent from get_etf_holdings.')
     return table([r for r in visible(fixture) if r['instrument_id'] == instrument_id], COLUMNS)
 
 
@@ -39,7 +42,7 @@ def select(fixture, identity):
     """Resolve one released source row rather than accepting an invented number."""
     row = next((r for r in visible(fixture) if r['observation_id'] == identity), None)
     if row is None:
-        raise ValueError('financial observation unavailable at analysis time')
+        raise ToolInputError('financial observation unavailable at analysis time; select an observation_id from get_financial_observations.')
     read(fixture, row['instrument_id'])
     return deepcopy(row)
 
@@ -57,9 +60,9 @@ def compare(fixture, previous_id, current_id):
     """
     previous, current = select(fixture, previous_id), select(fixture, current_id)
     if previous_id == current_id or any(previous[k] != current[k] for k in ('instrument_id','metric','unit','period')):
-        raise ValueError('distinct same-instrument metric, unit and period required')
+        raise ToolInputError('distinct same-instrument metric, unit and period required; select matching observations from get_financial_observations.')
     if instant(previous['published_at']) > instant(current['published_at']):
-        raise ValueError('previous observation was published after current')
+        raise ToolInputError('previous observation was published after current; select IDs in publication order from get_financial_observations.')
     before, after = decimal(previous['value']), decimal(current['value'])
     return {'previous':previous, 'current':current, 'difference':number(after-before),
             'percent_change':number(100*(after-before)/before) if before > 0 else None}
@@ -78,16 +81,22 @@ def valuation_range(fixture, eps_id, per_low, per_high):
         Source EPS, assumptions, observed price and conditional prices/returns.
     """
     eps = select(fixture, eps_id)
-    low, high, value = decimal(per_low), decimal(per_high), decimal(eps['value'])
+    try:
+        low, high = decimal(per_low), decimal(per_high)
+    except (ValueError, InvalidOperation):
+        raise ToolInputError('per_low/per_high must be finite positive numbers in increasing order.') from None
+    value = decimal(eps['value'])
     if eps['metric'] != 'eps' or eps['unit'] != 'KRW_per_share' or not (len(eps['period']) == 4 and eps['period'].isdigit()):
-        raise ValueError('annual KRW EPS observation required')
+        raise ToolInputError('annual KRW EPS observation required; select a matching row from get_financial_observations.')
     if not 0 < low <= high or value <= 0:
-        raise ValueError('positive EPS and ordered positive multiples required')
+        raise ToolInputError('positive EPS and ordered positive multiples required; use a positive annual EPS and ordered assumptions, or leave this calculation unavailable.')
     cutoff = instant(fixture['context']['analysis_at'])
     rows = sorted([r for r in available(fixture.get('prices', []), cutoff)
                    if r['instrument_id'] == eps['instrument_id'] and r['date'] < cutoff.date().isoformat()],
                   key=lambda r:r['date'])
-    if not rows or len({r['date'] for r in rows}) != len(rows) or decimal(rows[-1]['close']) <= 0:
+    if not rows:
+        raise ToolInputError('completed closing price unavailable. Do not retry this snapshot; use other factors or external evidence.')
+    if len({r['date'] for r in rows}) != len(rows) or decimal(rows[-1]['close']) <= 0:
         raise ValueError('unique positive completed closing price required')
     price = decimal(rows[-1]['close'])
     return {'eps_observation':eps, 'per_assumptions':{'low':number(low),'high':number(high)},
