@@ -306,6 +306,72 @@ def test_saved_prompt_snapshot_reaches_actual_model_boundary(run_context):
     request('movement', model, system_prompt='version-pinned system instruction')
 
 
+def test_movement_revision_does_not_receive_first_publication_selection_rules(run_context):
+    from copy import deepcopy
+    from datetime import datetime, timedelta
+    request, _ = run_context
+    fixture = make_fixture()
+    async def first(**kwargs):
+        assert '순서는 오늘 가격이 움직인 쪽' in kwargs['prompt']
+        assert '이번 실행은 가격변동 수정이다.' not in kwargs['prompt']
+        reference = news_reference(kwargs)
+        return {'new_items': [dict(candidate_id='kept', type='이슈', title_keyword='공급 계약',
+            sentence='공급 물량을 확보했어요.', sentiment='positive', tool_run_ids=[reference])],
+            'selected_item_ids': ['kept'], 'summary': '공급 물량을 확보했어요.'}
+    before, parent = request('movement', first, fixture, previous_analysis_id=None)
+    later = deepcopy(fixture)
+    later['context']['analysis_at'] = (datetime.fromisoformat(fixture['context']['analysis_at']) + timedelta(minutes=1)).isoformat()
+    async def revise(**kwargs):
+        assert '이번 실행은 가격변동 수정이다.' in kwargs['prompt']
+        assert '순서는 오늘 가격이 움직인 쪽' not in kwargs['prompt']
+        assert kwargs['initial']['previous_items']
+        assert 'revision-investigation' in kwargs['skills'] and kwargs['effort'] == 'low'
+        return {'new_items': [], 'selected_item_ids': [], 'summary': None}
+    after, _ = request('movement', revise, later, previous_analysis_id=parent)
+    assert after == before
+    tomorrow = deepcopy(fixture)
+    tomorrow.pop('price_snapshot', None)
+    tomorrow.pop('price_snapshots', None)
+    tomorrow['context']['analysis_at'] = (datetime.fromisoformat(fixture['context']['analysis_at']) + timedelta(days=1)).isoformat()
+    request('movement', first, tomorrow)
+
+
+def test_movement_revision_distinguishes_published_order_from_retired_candidates(run_context):
+    from copy import deepcopy
+    from datetime import datetime, timedelta
+    request, _ = run_context
+    fixture = make_fixture()
+    selected = []
+    async def first(**kwargs):
+        ref = news_reference(kwargs)
+        return {'new_items': [dict(candidate_id=name, type='이슈', title_keyword=name,
+            sentence='공급 물량을 확보했어요.', sentiment='positive', tool_run_ids=[ref])
+            for name in ('기존 계약', '공장 가동')],
+            'selected_item_ids': ['공장 가동', '기존 계약'], 'summary': '공급 물량을 확보했어요.'}
+    _, parent = request('movement', first, fixture, previous_analysis_id=None)
+    async def replace(**kwargs):
+        initial = kwargs['initial']
+        selected.extend(initial['previous_selected_item_ids'])
+        items = {item['item_id']: item for item in initial['previous_items']}
+        assert [items[key]['title_keyword'] for key in selected] == ['공장 가동', '기존 계약']
+        return {'new_items': [dict(candidate_id='corrected', type='이슈', title_keyword='계약 미확정',
+            sentence='계약을 협의 중이에요.', sentiment='neutral', tool_run_ids=items[selected[1]]['tool_run_ids'])],
+            'selected_item_ids': [selected[0], 'corrected'], 'summary': '계약을 협의 중이에요.'}
+    later = deepcopy(fixture)
+    later['context']['analysis_at'] = (datetime.fromisoformat(fixture['context']['analysis_at']) + timedelta(minutes=1)).isoformat()
+    _, revised = request('movement', replace, later, previous_analysis_id=parent)
+    async def unchanged(**kwargs):
+        initial = kwargs['initial']
+        ids = initial['previous_selected_item_ids']
+        items = {item['item_id']: item for item in initial['previous_items']}
+        assert selected[1] in items and selected[1] not in ids
+        assert ids[0] == selected[0]
+        assert [items[key]['title_keyword'] for key in ids] == ['공장 가동', '계약 미확정']
+        return {'new_items': [], 'selected_item_ids': ids, 'summary': initial['previous_analysis']['summary']}
+    later['context']['analysis_at'] = (datetime.fromisoformat(later['context']['analysis_at']) + timedelta(minutes=1)).isoformat()
+    request('movement', unchanged, later, previous_analysis_id=revised)
+
+
 def test_corrupt_source_data_fails_before_paying_for_model(run_context):
     request, factory = run_context
     fixture = make_fixture()
