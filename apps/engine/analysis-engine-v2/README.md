@@ -81,8 +81,8 @@ API 계약: [Search](https://docs.tinyfish.ai/api-reference/search-the-web),
 내 PC의 Codex·Claude Code 에이전트가 분석 에이전트와 같은 DB 툴로 ETF를 조회한다. stdio로만 동작해 네트워크 포트를 열지 않는다. 저장·모델 호출·웹 툴은 없다.
 
 ```sh
-codex mcp add edge-analysis -- <패키지를 설치한 python> -m edge_analysis_v2.mcp_server --rds-ca /path/to/rds-ca.pem
-claude mcp add edge-analysis -- <패키지를 설치한 python> -m edge_analysis_v2.mcp_server --rds-ca /path/to/rds-ca.pem
+codex mcp add edge-analysis -- <패키지를 설치한 python> -m edge_analysis_v2.tools.mcp_server --rds-ca /path/to/rds-ca.pem
+claude mcp add edge-analysis -- <패키지를 설치한 python> -m edge_analysis_v2.tools.mcp_server --rds-ca /path/to/rds-ca.pem
 ```
 
 - 에이전트는 `open_etf(etf_code, analysis_at)`로 ETF 하나를 그 시점 기준으로 읽고, 응답의 `tools`에 있는 이름과 `parameters`대로 `call(tool, arguments)`를 부른다. `analysis_at`을 비우면 지금이다.

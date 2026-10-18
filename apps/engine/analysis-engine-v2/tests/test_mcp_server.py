@@ -4,9 +4,9 @@ import json
 import psycopg
 from mcp.client import Client
 
-from edge_analysis_v2 import mcp_server
+from edge_analysis_v2.tools import mcp_server
 
-from edge_analysis_v2.mcp_server import build
+from edge_analysis_v2.tools.mcp_server import build
 from edge_analysis_v2.tools.fixture_data import FixtureTools
 from edge_analysis_v2.tools.fixture_data.demo import make_fixture
 
