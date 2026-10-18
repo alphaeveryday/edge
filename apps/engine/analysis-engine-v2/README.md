@@ -76,6 +76,18 @@ API 계약: [Search](https://docs.tinyfish.ai/api-reference/search-the-web),
 
 계약 검사는 실제 DB 조립 응답을 읽기 전용으로 검증한다. 옵시디언 원문을 복사하지 않고 경로와 해시만 보관한다. 자세한 범위는 [계약 안내](src/edge_analysis_v2/contracts/README.md)를 참고한다.
 
+### 로컬 MCP 조회
+
+내 PC의 Codex·Claude Code 에이전트가 분석 에이전트와 같은 DB 툴로 ETF를 조회한다. stdio로만 동작해 네트워크 포트를 열지 않는다. 저장·모델 호출·웹 툴은 없다.
+
+```sh
+codex mcp add edge-analysis -- <패키지를 설치한 python> -m edge_analysis_v2.mcp_server --rds-ca /path/to/rds-ca.pem
+claude mcp add edge-analysis -- <패키지를 설치한 python> -m edge_analysis_v2.mcp_server --rds-ca /path/to/rds-ca.pem
+```
+
+- 에이전트는 `open_etf(etf_code, analysis_at)`로 ETF 하나를 그 시점 기준으로 읽고, 응답의 `tools`에 있는 이름과 `parameters`대로 `call(tool, arguments)`를 부른다. `analysis_at`을 비우면 지금이다.
+- 읽기 전용 계정(`edge-v2-readonly`) 터널 `127.0.0.1:15432`가 필요하다. 거시·재무 툴은 쓰기 계정(`edge-v2-writer`) 터널 `127.0.0.1:15433`이 열려 있을 때만 붙고, 그 연결은 `default_transaction_read_only`로 잠근다. 터널이 없거나 조회가 실패하면 거시·재무 툴만 빼고 `notes`에 이유를 적는다.
+
 ## 검증
 
 문서 스킬과 실행 권한, 컨테이너 검증 방법은 [분석 스킬 실행 계약](docs/agent-skills.md)을 참고한다.

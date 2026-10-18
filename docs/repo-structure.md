@@ -156,6 +156,7 @@ analysis-engine-v2/
     │   ├── admission.py
     │   └── worker.py
     ├── api/                      # 분석 API(Lambda 진입점·HTTP 처리)
+    ├── mcp_server.py             # 로컬 stdio MCP — 내 PC 에이전트의 DB 툴 조회(읽기 전용)
     ├── sources/                  # 고정 시점 원천 조회·트리거 좌표·웹 조사
     ├── skills/                   # 이미지에 포함되는 승인된 분석 SKILL.md
     ├── tools/                    # 툴 실행·모델 노출 스키마
@@ -194,3 +195,5 @@ analysis-engine-v2/
 ```
 
 실행 진입점: `python -m edge_analysis_v2.dashboard.server`. 기존 `edge_analysis_v2.cloud_review` 경로는 제거했다. 필수 `--rds-ca`, 선택 `--port`, `--env-file`, `--runs-dir`, `--contract-vault` 인자는 유지한다. 패키지 기준으로 프롬프트·스키마·브라우저 자산을 찾으므로 작업 디렉터리에 의존하지 않는다.
+
+로컬 조회 진입점: `python -m edge_analysis_v2.mcp_server --rds-ca <경로>`. Codex·Claude Code에 stdio MCP로 등록해 쓴다. 사용법은 패키지 README의 "로컬 MCP 조회" 절에 있다.
