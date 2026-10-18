@@ -104,7 +104,11 @@ export function Dashboard() {
     const amount = f.get('amount') ? Number(f.get('amount')) : null;
     const average = f.get('average') ? Number(f.get('average')) : null;
     if (!cash && quantity === null && amount === null) { setError('보유 수량을 입력해 주세요.'); return; }
-    const asset = { ...editing, account: String(f.get('account')), quantity: cash ? null : quantity, quantity_revision: quantity !== null && quantity !== editing.quantity ? crypto.randomUUID() : editing.quantity_revision, average, average_revision: average !== editing.average ? crypto.randomUUID() : editing.average_revision, amount: cash || quantity === null ? amount : null, weight: null, target: null, price: null, price_date: null };
+    const stored = w.assets.find(a => a.id === editing.id && a.instrument_id === editing.instrument_id && a.currency === editing.currency);
+    // Untouched quote-adjusted values keep their original stored split baselines.
+    const savedQuantity = stored && quantity === editing.quantity ? stored.quantity : quantity;
+    const savedAverage = stored && average === editing.average ? stored.average : average;
+    const asset = { ...editing, account: String(f.get('account')), quantity: cash ? null : savedQuantity, quantity_revision: quantity !== null && quantity !== editing.quantity ? crypto.randomUUID() : editing.quantity_revision, average: savedAverage, average_revision: average !== editing.average ? crypto.randomUUID() : editing.average_revision, amount: cash || quantity === null ? amount : null, weight: null, target: null, price: null, price_date: null };
     if (await persist({ ...w, assets: w.assets.some(a => a.id === asset.id) ? w.assets.map(a => a.id === asset.id ? asset : a) : [...w.assets, asset] })) closeEditor();
   }
   const graphAssets = assets.map(a => ({ ...a, quantity: null, price: null, amount: amountOf(a) }));

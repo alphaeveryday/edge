@@ -92,6 +92,25 @@ test('an older poll cannot replace the fresh valuation returned after saving', a
   await expect(profit).toHaveText('+200,000원 (+50.00%)');
 });
 
+test('an account-only edit does not rebase quantities or averages normalized by an earlier quote', async ({ page }) => {
+  await mock(page);
+  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { ...tracking, market: { ...tracking.market, payload: { ...tracking.market.payload, assets: [{ ...tracking.market.payload.assets[0], quantity: 20, average: 20000 }] } } } }));
+  await page.goto('/portfolio/?view=dashboard');
+  await expect(page.locator('.profit-percent')).toBeVisible();
+  await page.locator('.asset-row').first().click();
+  await expect(page.getByLabel('보유 수량', { exact: true })).toHaveValue('20');
+  await expect(page.getByLabel(/평균매수가/)).toHaveValue('20000');
+  await page.getByRole('dialog').getByRole('combobox', { name: '계좌', exact: true }).selectOption('IRP');
+  const saving = page.waitForRequest(r => r.url().endsWith('/workbook') && r.method() === 'POST');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  const savedAsset = (await saving).postDataJSON().workbook.assets[0];
+  expect(savedAsset.account).toBe('IRP');
+  expect(savedAsset.quantity).toBe(10);
+  expect(savedAsset.average).toBe(40000);
+  expect(savedAsset.quantity_revision).toBeUndefined();
+  expect(savedAsset.average_revision).toBeUndefined();
+});
+
 test('holdings need only instrument quantity and optional average, never a customer quote or weight', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
   await page.locator('.asset-row').first().click();
