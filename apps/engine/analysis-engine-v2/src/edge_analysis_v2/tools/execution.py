@@ -20,8 +20,9 @@ class ToolInputError(ValueError):
 class ToolExecutionError(RuntimeError):
     """A failed calculation whose audit record can be retrieved by execution ID."""
 
-    def __init__(self, tool_run_id: str, message: str = "Tool execution failed"):
+    def __init__(self, tool_run_id: str, message: str = "Tool execution failed", *, recoverable: bool = False):
         self.tool_run_id = tool_run_id
+        self.recoverable = recoverable
         super().__init__(f"{message}; tool_run_id={tool_run_id}")
 
 
@@ -87,7 +88,7 @@ class AuditedExecution:
             self._store.save_run(**saved, tool_run_id=run_id, output=None,
                                  finished_at=datetime.now(timezone.utc),
                                  error_message=message)
-            raise ToolExecutionError(run_id, message) from None
+            raise ToolExecutionError(run_id, message, recoverable=isinstance(error, ToolInputError)) from None
         if not isinstance(output, dict) or not isinstance(output.get("tool_run_id"), str):
             raise ValueError("Tool response requires an execution identifier")
         return self._store.save_run(**saved, tool_run_id=output["tool_run_id"], output=output,

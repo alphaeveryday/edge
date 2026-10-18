@@ -87,8 +87,10 @@ def test_internal_failure_is_not_misrepresented_as_bad_model_input(monkeypatch):
     def broken_read(*args, **kwargs):
         raise RuntimeError('Internal fixture failure')
     monkeypatch.setattr(WorkContext, 'read', broken_read)
-    with pytest.raises(RuntimeError, match='Internal fixture failure'):
-        asyncio.run(tool.handler({'source':'news'}))
+    result = asyncio.run(tool.handler({'source':'news'}))
+    error = json.loads(result['content'][0]['text'])['error']
+    assert result['is_error'] and error['code'] == 'tool_execution_failed'
+    assert error['retryable'] is False and 'Internal fixture failure' not in error['message']
 
 
 def test_large_original_roundtrip_includes_correction_beyond_first_page(monkeypatch):
