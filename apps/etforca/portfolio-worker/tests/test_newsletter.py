@@ -20,9 +20,14 @@ B_CARD = {'headline': '반도체 실적 기대가 이어져요', 'dek': '주요 
           'watch_next': '다음 실적 발표의 수주 전망을 살펴봐요.', 'source_ids': ['outlook']}
 
 
-H_CARD = {'headline': '반도체 보유 가설은 그대로예요', 'dek': '새 공급 계약이 수요 가정을 뒷받침했어요.', 'thesis': 'AI 수요가 이어진다',
-          'verdict': '유지', 'important': True, 'changes': [B_CARD['factors'][0]], 'meaning': '가설을 바꾸지 않아요.',
-          'next_check': '다음 실적 발표', 'source_ids': ['outlook']}
+NEWS = {'title': '공급 계약 체결', 'detail': '새 계약이 수요 가정을 뒷받침해요.', 'certainty': '확인', 'source_id': 'outlook'}
+EVENT = {'date': '2026-10-23', 'when': '10월 23일', 'title': '3분기 실적 발표', 'kind': '실적', 'org': 'SK하이닉스', 'domain': ''}
+H_CARD = {'headline': '반도체 보유 이유는 견고해요', 'dek': '새 공급 계약이 수요 가정을 뒷받침했어요.', 'thesis': 'AI 수요가 이어진다',
+          'verdict': '견고', 'important': True, 'move_reason': '업종 강세에 함께 올랐어요.', 'positives': [NEWS], 'negatives': [],
+          'impact': '보유 이유를 바꾸지 않아요.', 'events': [EVENT], 'source_ids': ['outlook']}
+# What the worker stores after illustrate(): ids resolved to urls, domains to icons.
+H_STORED = {**H_CARD, 'positives': [NEWS | {'url': 'https://etforca.com/'}],
+            'events': [{k: v for k, v in EVENT.items() if k != 'domain'} | {'icon': None}]}
 
 
 @pytest.fixture
@@ -284,7 +289,7 @@ def test_confirmed_subscription_gets_one_complete_daily_email_and_unsubscribe_st
     sender.tick(ses, now)
     assert len(sends) == 1, 'A verified address must wait for its actual holdings content'
     claimed = news.claim_content()
-    card = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'format': agent.DEFAULT_FORMAT, **H_CARD, 'headline': '기술주 소식', 'sources': []}
+    card = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'format': agent.DEFAULT_FORMAT, **H_STORED, 'headline': '기술주 소식', 'sources': []}
     news.finish_content(claimed, value=card)
     sender.tick(ses, now)
     sender.tick(ses, now)
@@ -391,7 +396,7 @@ async def test_newsletter_harness_reuses_our_outlook_and_does_not_pass_customer_
 async def test_newsletter_requires_body_evidence_beyond_a_quote_for_its_issue_and_cause():
     calls = []
     evidence = SimpleNamespace(sources=[])
-    card = {**H_CARD, 'source_ids': ['price']}
+    card = {**H_CARD, 'positives': [], 'source_ids': ['price']}
     async def model(payload):
         calls.append(payload)
         if len(calls) == 2:
@@ -472,6 +477,9 @@ QUOTE = {'trading_date': '2026-10-15', 'previous_date': '2026-10-14', 'close': 1
 def letter_card(fmt, instrument='US:QQQ', name='QQQ', **fields):
     content = {'headline': '기술주 소식', 'dek': '확인한 소식', **FORMAT_CARDS[fmt], 'source_ids': ['outlook']}
     agent.FORMATS[fmt][1].model_validate(content)  # Samples must stay valid model output, or these tests prove nothing.
+    if fmt == 'H':  # then stored as the worker leaves it after illustrate()
+        content = {**content, 'positives': [i | {'url': 'https://etforca.com/'} for i in content['positives']],
+                   'events': [{k: v for k, v in ev.items() if k != 'domain'} | {'icon': None} for ev in content['events']]}
     return {'instrument_id': instrument, 'name': name, 'format': fmt, **content, 'sources': [], 'quote': QUOTE, **fields}
 
 
@@ -513,24 +521,51 @@ def test_every_link_is_a_button_and_the_letter_ends_with_a_kind_word():
     assert sum(cheer in plain for cheer in email.CHEERS) == 1, 'Exactly one closing line, chosen by date'
 
 
-def test_core_letter_explains_only_what_touches_the_thesis():
-    shaken = letter_card('H', 'US:A', 'A', headline='가설 흔들림', verdict='약화')
-    calm = letter_card('H', 'US:B', 'B', important=False, changes=[], meaning='업종 흐름 안의 등락이에요.')
+def test_core_letter_reports_the_portfolio_then_only_what_touches_the_thesis():
+    shaken = letter_card('H', 'US:A', 'A', headline='보유 이유 흔들림', verdict='악화')
+    calm = letter_card('H', 'US:B', 'B', important=False, positives=[], impact='업종 흐름 안의 등락이에요.')
     subject, html, text = email.daily(date(2026, 10, 18), [calm, shaken], 'H')
-    assert '가설 흔들림' in subject and '무엇이 바뀌었나' in html
-    assert 'B ▲ 5.00% — 가설 유지 · 업종 흐름 안의 등락이에요.' in text and text.count('내 보유 가설:') == 1
+    assert '보유 이유 흔들림' in subject
+    order = [text.index(part) for part in ('포트폴리오 보고:', '오늘 주요 보고 종목 1개', '내 보유 이유:', '오늘의 이유 브리핑', '변화 없음:', '앞으로 예정된 주요 이벤트:')]
+    assert order == sorted(order), 'Sections must follow the agreed reading order'
+    assert 'B ▲ 5.00% — 🛡️ 견고 · 업종 흐름 안의 등락이에요.' in text and text.count('내 보유 이유:') == 1
+    assert '오늘 판정: ⚠️ 악화' in text and '오늘 오른 이유: 업종 강세에 함께 올랐어요.' in text
     subject, _, _ = email.daily(date(2026, 10, 18), [calm], 'H')
-    assert '보유 가설을 흔드는 변화가 없어요' in subject
+    assert '보유 이유를 흔드는 변화가 없어요' in subject
 
 
-def test_core_card_keeps_changes_only_for_important_days():
-    assert agent.CoreCard.model_validate({**H_CARD, 'important': False}).changes == [], 'Quiet days carry no change list'
-    with pytest.raises(ValueError):
-        agent.CoreCard.model_validate({**H_CARD, 'changes': []})
+def test_core_letter_names_the_direction_of_the_move():
+    down = letter_card('H', quote={**QUOTE, 'change_pct': -2.0})
+    _, _, text = email.daily(date(2026, 10, 18), [down], 'H')
+    assert '오늘 떨어진 이유:' in text and '오늘 오른 이유' not in text
+
+
+def test_event_table_merges_holdings_sorts_by_date_and_drops_past_events():
+    fed = {**EVENT, 'date': '2026-10-21', 'when': '10월 21일', 'title': '미국 9월 CPI 발표', 'kind': '물가', 'org': '미국 노동통계국',
+           'icon': 'https://www.google.com/s2/favicons?domain=bls.gov&sz=64'}
+    past = {**EVENT, 'date': '2026-10-01', 'when': '10월 1일', 'title': '지난 일정'}
+    a = letter_card('H', 'US:A', 'A', events=[{**EVENT, 'icon': None}, fed, past])
+    b = letter_card('H', 'US:B', 'B', events=[{**EVENT, 'icon': None}])
+    _, html, text = email.daily(date(2026, 10, 18), [a, b], 'H')
+    assert '지난 일정' not in text
+    assert text.index('미국 9월 CPI 발표') < text.index('3분기 실적 발표'), 'Calendar reads in date order'
+    assert '10월 23일 · 3분기 실적 발표 (SK하이닉스) — A, B' in text, 'One row per event, listing every holding it touches'
+    assert 'src="https://www.google.com/s2/favicons?domain=bls.gov&amp;sz=64"' in html and '🧾' in html, 'Logo when resolved, emoji otherwise'
+
+
+async def test_illustrate_never_turns_model_text_into_a_logo_url():
+    class Client:
+        async def get(self, url, **_):
+            return SimpleNamespace(status_code=404 if 'unknown' in url else 200)
+    card = {'positives': [dict(NEWS)], 'negatives': [],
+            'events': [{**EVENT, 'domain': 'skhynix.com'}, {**EVENT, 'domain': 'javascript:alert(1)'}, {**EVENT, 'domain': 'unknown.example'}]}
+    value = await agent.illustrate(Client(), card, {'outlook': {'url': 'https://etforca.com/'}})
+    assert value['positives'][0] == {**NEWS, 'url': 'https://etforca.com/'}
+    assert [e['icon'] for e in value['events']] == ['https://www.google.com/s2/favicons?domain=skhynix.com&sz=64', None, None]
 
 
 def test_weakened_thesis_is_never_filed_as_no_change():
-    weak = letter_card('H', verdict='약화', important=False, changes=[], meaning='약화 이유')
+    weak = letter_card('H', verdict='악화', important=False, impact='악화 이유')
     subject, html, _ = email.daily(date(2026, 10, 18), [weak], 'H')
     assert '흔드는 변화가 없어요' not in subject and '변화 없음' not in html
 
@@ -876,3 +911,56 @@ def test_daily_and_confirmation_mails_carry_the_hosted_logo():
     _, confirm_html, _ = email.confirmation('a' * 43)
     for html in (daily_html, confirm_html):
         assert html.count(f'src="{email.LOGO}"') == 1 and 'alt="ETF ORCA"' in html
+
+
+def test_h_cards_cached_before_the_briefing_redesign_become_notices():
+    old = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'format': 'H', 'headline': '예전 H 제목', 'dek': '예전 H 부제', 'thesis': 'AI 수요',
+           'verdict': '유지', 'important': False, 'changes': [], 'meaning': '의미', 'next_check': '다음', 'sources': []}
+    for verdict in ('강화', '유지', '약화'):
+        subject, html, _ = email.daily(date(2026, 10, 18), [{**old, 'verdict': verdict}, letter_card('H', 'US:B', 'B')], 'H')
+        assert '예전 H 제목' in html, 'A deploy-day cache must render, not crash the whole send'
+
+
+def test_cover_prefers_a_strengthened_thesis_over_a_steady_one():
+    steady = letter_card('H', 'US:A', 'A', headline='견고 소식', verdict='견고', quote={**QUOTE, 'change_pct': 1.0})
+    stronger = letter_card('H', 'US:B', 'B', headline='강화 소식', verdict='강화', quote={**QUOTE, 'change_pct': 0.5})
+    subject, _, _ = email.daily(date(2026, 10, 18), [steady, stronger], 'H')
+    assert '강화 소식' in subject
+
+
+def test_event_titles_differing_only_in_spacing_are_one_row():
+    a = letter_card('H', 'US:A', 'A', events=[{**EVENT, 'icon': None}])
+    b = letter_card('H', 'US:B', 'B', events=[{**EVENT, 'title': '3분기 실적발표', 'icon': None}])
+    _, _, text = email.daily(date(2026, 10, 18), [a, b], 'H')
+    assert text.count('3분기 실적') == 1 and '— A, B' in text
+
+
+async def test_news_item_citing_the_price_row_is_sent_back_for_a_text_source():
+    calls = []
+    evidence = SimpleNamespace(sources=[{'id': 'outlook', 'url': 'https://etforca.com/', 'excerpt': '우리 전망'},
+                                        {'id': 'price', 'url': 'https://example.test/p', 'excerpt': json.dumps(QUOTE)}])
+    async def model(payload):
+        calls.append(payload)
+        news = {**NEWS, 'source_id': 'price' if len(calls) == 1 else 'outlook'}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({**H_CARD, 'positives': [news]})}}]}
+    await agent.write_card({'instrument_id': 'KR:091160', 'name': '반도체'}, date(2026, 10, 18), 'test', model_call=model,
+                           evidence=evidence, research=False)
+    assert len(calls) == 2, 'A price row is not news evidence'
+
+
+def test_same_title_from_two_companies_stays_two_rows():
+    a = letter_card('H', 'US:A', 'A', events=[{**EVENT, 'icon': None}])
+    b = letter_card('H', 'US:B', 'B', events=[{**EVENT, 'org': '삼성전자', 'icon': None}])
+    _, _, text = email.daily(date(2026, 10, 18), [a, b], 'H')
+    assert '(SK하이닉스) — A' in text and '(삼성전자) — B' in text
+
+
+async def test_a_source_cited_only_by_a_news_item_still_gets_its_button():
+    evidence = SimpleNamespace(sources=[{'id': 'outlook', 'url': 'https://etforca.com/', 'excerpt': '우리 전망'},
+                                        {'id': 'article', 'url': 'https://news.example/a', 'excerpt': '기사 본문'}])
+    async def model(payload):
+        card = {**H_CARD, 'positives': [{**NEWS, 'source_id': 'article'}], 'source_ids': ['outlook']}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(card)}}]}
+    result = await agent.write_card({'instrument_id': 'KR:091160', 'name': '반도체'}, date(2026, 10, 18), 'test', model_call=model,
+                                    evidence=evidence, research=False)
+    assert {'url': 'https://news.example/a'} in result['sources']

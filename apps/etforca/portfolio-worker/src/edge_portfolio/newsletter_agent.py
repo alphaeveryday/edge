@@ -4,10 +4,12 @@ import json
 import logging
 import inspect
 import os
+import re
 from contextlib import AsyncExitStack
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -123,27 +125,71 @@ class PurposeCard(Card):
     new_info: str = text(130)
 
 
-class CoreCard(Card):
-    """Production letter: D's thesis check, F's 'only what matters', B's cause breakdown."""
-    thesis: str = text(90)
-    verdict: Literal['강화', '유지', '약화']
-    important: bool
-    changes: list[Factor] = Field(max_length=2)
-    meaning: str = text(130)
-    next_check: str = text(90)
+class NewsItem(StrictModel):
+    title: str = text(40)
+    detail: str = text(140)
+    certainty: Literal['확인', '추정']
+    source_id: str = text(40)
 
-    @model_validator(mode='after')
-    def changes_only_when_important(self):
-        if not self.important:
-            self.changes = []  # Mechanical rule: normalise instead of spending model turns on it.
-        elif not self.changes:
-            raise ValueError('important가 true면 무엇이 바뀌었는지 changes를 1~2개 내세요.')
-        return self
+
+class UpcomingEvent(StrictModel):
+    date: str = Field(pattern=r'^\d{4}-\d{2}-\d{2}$')
+    when: str = text(16)
+    title: str = text(30)
+    kind: Literal['실적', '물가', '금리', '정책', '제품', '기타']
+    org: str = text(20)
+    domain: str = Field(max_length=60)  # official site of `org`, for its logo; '' if unknown
+
+
+class CoreCard(Card):
+    """Production letter: holding-thesis briefing with today's reasons and the calendar ahead."""
+    thesis: str = text(90)
+    verdict: Literal['악화', '견고', '강화']
+    important: bool
+    move_reason: str = text(160)
+    positives: list[NewsItem] = Field(max_length=2)
+    negatives: list[NewsItem] = Field(max_length=2)
+    impact: str = text(130)
+    events: list[UpcomingEvent] = Field(max_length=4)
 
 
 # H is the production combination; A-G are the hypotheses of docs/design/portfolio-newsletter-formats.md.
 FORMATS = {'H': ('core', CoreCard), 'A': ('profit', ProfitCard), 'B': ('cause', CauseCard), 'C': ('event', EventCard), 'D': ('thesis', ThesisCard),
            'E': ('action', ActionCard), 'F': ('exception', ExceptionCard), 'G': ('purpose', PurposeCard)}
+
+
+DOMAIN = re.compile(r'(?:[a-z0-9-]+\.)+[a-z]{2,}')
+FAVICON = 'https://www.google.com/s2/favicons?domain={}&sz=64'
+
+
+async def event_icon(client, domain):
+    if not DOMAIN.fullmatch(domain or ''):
+        return None
+    url = FAVICON.format(domain)
+    try:
+        response = await client.get(url, timeout=10, follow_redirects=True)
+    except (httpx.HTTPError, httpx.InvalidURL):
+        return None
+    return url if response.status_code == 200 else None  # unknown domains get a 404 globe; the renderer uses an emoji
+
+
+async def illustrate(client, card, sources):
+    """Code, not the model, turns source ids and domains into links and logos: https only, and only logos that exist.
+
+    Logos are decoration: a slow or failing lookup costs the logo, never the researched card."""
+    for item in card['positives'] + card['negatives']:
+        item['url'] = sources[item['source_id']]['url']
+    for event in card['events']:
+        event['icon'], event['domain'] = None, event.get('domain')
+    try:
+        async with asyncio.timeout(20):
+            for event in card['events']:
+                event['icon'] = await event_icon(client, event['domain'])
+    except TimeoutError:
+        log.warning('newsletter_illustration_timeout')
+    for event in card['events']:
+        event.pop('domain')
+    return card
 
 
 def skill(fmt):
@@ -272,12 +318,19 @@ async def write_card(holding, edition, key, *, fmt=DEFAULT_FORMAT, model_call=No
                 try:
                     card = card_model.model_validate_json(message.get('content') or '')
                     sources = {source['id']: source for source in evidence.sources}
-                    if not set(card.source_ids) <= sources.keys():
+                    cited = {item.source_id for item in getattr(card, 'positives', []) + getattr(card, 'negatives', [])}
+                    if not set(card.source_ids) | cited <= sources.keys():
                         raise ValueError('UNKNOWN_SOURCE')
+                    if 'price' in cited:
+                        raise ValueError('NEWS_EVIDENCE_REQUIRED')  # a news item needs a text source, not a price row
                     if not any(source_id != 'price' and sources[source_id].get('excerpt') for source_id in card.source_ids):
                         raise ValueError('NEWS_EVIDENCE_REQUIRED')
-                    return {**{k: holding[k] for k in ('instrument_id', 'name')}, **card.model_dump(exclude={'source_ids'}), 'format': fmt, 'edition': edition.isoformat(),
-                            'sources': [{'url': sources[s]['url']} for s in dict.fromkeys(card.source_ids)],
+                    value = card.model_dump(exclude={'source_ids'})
+                    if fmt == 'H':
+                        value = await illustrate(client, value, sources)
+                    return {**{k: holding[k] for k in ('instrument_id', 'name')}, **value, 'format': fmt, 'edition': edition.isoformat(),
+                            # Every claim gets its source button, including sources cited only by a news item.
+                            'sources': [{'url': sources[s]['url']} for s in dict.fromkeys([*card.source_ids, *sorted(cited)])],
                             'quote': json.loads(quote['excerpt']) if quote else None,
                             'outlook_at': outlook.get('analysis_at') if outlook else None,
                             'basis': 'published_outlook' if outlook else 'newsletter_research'}
