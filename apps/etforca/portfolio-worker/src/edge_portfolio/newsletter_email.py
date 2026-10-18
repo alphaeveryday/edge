@@ -400,27 +400,20 @@ def verdict_tag(verdict):
     return f'<span style="font-weight:700;color:{INK};white-space:nowrap">{VERDICTS[verdict]} {e(verdict)}</span>'
 
 
-def news_line(item, colour, sign, detailed):
-    """One line per item, signed and with a red (good) or blue (bad) bar. The line itself opens the detail where the client
-    folds <details> (Apple Mail and other WebKit/Chromium clients); Gmail replaces the tags with <u> and shows it open
-    (caniemail, HTML5 semantics). Outlook for Windows support is unverified."""
+def news_line(item, colour, sign):
+    """One large line per item: a signed mark and a red (good) or blue (bad) bar, the headline, then the company's move or
+    the importance. Nothing is folded away; the headline is the news."""
     moved, plain, prefix = tag(item)
     line = (f'<b style="color:{colour}">{sign}</b> {mark_of(item, NEWS_ICONS)}{e(item["title"])}'
-            f'<span style="color:{MUTED};font-size:14px;white-space:nowrap">&nbsp;· {prefix}{moved}</span>')
-    bar = f'border-left:3px solid {colour};padding:2px 0 2px 12px;margin:0 0 14px'
-    if not detailed:
-        # The HTML drops the detail to stay under the clip budget; the plain-text edition keeps it.
-        return f'<p style="{P};{bar};font-size:17px;line-height:1.6;color:{INK}">{line}</p>', f"  {sign} {item['title']} · {plain} — {item['detail']}"
-    return (f'<details style="{bar}"><summary style="cursor:pointer;font-family:{SANS};font-size:17px;line-height:1.6;color:{INK};word-break:keep-all;overflow-wrap:anywhere">{line}</summary>'
-            f'<p style="{P};margin:6px 0 0;color:{MUTED};font-size:15px;line-height:1.8">{e(item["detail"])}</p></details>',
-            f"  {sign} {item['title']} · {plain} — {item['detail']}")
+            f'<span style="color:{MUTED};font-size:15px;font-weight:400;white-space:nowrap">&nbsp;· {prefix}{moved}</span>')
+    return (f'<p style="{P};border-left:4px solid {colour};padding:4px 0 4px 14px;margin:0 0 16px;font-size:20px;font-weight:700;line-height:1.5;color:{INK}">{line}</p>',
+            f"  {sign} {item['title']} · {plain}")
 
 
-def holding_block(letter, card, detailed):
+def holding_block(letter, card):
     change = quote_of(card).get('change_pct')
     reason = '📈' if (change or 0) > 0 else '📉' if (change or 0) < 0 else '•'
-    lines = ([news_line(item, UP, '＋', detailed) for item in card['positives']]
-             + [news_line(item, DOWN, '－', detailed) for item in card['negatives']])
+    lines = [news_line(item, UP, '＋') for item in card['positives']] + [news_line(item, DOWN, '－') for item in card['negatives']]
     shown = move(change) if change is not None else ('', '')
     letter.add(row(f'''<div style="border-top:2px solid {INK};padding-top:18px">
 <p style="{P};margin:0 0 10px;color:{INK};font-size:20px;font-weight:700;line-height:1.5">{e(card['name'])} &nbsp;{shown[0]} &nbsp;{verdict_tag(card['verdict'])}</p>
@@ -477,7 +470,7 @@ def calendar(letter, edition, cards):
                '앞으로 예정된 일정:', *text, '')
 
 
-def brief_letter(edition, cards, weights, at, detailed):
+def brief_letter(edition, cards, weights, at):
     """Production letter H: one headline, a one-glance dashboard, a short block only for holdings whose thesis moved
     (or moved twice the usual range), the calendar, and every source on one line."""
     ready = [card for card in cards if fits(card, 'H')]
@@ -500,10 +493,8 @@ def brief_letter(edition, cards, weights, at, detailed):
     letter.add(row(f'<h1 class="hl" style="margin:0;font-family:{SERIF};font-size:29px;line-height:1.38;letter-spacing:-.5px;color:{INK};font-weight:700;word-break:keep-all">{e(headline)}</h1>', '32px 32px 30px'),
                headline, '')
     dashboard(letter, cards, ready, weights)
-    for i, card in enumerate(shaken):
-        holding_block(letter, card, detailed=i < detailed)
-    if detailed < len(shaken):
-        letter.add(row(para('메일이 길어 일부 소식의 자세한 내용은 뺐어요.', 14, MUTED), '0 32px 24px'), '메일이 길어 일부 소식의 자세한 내용은 뺐어요.', '')
+    for card in shaken:
+        holding_block(letter, card)
     for card in legacy:
         # Cached before the current shape (deploy day): show what it has rather than nothing.
         kept = card.get('dek') or card.get('issue', '')
@@ -523,8 +514,10 @@ def daily(edition, cards, fmt=DEFAULT_FORMAT, *, weights=None, purpose='long_ter
 
     Stories print in full in importance order until the letter would pass BUDGET; the rest become briefs
     (headline and dek), the way a magazine runs the remainder as short items."""
-    for full in range(len(cards), -1, -1):
-        rendered = (brief_letter(edition, cards, weights, issued_at, full) if fmt == 'H'
+    # H is one line per item and stays far under the budget; only the long experiment layouts shrink.
+    shrink = [None] if fmt == 'H' else range(len(cards), -1, -1)
+    for full in shrink:
+        rendered = (brief_letter(edition, cards, weights, issued_at) if fmt == 'H'
                     else compose(edition, cards, fmt, weights, purpose, full, issued_at))
         if len(rendered[1].encode()) <= BUDGET:
             return rendered
