@@ -1,15 +1,12 @@
 """Daily editorial harness: published outlook first, existing research tools otherwise."""
 import asyncio
-import ipaddress
 import json
 import logging
 import inspect
 import os
 import re
-import socket
 from contextlib import AsyncExitStack
 from datetime import datetime
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
@@ -133,7 +130,6 @@ class NewsItem(StrictModel):
     detail: str = text(140)
     certainty: Literal['확인', '추정']
     source_id: str = text(40)
-    visual: bool  # the article carries a picture or chart worth showing next to this item
 
 
 class UpcomingEvent(StrictModel):
@@ -166,52 +162,6 @@ DOMAIN = re.compile(r'(?:[a-z0-9-]+\.)+[a-z]{2,}')
 FAVICON = 'https://www.google.com/s2/favicons?domain={}&sz=64'
 
 
-class OpenGraphImage(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.image = None
-
-    def handle_starttag(self, tag, attrs):
-        attrs = dict(attrs)
-        if tag == 'meta' and self.image is None and (attrs.get('property') or attrs.get('name')) in {'og:image', 'twitter:image'}:
-            self.image = attrs.get('content')
-
-
-def public_https(url):
-    """Search results are attacker-influenced: only https to hosts that resolve to public addresses."""
-    # ponytail: httpx resolves again on connect, so DNS rebinding can still reach an internal host once. Without redirects
-    # and with only an https og:image attribute read back, that is a blind probe; pin the vetted IP if it ever matters.
-    try:
-        parts = urlsplit(url)
-        if parts.scheme != 'https' or not parts.hostname:
-            return False
-        addresses = {info[4][0] for info in socket.getaddrinfo(parts.hostname, 443, proto=socket.IPPROTO_TCP)}
-        return bool(addresses) and all(ipaddress.ip_address(address.split('%')[0]).is_global for address in addresses)
-    except (OSError, ValueError, UnicodeError):
-        return False
-
-
-async def og_image(client, url):
-    if not await asyncio.to_thread(public_https, url):
-        return None
-    page = b''
-    try:
-        # No redirects (a 302 could point inside the network) and at most 400KB read, whatever the server sends.
-        async with client.stream('GET', url, headers={'User-Agent': 'Mozilla/5.0'}, follow_redirects=False, timeout=10) as response:
-            if response.status_code != 200 or 'html' not in response.headers.get('content-type', ''):
-                return None
-            async for chunk in response.aiter_bytes():
-                page += chunk
-                if len(page) >= 400_000:
-                    break
-        parser = OpenGraphImage()
-        parser.feed(page[:400_000].decode(response.encoding or 'utf-8', errors='replace'))
-    except (httpx.HTTPError, httpx.InvalidURL, ValueError, LookupError):
-        return None
-    image = parser.image or ''
-    return image if urlsplit(image).scheme == 'https' and urlsplit(image).hostname else None
-
-
 async def event_icon(client, domain):
     if not DOMAIN.fullmatch(domain or ''):
         return None
@@ -224,21 +174,15 @@ async def event_icon(client, domain):
 
 
 async def illustrate(client, card, sources):
-    """Code, not the model, turns source ids and domains into image URLs: https only, and only images that exist.
+    """Code, not the model, turns source ids and domains into links and logos: https only, and only logos that exist.
 
-    Pictures are decoration: a slow or failing lookup costs the picture, never the researched card."""
-    wanted = []
+    Logos are decoration: a slow or failing lookup costs the logo, never the researched card."""
     for item in card['positives'] + card['negatives']:
         item['url'] = sources[item['source_id']]['url']
-        item['image'] = None
-        if item.pop('visual') and item['source_id'] not in {'price', 'outlook'}:
-            wanted.append(item)
     for event in card['events']:
         event['icon'], event['domain'] = None, event.get('domain')
     try:
         async with asyncio.timeout(20):
-            for item in wanted:
-                item['image'] = await og_image(client, item['url'])
             for event in card['events']:
                 event['icon'] = await event_icon(client, event['domain'])
     except TimeoutError:

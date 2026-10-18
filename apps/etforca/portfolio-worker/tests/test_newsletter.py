@@ -20,13 +20,13 @@ B_CARD = {'headline': '반도체 실적 기대가 이어져요', 'dek': '주요 
           'watch_next': '다음 실적 발표의 수주 전망을 살펴봐요.', 'source_ids': ['outlook']}
 
 
-NEWS = {'title': '공급 계약 체결', 'detail': '새 계약이 수요 가정을 뒷받침해요.', 'certainty': '확인', 'source_id': 'outlook', 'visual': False}
+NEWS = {'title': '공급 계약 체결', 'detail': '새 계약이 수요 가정을 뒷받침해요.', 'certainty': '확인', 'source_id': 'outlook'}
 EVENT = {'date': '2026-10-23', 'when': '10월 23일', 'title': '3분기 실적 발표', 'kind': '실적', 'org': 'SK하이닉스', 'domain': ''}
 H_CARD = {'headline': '반도체 보유 이유는 견고해요', 'dek': '새 공급 계약이 수요 가정을 뒷받침했어요.', 'thesis': 'AI 수요가 이어진다',
           'verdict': '견고', 'important': True, 'move_reason': '업종 강세에 함께 올랐어요.', 'positives': [NEWS], 'negatives': [],
           'impact': '보유 이유를 바꾸지 않아요.', 'events': [EVENT], 'source_ids': ['outlook']}
 # What the worker stores after illustrate(): ids resolved to urls, domains to icons.
-H_STORED = {**H_CARD, 'positives': [{k: v for k, v in NEWS.items() if k != 'visual'} | {'url': 'https://etforca.com/', 'image': None}],
+H_STORED = {**H_CARD, 'positives': [NEWS | {'url': 'https://etforca.com/'}],
             'events': [{k: v for k, v in EVENT.items() if k != 'domain'} | {'icon': None}]}
 
 
@@ -478,7 +478,7 @@ def letter_card(fmt, instrument='US:QQQ', name='QQQ', **fields):
     content = {'headline': '기술주 소식', 'dek': '확인한 소식', **FORMAT_CARDS[fmt], 'source_ids': ['outlook']}
     agent.FORMATS[fmt][1].model_validate(content)  # Samples must stay valid model output, or these tests prove nothing.
     if fmt == 'H':  # then stored as the worker leaves it after illustrate()
-        content = {**content, 'positives': [{k: v for k, v in i.items() if k != 'visual'} | {'url': 'https://etforca.com/', 'image': None} for i in content['positives']],
+        content = {**content, 'positives': [i | {'url': 'https://etforca.com/'} for i in content['positives']],
                    'events': [{k: v for k, v in ev.items() if k != 'domain'} | {'icon': None} for ev in content['events']]}
     return {'instrument_id': instrument, 'name': name, 'format': fmt, **content, 'sources': [], 'quote': QUOTE, **fields}
 
@@ -553,27 +553,14 @@ def test_event_table_merges_holdings_sorts_by_date_and_drops_past_events():
     assert 'src="https://www.google.com/s2/favicons?domain=bls.gov&amp;sz=64"' in html and '🧾' in html, 'Logo when resolved, emoji otherwise'
 
 
-def test_news_thumbnail_only_from_a_safe_resolved_image():
-    item = {**H_STORED['positives'][0], 'image': 'https://img.example/chart.png'}
-    bad = {**item, 'title': '다른 소식', 'image': 'javascript:alert(1)'}
-    _, html, _ = email.daily(date(2026, 10, 18), [letter_card('H', positives=[item, bad])], 'H')
-    assert html.count('<img src="https://img.example/chart.png"') == 1 and 'javascript:' not in html
-
-
-def test_open_graph_image_parser_takes_the_article_picture_not_its_size_tags():
-    parser = agent.OpenGraphImage()
-    parser.feed('<meta property="og:image:width" content="1200"><meta content="https://img.example/a.jpg" property="og:image">')
-    assert parser.image == 'https://img.example/a.jpg'
-
-
-async def test_illustrate_never_turns_model_text_into_an_image_url():
+async def test_illustrate_never_turns_model_text_into_a_logo_url():
     class Client:
         async def get(self, url, **_):
             return SimpleNamespace(status_code=404 if 'unknown' in url else 200)
-    card = {'positives': [{**NEWS, 'visual': False}], 'negatives': [],
+    card = {'positives': [dict(NEWS)], 'negatives': [],
             'events': [{**EVENT, 'domain': 'skhynix.com'}, {**EVENT, 'domain': 'javascript:alert(1)'}, {**EVENT, 'domain': 'unknown.example'}]}
     value = await agent.illustrate(Client(), card, {'outlook': {'url': 'https://etforca.com/'}})
-    assert value['positives'][0] == {**{k: v for k, v in NEWS.items() if k != 'visual'}, 'url': 'https://etforca.com/', 'image': None}
+    assert value['positives'][0] == {**NEWS, 'url': 'https://etforca.com/'}
     assert [e['icon'] for e in value['events']] == ['https://www.google.com/s2/favicons?domain=skhynix.com&sz=64', None, None]
 
 
@@ -946,47 +933,6 @@ def test_event_titles_differing_only_in_spacing_are_one_row():
     b = letter_card('H', 'US:B', 'B', events=[{**EVENT, 'title': '3분기 실적발표', 'icon': None}])
     _, _, text = email.daily(date(2026, 10, 18), [a, b], 'H')
     assert text.count('3분기 실적') == 1 and '— A, B' in text
-
-
-async def test_illustrate_takes_a_thumbnail_only_from_an_article_and_survives_failures(monkeypatch):
-    monkeypatch.setattr(agent, 'public_https', lambda url: True)
-    requested = []
-    pages = {'https://news.example/a': (200, '<meta property="og:image" content="https://img.example/a.jpg">'),
-             'https://news.example/redirect': (302, ''), 'https://news.example/plain': (200, '<meta property="og:image" content="http://img.example/b.jpg">')}
-    class Client:
-        def stream(self, method, url, **kwargs):
-            assert kwargs['follow_redirects'] is False, 'A redirect could point inside the network'
-            requested.append(url)
-            status, body = pages[url]
-            class Response:
-                status_code, headers, encoding = status, {'content-type': 'text/html'}, 'utf-8'
-                async def aiter_bytes(self):
-                    yield body.encode()
-            class Context:
-                async def __aenter__(self):
-                    return Response()
-                async def __aexit__(self, *_):
-                    return False
-            return Context()
-        async def get(self, url, **_):
-            return SimpleNamespace(status_code=200)
-    items = [{**NEWS, 'source_id': s, 'visual': True} for s in ('a', 'redirect', 'plain', 'outlook')]
-    card = {'positives': items[:2], 'negatives': items[2:], 'events': []}
-    sources = {'a': {'url': 'https://news.example/a'}, 'redirect': {'url': 'https://news.example/redirect'},
-               'plain': {'url': 'https://news.example/plain'}, 'outlook': {'url': 'https://etforca.com/outlook/091160.json'}}
-    value = await agent.illustrate(Client(), card, sources)
-    assert [i['image'] for i in value['positives'] + value['negatives']] == ['https://img.example/a.jpg', None, None, None]
-    assert 'https://etforca.com/outlook/091160.json' not in requested, 'Our outlook JSON is never treated as an article picture'
-
-
-def test_public_https_refuses_internal_addresses(monkeypatch):
-    import socket
-    monkeypatch.setattr(socket, 'getaddrinfo', lambda host, *_ , **__: [(None, None, None, None, ('93.184.216.34', 443))])
-    assert agent.public_https('https://news.example/a'), 'A public article host must stay reachable, or no thumbnail ever shows'
-    monkeypatch.undo()
-    assert not agent.public_https('http://example.com/')
-    assert not agent.public_https('https://127.0.0.1/')
-    assert not agent.public_https('https://169.254.170.2/v2/credentials')
 
 
 async def test_news_item_citing_the_price_row_is_sent_back_for_a_text_source():

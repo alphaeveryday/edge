@@ -314,15 +314,12 @@ def image_url(value):
 
 
 def news(title, items, mark):
-    """One row per item; a small thumbnail only when the worker resolved the article's own picture."""
+    """One row per item: what happened, how sure, and why it matters to this ETF."""
     if not items:
         return '', []
     rows = ''
     for item in items:
-        image = image_url(item.get('image'))
-        thumb = (f'<td width="104" valign="top" style="padding:13px 12px 13px 0;border-top:1px solid {HAIR}">'
-                 f'<img src="{escape(image, quote=True)}" width="96" alt="" style="display:block;width:96px;height:auto;border:0"></td>') if image else ''
-        rows += f'''<tr>{thumb}<td valign="top" style="padding:13px 0;border-top:1px solid {HAIR}"><p style="{P};color:{INK};font-size:15px;font-weight:700;line-height:1.55">{mark} {e(item['title'])} <span style="color:{INK if item['certainty'] == '확인' else BRASS};font-size:12px">· {e(item['certainty'])}</span></p>
+        rows += f'''<tr><td valign="top" style="padding:13px 0;border-top:1px solid {HAIR}"><p style="{P};color:{INK};font-size:15px;font-weight:700;line-height:1.55">{mark} {e(item['title'])} <span style="color:{INK if item['certainty'] == '확인' else BRASS};font-size:12px">· {e(item['certainty'])}</span></p>
 <p style="{P};margin:4px 0 0;color:{BODY};font-size:15px;line-height:1.7">{e(item['detail'])}</p></td></tr>'''
     html = label(title) + f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;border-bottom:1px solid {HAIR}">{rows}</table>'
     return html, [f'{title}:', *[f"  {mark} [{item['certainty']}] {item['title']} — {item['detail']}" for item in items]]
