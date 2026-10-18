@@ -42,6 +42,15 @@ test('tiny positive holdings stay represented by a valid hundredth-percent alloc
   await expect(page.getByRole('alert')).toContainText('0.01%보다 작은 보유분');
 });
 
+test('an unavailable first tracking response never presents the old import amount as current value', async ({ page }) => {
+  await mock(page, { version: 1, workbook: { ...workbook, assets: [{ ...asset, quantity: null, amount: 1000000 }] } });
+  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ status: 503, json: {} }));
+  await page.goto('/portfolio/?view=dashboard');
+  await expect(page.getByRole('alert')).toContainText('자동 기록을 불러오지 못했어요.');
+  await expect(page.locator('.dashboard-stats article').first().locator('strong')).toHaveText('—');
+  await expect(page.locator('.asset-row')).not.toContainText('1,000,000원');
+});
+
 test('an older poll cannot replace the fresh valuation returned after saving', async ({ page }) => {
   await page.clock.install();
   await mock(page);

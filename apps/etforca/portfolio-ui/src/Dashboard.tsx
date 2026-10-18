@@ -18,6 +18,7 @@ const thisMonth = () => preview ? '2026-10' : new Intl.DateTimeFormat('sv-SE', {
 export function Dashboard() {
   const [saved, setSaved] = useState<Saved | null>(null);
   const [tracking, setTracking] = useState<Tracking>({ market: null, days: [] });
+  const [trackingLoaded, setTrackingLoaded] = useState(false);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [catalogError, setCatalogError] = useState('');
   const [trackingError, setTrackingError] = useState('');
@@ -40,7 +41,7 @@ export function Dashboard() {
   async function loadCatalog() { try { setCatalog(await request<Catalog>('/catalog')); setCatalogError(''); } catch { setCatalogError('종목 목록을 불러오지 못했어요.'); } }
   async function loadTracking() {
     const sequence = ++trackingSequence.current;
-    try { const next = await request<Tracking>('/workbook/tracking'); if (!Array.isArray(next.days)) throw new Error('Invalid tracking'); if (sequence === trackingSequence.current) { setTracking(next); setTrackingError(''); } }
+    try { const next = await request<Tracking>('/workbook/tracking'); if (!Array.isArray(next.days)) throw new Error('Invalid tracking'); if (sequence === trackingSequence.current) { setTracking(next); setTrackingLoaded(true); setTrackingError(''); } }
     catch { if (sequence === trackingSequence.current) setTrackingError('자동 기록을 불러오지 못했어요. 잠시 후 다시 확인해 주세요.'); }
   }
   async function load() {
@@ -71,7 +72,7 @@ export function Dashboard() {
   const market = tracking.market && tracking.market.version === saved?.version ? tracking.market.payload : null;
   const assets = w.assets.filter(a => account === '전체' || a.account === account);
   const quotes = new Map(market?.assets.map(a => [a.id, a]) ?? []);
-  const amountOf = (a: Asset) => quotes.get(a.id)?.value ?? (!tracking.market && a.quantity === null ? a.amount : null);
+  const amountOf = (a: Asset) => quotes.get(a.id)?.value ?? (trackingLoaded && !trackingError && !tracking.market && a.quantity === null ? a.amount : null);
   const values = assets.map(amountOf);
   const total = values.every(v => v !== null) ? values.reduce<number>((sum, v) => sum + v!, 0) : null;
   const invested = assets.filter(a => a.category !== '현금');
