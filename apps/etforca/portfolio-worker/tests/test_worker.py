@@ -69,7 +69,11 @@ async def test_shutdown_during_database_claim_returns_unstarted_job(monkeypatch,
 
 def test_worker_only_marks_ready_after_db_initialization_and_cleans_up(monkeypatch, tmp_path):
     from edge_portfolio import newsletter_store
+    from edge_portfolio import dashboard_work
     monkeypatch.setattr(newsletter_store, 'claim_content', lambda: None)
+    async def dashboard_idle(*args):
+        return False
+    monkeypatch.setattr(dashboard_work, 'work_once', dashboard_idle)
     marker = tmp_path / 'ready'
     marker.touch()  # A previous process must not make this startup appear ready.
     monkeypatch.setattr(worker, 'HEARTBEAT', marker)
@@ -108,3 +112,27 @@ def test_worker_queue_failure_never_signals_ready(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError, match='database unavailable'):
         asyncio.run(worker.main())
     assert not marker.exists()
+
+
+async def test_dashboard_collection_cannot_delay_already_queued_customer_analyses(monkeypatch, tmp_path):
+    from edge_portfolio import dashboard_work, newsletter_work
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
+    monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'ready')
+    monkeypatch.setattr(worker.store, 'initialize', lambda: None)
+    monkeypatch.setattr(worker.signal, 'signal', lambda *args: None)
+    events = []
+    async def analysis(stopping):
+        events.append('analysis')
+        return len(events) < 4
+    async def newsletter(stopping):
+        events.append('newsletter')
+        return False
+    async def dashboard(stopping):
+        events.append('dashboard')
+        stopping.set()
+        return True
+    monkeypatch.setattr(worker, 'work_once', analysis)
+    monkeypatch.setattr(newsletter_work, 'work_once', newsletter)
+    monkeypatch.setattr(dashboard_work, 'work_once', dashboard)
+    await worker.main()
+    assert events == ['analysis'] * 4 + ['newsletter', 'dashboard']

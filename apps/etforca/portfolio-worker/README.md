@@ -30,15 +30,33 @@ uv run python -m edge_portfolio.worker
 
 ## 포트폴리오 대시보드와 화면 테스트
 
-`/portfolio/?view=dashboard`는 같은 브라우저 세션의 보유 자산·배당·월 기록을 관리한다.
+`/portfolio/?view=dashboard`는 같은 브라우저 세션의 보유 자산·배당 전망·자동 일별 기록·조합 백테스트·최근 AI 분석을 관리한다.
 메인 화면은 자산 요약, 자산 구성·월별 배당, 보유 목록 순서다. 차트와 진행 단계 모션은 `prefers-reduced-motion`을 따른다.
-고객·관리자는 [Orca UI](../../../docs/design/portfolio-design-system.md)의 공통 토큰과 조작부를 사용한다. `/portfolio/?preview=design-system`에서 실제 컴포넌트와 상태를 확인한다. `pnpm --filter portfolio-ui check:design`은 색상 원천·공통 조작부·대비를 검사하며 빌드에도 포함된다. 삭제와 덮어쓰기는 서비스 안의 공통 확인 팝업을 사용한다.
+고객·관리자는 [Orca UI](../../../docs/design/portfolio-design-system.md)의 공통 토큰과 조작부를 사용한다. `/portfolio/?preview=design-system`에서 실제 컴포넌트와 상태를 확인한다. `pnpm --filter portfolio-ui check:design`은 색상 원천·공통 조작부·대비를 검사하며 빌드에도 포함된다. 종목 삭제와 미저장 수정 취소는 공통 확인 팝업을 사용한다. 분석 결과에서 입력한 포트폴리오 저장은 추가 확인 없이 진행한다.
 저장 팝업은 예시 데이터로 촬영한 `portfolio-ui/src/dashboard-preview.png`를 보여준다. 뉴스레터는 이메일과 신청 버튼으로 접수하며 기존 이메일 확인 절차를 유지한다.
 분석 결과의 저장 버튼은 입력했던 보유 종목을 가져오며 추천안을 실제 매매로 반영하지 않는다.
 `portfolio_workbooks`는 소유자별 문서와 버전을 전용 DB에 저장한다. `GET/POST /api/portfolio/workbook`은 기존 세션 소유권과 POST origin 검사를 사용하며 오래된 저장 버전은 409로 거절한다.
 `GET /api/portfolio/analyses/{job_id}/workbook`은 소유한 분석의 입력을 변환한다.
+`AI 포폴 분석`은 `GET /api/portfolio/analyses/latest`로 최근 요청한 분석을 복원하고 기존 `Analysis`/`ReportView`/`ProgressView` 화면을 재사용한다. 새 분석을 시작해도 서버의 이전 결과는 삭제하지 않는다.
+분석 접수 캐시는 소유자·입력(초안 ID 제외)·한국 날짜·Python 코드/프롬프트 해시가 같을 때 성공 결과 또는 진행 중 작업을 재사용한다. 실패/기한 만료 작업과 다른 고객 결과는 재사용하지 않는다. `portfolio_analysis_requests`는 재사용 요청의 멱등 키를 보관한다. 캐시 적중은 새 작업/LLM 호출/체험 횟수를 소비하지 않으며 최근 요청 순서만 갱신한다. 내부 모델 검증 요청은 캐시를 사용하지 않는다.
 로그인·기기 간 동기화는 제공하지 않는다. 세션 쿠키가 없어지면 기존 저장본에 접근할 수 없으므로 브라우저 데이터를 지우지 않는다.
-가격과 환율은 수동 기록이며 실시간 시세가 아니다. 입출금이 있는 월의 수익률은 증권사 값을 입력하고, 누락 월을 연결해 누적 수익률을 꾸미지 않는다.
+종목 검색·계좌·수량·선택 평균매수가만 입력한다. 시세·환율·비중은 자동 계산한다. 비중으로 분석한 고객은 저장 전에 총 투자금을 입력한다. 금액으로 가져온 보유분은 첫 확보 시세로 추정 수량을 고정해 추적하며 화면에 금액 기준 추적임을 표시한다. 실제 수량을 입력하면 이를 대체한다.
+
+`dashboard_work.py`는 기존 워커에서 먼저 접수된 분석·뉴스레터 작업을 처리한 뒤 시세 갱신과 백테스트를 수행한다. 대기 분석 앞에 긴 시세 수집을 끼워 넣지 않으며, 계속 분석이 들어오면 갱신은 늦어질 수 있다. 대시보드의 두 작업은 접수/갱신 예정 시각 순으로 처리한다. 성공 시 12시간 뒤, 자료 실패 시 1시간 뒤 다시 조회한다. 같은 날짜·종목 시세는 전용 DB에 캐시한다. 종목별 조회 시간을 나눠 느린 종목 뒤의 조회도 시도한다. 수집은 210초 내 완료한 자료를 보존하며 전체 작업은 240초로 제한한다. 새 AWS 자원이나 LLM 호출은 없다.
+
+종가 캐시는 한국·미국 시장의 완료 거래일 기준으로 구분한다. 보유 정보를 저장하면 저장 이후 확인한 분할 정보를 사용하며, 현재 거래일의 분할 공시는 읽되 미완료 가격은 평가에 쓰지 않는다. 분할이 확인됐으나 분할 후 첫 종가가 없으면 해당 종목만 확인 중으로 표시한다. 가격 복구가 수정 종가만 제공할 때 이를 실제 평가 가격으로 대체하지 않는다. 수량·평균매수가의 명시적인 수정은 각각 별도 기준일로 보존한다.
+
+`GET /api/portfolio/workbook/tracking`은 소유자의 시세·월별 예상 분배금·일별 평가액·이전 수동 기록 보관본을 반환한다. `portfolio_dashboard_market`, `portfolio_dashboard_days`, `portfolio_dashboard_prices`가 시세 상태·일별 기록·공용 공개 가격 캐시를 저장한다. 보유 문서 버전이 달라지면 오래된 계산은 발행하지 않는다. 종목 삭제·분석 재가져오기 후에도 자동 기록은 남고, 없어지는 수동 배당·월 기록은 원래 종목명과 함께 `portfolio_workbook_archives`에 보관한다.
+
+문서 버전이 같아도 다른 워커가 갱신을 이어받으면 이전 작업은 결과와 갱신 예약을 덮어쓰지 않는다. 백테스트와 분석은 기존 전체 대기·실행 중 20건 접수 한도를 공유한다. 백테스트의 소유자별 하루 50건 제한 외에 새 일일 전체 예산 제한은 추가하지 않는다.
+
+`POST /api/portfolio/backtests`는 카탈로그 종목·합계 100% 비중·선택 기간을 `portfolio_backtests`에 접수한다. `GET /api/portfolio/backtests/{id}`는 소유한 작업만 반환한다. 지정 시작일에 비중을 적용하고 분배금 전액 재투자·환율 반영·세금/거래비용 제외로 계산한다. 기간을 생략하면 최대 공통 기간을 사용한다. 자료가 없는 종목은 제외 내역을 표시하고 남은 비중을 정규화한다. 수익 기록의 자산 추이는 입력 수량의 평가액이므로 입출금과 수량 변경도 포함하며, 이를 투자 수익률로 표시하지 않는다.
+
+시세는 최근 완료된 종가다. 해외 종목 평가손익은 현재 환율 기준 가격 손익이며 매입 이후 환차익을 포함하지 않는다. 분할은 등록 이후 관측된 분할 비율로 수량과 평균매수가를 보정한다. 배당 전망은 완전한 최근 12개월 분배 이력을 같은 월로 옮긴 세전 추정이며 확정 지급일을 만들어내지 않는다. 미확인 자료는 0원과 구분한다. 원천은 기존 Yahoo/대체 수집기이며 [가격·분배·분할 인터페이스](https://ranaroussi.github.io/yfinance/reference/yfinance.price_history.html)와 [가격 복구](https://ranaroussi.github.io/yfinance/advanced/price_repair.html)를 따른다.
+
+평가손익 요약에는 금액 뒤에 소수점 둘째 자리 수익률을 표시한다. 선택 계좌의 현금 외 보유 자산을 합산하고 매입 원가가 확인된 경우에만 계산한다. 매입 원가가 없거나 0이면 수익률을 만들지 않는다.
+
+배당 달력은 현재 월의 남은 기간부터 내년 같은 월까지 표시해 향후 1년 안의 예상 분배금을 빠뜨리지 않는다. 따라서 월 표시 칸은 양 끝의 부분 월을 포함한 13개다. 백테스트의 가격 유효성은 요청한 과거 종료일 기준으로 판단하며, 휴장일인 시작·종료일에는 직전 관측 가격을 사용한다.
 
 배포 사이트에서 `/portfolio/?preview=result`로 분석 없이 결과·저장 팝업을 확인한다.
 상단 선택기에서 `input`, `queued`, `running`, `result`, `partial`, `failed`, `dashboard`, `empty`, `newsletter` 화면을 전환한다.
@@ -76,6 +94,7 @@ pnpm --filter portfolio-ui test:e2e
 - `GET /api/portfolio/catalog`: 국내·미국 ETF 종목 메타데이터 스냅샷.
 - `POST /api/portfolio/drafts/{id}`: 단계별 입력을 소유권이 있는 초안의 분리 테이블에 저장.
 - `POST /api/portfolio/analyses`: `Idempotency-Key` UUID, holdings/question/horizon → 202 작업.
+- `GET /api/portfolio/analyses/latest`: 소유자의 최근 분석 또는 null.
 - `GET /api/portfolio/analyses/{id}`: 소유한 작업의 queued/running/succeeded/failed 상태.
 - `POST /api/portfolio/analyses/{id}/chat`: question과 멱등 키. 무료 1회 초과는 409 CHAT_LIMIT.
 - `POST /api/portfolio/analyses/{id}/report-request`: email. 접수만 저장, 발송은 미구현.

@@ -1,5 +1,5 @@
 import type { Input, Job, Report } from './api';
-import type { Saved, Workbook } from './workbook';
+import type { Saved, Workbook, Tracking } from './workbook';
 export const preview = new URLSearchParams(location.search).get('preview');
 export const jobKey = preview ? 'edge-preview-job' : 'edge-portfolio-job';
 export const pendingKey = preview ? 'edge-preview-pending' : 'edge-portfolio-pending';
@@ -26,6 +26,7 @@ const report: Report = {
     actions: [{ instrument_id: 'US:VOO', name: '미국시장 ETF 예시', ticker: 'VOO', account: 'ISA', before_pct: 60, after_pct: 70, action: '비중 확대', buy_krw: '1000000' }], expected_return_1y: null, dividend_yield_1y: 1.5, unavailable_reason: '',
     historical_performance: { basis: '화면 확인용 가상 성과 · 분배금 재투자', source_url: '', points: Array.from({ length: 24 }, (_, i) => ({ date: new Date(Date.UTC(2024, 10 + i, 1)).toISOString().slice(0, 10), recommended: 1000000 + i * 15000, current: 1000000 + i * 11000 })) } },
 };
+sample.assets.forEach((a, i) => { a.instrument_id = ['KR:360750', 'US:SCHD', 'KR:114260', 'KR:132030', 'KR:441640', 'CASH:KRW'][i]; });
 export async function previewRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const body = init?.body ? JSON.parse(String(init.body)) : null;
   let result: unknown;
@@ -34,15 +35,30 @@ export async function previewRequest<T>(path: string, init?: RequestInit): Promi
   else if (path.startsWith('/drafts/')) result = { status: 'saved' };
   else if (path.endsWith('/newsletter')) result = { status: 'pending', delivery_ready: true };
   else if (path === '/newsletter/confirm') result = { status: 'confirmed', delivery_ready: true };
+  else if (path === '/backtests') result = { id: 'preview-backtest' };
+  else if (path.startsWith('/backtests/')) result = { state: 'succeeded', result: { history: report.recommendation!.historical_performance, return_pct: 34.5, excluded: [] } };
+  else if (path === '/workbook/tracking') {
+    const saved = await previewRequest<Saved>('/workbook');
+    const w = saved.workbook;
+    const assets = (w?.assets ?? []).map(a => {
+      const price = a.category === '현금' ? null : a.price ?? sample.assets.find(s => s.instrument_id === a.instrument_id)?.price ?? (a.currency === 'USD' ? 500 : 50000);
+      const rate = a.currency === 'USD' ? 1360 : 1;
+      const quantity = a.quantity ?? (price && a.amount !== null ? a.amount / price / rate : null);
+      return { id: a.id, value: price !== null && quantity !== null ? price * quantity * rate : a.amount, profit: price !== null && quantity !== null && a.average !== null ? (price - a.average) * quantity * rate - a.fee : null, price, price_date: price ? '2026-10-16' : null, quantity, estimated_quantity: a.quantity === null && price !== null };
+    });
+    const forecasts = (w?.assets ?? []).filter(a => a.category !== '현금').flatMap(a => Array.from({ length: 12 }, (_, i) => ({ asset_id: a.id, month: new Date(Date.UTC(2026, 9 + i, 1)).toISOString().slice(0, 7), amount: (assets.find(q => q.id === a.id)?.value ?? 0) * .003 })));
+    result = { market: w ? { version: saved.version, payload: { date: '2026-10-18', assets, fx: 1360, forecasts, missing: assets.filter(a => a.value === null).map(a => a.id), dividend_missing: [] } } : null, days: assets.length && assets.every(a => a.value !== null) ? ['2026-10-16', '2026-10-17', '2026-10-18'].map((date, i) => ({ date, value: assets.reduce((s, a) => s + a.value!, 0) * (1 - (2 - i) * .005), assets, fx: 1360 })) : [], archives: (saved as Saved & { archives?: Tracking['archives'] }).archives ?? [] } satisfies Tracking;
+  }
   else if (path === '/workbook') {
-    const saved: Saved = JSON.parse(localStorage.getItem(workbookKey) || 'null') ?? { version: 0, workbook: null };
-    if (body) { if (body.version !== saved.version) throw new Error('다른 탭에서 수정했어요. 저장된 내용을 다시 불러와 주세요.'); result = { version: saved.version + 1, workbook: body.workbook }; localStorage.setItem(workbookKey, JSON.stringify(result)); }
+    const saved: Saved & { archives?: Tracking['archives'] } = JSON.parse(localStorage.getItem(workbookKey) || 'null') ?? { version: 0, workbook: null };
+    if (body) { if (body.version !== saved.version) throw new Error('다른 탭에서 수정했어요. 저장된 내용을 다시 불러와 주세요.'); const archives = saved.archives ?? []; if (saved.workbook && ['dividends', 'months'].some(key => JSON.stringify(saved.workbook![key as 'dividends' | 'months']) !== JSON.stringify(body.workbook[key]))) archives.unshift({ version: saved.version, payload: saved.workbook }); result = { version: saved.version + 1, workbook: body.workbook, archives }; localStorage.setItem(workbookKey, JSON.stringify(result)); }
     else result = saved.workbook ? saved : { version: 0, workbook: preview === 'empty' ? null : sample };
   } else if (path.endsWith('/workbook')) result = sample;
   else if (path.endsWith('/report-request')) result = { status: 'received', delivery_status: 'not_scheduled' };
   else if (path.endsWith('/chat') || path.startsWith('/analyses/preview-chat-')) {
     result = { id: path.endsWith('/chat') ? 'preview-chat-' + crypto.randomUUID() : path.split('/').at(-1), state: 'succeeded', result: { answer: { paragraphs: ['테스트 답변: 기존 테마를 유지하고 추가 투자금을 목표 비중에 맞춰 나누세요.'], evidence: [], limitations: [] }, revision: report, status: 'complete' } };
   }
+  else if (path === '/analyses/latest' && preview === 'empty') result = null;
   else if (path.startsWith('/analyses')) {
     if (path === '/analyses' && body) localStorage.setItem('edge-preview-input', JSON.stringify(body as Input));
     const state = preview === 'queued' ? 'queued' : preview === 'running' ? 'running' : preview === 'failed' ? 'failed' : 'succeeded';

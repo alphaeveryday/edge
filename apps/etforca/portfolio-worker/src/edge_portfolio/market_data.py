@@ -7,7 +7,8 @@ import sys
 import subprocess
 import tempfile
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 from functools import lru_cache
 from numbers import Real
@@ -108,17 +109,22 @@ def repair_prices(ticker, frame, symbol, as_of, currency):
 def load_prices(symbol, as_of, *, on_raw=None):
     yf.set_tz_cache_location(str(Path(tempfile.gettempdir()) / 'portfolio-yfinance'))
     ticker = yf.Ticker(symbol)
-    frame = ticker.history(period='max', end=as_of.isoformat(),
+    actions_day = datetime.now(ZoneInfo('Asia/Seoul')).date()
+    frame = ticker.history(period='max', end=(max(as_of, actions_day) + timedelta(days=1)).isoformat(),
                            interval='1d', auto_adjust=False, actions=True, timeout=12)
     metadata = ticker.history_metadata
     if frame.empty or not {'Adj Close', 'Close'} <= set(frame.columns):
         raise ValueError('PRICE_UNAVAILABLE')
     frame.index = pd.to_datetime([i.date() for i in frame.index])
     frame = frame[~frame.index.duplicated(keep='last')].sort_index()
+    # Inspect current-session actions without publishing its unfinished prices.
+    pending_splits = [str(stamp.date()) for stamp, ratio in frame.get('Stock Splits', pd.Series(dtype=float)).items()
+                      if stamp.date() >= as_of and positive_price(ratio)]
     frame = frame.loc[frame.index < pd.Timestamp(as_of)]
     if frame.empty or (as_of - frame.index[-1].date()).days > 7:
         raise ValueError('PRICE_STALE')
     original = {'frame': frame, 'currency': metadata.get('currency'), 'symbol': symbol,
+                'pending_splits': pending_splits,
                 'source_url': f'https://finance.yahoo.com/quote/{quote(symbol, safe="")}/history/'}
     if on_raw:
         on_raw(original)
@@ -127,9 +133,11 @@ def load_prices(symbol, as_of, *, on_raw=None):
     return {**original, 'frame': frame, 'price_recovery': recovery}
 
 
-async def fetch_prices(symbol, as_of, *, on_raw=None):
+async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None):
     try:
-        original = await _fetch_prices(symbol, as_of, on_raw=on_raw)
+        original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw), timeout=provider_timeout)
+        if on_primary:
+            on_primary(original)
         columns = [original['frame'][name] for name in ('Adj Close', 'Close')]
         valid = [column[column.map(positive_price)] for column in columns]
         if all(not column.empty and (as_of - column.index[-1].date()).days <= 7 for column in valid):
@@ -137,7 +145,7 @@ async def fetch_prices(symbol, as_of, *, on_raw=None):
         primary_failure = 'PRICE_INVALID' if any(column.empty for column in valid) else 'PRICE_STALE'
     except (ValueError, TimeoutError) as error:
         primary_failure = price_failure(error)
-    record = await _fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback')
+    record = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback'), timeout=provider_timeout)
     record['primary_failure'] = primary_failure
     return record
 
@@ -286,6 +294,7 @@ def normalized_prices(ids, records, as_of, bounds=None, *, column=None):
             expected = expected.union(preceding[-1:])
         prices, price_fill = carry_missing_prices(prices, expected, start, end)
         values = prices['Adj Close']
+        values = values.reindex(values.index.union(pd.DatetimeIndex([start, end]))).ffill()
         if record['currency'] == 'USD':
             fx = records['FX']['frame']['Close']
             fx_expected = sessions[sessions >= start]
@@ -294,7 +303,7 @@ def normalized_prices(ids, records, as_of, bounds=None, *, column=None):
             fx_frame, fx_fill = carry_missing_prices(fx.to_frame(), fx_expected, start, end)
             fx = fx_frame['Close']
             fx_fill_dates.update(fx_fill['dates'])
-            index = values.index.union(fx.index).union(pd.DatetimeIndex([start]))
+            index = values.index.union(fx.index).union(pd.DatetimeIndex([start, end]))
             # Carry only earlier observations; never invent pre-inception prices.
             carried_prices = values.reindex(index).ffill().loc[start:end]
             carried_fx = fx.reindex(index).ffill().loc[start:end]
@@ -304,7 +313,7 @@ def normalized_prices(ids, records, as_of, bounds=None, *, column=None):
         elif record['currency'] != 'KRW':
             raise ValueError('UNSUPPORTED_CURRENCY')
         series[key] = values
-        urls.append({'instrument_id': key, 'url': record['source_url'], 'price_recovery': record.get('price_recovery'), 'price_fill': price_fill})
+        urls.append({'instrument_id': key, 'url': record.get('return_source_url', record['source_url']), 'price_recovery': record.get('price_recovery'), 'price_fill': price_fill})
     if needs_fx:
         urls.append({'instrument_id': 'USD/KRW', 'url': records['FX']['source_url'], 'price_recovery': records['FX'].get('price_recovery'),
                      'price_fill': {'method': 'previous_observation', 'count': len(fx_fill_dates), 'dates': sorted(fx_fill_dates)}})
@@ -319,7 +328,7 @@ def normalized_prices(ids, records, as_of, bounds=None, *, column=None):
         if any((end.date() - records[key]['frame'].index[-1].date()).days > 7 for key in ids - {'CASH:KRW'}):
             raise ValueError('PRICE_STALE')
     else:
-        frame = pd.DataFrame(index=pd.bdate_range(start, end))
+        frame = pd.DataFrame(index=pd.bdate_range(start, end).union(pd.DatetimeIndex([start, end])))
     frame['CASH:KRW'] = 1.0
     return frame / frame.iloc[0], urls
 
@@ -352,10 +361,10 @@ def history_returns(history):
     return {'return_period_pct': period, 'return_1y_pct': annual}
 
 
-def comparison(target, current, records, as_of):
+def comparison(target, current, records, as_of, *, bounds=None):
     active = set(target) | set(current or {}) | {'FX'}
     records = {key: record for key, record in records.items() if key in active}
-    frame, urls = normalized_prices(set(target) | set(current or {}), records, as_of)
+    frame, urls = normalized_prices(set(target) | set(current or {}), records, as_of, bounds=bounds)
 
     def value(allocation):
         return sum(frame[key] * weight * 1000000 for key, weight in allocation.items())
@@ -463,31 +472,34 @@ class MarketData:
             'instruction': '과거 수익률은 미래 예상 수익률이 아닙니다. 시장 근거를 대조해 추정 근거를 설명하고 양수로 보정하지 마세요.'}
 
     def dividends(self, instrument_id):
-        record = self.records.get(instrument_id)
-        if record is None or 'Dividends' not in record['frame']:
-            return None
-        frame = record['frame']
-        end = frame.index[-1].date()
-        start = year_before(end)
-        if frame.index[0].date() > start + timedelta(days=7):
-            return None
-        if len(expected_sessions(instrument_id, pd.Timestamp(start), pd.Timestamp(end)).difference(frame['Close'].dropna().index)):
-            return None
-        recent = frame.loc[(frame.index.date > start) & (frame.index.date <= end)]
-        values = recent['Dividends']
-        if values.isna().any() or not values.map(lambda value: math.isfinite(value) and value >= 0).all():
-            return None
-        total = float(values.sum())
-        price = frame['Close'].iloc[-1]
-        if not positive_price(price):
-            return None
-        price = float(price)
-        return {'instrument_id': instrument_id, 'trailing_yield_pct': round(total / price * 100, 4),
-                'as_of': end.isoformat(), 'period_start': start.isoformat(), 'dividends_per_share': total,
-                'price': price, 'currency': record['currency'], 'source_url': record['source_url'],
-                'method': 'Yahoo Finance 최근 12개월 분배금 합계 ÷ 최근 종가 · 분배락일 기준',
-                'events': [{'date': day.date().isoformat(), 'amount': float(value)} for day, value in values.items() if value > 0],
-                'evidence': []}
+        return dividend_observation(self.records.get(instrument_id), instrument_id)
+
+
+def dividend_observation(record, instrument_id):
+    if record is None or 'Dividends' not in record['frame']:
+        return None
+    frame = record['frame']
+    end = frame.index[-1].date()
+    start = year_before(end)
+    if frame.index[0].date() > start + timedelta(days=7):
+        return None
+    if len(expected_sessions(instrument_id, pd.Timestamp(start), pd.Timestamp(end)).difference(frame['Close'].dropna().index)):
+        return None
+    recent = frame.loc[(frame.index.date > start) & (frame.index.date <= end)]
+    values = recent['Dividends']
+    if values.isna().any() or not values.map(lambda value: math.isfinite(value) and value >= 0).all():
+        return None
+    total = float(values.sum())
+    price = frame['Close'].iloc[-1]
+    if not positive_price(price):
+        return None
+    price = float(price)
+    return {'instrument_id': instrument_id, 'trailing_yield_pct': round(total / price * 100, 4),
+            'as_of': end.isoformat(), 'period_start': start.isoformat(), 'dividends_per_share': total,
+            'price': price, 'currency': record['currency'], 'source_url': record['source_url'],
+            'method': 'Yahoo Finance 최근 12개월 분배금 합계 ÷ 최근 종가 · 분배락일 기준',
+            'events': [{'date': day.date().isoformat(), 'amount': float(value)} for day, value in values.items() if value > 0],
+            'evidence': []}
 
 
 TOOL = {'type': 'function', 'function': {'name': 'read_portfolio_history',

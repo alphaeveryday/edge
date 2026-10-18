@@ -42,7 +42,10 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch('/api/portfolio' + path, { ...init, signal: AbortSignal.timeout(15000), headers: { 'Content-Type': 'application/json', ...init?.headers } });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
+    if (path.startsWith('/backtests/') && [401, 404].includes(response.status)) throw Object.assign(new Error('백테스트 연결이 만료됐어요. 다시 조회해 주세요.'), { status: response.status });
     if (body.detail === 'WORKBOOK_CONFLICT') throw new Error('다른 탭에서 수정했어요. 저장된 내용을 다시 불러와 주세요.');
+    if (body.detail === 'BACKTEST_BUSY') throw new Error('이전 백테스트를 계산하고 있어요. 완료 후 다시 조회해 주세요.');
+    if (path === '/backtests' && response.status === 422) throw new Error('비중 합계가 100%인지, 조회 기간이 어제 이전인지 확인해 주세요.');
     if (path === '/workbook' && response.status === 422) throw new Error('종목·배당·월 기록의 입력값과 최대 기록 수를 확인해 주세요.');
     if (body.detail === 'CHAT_LIMIT') throw new Error('CHAT_LIMIT');
     if (body.detail === 'RECOVERY_LIMIT') throw new Error('RECOVERY_LIMIT');
