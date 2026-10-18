@@ -5,6 +5,29 @@ import json
 from edge_analysis_v2.analysis.research_state import ResearchState
 
 
+def test_legacy_descendant_never_inherits_ancestor_workspace_as_current(monkeypatch):
+    from edge_analysis_v2.storage import research
+    from edge_analysis_v2.agent.work_context import WorkContext
+    state = ResearchState()
+    state.add('q', {'kind': 'questions', 'todos': [{'content': 'old question', 'status': 'pending'}]})
+    state.value.update(analysis={'analysis_id': 'A'}, current_work={
+        'analysis_id': 'A', 'stages': {'root': {'questions': 'q', 'notes': {}}}})
+    def stored(identity, previous, at, runs):
+        return {'tables': {'outlook_analyses': [{'analysis_id': identity, 'previous_analysis_id': previous,
+            'analysis_at': at, 'status': 'completed', 'etf_code': 'X', 'data_source': 'synthetic'}],
+            'tool_definitions': [research.DEFINITION], 'tool_runs': runs}}
+    records = {
+        'A': stored('A', None, '2026-10-16', [{'tool_id': research.DEFINITION['tool_id'],
+            'status': 'completed', 'output': {'result': state.snapshot()}}]),
+        'B': stored('B', 'A', '2026-10-17', [])}
+    monkeypatch.setattr(research, 'read_storage', lambda connection, kind, identity: records[identity])
+    restored = research.load_research(None, 'outlook', 'B').snapshot()
+    assert restored['analysis']['analysis_id'] == 'B'
+    assert 'current_work' not in restored
+    assert restored['materials'] == state.snapshot()['materials']
+    assert WorkContext({'research_state': restored}).initial['research_state']['current_work']['status'] == 'unavailable'
+
+
 def test_material_order_survives_jsonb_sorting_and_appends_only_new_active_originals():
     state = ResearchState()
     state.add('z', {'text': 'first original'})
@@ -153,3 +176,81 @@ def test_collector_preserves_large_originals_and_scopes_old_short_references(tmp
     assert note['text'] == original + '[f1]'
     assert note['reference_ids'] == {'f1': 'old-run-id'}
     assert any(m['kind'] == 'external_search' and m['output']['text'] == 'search original' for m in result['materials'].values())
+    work = result['current_work']
+    assert work['analysis_id'] == 'a'
+    assert set(work['stages']) == {stage or 'root'}
+    pointers = work['stages'][stage or 'root']
+    assert result['materials'][pointers['notes']['reason.md']] == note
+    assert result['materials'][pointers['questions']] == {'kind': 'questions', 'todos': []}
+
+
+def collected_work(state, folder, identity):
+    from edge_analysis_v2.storage.research import collect_research
+    parent = {'analysis_id': identity, 'analysis_at': '2026-10-16T00:00:00+00:00',
+              'etf_code': 'X', 'data_source': 'synthetic'}
+    stored = {'tables': {'outlook_analyses': [parent], 'tool_runs': [], 'tool_definitions': []}}
+    return collect_research(state, stored, folder)
+
+
+def test_current_work_tracks_return_to_an_older_note_without_reordering_originals(tmp_path):
+    state = ResearchState()
+    snapshots = []
+    for identity, text in [('first', 'A'), ('second', 'B'), ('third', 'A')]:
+        folder = tmp_path / identity
+        folder.mkdir()
+        (folder / 'workspace.json').write_text(json.dumps({
+            'todos': [{'content': text, 'status': 'pending'}], 'notes': {'index.md': text}}), encoding='utf-8')
+        snapshots.append(collected_work(state, folder, identity))
+        state = ResearchState(snapshots[-1])
+    first, second, third = snapshots
+    assert third['current_work']['analysis_id'] == 'third'
+    assert third['current_work']['stages'] == first['current_work']['stages']
+    assert third['current_work']['stages'] != second['current_work']['stages']
+    assert third['materials'] == second['materials']
+    assert third['material_order'] == second['material_order']
+
+
+def test_current_work_keeps_same_note_path_separate_between_actual_stages(tmp_path):
+    for stage in ('root', 'investigation', 'writing'):
+        folder = tmp_path if stage == 'root' else tmp_path / stage
+        folder.mkdir(exist_ok=True)
+        (folder / 'workspace.json').write_text(json.dumps({
+            'todos': [], 'notes': {'index.md': stage}}), encoding='utf-8')
+    result = collected_work(ResearchState(), tmp_path, 'a')
+    assert set(result['current_work']['stages']) == {'root', 'investigation', 'writing'}
+    for stage, pointers in result['current_work']['stages'].items():
+        assert result['materials'][pointers['notes']['index.md']]['text'] == stage
+
+
+@pytest.mark.parametrize('had_current_work', [False, True])
+def test_absent_workspace_does_not_present_historical_notes_as_current(tmp_path, had_current_work):
+    state = ResearchState()
+    state.add('old-note', {'kind': 'note', 'path': 'index.md', 'text': 'old'})
+    previous = state.snapshot()
+    if had_current_work:
+        previous['current_work'] = {'analysis_id': 'old', 'stages': {'root': {'notes': {'index.md': 'old-note'}}}}
+    result = collected_work(ResearchState(previous), tmp_path, 'new')
+    assert result['current_work'] == {'analysis_id': 'new', 'stages': {}}
+    assert result['materials'] == previous['materials']
+    assert ('current_work' in previous) == had_current_work
+
+
+def test_current_work_uses_canonical_ids_and_drops_pointers_retired_in_a_later_stage(tmp_path):
+    state = ResearchState()
+    state.add('canonical-note', {'kind': 'note', 'path': 'index.md', 'text': 'original'})
+    state.add('canonical-questions', {'kind': 'questions', 'todos': []})
+    (tmp_path / 'workspace.json').write_text(json.dumps({
+        'todos': [], 'notes': {'index.md': 'original'}}), encoding='utf-8')
+    first = collected_work(state, tmp_path, 'first')
+    assert first['current_work']['stages']['root'] == {
+        'questions': 'canonical-questions', 'notes': {'index.md': 'canonical-note'}}
+    writing = tmp_path / 'writing'
+    writing.mkdir()
+    (writing / 'research_removals.json').write_text(json.dumps([
+        {'id': 'canonical-note', 'reason': 'superseded'},
+        {'id': 'canonical-questions', 'reason': 'resolved'}]), encoding='utf-8')
+    result = collected_work(ResearchState(first), tmp_path, 'second')
+    assert result['current_work']['stages'] == {'root': {'notes': {}}}
+    assert set(result['removed']) == {'canonical-note', 'canonical-questions'}
+    assert result['materials'] == {}
+    assert first['materials']['canonical-note']['text'] == 'original'

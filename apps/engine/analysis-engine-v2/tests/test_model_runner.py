@@ -20,7 +20,7 @@ SCHEMA = {'type': 'object', 'required': ['summary'], 'additionalProperties': Fal
           'properties': {'summary': {'type': 'string'}}}
 
 
-def test_revision_wire_input_removes_only_json_formatting_and_keeps_every_original(tmp_path):
+def test_revision_wire_input_keeps_parent_but_does_not_repeat_research_originals(tmp_path):
     captured = []
     class Client:
         def __init__(self, *, options):
@@ -39,7 +39,11 @@ def test_revision_wire_input_removes_only_json_formatting_and_keeps_every_origin
         output_schema=SCHEMA, artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client))
     saved = (tmp_path/'model_input.json').read_text(encoding='utf-8')
     assert json.loads(captured[0]) == json.loads(saved)
-    assert json.loads(captured[0])['input']['research_state'] == initial['research_state']
+    projected = json.loads(captured[0])['input']
+    assert projected['previous_analysis'] == initial['previous_analysis']
+    assert set(projected['research_state']['catalog']) == {'a'}
+    assert 'original\\n  preserve spacing' not in captured[0]
+    assert initial['research_state']['materials']['a']['text'] == 'original\n  preserve spacing'
     assert len(captured[0]) < len(saved)
 
 

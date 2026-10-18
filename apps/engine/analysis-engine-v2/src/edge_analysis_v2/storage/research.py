@@ -51,6 +51,10 @@ def load_research(connection, kind, identity):
         identity, child = parent['previous_analysis_id'], parent
     for identity, stored in reversed(legacy):
         add_records(state, stored)
+        parent = stored['tables'][kind + '_analyses'][0]
+        state.value['analysis'] = {key: parent[key] for key in ('analysis_id', 'analysis_at', 'etf_code', 'data_source')}
+        # An ancestor's workspace does not describe a later legacy publication.
+        state.value.pop('current_work', None)
         state.value['gaps'].append({'analysis_id': identity,
             'reason': 'Legacy publication: audited research recovered; unrecorded source reads, notes and retirements are unavailable.'})
     return state
@@ -61,12 +65,15 @@ def collect_research(state, stored, artifacts, references=None):
     add_records(state, stored)
     parent = next(rows[0] for name, rows in stored['tables'].items() if name in ('movement_analyses', 'outlook_analyses'))
     state.value['analysis'] = {key: parent[key] for key in ('analysis_id', 'analysis_at', 'etf_code', 'data_source')}
+    current_work = {'analysis_id': parent['analysis_id'], 'stages': {}}
     for folder in (artifacts, artifacts / 'investigation', artifacts / 'writing'):
         for name in ('consulted_sources.json', 'workspace.json'):
             path = folder / name
             if not path.is_file():
                 continue
             content = json.loads(path.read_text(encoding='utf-8'))
+            if name == 'workspace.json':
+                stage = current_work['stages'].setdefault('root' if folder == artifacts else folder.name, {'notes': {}})
             originals = content if name == 'consulted_sources.json' else [
                 {'kind': 'questions', 'todos': content['todos']},
                 *({'kind': 'external_search', **result} for result in content.get('external_research', [])),
@@ -79,6 +86,12 @@ def collect_research(state, stored, artifacts, references=None):
                     material = material | {'reference_ids': {ref: actual for ref, actual in (references or {}).items() if ref in mentioned}}
                 identity = 'material:' + sha256(json.dumps(material, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
                 state.add(identity, material)
+                if name == 'workspace.json':
+                    canonical = state.value['aliases'].get(identity, identity)
+                    if material['kind'] == 'questions':
+                        stage['questions'] = canonical
+                    elif material['kind'] == 'note':
+                        stage['notes'][material['path']] = canonical
         path = folder / 'model_input.json'
         if path.is_file():
             initial = json.loads(path.read_text(encoding='utf-8'))['input']
@@ -90,4 +103,10 @@ def collect_research(state, stored, artifacts, references=None):
         path = folder / 'research_removals.json'
         if path.is_file():
             state.remove(json.loads(path.read_text(encoding='utf-8')))
+    for stage in current_work['stages'].values():
+        if stage.get('questions') not in state.value['materials']:
+            stage.pop('questions', None)
+        stage['notes'] = {path: identity for path, identity in stage['notes'].items()
+                          if identity in state.value['materials']}
+    state.value['current_work'] = current_work
     return state.snapshot()
