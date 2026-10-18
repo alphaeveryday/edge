@@ -924,3 +924,59 @@ def test_daily_and_confirmation_mails_carry_the_hosted_logo():
     _, confirm_html, _ = email.confirmation('a' * 43)
     for html in (daily_html, confirm_html):
         assert html.count(f'src="{email.LOGO}"') == 1 and 'alt="ETF ORCA"' in html
+
+
+def test_h_cards_cached_before_the_briefing_redesign_become_notices():
+    old = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'format': 'H', 'headline': '예전 H 제목', 'dek': '예전 H 부제', 'thesis': 'AI 수요',
+           'verdict': '유지', 'important': False, 'changes': [], 'meaning': '의미', 'next_check': '다음', 'sources': []}
+    for verdict in ('강화', '유지', '약화'):
+        subject, html, _ = email.daily(date(2026, 10, 18), [{**old, 'verdict': verdict}, letter_card('H', 'US:B', 'B')], 'H')
+        assert '예전 H 제목' in html, 'A deploy-day cache must render, not crash the whole send'
+
+
+def test_cover_prefers_a_strengthened_thesis_over_a_steady_one():
+    steady = letter_card('H', 'US:A', 'A', headline='견고 소식', verdict='견고', quote={**QUOTE, 'change_pct': 1.0})
+    stronger = letter_card('H', 'US:B', 'B', headline='강화 소식', verdict='강화', quote={**QUOTE, 'change_pct': 0.5})
+    subject, _, _ = email.daily(date(2026, 10, 18), [steady, stronger], 'H')
+    assert '강화 소식' in subject
+
+
+def test_event_titles_differing_only_in_spacing_are_one_row():
+    a = letter_card('H', 'US:A', 'A', events=[{**EVENT, 'icon': None}])
+    b = letter_card('H', 'US:B', 'B', events=[{**EVENT, 'title': '3분기 실적발표', 'icon': None}])
+    _, _, text = email.daily(date(2026, 10, 18), [a, b], 'H')
+    assert text.count('3분기 실적') == 1 and '— A, B' in text
+
+
+async def test_illustrate_takes_a_thumbnail_only_from_an_article_and_survives_failures(monkeypatch):
+    monkeypatch.setattr(agent, 'public_https', lambda url: True)
+    pages = {'https://news.example/a': (200, '<meta property="og:image" content="https://img.example/a.jpg">'),
+             'https://news.example/redirect': (302, ''), 'https://news.example/plain': (200, '<meta property="og:image" content="http://img.example/b.jpg">')}
+    class Client:
+        def stream(self, method, url, **kwargs):
+            assert kwargs['follow_redirects'] is False, 'A redirect could point inside the network'
+            status, body = pages[url]
+            class Response:
+                status_code, headers, encoding = status, {'content-type': 'text/html'}, 'utf-8'
+                async def aiter_bytes(self):
+                    yield body.encode()
+            class Context:
+                async def __aenter__(self):
+                    return Response()
+                async def __aexit__(self, *_):
+                    return False
+            return Context()
+        async def get(self, url, **_):
+            return SimpleNamespace(status_code=200)
+    items = [{**NEWS, 'source_id': s, 'visual': True} for s in ('a', 'redirect', 'plain', 'outlook')]
+    card = {'positives': items[:2], 'negatives': items[2:], 'events': []}
+    sources = {'a': {'url': 'https://news.example/a'}, 'redirect': {'url': 'https://news.example/redirect'},
+               'plain': {'url': 'https://news.example/plain'}, 'outlook': {'url': 'https://etforca.com/outlook/091160.json'}}
+    value = await agent.illustrate(Client(), card, sources)
+    assert [i['image'] for i in value['positives'] + value['negatives']] == ['https://img.example/a.jpg', None, None, None]
+
+
+def test_public_https_refuses_internal_addresses():
+    assert not agent.public_https('http://example.com/')
+    assert not agent.public_https('https://127.0.0.1/')
+    assert not agent.public_https('https://169.254.170.2/v2/credentials')

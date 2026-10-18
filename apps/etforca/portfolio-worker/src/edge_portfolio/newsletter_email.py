@@ -25,7 +25,8 @@ FORMATS = {'H': ('보유 이유 브리핑', '내 보유 이유에 중요한 것�
 DEFAULT_FORMAT = 'H'
 PURPOSES = {'long_term': '장기 적립', 'mid_term': '중기 보유', 'short_term': '단기 매매'}
 LEAN = {'약화': 0, '강화': 1, '유지': 2}
-VERDICTS = {'악화': '⚠️', '견고': '🛡️', '강화': '💪'}  # H, in cover priority order
+VERDICTS = {'악화': '⚠️', '견고': '🛡️', '강화': '💪'}  # H
+COVER = {'악화': 0, '강화': 1, '견고': 2}  # H cover priority: a weakened thesis first, then news that strengthened one
 EVENT_ICONS = {'실적': '🧾', '물가': '📊', '금리': '🏛️', '정책': '📜', '제품': '🧪', '기타': '📅'}  # when no logo resolved
 # One line to close each letter, picked by date: re-renders stay identical. Eight lines so no weekday is stuck with
 # one, and every line reads right at an 8 AM send on any day, holidays included.
@@ -348,11 +349,12 @@ def calendar(letter, edition, cards):
     for card in cards:
         for event in card['events']:
             if event['date'] >= edition.isoformat():
-                seen.setdefault((event['date'], event['title'], event['org']), (event, []))[1].append(card['name'])
+                # Titles come from separate model runs: '3분기 실적 발표' and '3분기 실적발표' are one event.
+                seen.setdefault((event['date'], ''.join(event['title'].split())), (event, []))[1].append(card['name'])
     if not seen:
         return
     lines, text = '', []
-    for (_, _, _), (event, names) in sorted(seen.items())[:8]:
+    for _, (event, names) in sorted(seen.items())[:8]:
         icon = image_url(event.get('icon'))
         mark = (f'<img src="{escape(icon, quote=True)}" width="18" height="18" alt="" style="display:inline-block;vertical-align:-4px;border:0;margin-right:6px">'
                 if icon else f'<span style="margin-right:6px">{EVENT_ICONS[event["kind"]]}</span>')
@@ -380,7 +382,7 @@ def lead(cards, fmt):
     if fmt in 'FH':
         # Same definition as the stamp: a 2-sigma move is news even when the model calls the day quiet.
         flagged = [c for c in cards if flags(c, fmt)]
-        return max(flagged, key=lambda c: (-list(VERDICTS).index(c['verdict']), size(c)) if fmt == 'H' else size(c)) if flagged else None
+        return max(flagged, key=lambda c: (-COVER[c['verdict']], size(c)) if fmt == 'H' else size(c)) if flagged else None
     rank = {'D': lambda c: (-LEAN[c['verdict']], size(c)), 'E': lambda c: (c['decision_needed'], size(c)),
             'C': lambda c: (-min(['높음', '보통', '낮음'].index(x['importance']) for x in c['events']), size(c))}.get(fmt, lambda c: size(c))
     return max(cards, key=rank) if cards else None
@@ -436,8 +438,15 @@ def daily(edition, cards, fmt=DEFAULT_FORMAT, *, weights=None, purpose='long_ter
     return rendered
 
 
+def fits(card, fmt):
+    """Same format and the current shape: H cards cached before the briefing redesign fall back to a notice."""
+    if card.get('unavailable') or card.get('format') != fmt:
+        return False
+    return fmt != 'H' or ('move_reason' in card and card.get('verdict') in VERDICTS)
+
+
 def compose(edition, cards, fmt, weights, purpose, full, at):
-    ready = [card for card in cards if not card.get('unavailable') and card.get('format') == fmt]
+    ready = [card for card in cards if fits(card, fmt)]
     top = lead(ready, fmt)
     missing = sum(bool(c.get('unavailable')) for c in cards)
     if fmt in 'FH' and top is None and ready:

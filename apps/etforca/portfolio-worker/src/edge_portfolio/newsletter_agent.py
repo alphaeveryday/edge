@@ -1,10 +1,12 @@
 """Daily editorial harness: published outlook first, existing research tools otherwise."""
 import asyncio
+import ipaddress
 import json
 import logging
 import inspect
 import os
 import re
+import socket
 from contextlib import AsyncExitStack
 from datetime import datetime
 from html.parser import HTMLParser
@@ -175,14 +177,34 @@ class OpenGraphImage(HTMLParser):
             self.image = attrs.get('content')
 
 
-async def og_image(client, url):
+def public_https(url):
+    """Search results are attacker-influenced: only https to hosts that resolve to public addresses."""
     try:
-        response = await client.get(url, headers={'User-Agent': 'Mozilla/5.0'}, follow_redirects=True, timeout=10)
-        if response.status_code != 200 or 'html' not in response.headers.get('content-type', ''):
-            return None
+        parts = urlsplit(url)
+        if parts.scheme != 'https' or not parts.hostname:
+            return False
+        addresses = {info[4][0] for info in socket.getaddrinfo(parts.hostname, 443, proto=socket.IPPROTO_TCP)}
+        return bool(addresses) and all(ipaddress.ip_address(address.split('%')[0]).is_global for address in addresses)
+    except (OSError, ValueError, UnicodeError):
+        return False
+
+
+async def og_image(client, url):
+    if not await asyncio.to_thread(public_https, url):
+        return None
+    page = b''
+    try:
+        # No redirects (a 302 could point inside the network) and at most 400KB read, whatever the server sends.
+        async with client.stream('GET', url, headers={'User-Agent': 'Mozilla/5.0'}, follow_redirects=False, timeout=10) as response:
+            if response.status_code != 200 or 'html' not in response.headers.get('content-type', ''):
+                return None
+            async for chunk in response.aiter_bytes():
+                page += chunk
+                if len(page) >= 400_000:
+                    break
         parser = OpenGraphImage()
-        parser.feed(response.text[:400_000])
-    except (httpx.HTTPError, ValueError):
+        parser.feed(page[:400_000].decode(response.encoding or 'utf-8', errors='replace'))
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError, LookupError):
         return None
     image = parser.image or ''
     return image if urlsplit(image).scheme == 'https' and urlsplit(image).hostname else None
@@ -194,18 +216,33 @@ async def event_icon(client, domain):
     url = FAVICON.format(domain)
     try:
         response = await client.get(url, timeout=10, follow_redirects=True)
-    except httpx.HTTPError:
+    except (httpx.HTTPError, httpx.InvalidURL):
         return None
     return url if response.status_code == 200 else None  # unknown domains get a 404 globe; the renderer uses an emoji
 
 
 async def illustrate(client, card, sources):
-    """Code, not the model, turns source ids and domains into image URLs: https only, and only images that exist."""
+    """Code, not the model, turns source ids and domains into image URLs: https only, and only images that exist.
+
+    Pictures are decoration: a slow or failing lookup costs the picture, never the researched card."""
+    wanted = []
     for item in card['positives'] + card['negatives']:
         item['url'] = sources[item['source_id']]['url']
-        item['image'] = await og_image(client, item['url']) if item.pop('visual') else None
+        item['image'] = None
+        if item.pop('visual') and item['source_id'] not in {'price', 'outlook'}:
+            wanted.append(item)
     for event in card['events']:
-        event['icon'] = await event_icon(client, event.pop('domain'))
+        event['icon'], event['domain'] = None, event.get('domain')
+    try:
+        async with asyncio.timeout(20):
+            for item in wanted:
+                item['image'] = await og_image(client, item['url'])
+            for event in card['events']:
+                event['icon'] = await event_icon(client, event['domain'])
+    except TimeoutError:
+        log.warning('newsletter_illustration_timeout')
+    for event in card['events']:
+        event.pop('domain')
     return card
 
 
@@ -338,6 +375,8 @@ async def write_card(holding, edition, key, *, fmt=DEFAULT_FORMAT, model_call=No
                     cited = {item.source_id for item in getattr(card, 'positives', []) + getattr(card, 'negatives', [])}
                     if not set(card.source_ids) | cited <= sources.keys():
                         raise ValueError('UNKNOWN_SOURCE')
+                    if 'price' in cited:
+                        raise ValueError('NEWS_EVIDENCE_REQUIRED')  # a news item needs a text source, not a price row
                     if not any(source_id != 'price' and sources[source_id].get('excerpt') for source_id in card.source_ids):
                         raise ValueError('NEWS_EVIDENCE_REQUIRED')
                     value = card.model_dump(exclude={'source_ids'})
