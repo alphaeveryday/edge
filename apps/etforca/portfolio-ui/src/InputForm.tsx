@@ -3,12 +3,18 @@ import { Fragment, useEffect, useRef, useState } from 'react';
 import { request, ensureVisitorSession, type Catalog, type Instrument, type Holding, type Input } from './api';
 import { InstrumentSearch } from './InstrumentSearch';
 import { PortfolioPreview } from './PortfolioPreview';
-import { TaxAccounts, missingTaxAnswers, type TaxProfile } from './TaxAccounts';
+import { TaxAccounts, type TaxProfile } from './TaxAccounts';
 import { trackScreen } from './analytics';
+
+import { inputDraftKey, readInputDraft } from './inputDraft';
+import { useConfirmation } from './design-system/confirmation';
 
 const accounts = ['일반 계좌', 'ISA', '연금저축', 'IRP'];
 const hints = ['월 적립 계획까지 추천', '배당 얼마를 원해', '모은 돈이 있어', '목돈 넣는 방법', '대출이 있어', '레버리지는 빼줘', '개수는 적게'];
 export function InputForm({ onSubmit, busy }: { onSubmit: (input: Input) => void; busy: boolean }) {
+  const [initial] = useState(readInputDraft);
+  const { ask, confirmation, restoreFocus } = useConfirmation();
+  const heading = useRef<HTMLElement>(null);
   const bar = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = bar.current, app = element?.closest<HTMLElement>('.app');
@@ -19,34 +25,44 @@ export function InputForm({ onSubmit, busy }: { onSubmit: (input: Input) => void
     observer.observe(element);
     return () => { observer.disconnect(); app.style.removeProperty('--input-cta-height'); };
   }, []);
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(initial?.step ?? 0);
   useEffect(() => trackScreen((['input_holdings', 'input_funding', 'input_horizon', 'input_interests', 'input_question'] as const)[step]), [step]);
-  const [holdings, setHoldings] = useState<Holding[]>([{ name: '현금', kind: 'cash', instrument_id: 'CASH:KRW', account: '일반 계좌', amount_krw: '100' }]);
-  const [selected, setSelected] = useState(['일반 계좌']);
+  const [holdings, setHoldings] = useState<Holding[]>(initial?.holdings ?? [{ name: '현금', kind: 'cash', instrument_id: 'CASH:KRW', account: '일반 계좌', amount_krw: '100' }]);
+  const [selected, setSelected] = useState(initial?.selected ?? ['일반 계좌']);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
+  const [catalogAttempt, setCatalogAttempt] = useState(0);
   const [catalogError, setCatalogError] = useState('');
-  useEffect(() => { let stopped = false; request<Catalog>('/catalog').then(data => { if (!stopped) setCatalog(data); }).catch(() => { if (!stopped) setCatalogError('ETF 목록을 불러오지 못했어요. 화면을 새로고침해 주세요.'); }); return () => { stopped = true; }; }, []);
-  const [question, setQuestion] = useState('');
-  const [horizon, setHorizon] = useState('');
-  const [how, setHow] = useState('');
-  const [interests, setInterests] = useState<string[]>([]);
-  const [note, setNote] = useState('');
-  const [contribution, setContribution] = useState('');
+  useEffect(() => { let stopped = false; setCatalogError(''); request<Catalog>('/catalog').then(data => { if (!stopped) setCatalog(data); }).catch(() => { if (!stopped) setCatalogError('ETF 목록을 불러오지 못했어요. 입력은 유지돼요.'); }); return () => { stopped = true; }; }, [catalogAttempt]);
+  const [question, setQuestion] = useState(initial?.question ?? '');
+  const [horizon, setHorizon] = useState(initial?.horizon ?? '');
+  const [how, setHow] = useState(initial?.how ?? '');
+  const [interests, setInterests] = useState<string[]>(initial?.interests ?? []);
+  const [note, setNote] = useState(initial?.note ?? '');
+  const [contribution, setContribution] = useState(initial?.contribution ?? '');
   const contributionRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (step === 1 && how === '매달 꾸준히') contributionRef.current?.scrollIntoView({ block: 'center', behavior: 'instant' });
   }, [step, how]);
-  const [keyword, setKeyword] = useState('');
-  const [taxPending, setTaxPending] = useState(false);
-  const [tax, setTax] = useState<TaxProfile | null>(null);
+  const [keyword, setKeyword] = useState(initial?.keyword ?? '');
+  const [tax, setTax] = useState<TaxProfile | null>(initial?.tax ?? null);
   const [saving, setSaving] = useState(false);
-  const [draftId] = useState(() => crypto.randomUUID());
-  const [mode, setMode] = useState<'amount' | 'percent'>('amount');
-  const [fresh, setFresh] = useState(false);
+  const [draftId] = useState(() => initial?.draftId ?? crypto.randomUUID());
+  const [mode, setMode] = useState<'amount' | 'percent'>(initial?.mode ?? 'amount');
+  const [fresh, setFresh] = useState(initial?.fresh ?? false);
+  const [alternate, setAlternate] = useState<Holding[]>(initial?.alternate ?? []);
+  const [storageError, setStorageError] = useState(false);
+  useEffect(() => {
+    try { sessionStorage.setItem(inputDraftKey, JSON.stringify({ step, holdings, alternate, selected, question, horizon, how, interests, note, contribution, keyword, tax, draftId, mode, fresh })); setStorageError(false); }
+    catch { setStorageError(true); }
+  }, [step, holdings, alternate, selected, question, horizon, how, interests, note, contribution, keyword, tax, draftId, mode, fresh]);
+  const previousStep = useRef(step);
+  useEffect(() => { if (step !== previousStep.current) { heading.current?.focus({ preventScroll: true }); window.scrollTo(0, 0); previousStep.current = step; } }, [step]);
   const [inputError, setInputError] = useState('');
-  const holdingsValid = holdings.length > 0 && holdings.every(h => Number(h.amount_krw) > 0) && (mode !== 'percent' || Math.abs(holdings.reduce((n, h) => n + Number(h.amount_krw), 0) - 100) < .001);
+  const invalidHolding = holdings.some(h => !/^(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/.test(h.amount_krw || '') || !(Number(h.amount_krw) > 0) || Number(h.amount_krw) > (mode === 'percent' ? 100 : 1000000000));
+  const holdingsValid = holdings.length > 0 && !invalidHolding && (mode !== 'percent' || holdings.reduce((n, h) => n + Math.round(Number(h.amount_krw) * 100), 0) === 10000);
   function add(account: string, item: Instrument) {
-    if (holdings.length >= 20 || holdings.some(h => h.account === account && h.instrument_id === item.id)) return;
+    if (holdings.some(h => h.account === account && h.instrument_id === item.id)) return '이미 담은 종목이에요. 보유 금액이나 비율을 수정해 주세요.';
+    if (holdings.length >= 20) return '최대 20종목까지 담을 수 있어요. 기존 종목을 빼고 추가해 주세요.';
     setHoldings([...holdings, { name: item.name, account, amount_krw: '', kind: item.kind, instrument_id: item.id }]);
   }
   function payload(profile = tax, planning = fresh): Input {
@@ -60,7 +76,6 @@ export function InputForm({ onSubmit, busy }: { onSubmit: (input: Input) => void
   async function advance(recommend = false) {
     if (saving) return;
     if (holdings.length && !holdingsValid) { setInputError('보유 종목의 금액 또는 비율을 입력해 주세요. 비율의 합계는 100%여야 해요.'); setStep(0); return; }
-    if (taxPending || tax && missingTaxAnswers(tax, selected)) { setInputError('절세 전략의 필수 항목을 모두 선택한 뒤 ‘선택한 내용 적용하기’를 눌러 주세요.'); setStep(0); return; }
     setSaving(true); setInputError('');
     try { await save(tax, recommend || fresh); } catch (error) { setInputError((error as Error).message); setSaving(false); return; }
     setSaving(false);
@@ -70,23 +85,25 @@ export function InputForm({ onSubmit, busy }: { onSubmit: (input: Input) => void
     onSubmit({ ...payload(), draft_id: draftId });
   }
   const valid = step === 0 ? holdingsValid || fresh && !holdings.length : step === 1 ? !!how && (how !== '매달 꾸준히' || Number(contribution) > 0) : step === 2 ? !!horizon : true;
-  const guidance = !valid ? step === 0 ? !holdings.length ? '보유 종목을 추가하거나 종목부터 추천받기를 눌러 주세요.' : holdings.some(h => !(Number(h.amount_krw) > 0)) ? mode === 'percent' ? '각 종목의 비중을 입력해 주세요.' : '보유 종목의 금액을 입력해 주세요.' : '비중 합계를 100%로 맞춰 주세요.' : step === 1 ? how === '매달 꾸준히' ? '매달 투자할 금액을 입력해 주세요.' : '투자 방법을 골라 주세요.' : '투자 기간을 골라 주세요.' : step === 4 ? '분석에 약 5분이 걸려요' : '';
+  const guidance = !valid ? step === 0 ? !holdings.length ? '보유 종목을 추가하거나 종목부터 추천받기를 눌러 주세요.' : holdings.some(h => !(Number(h.amount_krw) > 0)) ? mode === 'percent' ? '각 종목의 비중을 입력해 주세요.' : '보유 종목의 금액을 입력해 주세요.' : invalidHolding ? mode === 'percent' ? '비중은 100% 이하, 소수 둘째 자리까지 적어 주세요.' : '금액은 10조 원 이하, 만 원 단위로 소수 둘째 자리까지 적어 주세요.' : '비중 합계를 100%로 맞춰 주세요.' : step === 1 ? how === '매달 꾸준히' ? '매달 투자할 금액을 입력해 주세요.' : '투자 방법을 골라 주세요.' : '투자 기간을 골라 주세요.' : step === 4 ? '분석에 약 5분이 걸려요' : '';
   const choices = (values: string[], current: string, change: (v: string) => void, labels = values) => <div className="chips big">{values.map((v, i) => <Button className="chip" key={v} aria-pressed={current === v} onClick={() => change(v)}>{labels[i]}</Button>)}</div>;
   return <>
-    <div className="nav"><div className="nav__pill"><Button disabled={!step || saving} className={'nav__back' + (!step ? ' off' : '')} aria-label="앞 질문으로" onClick={() => setStep(step - 1)}>‹</Button><span className="nav__logo">ETF Orca</span><div className="prog"><i style={{ width: `${(step + 1) / 5 * 100}%` }} /></div><span className="nav__n">{step + 1} / 5</span></div></div>
-    <section className="step in" key={step}>
+    <div className="nav"><div className="nav__pill"><Button disabled={!step || saving || busy} className={'nav__back' + (!step ? ' off' : '')} aria-label="앞 질문으로" onClick={() => setStep(step - 1)}>‹</Button><span className="nav__logo">ETF Orca</span><div className="prog"><i style={{ width: `${(step + 1) / 5 * 100}%` }} /></div><span className="nav__n" aria-label={`전체 5단계 중 ${step + 1}단계`}>{step + 1} / 5</span></div></div>
+    <section inert={saving || busy} ref={heading} tabIndex={-1} aria-label={`${step + 1}단계`} className="step in" key={step}>
+      {storageError && <p role="alert">이 브라우저에서는 입력을 임시 보관할 수 없어요. 완료할 때까지 이 화면을 유지해 주세요.</p>}
+      {initial && step === 0 && <div className="draft-resume"><span>입력하던 내용을 이어서 작성해요.</span><Button onClick={async () => { if (await ask('입력한 내용을 지우고 새로 시작할까요?', '새로 시작하기')) { try { sessionStorage.removeItem(inputDraftKey); location.reload(); } catch { setInputError('임시 입력을 지우지 못했어요. 이 브라우저의 저장 설정을 확인해 주세요.'); restoreFocus(); } } }}>새로 작성</Button></div>}
       {inputError && <p role="alert">{inputError}</p>}
       {step === 0 && <><span className="eyebrow">내 구성 확인</span><h2>내 포트폴리오를<br />더 좋게 바꿔볼까요?</h2><p className="hint">보유 종목을 알려주시면 무엇을 얼마나 바꿀지 정리해 드려요.</p>
         <div className="holdings-layout"><div className="holdings-input">
         <>
-          {!!holdings.length && <div className="unit"><div className="unit__row"><div className="switch" data-u={mode === 'percent' ? 'pct' : 'won'} aria-label="숫자 적는 방법">{(['amount', 'percent'] as const).map((m, i) => <Button key={m} aria-pressed={mode === m} onClick={() => { if (m === mode) return; setMode(m); setHoldings(holdings.map(h => ({ ...h, amount_krw: '' }))); }}>{i ? '비율' : '금액'}</Button>)}</div></div><p className="unit__note">{mode === 'percent' ? '전체 계좌를 합쳐 100%가 되도록 적어 주세요.' : '현재 평가금액을 만 원 단위로 적어 주세요.'}</p></div>}
-          {selected.map(account => <article className="acct" key={account}><div className="acct__head"><h3 className="acct__name">{account}</h3>{account !== '일반 계좌' && <Button className="x" aria-label={account + ' 지우기'} onClick={() => { setSelected(selected.filter(a => a !== account)); setHoldings(holdings.filter(h => h.account !== account)); }}>×</Button>}</div>
-            {!!holdings.filter(h => h.account === account).length && <ul className="rows">{holdings.map((h, i) => h.account === account && <li className="row" key={i}><span className="row__name">{h.name}</span><label className="num won"><TextInput aria-label={h.name + (mode === 'amount' ? ' 금액' : ' 비율')} inputMode="decimal" type="number" min="0.01" max={mode === 'percent' ? 100 : 1000000000} step="0.01" placeholder="0" value={h.amount_krw || ''} onChange={e => setHoldings(holdings.map((x, n) => n === i ? { ...x, amount_krw: e.target.value } : x))} /><span>{mode === 'amount' ? '만 원' : '%'}</span></label><Button className="x" aria-label={h.name + ' 빼기'} onClick={() => setHoldings(holdings.filter((_, n) => n !== i))}>×</Button></li>)}</ul>}
+          {!!holdings.length && <div className="unit"><div className="unit__row"><div className="switch" data-u={mode === 'percent' ? 'pct' : 'won'} aria-label="숫자 적는 방법">{(['amount', 'percent'] as const).map((m, i) => <Button key={m} aria-pressed={mode === m} onClick={() => { if (m === mode) return; setAlternate(holdings); setHoldings(holdings.map(h => ({ ...h, amount_krw: alternate.find(a => a.account === h.account && a.instrument_id === h.instrument_id)?.amount_krw ?? '' }))); setMode(m); }}>{i ? '비율' : '금액'}</Button>)}</div></div><p className="unit__note">{mode === 'percent' ? '전체 계좌를 합쳐 100%가 되도록 적어 주세요. 금액 입력은 따로 보관돼요.' : '현재 평가금액을 만 원 단위로 적어 주세요.'}</p></div>}
+          {selected.map(account => <article className="acct" key={account}><div className="acct__head"><h3 className="acct__name">{account}</h3>{account !== '일반 계좌' && <Button className="x" aria-label={account + ' 지우기'} onClick={async () => { if (holdings.some(h => h.account === account) && !await ask(account + '와 담은 종목을 입력에서 지울까요?')) return; setSelected(selected.filter(a => a !== account)); setHoldings(holdings.filter(h => h.account !== account)); setAlternate(alternate.filter(h => h.account !== account)); restoreFocus(heading.current); }}>×</Button>}</div>
+            {!!holdings.filter(h => h.account === account).length && <ul className="rows">{holdings.map((h, i) => h.account === account && <li className="row" key={i}><span className="row__name">{h.name}</span><label className="num won"><TextInput aria-label={h.name + (mode === 'amount' ? ' 금액' : ' 비율')} inputMode="decimal" type="number" min="0.01" max={mode === 'percent' ? 100 : 1000000000} step="0.01" placeholder="0" value={h.amount_krw || ''} onChange={e => setHoldings(holdings.map((x, n) => n === i ? { ...x, amount_krw: e.target.value } : x))} /><span>{mode === 'amount' ? '만 원' : '%'}</span></label><Button className="x" aria-label={h.name + ' 빼기'} onClick={() => { setHoldings(holdings.filter((_, n) => n !== i)); setAlternate(alternate.filter(a => a.account !== h.account || a.instrument_id !== h.instrument_id)); }}>×</Button></li>)}</ul>}
             <InstrumentSearch account={account} catalog={catalog} onAdd={item => add(account, item)} />
           </article>)}
-          <div className="q"><TaxAccounts onPending={setTaxPending} accounts={selected} value={tax} onSave={async profile => { await save(profile); setTax(profile); }} /><div className="chips">{accounts.filter(a => !selected.includes(a)).map(a => <Button className="chip add" key={a} onClick={() => setSelected([...selected, a])}>{a}</Button>)}</div></div>
+          <div className="q"><TaxAccounts accounts={selected} value={tax} onSave={async profile => { await save(profile); setTax(profile); }} /><div className="chips">{accounts.filter(a => !selected.includes(a)).map(a => <Button className="chip add" key={a} onClick={() => setSelected([...selected, a])}>{a}</Button>)}</div></div>
           <div className="entry"><Button className="rec" disabled={saving} onClick={() => void advance(true)}><b>종목부터 추천받기</b><span>나에게 맞는 ETF부터 찾아드려요</span></Button></div>
-          {catalogError && <p role="alert">{catalogError}</p>}
+          {catalogError && <p role="alert">{catalogError} <Button onClick={() => setCatalogAttempt(n => n + 1)}>목록 다시 불러오기</Button></p>}
         </>
         </div><aside className="holdings-context"><PortfolioPreview holdings={holdings} mode={mode} /><div className="askbox"><label className="lab" htmlFor="ask">요청사항</label><p>원하는 변경이나 궁금한 점을 적어 주세요.</p><TextArea className="field" id="ask" maxLength={1000} value={question} onChange={e => setQuestion(e.target.value)} placeholder="예: 3년 뒤 결혼인데 지금 구성으로 버텨도 되는지, 배당은 언제부터 섞어야 하는지 궁금해요" /><span className="hintlab">이런 것도 요청할 수 있어요</span><div className="chips">{hints.map(h => <Button className="chip add" key={h} onClick={() => setQuestion((question + '\n' + h).trim().slice(0, 1000))}>{h}</Button>)}</div></div>
       </aside></div></>}
@@ -96,6 +113,7 @@ export function InputForm({ onSubmit, busy }: { onSubmit: (input: Input) => void
       {step === 3 && <div className="q"><label className="lab" htmlFor="keyword">관심 키워드 직접 입력</label><div className="keyword-entry"><TextInput className="field" id="keyword" maxLength={50} value={keyword} onChange={e => setKeyword(e.target.value)} placeholder="예: 환율 부담을 줄이고 싶어요" /><Button variant="secondary" className="secondary" disabled={!keyword.trim() || interests.length >= 10} onClick={() => { const v = keyword.trim(); if (v && !interests.includes(v)) setInterests([...interests, v]); setKeyword(''); }}>추가</Button></div><p className="hint sm" role="status">{interests.length}/10개 선택 · {interests.length >= 10 ? '다른 항목을 고르려면 하나를 해제해 주세요.' : '선택하지 않고 넘어가도 괜찮아요.'}</p><div className="chips">{interests.map(v => <Button className="chip" key={v} aria-label={v + ' 선택 취소'} onClick={() => setInterests(interests.filter(x => x !== v))}>{v} ×</Button>)}</div></div>}
       {step === 4 && <><span className="eyebrow">선택</span><h2>추가적으로 고려할<br />것들을 알려주세요</h2><p className="hint">원하는 것을 편하게 적어 주세요. 적은 대로 반영해요.</p><TextArea className="field" aria-label="추가 고려사항" maxLength={1000} value={note} onChange={e => setNote(e.target.value)} placeholder="예: 매달 100만 원씩 넣는 계획까지 추천해줘" /><p className="hint sm">자료 조사와 검토에 약 5분이 걸려요.</p></>}
     </section>
+    {confirmation}
     <div ref={bar} className="bar"><div className="bar__in"><div className="bar__msg" id="step-guidance" aria-live="polite" hidden={!guidance}>{guidance}</div><Button variant="primary" className="btn" loading={busy || saving} aria-describedby={guidance ? 'step-guidance' : undefined} disabled={!valid || busy || saving} aria-disabled={!valid || busy || saving} onClick={() => void advance()}>{busy ? '분석 접수 중…' : saving ? '저장 중…' : step === 4 ? '내 포트폴리오 분석하기' : '다음'}</Button></div></div>
   </>;
 }

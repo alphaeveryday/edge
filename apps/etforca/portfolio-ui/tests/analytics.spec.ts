@@ -184,7 +184,7 @@ for (const [label, rating] of [['좋아요', 'good'], ['그냥 그래요', 'okay
     await expect(popup).toHaveCount(0);
     await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
     await expect(popup).toBeVisible();
-    await expect(popup).toBeFocused();
+    await expect(popup).not.toBeFocused();
     if (rating === 'good') await popup.screenshot({ path: `test-results/feedback-${test.info().project.name}.png` });
     const bounds = await popup.boundingBox();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);

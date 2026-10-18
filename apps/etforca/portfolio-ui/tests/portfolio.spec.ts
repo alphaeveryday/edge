@@ -150,8 +150,8 @@ test('tax details and custom interests persist without a dividend step', async (
   await expect(page.getByRole('dialog').getByRole('alert')).toContainText('연간 소득 구간');
   await page.getByRole('button', { name: '계좌 정보 닫기' }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
-  await expect(page.getByRole('alert')).toContainText('필수 항목');
+  await expect(page.getByRole('heading', { name: '어떻게 투자할 계획인가요?' })).toBeVisible();
+  await page.getByRole('button', { name: '앞 질문으로' }).click();
   await page.locator('.tax-trigger').click();
   await page.getByRole('group', { name: '연간 소득 구간', exact: true }).getByRole('radio', { name: '확인 필요', exact: true }).check();
   await page.getByRole('radio', { name: '대한민국 거주자', exact: true }).check();

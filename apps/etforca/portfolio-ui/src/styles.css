@@ -2137,7 +2137,7 @@ textarea.field {
   font-size: var(--text-caption)
 }
 .nav__n {
-  display: none
+  display: inline
 }
 .unit[hidden],.more[hidden],.bar[hidden] {
   display: none
@@ -6331,3 +6331,7 @@ to {
   transition: none;
 }
 }
+
+.draft-resume { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); color: var(--color-text-secondary); font-size: var(--text-caption); }
+
+.dashboard-save-status { display: block; min-height: 1.5em; color: var(--color-text-secondary); font-size: var(--text-caption); }
