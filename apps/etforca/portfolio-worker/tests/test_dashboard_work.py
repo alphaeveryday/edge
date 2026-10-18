@@ -521,6 +521,37 @@ def test_cash_only_weekend_has_valid_zero_return_and_requested_boundaries():
     assert [p['date'] for p in result['history']['points']] == ['2026-10-17', '2026-10-18']
 
 
+def test_stock_weekend_uses_fridays_close_at_both_requested_boundaries():
+    result = work.run_backtest({'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 100.}], 'start': '2026-10-17', 'end': '2026-10-18'}, {'KR:069500': record()}, date(2026, 10, 21), [])
+    assert result['return_pct'] == 0
+    assert [p['date'] for p in result['history']['points']] == ['2026-10-17', '2026-10-18']
+
+
+async def test_historical_backtest_uses_requested_endpoint_for_collection_and_freshness(isolated_db, monkeypatch):
+    body = work.Backtest(allocations=[{'instrument_id': 'KR:069500', 'weight_pct': 100.}], start='2021-10-14', end='2021-10-15')
+    job = work.submit('owner', body)
+    r = record()
+    r['frame'].index = pd.to_datetime(['2021-10-14', '2021-10-15'])
+    days = []
+    async def prices(ids, day, **kwargs):
+        days.append(day)
+        return {'KR:069500': r}, []
+    monkeypatch.setattr(work, 'records_for', prices)
+    monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
+    await work.work_once()
+    assert days == [date(2021, 10, 16)]
+    completed = work.read_backtest('owner', job['id'])
+    assert completed['state'] == 'succeeded'
+    assert completed['result']['return_pct'] == 10
+
+
+def test_annual_distribution_this_month_is_preserved_in_the_next_twelve_months():
+    r = record()
+    r['frame'] = pd.DataFrame({'Close': 100., 'Adj Close': 100., 'Dividends': 0.}, index=pd.bdate_range('2025-10-01', '2026-10-16'))
+    r['frame'].loc['2026-10-15', 'Dividends'] = 5.
+    assert work.forecast(asset(), r, 10, 1, date(2026, 10, 18)) == [{'asset_id': 'a', 'month': '2027-10', 'amount': 50}]
+
+
 async def test_new_holdings_require_actions_checked_after_save_even_with_same_close(isolated_db, monkeypatch):
     from edge_portfolio import market_data
     calls = []

@@ -294,7 +294,7 @@ def normalized_prices(ids, records, as_of, bounds=None, *, column=None):
             expected = expected.union(preceding[-1:])
         prices, price_fill = carry_missing_prices(prices, expected, start, end)
         values = prices['Adj Close']
-        values = values.reindex(values.index.union(pd.DatetimeIndex([start]))).ffill()
+        values = values.reindex(values.index.union(pd.DatetimeIndex([start, end]))).ffill()
         if record['currency'] == 'USD':
             fx = records['FX']['frame']['Close']
             fx_expected = sessions[sessions >= start]
@@ -303,7 +303,7 @@ def normalized_prices(ids, records, as_of, bounds=None, *, column=None):
             fx_frame, fx_fill = carry_missing_prices(fx.to_frame(), fx_expected, start, end)
             fx = fx_frame['Close']
             fx_fill_dates.update(fx_fill['dates'])
-            index = values.index.union(fx.index).union(pd.DatetimeIndex([start]))
+            index = values.index.union(fx.index).union(pd.DatetimeIndex([start, end]))
             # Carry only earlier observations; never invent pre-inception prices.
             carried_prices = values.reindex(index).ffill().loc[start:end]
             carried_fx = fx.reindex(index).ffill().loc[start:end]

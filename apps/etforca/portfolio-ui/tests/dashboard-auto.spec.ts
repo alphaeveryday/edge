@@ -51,6 +51,20 @@ test('an unavailable first tracking response never presents the old import amoun
   await expect(page.locator('.asset-row')).not.toContainText('1,000,000원');
 });
 
+for (const status of [401, 404]) test(`an expired backtest connection preserves the composition and permits a retry: ${status}`, async ({ page }) => {
+  await mock(page);
+  await page.route('**/api/portfolio/backtests', r => r.fulfill({ json: { id: 'job' } }));
+  await page.route('**/api/portfolio/backtests/job', r => r.fulfill({ status, json: {} }));
+  await page.goto('/portfolio/?view=dashboard');
+  await expect(page.locator('.asset-row')).toHaveCount(1);
+  await page.getByRole('button', { name: '백테스트', exact: true }).click();
+  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
+  await page.getByRole('button', { name: '과거 수익률 조회', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText('백테스트 연결이 만료됐어요. 다시 조회해 주세요.');
+  await expect(page.getByLabel('KODEX 200 비중 (%)')).toHaveValue('100');
+  await expect(page.getByRole('button', { name: '과거 수익률 조회', exact: true })).toBeEnabled();
+});
+
 test('an older poll cannot replace the fresh valuation returned after saving', async ({ page }) => {
   await page.clock.install();
   await mock(page);
@@ -115,14 +129,14 @@ test('preview backtests and daily records make no customer requests', async ({ p
 test('forecast shows twelve months across January and scroll controls do not overflow the page', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
   await page.getByRole('button', { name: '배당 달력', exact: true }).click();
-  await expect(page.locator('.dividend-bars button')).toHaveCount(12);
+  await expect(page.locator('.dividend-bars button')).toHaveCount(13);
   const region = page.getByRole('region', { name: /12개월 배당 그래프/ });
   await page.getByRole('button', { name: '다음 배당 월 보기' }).click();
   if (await region.evaluate(el => el.scrollWidth > el.clientWidth)) await expect.poll(() => region.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
   await page.getByRole('button', { name: /^2027-01 실수령/ }).click();
   await expect(page.getByRole('heading', { name: /2027년 01월/ })).toBeVisible();
   await expect(page.locator('.dividend-records')).not.toBeEmpty();
-  await expect(page.getByRole('button', { name: /^2027-09 실수령/ })).toHaveCount(1);
+  await expect(page.getByRole('button', { name: /^2027-10 실수령/ })).toHaveCount(1);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
 

@@ -5267,7 +5267,7 @@ body:has(.dashboard) {
 }}
 .dividend-bars {
   display: grid;
-  grid-template-columns: repeat(12,minmax(0,1fr))
+  grid-template-columns: repeat(13,minmax(0,1fr))
 }
 .dividend-bars button {
   min-width: 0
@@ -6108,7 +6108,7 @@ to {
   gap: 10px;
 }
 .dividend-scroll { overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; padding-bottom: 8px; }
-.dividend-scroll .dividend-bars { min-width: 720px; }
+.dividend-scroll .dividend-bars { min-width: 780px; }
 .dividend-scroll .dividend-bars button { scroll-snap-align: start; min-width: 48px; }
 .dividend-navigation { display: flex; align-items: center; gap: 8px; color: var(--color-text-secondary); font-size: var(--text-caption); }
 .dividend-navigation span { margin-right: auto; }

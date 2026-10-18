@@ -217,11 +217,17 @@ def forecast(asset, record, quantity, fx, day):
     for event in observation['events']:
         stamp = date.fromisoformat(event['date'])
         # Provider dates are ex-dividend dates: forecast months, never fabricated payment days.
-        projected = stamp.year * 12 + stamp.month - 1 + 12
+        try:
+            next_date = stamp.replace(year=stamp.year + 1)
+        except ValueError:
+            next_date = stamp.replace(year=stamp.year + 1, day=28)
+        if next_date < day:
+            continue
+        projected = next_date.year * 12 + next_date.month - 1
         months[projected] = months.get(projected, 0) + event['amount'] * quantity * fx
     start = day.year * 12 + day.month - 1
     return [{'asset_id': asset['id'], 'month': f'{m // 12:04d}-{m % 12 + 1:02d}', 'amount': round(amount, 2)}
-            for m, amount in sorted(months.items()) if start <= m < start + 12]
+            for m, amount in sorted(months.items()) if start <= m <= start + 12]
 
 
 def valuation(workbook, records, prior, day):
@@ -285,6 +291,7 @@ def valuation(workbook, records, prior, day):
 def run_backtest(body, records, day, failures):
     import pandas as pd
     from .market_data import comparison, comparison_bounds, weights, year_before
+    day = min(day, date.fromisoformat(body['end']) + timedelta(days=1)) if body.get('end') else day
     allocation = weights(body['allocations'])
     excluded = [k for k in allocation if k != 'CASH:KRW' and (k not in records or k.startswith('US:') and 'FX' not in records or records[k].get('return_basis') == 'price')]
     for key in allocation.keys() - set(excluded) - {'CASH:KRW'}:
@@ -305,7 +312,7 @@ def run_backtest(body, records, day, failures):
         if body.get('start'):
             start = max(start, pd.Timestamp(body['start']))
         if body.get('end'):
-            end = min(end, pd.Timestamp(body['end']))
+            end = pd.Timestamp(body['end'])
     if start >= end:
         raise ValueError('NO_COMMON_PRICE_HISTORY')
     history = comparison({k: v / total for k, v in target.items()}, None, records, day, bounds=(start, end))
@@ -338,7 +345,8 @@ async def work_once(stopping=None):
     try:
         async with asyncio.timeout(240):
             if job:
-                records, failures = await records_for([a['instrument_id'] for a in job['input']['allocations']], day)
+                collection_day = min(day, date.fromisoformat(job['input']['end']) + timedelta(days=1)) if job['input'].get('end') else day
+                records, failures = await records_for([a['instrument_id'] for a in job['input']['allocations']], collection_day)
                 result = run_backtest(job['input'], records, day, failures)
                 with store.connect() as db:
                     db.execute("UPDATE portfolio_backtests SET state='succeeded',result=%s WHERE id=%s AND lease_until=%s", (Jsonb(result), job['id'], job['lease_until']))

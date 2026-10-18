@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { request, type Catalog, type History } from './api';
+import { request, ensureVisitorSession, type Catalog, type History } from './api';
 import { InstrumentSearch } from './InstrumentSearch';
 import { Button, TextInput, SectionHeading } from './design-system/components';
 import { PerformanceChart } from './ReportCharts';
@@ -25,7 +25,10 @@ export function Backtest({ assets, catalog }: { assets: Asset[]; catalog: Catalo
         if (next.state === 'succeeded') { setResult(next.result); setJob(null); setBusy(false); }
         else if (next.state === 'failed') { setError(next.result.message || '가격 자료를 가져오지 못했어요. 다시 조회해 주세요.'); setJob(null); setBusy(false); }
         else timer = setTimeout(poll, 3000);
-      } catch { if (!stopped) { setError('조회 연결을 다시 시도하고 있어요. 잠시만 기다려 주세요.'); timer = setTimeout(poll, 3000); } }
+      } catch (error) { if (!stopped) {
+        if (error instanceof Error && 'status' in error && [401, 404].includes(Number(error.status))) { setError(error.message); setJob(null); setBusy(false); }
+        else { setError('조회 연결을 다시 시도하고 있어요. 잠시만 기다려 주세요.'); timer = setTimeout(poll, 3000); }
+      } }
     }
     void poll();
     return () => { stopped = true; clearTimeout(timer); };
@@ -52,6 +55,7 @@ export function Backtest({ assets, catalog }: { assets: Asset[]; catalog: Catalo
     const data = new FormData(e.currentTarget);
     setBusy(true); setError(''); setResult(null);
     try {
+      await ensureVisitorSession();
       const response = await request<{ id: string }>('/backtests', { method: 'POST', body: JSON.stringify({ allocations: rows.map(r => ({ instrument_id: r.instrument_id, weight_pct: Number(r.weight) })), start: data.get('start') || null, end: data.get('end') || null }) });
       setJob(response.id);
     } catch (e) { setError((e as Error).message); setBusy(false); }

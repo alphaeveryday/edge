@@ -5,7 +5,7 @@ import { money, performance, value, type Asset, type Month, type Dividend, type 
 
 export function DividendChart({ dividends, forecasts, complete, startMonth, selectedMonth, onMonth }: { dividends: Dividend[]; forecasts: Forecast[]; complete: boolean; startMonth: string; selectedMonth: string; onMonth: (month: string) => void }) {
   const scroll = useRef<HTMLDivElement>(null);
-  const rows = Array.from({ length: 12 }, (_, i) => {
+  const rows = Array.from({ length: 13 }, (_, i) => {
     const month = new Date(Date.UTC(Number(startMonth.slice(0, 4)), Number(startMonth.slice(5)) - 1 + i, 1)).toISOString().slice(0, 7);
     const ds = dividends.filter(d => d.date.startsWith(month));
     return { month, actual: ds.filter(d => d.status === '실수령').reduce((s, d) => s + d.amount, 0), expected: forecasts.filter(d => d.month === month).reduce((s, d) => s + d.amount, 0) };
