@@ -66,6 +66,25 @@ def test_missing_fx_is_not_zero_or_customer_supplied_stale_fx():
     assert result['assets'] == [] and result['missing'] == ['a']
 
 
+@pytest.mark.parametrize('quantity,amount', [(0., None), (None, 0.)])
+async def test_zero_holdings_need_no_quotes_fx_or_dividends_and_cannot_block_daily_records(isolated_db, monkeypatch, quantity, amount):
+    zero = {**asset(), 'id': 'zero', 'instrument_id': 'US:VOO', 'currency': 'USD', 'quantity': quantity, 'amount': amount, 'average': None}
+    dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset(), zero])))
+    calls = []
+    async def prices(ids, day, **kwargs):
+        calls.append(ids)
+        return {'KR:069500': record()}, []
+    monkeypatch.setattr(work, 'records_for', prices)
+    monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
+    await work.work_once()
+    result = work.tracking('owner')
+    assert calls == [['KR:069500']]
+    assert result['days'][0]['value'] == 1100
+    assert result['market']['payload']['missing'] == []
+    assert result['market']['payload']['dividend_missing'] == ['a'], 'Only the positive holding with short history needs dividend data'
+    assert result['market']['payload']['assets'][1]['value'] == 0
+
+
 def test_amount_import_tracks_market_moves_instead_of_resetting_value_each_day():
     a = {**asset(), 'quantity': None, 'amount': 1100.}
     first = work.valuation({'assets': [a]}, {'KR:069500': record()}, None, date(2026, 10, 18))

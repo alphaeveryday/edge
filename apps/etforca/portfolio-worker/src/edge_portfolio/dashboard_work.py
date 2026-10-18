@@ -230,6 +230,10 @@ def forecast(asset, record, quantity, fx, day):
             for m, amount in sorted(months.items()) if start <= m <= start + 12]
 
 
+def zero_exposure(asset):
+    return asset.get('quantity') == 0 or (asset.get('quantity') is None and asset.get('amount') == 0)
+
+
 def valuation(workbook, records, prior, day):
     fx = last_close(records['FX'])[0] if 'FX' in records else None
     assets, forecasts, missing, dividend_missing = [], [], [], []
@@ -241,6 +245,11 @@ def valuation(workbook, records, prior, day):
         key = a.get('instrument_id')
         if key == 'CASH:KRW':
             assets.append({'id': a['id'], 'value': a.get('amount'), 'profit': None, 'price': None, 'price_date': None, 'quantity': None})
+            continue
+        if zero_exposure(a):
+            assets.append({'id': a['id'], 'value': 0, 'profit': -a.get('fee', 0), 'price': None, 'price_date': None,
+                           'quantity': 0, 'average': a.get('average'), 'estimated_quantity': a.get('quantity') is None})
+            next_bases.pop(a['id'], None)
             continue
         if key not in records or a['currency'] == 'USD' and fx is None or records[key].get('provider', '').startswith('FinanceDataReader:NAVER:'):
             missing.append(a['id'])
@@ -352,7 +361,7 @@ async def work_once(stopping=None):
                     db.execute("UPDATE portfolio_backtests SET state='succeeded',result=%s WHERE id=%s AND lease_until=%s", (Jsonb(result), job['id'], job['lease_until']))
             else:
                 assets = [identify(a, strict=False, fx=book['payload'].get('fx')) for a in book['payload']['assets']]
-                records, failures = await records_for([a.get('instrument_id') for a in assets], day, required_after=book['updated_at'])
+                records, failures = await records_for([a.get('instrument_id') for a in assets if not zero_exposure(a)], day, required_after=book['updated_at'])
                 previous = tracking(book['owner'])['market']
                 result = valuation({**book['payload'], 'assets': assets}, records, previous['payload'] if previous else None, day)
                 with store.connect() as db:
