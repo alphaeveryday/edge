@@ -17,7 +17,7 @@ SERIF = "'Noto Serif KR','Nanum Myeongjo',AppleMyungjo,Batang,Georgia,serif"
 SANS = "-apple-system,'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif"
 PAPER, DESK, INK, BODY, MUTED, HAIR, BRASS = '#fbfaf6', '#efece4', '#17150f', '#2b2822', '#6b665b', '#e0dbcf', '#86652c'
 UP, DOWN = '#c8322a', '#2453b8'  # Korean market convention: rise red, fall blue. Always paired with ▲▼.
-FORMATS = {'H': ('보유 가설 브리핑', '내 보유 이유에 중요한 것만'), 'A': ('손익 리포트', '오늘 내 계좌는 어땠나'), 'B': ('원인 노트', '왜 움직였나'),
+FORMATS = {'H': ('보유 이유 브리핑', '내 보유 이유에 중요한 것만'), 'A': ('손익 리포트', '오늘 내 계좌는 어땠나'), 'B': ('원인 노트', '왜 움직였나'),
            'C': ('새 소식', '오늘 새로 나온 일'), 'D': ('판단 점검', '보유 이유는 그대로인가'),
            'E': ('결정 노트', '지금 결정이 필요한가'), 'F': ('변화 감지', '중요한 변화만 골라'),
            'G': ('목적별 브리핑', '내 목적에서 본 오늘')}
@@ -25,6 +25,8 @@ FORMATS = {'H': ('보유 가설 브리핑', '내 보유 이유에 중요한 것�
 DEFAULT_FORMAT = 'H'
 PURPOSES = {'long_term': '장기 적립', 'mid_term': '중기 보유', 'short_term': '단기 매매'}
 LEAN = {'약화': 0, '강화': 1, '유지': 2}
+VERDICTS = {'악화': '⚠️', '견고': '🛡️', '강화': '💪'}  # H, in cover priority order
+EVENT_ICONS = {'실적': '🧾', '물가': '📊', '금리': '🏛️', '정책': '📜', '제품': '🧪', '기타': '📅'}  # when no logo resolved
 # One line to close each letter, picked by date: re-renders stay identical. Eight lines so no weekday is stuck with
 # one, and every line reads right at an 8 AM send on any day, holidays included.
 CHEERS = ('오늘도 힘내세요. 내 기준을 지키는 하루면 충분해요.', '흔들리는 날에도 기준을 지키는 당신, 충분히 잘하고 있어요.',
@@ -301,16 +303,64 @@ def changes_table(factors):
 <td style="padding:13px 0;border-top:1px solid {HAIR}"><p style="{P};color:{INK};font-size:15px;font-weight:700">{e(f['label'])}</p><p style="{P};margin:4px 0 0;color:{BODY};font-size:15px;line-height:1.7">{e(f['detail'])}</p></td></tr>''' for f in factors)
 
 
+def chip(verdict):
+    return (f'<span style="display:inline-block;padding:5px 10px;border:1px solid {INK};font-family:{SANS};font-size:13px;font-weight:700;'
+            f'color:{INK};white-space:nowrap">{VERDICTS[verdict]} {e(verdict)}</span>')
+
+
+def image_url(value):
+    return value if value and safe_url(value) == value else None
+
+
+def news(title, items, mark):
+    """One row per item; a small thumbnail only when the worker resolved the article's own picture."""
+    if not items:
+        return '', []
+    rows = ''
+    for item in items:
+        image = image_url(item.get('image'))
+        thumb = (f'<td width="104" valign="top" style="padding:13px 12px 13px 0;border-top:1px solid {HAIR}">'
+                 f'<img src="{escape(image, quote=True)}" width="96" alt="" style="display:block;width:96px;height:auto;border:0"></td>') if image else ''
+        rows += f'''<tr>{thumb}<td valign="top" style="padding:13px 0;border-top:1px solid {HAIR}"><p style="{P};color:{INK};font-size:15px;font-weight:700;line-height:1.55">{mark} {e(item['title'])} <span style="color:{INK if item['certainty'] == '확인' else BRASS};font-size:12px">· {e(item['certainty'])}</span></p>
+<p style="{P};margin:4px 0 0;color:{BODY};font-size:15px;line-height:1.7">{e(item['detail'])}</p></td></tr>'''
+    html = label(title) + f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;border-bottom:1px solid {HAIR}">{rows}</table>'
+    return html, [f'{title}:', *[f"  {mark} [{item['certainty']}] {item['title']} — {item['detail']}" for item in items]]
+
+
 def write_h(number, card, purpose):
+    change = quote_of(card).get('change_pct') or 0
+    moved = '오늘 오른 이유' if change > 0 else '오늘 떨어진 이유' if change < 0 else '오늘의 움직임'
     note = '하루 변동이 평소 변동 폭의 2배를 넘었어요.' if alert(card) else ''
-    verdict = f'<p style="{P};margin:0 0 22px;color:{INK};font-size:16px;font-weight:700">오늘 판정: {e(card["verdict"])}</p>'
-    changes = (label('무엇이 바뀌었나') + f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;border-bottom:1px solid {HAIR}">'
-               f'{changes_table(card["changes"])}</table>') if card['changes'] else ''
-    body = (pull(card['thesis'], '내 보유 가설') + verdict + changes + section('가설에 주는 의미', card['meaning'])
-            + section('다음 확인', card['next_check']) + (para(note, 13, MUTED) if note else ''))
-    return body, [f"내 보유 가설: {card['thesis']}", f"오늘 판정: {card['verdict']}",
-                  *[f"  [{f['certainty']}] {f['label']} — {f['detail']}" for f in card['changes']],
-                  f"가설에 주는 의미: {card['meaning']}", f"다음 확인: {card['next_check']}", *([note] if note else [])]
+    good, good_text = news('새로운 긍정적 소식', card['positives'], '＋')
+    bad, bad_text = news('새로운 부정적 소식', card['negatives'], '－')
+    body = (pull(card['thesis'], '내 보유 이유')
+            + f'<p style="{P};margin:0 0 30px;color:{INK};font-size:15px;font-weight:700">오늘 판정 &nbsp;{chip(card["verdict"])}</p>'
+            + label('오늘의 이유 브리핑', BRASS) + rule(1, INK) + '<div style="height:14px"></div>'
+            + section(moved, card['move_reason']) + good + bad + section('내 투자 판단에 주는 영향', card['impact'])
+            + (para(note, 13, MUTED) if note else ''))
+    return body, [f"내 보유 이유: {card['thesis']}", f"오늘 판정: {VERDICTS[card['verdict']]} {card['verdict']}", '오늘의 이유 브리핑',
+                  f"{moved}: {card['move_reason']}", *good_text, *bad_text, f"내 투자 판단에 주는 영향: {card['impact']}", *([note] if note else [])]
+
+
+def calendar(letter, edition, cards):
+    """Upcoming events across holdings, deduplicated and in date order; past dates never show."""
+    seen = {}
+    for card in cards:
+        for event in card['events']:
+            if event['date'] >= edition.isoformat():
+                seen.setdefault((event['date'], event['title'], event['org']), (event, []))[1].append(card['name'])
+    if not seen:
+        return
+    lines, text = '', []
+    for (_, _, _), (event, names) in sorted(seen.items())[:8]:
+        icon = image_url(event.get('icon'))
+        mark = (f'<img src="{escape(icon, quote=True)}" width="18" height="18" alt="" style="display:inline-block;vertical-align:-4px;border:0;margin-right:6px">'
+                if icon else f'<span style="margin-right:6px">{EVENT_ICONS[event["kind"]]}</span>')
+        lines += f'''<tr><td width="74" valign="top" style="padding:12px 8px 12px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:13px;font-weight:700;color:{INK};white-space:nowrap">{e(event['when'])}</td>
+<td valign="top" style="padding:12px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:14px;line-height:1.6;color:{INK};word-break:keep-all">{mark}<b>{e(event['title'])}</b><br><span style="color:{MUTED};font-size:12px">{e(event['org'])} · {e(', '.join(dict.fromkeys(names)))}</span></td></tr>'''
+        text.append(f"  {event['when']} · {event['title']} ({event['org']}) — {', '.join(dict.fromkeys(names))}")
+    letter.add(row(label('앞으로 예정된 주요 이벤트') + f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid {HAIR}">{lines}</table>', '0 32px 38px'),
+               '앞으로 예정된 주요 이벤트:', *text, '')
 
 
 WRITERS = {'H': write_h, 'A': write_a, 'B': write_b, 'C': write_c, 'D': write_d, 'E': write_e, 'F': write_f, 'G': write_g}
@@ -319,7 +369,7 @@ NEXT = {'B': ('다음에 확인할 것', lambda c: c['watch_next']), 'D': ('판�
 
 
 def flags(card, fmt):
-    if fmt == 'H' and card['verdict'] == '약화':
+    if fmt == 'H' and card['verdict'] == '악화':
         return True  # A weakened thesis is never 'no change', whatever the importance flag says.
     return card['significant' if fmt == 'F' else 'important'] or alert(card)
 
@@ -330,7 +380,7 @@ def lead(cards, fmt):
     if fmt in 'FH':
         # Same definition as the stamp: a 2-sigma move is news even when the model calls the day quiet.
         flagged = [c for c in cards if flags(c, fmt)]
-        return max(flagged, key=lambda c: (-LEAN[c['verdict']], size(c)) if fmt == 'H' else size(c)) if flagged else None
+        return max(flagged, key=lambda c: (-list(VERDICTS).index(c['verdict']), size(c)) if fmt == 'H' else size(c)) if flagged else None
     rank = {'D': lambda c: (-LEAN[c['verdict']], size(c)), 'E': lambda c: (c['decision_needed'], size(c)),
             'C': lambda c: (-min(['높음', '보통', '낮음'].index(x['importance']) for x in c['events']), size(c))}.get(fmt, lambda c: size(c))
     return max(cards, key=rank) if cards else None
@@ -391,7 +441,7 @@ def compose(edition, cards, fmt, weights, purpose, full, at):
     top = lead(ready, fmt)
     missing = sum(bool(c.get('unavailable')) for c in cards)
     if fmt in 'FH' and top is None and ready:
-        headline = '오늘은 보유 가설을 흔드는 변화가 없어요' if fmt == 'H' else '오늘은 중요한 변화가 없어요'
+        headline = '오늘은 보유 이유를 흔드는 변화가 없어요' if fmt == 'H' else '오늘은 중요한 변화가 없어요'
         dek = (f'자료를 확인한 {len(ready)}종목은 등락이 평소 범위 안이고 보유 이유를 흔드는 새 사건이 없었어요.'
                + (f' {missing}종목은 오늘 자료를 확보하지 못했어요.' if missing else ''))
     elif top:
@@ -409,6 +459,14 @@ def compose(edition, cards, fmt, weights, purpose, full, at):
         # Only what touches the thesis gets a story; everything else is one line.
         calm = [c for c in ready if not flags(c, fmt)]
         order = sorted([c for c in ready if c not in calm], key=lambda c: c is not top) + [c for c in cards if c not in ready]
+        if any(quote_of(c) for c in cards):
+            letter.add(row(label('포트폴리오 보고'), '0 32px 4px'), '포트폴리오 보고:')
+            ledger(letter, cards, weights, big=bool(weights))
+        reported = len(ready) - len(calm)
+        letter.add(row(f'''{rule(1, INK)}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:18px 0 0"><tr>
+<td width="80" valign="top" style="font-family:{SERIF};font-size:52px;line-height:1;font-weight:700;color:{INK}">{reported}</td>
+<td valign="top"><p style="{P};margin:4px 0 4px;color:{INK};font-size:17px;font-weight:700">오늘 주요 보고 종목</p><p style="{P};color:{MUTED};font-size:13px;line-height:1.7">보유 {len(cards)}종목 중{' · 나머지는 한 줄로 줄였어요' if calm else ''}</p></td></tr></table>''', '0 32px 34px'),
+                   f'오늘 주요 보고 종목 {reported}개 · 보유 {len(cards)}종목 중', '')
     if fmt == 'F':
         flagged = [c for c in ready if c['significant'] or alert(c)]
         letter.add(row(f'''{rule(1, INK)}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:18px 0 0"><tr>
@@ -457,9 +515,11 @@ def compose(edition, cards, fmt, weights, purpose, full, at):
             notice(letter, number, card, brief=number > full)
     if calm:
         lines = ''.join(f'''<tr><td style="padding:12px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:14px;font-weight:700;color:{INK};word-break:keep-all" width="40%">{e(c['name'])} &nbsp;{move(quote_of(c).get('change_pct'))[0]}</td>
-<td style="padding:12px 0 12px 12px;border-top:1px solid {HAIR};font-family:{SANS};font-size:14px;line-height:1.65;color:{BODY};word-break:keep-all">가설 {e(c['verdict'])} · {e(c['meaning'])}</td></tr>''' for c in calm)
+<td style="padding:12px 0 12px 12px;border-top:1px solid {HAIR};font-family:{SANS};font-size:14px;line-height:1.65;color:{BODY};word-break:keep-all">{VERDICTS[c['verdict']]} {e(c['verdict'])} · {e(c['impact'])}</td></tr>''' for c in calm)
         letter.add(row(label('변화 없음') + f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid {HAIR}">{lines}</table>', '0 32px 38px'),
-                   '변화 없음:', *[f"  {c['name']} {move(quote_of(c).get('change_pct'))[1]} — 가설 {c['verdict']} · {c['meaning']}" for c in calm], '')
+                   '변화 없음:', *[f"  {c['name']} {move(quote_of(c).get('change_pct'))[1]} — {VERDICTS[c['verdict']]} {c['verdict']} · {c['impact']}" for c in calm], '')
+    if fmt == 'H':
+        calendar(letter, edition, ready)
     if fmt in NEXT and any(c in ready for c in order):
         title, pick = NEXT[fmt]
         lines = ''.join(f'''<tr><td width="34%" valign="top" style="padding:11px 10px 11px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:13px;font-weight:700;color:{INK};word-break:keep-all">{e(c['name'])}</td>
