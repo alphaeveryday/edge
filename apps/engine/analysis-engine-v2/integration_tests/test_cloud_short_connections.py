@@ -115,7 +115,7 @@ def cloud(tmp_path):
 
 
 def news(kwargs):
-    return kwargs['call']('get_issue_evidence', {'news_ids': [kwargs['initial']['news'][0]['news_id']],
+    return kwargs['call']('get_news_evidence', {'news_ids': [kwargs['initial']['news'][0]['news_id']],
                                                  'include_body': False})['tool_run_id']
 
 

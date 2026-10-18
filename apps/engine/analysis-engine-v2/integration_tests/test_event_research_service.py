@@ -70,7 +70,7 @@ def fields(reference):
 
 
 def write(kwargs, source):
-    reference = kwargs['call']('get_issue_evidence',
+    reference = kwargs['call']('get_news_evidence',
         {'news_ids': [source.fixture['news'][0]['news_id']], 'include_body': False})['tool_run_id']
     kwargs['call']('write_outlook_body', {'title': '공급 확대를 확인해요', 'items': [dict(
         id='supply', title_keyword='공급 확대', sentences=['추가 물량을 확보했어요.'],
@@ -78,12 +78,20 @@ def write(kwargs, source):
     return fields(reference)
 
 
-def test_revision_uses_the_completed_predecessors_snapshot_and_real_revision_prompt(local_runs):
+@pytest.mark.parametrize('legacy_name', [False, True])
+def test_revision_uses_the_completed_predecessors_snapshot_and_real_revision_prompt(local_runs, legacy_name):
     execute, factory, _ = local_runs
     source = SnapshotSource(make_fixture())
+    if legacy_name:
+        # Simulate the already-deployed contract, without rewriting stored audit definitions.
+        source._tools['get_issue_evidence'] = source._tools.pop('get_news_evidence')
+        source.final_tool_names = (source.final_tool_names - {'get_news_evidence'}) | {'get_issue_evidence'}
     async def first(**kwargs):
         assert kwargs['initial']['news_research']['mode'] == 'initial'
         assert source.previous_snapshot is None
+        if legacy_name:
+            call = kwargs['call']
+            kwargs['call'] = lambda name, args: call('get_issue_evidence' if name == 'get_news_evidence' else name, args)
         return write(kwargs, source)
     previous, previous_id = execute(source, first, previous_analysis_id=None)
     updated = deepcopy(source.fixture)
@@ -123,7 +131,7 @@ def test_prior_news_includes_an_article_cited_only_by_the_inherited_issue(local_
     source = SnapshotSource(make_fixture())
     async def first(**kwargs):
         result = write(kwargs, source)
-        reference = kwargs['call']('get_issue_evidence', {
+        reference = kwargs['call']('get_news_evidence', {
             'news_ids': [source.fixture['news'][1]['news_id']], 'include_body': False})['tool_run_id']
         result['issue_detail']['items'][0]['tool_run_ids'] = [reference]
         return result
@@ -186,7 +194,7 @@ def test_revision_rechecks_prior_article_by_id_and_keeps_unchanged_body(local_ru
         selected = kwargs['initial']['news_research']['previous_news']
         assert len(selected) == 1 and selected[0]['in_current_scope'] is True
         # When a fact needs rechecking, its known article ID avoids a repeated search.
-        reference = kwargs['call']('get_issue_evidence', {
+        reference = kwargs['call']('get_news_evidence', {
             'news_ids': [selected[0]['news_id']], 'include_body': False})['tool_run_id']
         return fields(reference)
     result, identity = execute(current, revision, previous_analysis_id=previous_id)
@@ -196,7 +204,7 @@ def test_revision_rechecks_prior_article_by_id_and_keeps_unchanged_body(local_ru
         assert refs != previous['detail']['items'][0]['tool_run_ids']
         calls = conn.execute('''SELECT d.function_name FROM tool_runs r JOIN tool_definitions d USING(tool_id)
             WHERE r.outlook_analysis_id=%s''', (identity,)).fetchall()
-        assert ('get_issue_evidence',) in calls
+        assert ('get_news_evidence',) in calls
         assert not any(name.startswith('search_news') for (name,) in calls)
 
 
@@ -209,7 +217,7 @@ def test_fields_repair_exhaustion_does_not_borrow_the_first_topics_evidence(loca
         stage = kwargs['artifacts'].name
         stages.append(stage)
         if stage == 'investigation':
-            reference = kwargs['call']('get_issue_evidence', {
+            reference = kwargs['call']('get_news_evidence', {
                 'news_ids': [source.fixture['news'][0]['news_id']], 'include_body': False})['tool_run_id']
             return {'report': '계약을 확인했어요. [' + reference + ']'}
         if stage == 'writing':
@@ -251,8 +259,8 @@ def test_event_discovery_can_publish_evidence_beyond_the_old_thousand_article_bo
         timeline = call('get_event_timeline', {'event_key': 'thread:important'})['result']
         ids = timeline['items'][0]['news_ids']
         assert ids == ['article-1001']
-        assert call('get_issue_evidence', {'news_ids': ids, 'include_body': True})['result']['news'][0]['body']
-        reference = call('get_issue_evidence', {'news_ids': ids, 'include_body': False})['tool_run_id']
+        assert call('get_news_evidence', {'news_ids': ids, 'include_body': True})['result']['news'][0]['body']
+        reference = call('get_news_evidence', {'news_ids': ids, 'include_body': False})['tool_run_id']
         call('write_outlook_body', {'title': '정정 사실을 반영해요', 'items': [dict(
             id='correction', title_keyword='정정 확인', sentences=['정정된 사실을 확인했어요.'],
             sentiment='negative', tool_run_ids=[reference])]})

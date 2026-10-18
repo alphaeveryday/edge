@@ -102,10 +102,10 @@ def test_assembled_actor_event_reaches_v2_news_tools(tmp_path, pg):
             assert [t["event_key"] for t in result["items"]] == ['thread:' + thread_id]
             found = tools.call("get_event_timeline", {"event_key": 'thread:' + thread_id})["result"]["items"]
             assert [(e["event_id"], e["news_ids"]) for e in found] == [(event_id, [document_id])]
-            assert tools.call("get_issue_evidence", {"news_ids": [document_id], "include_body": False})["result"] == {
+            assert tools.call("get_news_evidence", {"news_ids": [document_id], "include_body": False})["result"] == {
                 "news": [{"news_id": document_id, "title": title}]}
             # Assembly did not fetch a body; the tool must not invent one.
-            assert tools.call("get_issue_evidence", {"news_ids": [document_id], "include_body": True})["result"]["news"] == [
+            assert tools.call("get_news_evidence", {"news_ids": [document_id], "include_body": True})["result"]["news"] == [
                 {"news_id": document_id, "title": title, "body": None, "body_kind": "excerpt"}]
 
         # The supported minute writer must share the batch identity and replay gate.
@@ -136,4 +136,4 @@ def test_assembled_actor_event_reaches_v2_news_tools(tmp_path, pg):
             # The minute writer must join the same stored thread, including its article evidence.
             assert events[0]['report_count'] == 2
             assert {e['event_id'] for e in tools.news_snapshot()['events']} == {event_id, minute_event}
-            assert tools.call("get_issue_evidence", {"news_ids": [minute_doc], "include_body": False})["result"]["news"][0]['news_id'] == minute_doc
+            assert tools.call("get_news_evidence", {"news_ids": [minute_doc], "include_body": False})["result"]["news"][0]['news_id'] == minute_doc

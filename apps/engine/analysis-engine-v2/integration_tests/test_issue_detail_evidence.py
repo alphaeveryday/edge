@@ -15,8 +15,8 @@ from edge_analysis_v2.storage.tool_runs import ToolStore
 
 @pytest.mark.parametrize('function,arguments,accepted', [
     ('search_news_threads', {}, False),
-    ('get_issue_evidence', {'news_ids': ['n1'], 'include_body': True}, False),
-    ('get_issue_evidence', {'news_ids': ['n1'], 'include_body': False}, True),
+    ('get_news_evidence', {'news_ids': ['n1'], 'include_body': True}, False),
+    ('get_news_evidence', {'news_ids': ['n1'], 'include_body': False}, True),
 ])
 def test_issue_detail_cannot_publish_exploration_evidence(function, arguments, accepted):
     dsn = os.environ['V2_FACTOR_TEST_DSN']
@@ -27,7 +27,7 @@ def test_issue_detail_cannot_publish_exploration_evidence(function, arguments, a
     identity = 'issue-policy-' + uuid4().hex
     now = datetime.fromisoformat('2026-09-28T08:30:00+09:00')
     with psycopg.connect(dsn, autocommit=True) as connection:
-        store = PublicationStore(connection, final_tool_names={'get_issue_evidence'})
+        store = PublicationStore(connection, final_tool_names={'get_news_evidence'})
         store.begin('outlook', identity, 'TEST', now)
         audit = ToolStore(connection)
         audit.register_definition(tool_id=identity, function_name=function, version=identity,

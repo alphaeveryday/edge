@@ -50,7 +50,7 @@ def explain(label):
     async def model(**kwargs):
         assert kwargs['initial']['previous_analysis'] is None
         assert kwargs['initial']['previous_items'] == []
-        run = kwargs['call']('get_issue_evidence', {'news_ids': [kwargs['initial']['news'][0]['news_id']], 'include_body': False})
+        run = kwargs['call']('get_news_evidence', {'news_ids': [kwargs['initial']['news'][0]['news_id']], 'include_body': False})
         return {'new_items': [{'candidate_id': label, 'type': '이슈', 'title_keyword': label,
             'sentence': label, 'sentiment': 'positive', 'tool_run_ids': [run['tool_run_id']]}],
             'selected_item_ids': [label], 'summary': label}

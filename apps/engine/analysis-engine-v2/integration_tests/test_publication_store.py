@@ -151,7 +151,7 @@ def test_outlook_news_source_links_are_assembled_from_final_evidence(publication
     evidence(identity, "outlook")
     source_tool = key + "-news-source"
     audit = ToolStore(store.connection)
-    audit.register_definition(tool_id=source_tool, function_name="get_issue_evidence", version=key,
+    audit.register_definition(tool_id=source_tool, function_name="get_news_evidence", version=key,
                               description="Read final news evidence", source_names=["news"])
     source_run = identity + "-news-run"
     audit.save_run(tool_run_id=source_run, tool_id=source_tool, analysis_kind="outlook", analysis_id=identity,
@@ -161,7 +161,7 @@ def test_outlook_news_source_links_are_assembled_from_final_evidence(publication
                    started_at=NOW, finished_at=NOW)
     body = BodyEditor(None, NOW).write("본문", [{"id":"topic", "title_keyword":"이유", "sentences":["불릿"],
                                                   "sentiment":"positive", "tool_run_ids":[source_run]}])
-    store.final_tool_names = store.final_tool_names | {"get_issue_evidence"}
+    store.final_tool_names = store.final_tool_names | {"get_news_evidence"}
     result = store.save_outlook(identity, features(identity), body)
     assert result["detail"]["items"][0]["source_links"] == [
         {"title": "계약 발표", "url": "https://news.example.com/article/1"}]

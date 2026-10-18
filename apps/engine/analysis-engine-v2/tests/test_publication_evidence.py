@@ -20,17 +20,38 @@ class Cursor:
 
 
 @pytest.mark.parametrize("include_body", [True, None, "false", 0])
-def test_only_explicit_false_news_lookup_can_be_used_as_final_evidence(include_body):
+@pytest.mark.parametrize("tool_name", ["get_issue_evidence", "get_news_evidence"])
+def test_only_explicit_false_news_lookup_can_be_used_as_final_evidence(include_body, tool_name):
     store = object.__new__(PublicationStore)
-    store.final_tool_names = frozenset({"get_issue_evidence"})
+    store.final_tool_names = frozenset({tool_name})
     now = datetime.fromisoformat("2026-09-28T08:30:00+09:00")
     analysis = {"data_source":"synthetic", "analysis_id":"a", "etf_code":"ETF", "analysis_at":now}
-    run = {"data_source":"synthetic", "function_name":"get_issue_evidence", "status":"completed", "etf_code":"ETF", "analysis_at":now,
-           "movement_analysis_id":"a", "outlook_analysis_id":None, "arguments":{"include_body":include_body}}
+    run = {"data_source":"synthetic", "function_name":tool_name, "status":"completed", "etf_code":"ETF", "analysis_at":now,
+               "movement_analysis_id":"a", "outlook_analysis_id":None, "analysis_status":"running", "arguments":{"include_body":include_body}}
     with pytest.raises(ValueError, match="exclude article body"):
         store._evidence(Cursor(run), ["run-1"], analysis)
     run["arguments"]["include_body"] = False
     store._evidence(Cursor(run), ["run-1"], analysis)
+
+
+def test_renamed_news_tool_keeps_completed_old_citations_but_cannot_be_called_in_new_run():
+    store = object.__new__(PublicationStore)
+    store.final_tool_names = frozenset({'get_news_evidence'})
+    now = datetime.fromisoformat('2026-10-18T08:30:00+09:00')
+    analysis = dict(data_source='database', analysis_id='new', etf_code='ETF', analysis_at=now)
+    run = dict(data_source='database', function_name='get_issue_evidence', status='completed',
+               etf_code='ETF', analysis_at=now, analysis_status='completed',
+               movement_analysis_id=None, outlook_analysis_id='old', arguments={'include_body':False},
+               output={'result':{'news':[{'title':'Old article', 'source_uri':'https://news.example.com/old'}]}})
+    assert store._evidence(Cursor(run), ['run-1'], analysis) == [
+        {'title':'Old article', 'url':'https://news.example.com/old'}]
+    run['arguments']['include_body'] = True
+    with pytest.raises(ValueError, match='exclude article body'):
+        store._evidence(Cursor(run), ['run-1'], analysis)
+    run['arguments']['include_body'] = False
+    run['outlook_analysis_id'] = 'new'
+    with pytest.raises(ValueError, match='not final-eligible'):
+        store._evidence(Cursor(run), ['run-1'], analysis)
 
 
 @pytest.mark.parametrize("value", [

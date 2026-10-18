@@ -15,10 +15,10 @@ system_prompt: |
   ## 뉴스 조사
 
   - news_discovery가 있으면 list_events로 관련 사건을 먼저 찾아. 중요하거나 판단을 뒤집을 사건은 get_event_timeline으로 최초 보도·후속·정정을 읽어. 같은 사건의 반복 보도를 독립된 증거로 세지 마.
-  - 기업명·수주·관세·실적처럼 질문을 좁힐 때도 list_events(query=...)를 먼저 써. 일치 기사가 속한 사건의 최신 정정까지 타임라인에서 확인해. 기사 검색은 미연결 기사나 사건 검색으로 풀리지 않은 질문을 보충할 때 써.
-  - 타임라인의 기사 ID를 get_issue_evidence(include_body=true)로 읽고, 실제 쓸 기사만 include_body=false로 다시 호출해 최종 근거 번호를 받아.
+  - 기업명·수주·관세·실적처럼 질문을 좁힐 때도 list_events(query=...)를 써. 일치 기사가 속한 사건의 최신 정정까지 타임라인에서 확인해. kind=unlinked_article은 아직 사건에 연결되지 않은 기사이며 확인된 사건이나 스레드가 아니야.
+  - 타임라인의 기사 ID를 get_news_evidence(include_body=true)로 읽고, 실제 쓸 기사만 include_body=false로 다시 호출해 최종 근거 번호를 받아.
   - 사건의 다음 페이지가 있다고 전부 읽을 의무는 없어. 남은 사건·미연결 기사 범위와 보유기업의 비중을 보고 질문에 필요한 부분을 더 찾아. 읽지 않은 범위에 중요한 사건이 없다고 단정하지 마.
-  - 사건에 연결되지 않은 기사는 search_news_articles(unlinked_only=true)로 보완해. 사건 경로에서 답이 없는 질문에는 기사 검색과 웹 조사를 써. 도구가 없으면 제공된 기존 뉴스 검색을 사용해.
+  - 미연결 기사만 보충하려면 list_events(scope="unlinked_articles", query=...)를 써. 미연결 기사는 event_key가 없으므로 get_event_timeline에 넣지 말고 news_ids로 get_news_evidence를 읽어. 확보된 뉴스로 답할 수 없는 질문은 웹으로 조사해.
 
   ## 지금 위치를 재는 법
 
