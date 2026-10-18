@@ -1,0 +1,419 @@
+from datetime import date, datetime
+import pandas as pd
+import pytest
+from pydantic import ValidationError
+from edge_portfolio import dashboard, dashboard_work as work, store
+from test_store import isolated_db  # noqa: F401
+
+
+def asset(**changes):
+    return dashboard.Asset(id='a', instrument_id='KR:069500', name='KODEX 200', account='ISA', quantity=10., average=80., **changes).model_dump(mode='json')
+
+
+def record(prices=(100., 110.), currency='KRW', dividends=(0., 2.)):
+    return {'frame': pd.DataFrame({'Close': prices, 'Adj Close': prices, 'Dividends': dividends}, index=pd.to_datetime(['2026-10-15', '2026-10-16'])), 'currency': currency, 'source_url': 'https://example.com/prices'}
+
+
+def test_us_cache_advances_only_after_the_session_closes_even_within_one_korean_day():
+    day = date(2026, 10, 16)
+    assert work.price_end('US:VOO', day, datetime.fromisoformat('2026-10-16T01:00:00+09:00')) == date(2026, 10, 15)
+    assert work.price_end('US:VOO', day, datetime.fromisoformat('2026-10-16T06:00:00+09:00')) == date(2026, 10, 16)
+    assert work.price_end('FX', day, datetime.fromisoformat('2026-10-16T01:00:00+09:00')) == date(2026, 10, 15)
+
+
+def test_instrument_identity_survives_analysis_import():
+    result = dashboard.from_analysis({'input': {'holdings': [{'instrument_id': 'KR:069500', 'name': 'KODEX 200', 'account': 'ISA', 'amount_krw': '100000'}]}})
+    assert result['assets'][0]['instrument_id'] == 'KR:069500'
+    again = dashboard.from_analysis({'input': {'holdings': [{'instrument_id': 'KR:069500', 'name': 'KODEX 200', 'account': 'ISA', 'amount_krw': '100000'}]}})
+    assert again['assets'][0]['id'] != result['assets'][0]['id'], 'Replacement imports must establish a fresh quantity basis'
+
+
+def test_known_legacy_names_are_resolved_but_unknown_names_are_not_guessed():
+    a = asset()
+    a['instrument_id'] = None
+    assert work.identify(a)['instrument_id'] == 'KR:069500'
+    assert work.identify({**a, 'name': 'my fund'})['instrument_id'] is None
+
+
+def test_customer_cannot_send_arbitrary_price_symbols():
+    with pytest.raises(ValueError, match='SELECT_LISTED_ETF'):
+        work.identify({**asset(), 'instrument_id': 'https://internal'})
+
+
+def test_price_weight_and_profit_need_no_customer_quote_or_target():
+    result = work.valuation({'assets': [asset()]}, {'KR:069500': record()}, None, date(2026, 10, 18))
+    assert result['assets'][0]['value'] == 1100
+    assert result['assets'][0]['profit'] == 300
+    assert result['missing'] == []
+
+
+def test_us_profit_uses_current_fx_without_inventing_purchase_fx():
+    a = {**asset(), 'instrument_id': 'US:VOO', 'currency': 'USD'}
+    result = work.valuation({'assets': [a]}, {'US:VOO': record(currency='USD'), 'FX': record((1300., 1400.))}, None, date(2026, 10, 18))
+    assert result['assets'][0]['value'] == 1540000
+    assert result['assets'][0]['profit'] == 420000
+
+
+def test_missing_fx_is_not_zero_or_customer_supplied_stale_fx():
+    a = {**asset(), 'instrument_id': 'US:VOO', 'currency': 'USD'}
+    result = work.valuation({'assets': [a], 'fx': 1}, {'US:VOO': record(currency='USD')}, None, date(2026, 10, 18))
+    assert result['assets'] == [] and result['missing'] == ['a']
+
+
+def test_amount_import_tracks_market_moves_instead_of_resetting_value_each_day():
+    a = {**asset(), 'quantity': None, 'amount': 1100.}
+    first = work.valuation({'assets': [a]}, {'KR:069500': record()}, None, date(2026, 10, 18))
+    next_day = work.valuation({'assets': [a]}, {'KR:069500': record((110., 121.))}, first, date(2026, 10, 19))
+    assert next_day['assets'][0]['quantity'] == 10
+    assert next_day['assets'][0]['value'] == 1210
+    changed = work.valuation({'assets': [{**a, 'amount': 2420.}]}, {'KR:069500': record((110., 121.))}, first, date(2026, 10, 19))
+    assert changed['assets'][0]['quantity'] == 20
+
+
+def test_forecast_crosses_year_boundary_without_fabricating_payment_dates():
+    r = record()
+    r['frame'] = pd.DataFrame({'Close': 100., 'Adj Close': 100., 'Dividends': 0.}, index=pd.bdate_range('2025-10-01', '2026-10-16'))
+    r['frame'].loc['2026-01-16', 'Dividends'] = 2.
+    result = work.forecast(asset(), r, 10, 1, date(2026, 10, 18))
+    assert result == [{'asset_id': 'a', 'month': '2027-01', 'amount': 20}]
+    assert 'date' not in result[0]
+
+
+def test_unknown_distribution_series_is_not_zero_income():
+    r = record()
+    del r['frame']['Dividends']
+    result = work.valuation({'assets': [asset()]}, {'KR:069500': r}, None, date(2026, 10, 18))
+    assert result['dividend_missing'] == ['a']
+
+
+def test_split_adjusts_quantity_and_average_without_faking_a_loss_or_repeating_the_split():
+    a = asset()
+    before = record()
+    before['frame'] = before['frame'].iloc[:1]
+    first = work.valuation({'assets': [a]}, {'KR:069500': before}, None, date(2026, 10, 16))
+    split = record((50., 55.))
+    split['frame']['Stock Splits'] = [0., 2.]
+    result = work.valuation({'assets': [a]}, {'KR:069500': split}, first, date(2026, 10, 18))
+    assert result['assets'][0]['value'] == 1100
+    assert result['assets'][0]['quantity'] == 20
+    assert result['assets'][0]['average'] == 40
+    repeat = work.valuation({'assets': [a]}, {'KR:069500': split}, result, date(2026, 10, 19))
+    assert repeat['assets'] == result['assets']
+    sold = {**a, 'quantity_revision': 'customer-edit', 'average': 40.}
+    updated = work.valuation({'assets': [sold]}, {'KR:069500': split}, result, date(2026, 10, 19))
+    assert updated['assets'][0]['quantity'] == 10, 'An explicit sale back to the original quantity must not replay an old split'
+    assert updated['assets'][0]['value'] == 550
+
+
+def test_catalog_removal_cannot_hide_an_existing_portfolio_or_block_unrelated_edits(isolated_db, monkeypatch):
+    dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
+    monkeypatch.setattr(work, 'directory', lambda: {'instruments': []})
+    saved = dashboard.read('owner')
+    assert saved['workbook']['assets'][0]['instrument_id'] is None
+    assert saved['workbook']['assets'][0]['quantity'] == 10
+    result = work.valuation(saved['workbook'], {}, None, date(2026, 10, 18))
+    assert result['missing'] == ['a']
+    saved['workbook']['title'] = 'Still editable'
+    assert dashboard.save('owner', dashboard.Save(**saved))['workbook']['title'] == 'Still editable'
+
+
+def test_editing_average_price_does_not_reset_an_amount_import_to_its_original_value():
+    a = {**asset(), 'quantity': None, 'amount': 1100.}
+    first = work.valuation({'assets': [a]}, {'KR:069500': record()}, None, date(2026, 10, 18))
+    changed = work.valuation({'assets': [{**a, 'average': 90.}]}, {'KR:069500': record((110., 121.))}, first, date(2026, 10, 19))
+    assert changed['assets'][0]['value'] == 1210
+    assert changed['assets'][0]['profit'] == 310
+
+
+def test_missing_quantity_or_fx_does_not_claim_zero_forecast():
+    a = {**asset(), 'quantity': None, 'amount': None}
+    result = work.valuation({'assets': [a]}, {'KR:069500': record()}, None, date(2026, 10, 18))
+    assert result['dividend_missing'] == ['a']
+
+
+@pytest.mark.parametrize('weight', [True, float('nan'), float('inf'), -1., 0., 101.])
+def test_backtest_rejects_invalid_weights(weight):
+    with pytest.raises(ValidationError):
+        work.Backtest(allocations=[{'instrument_id': 'KR:069500', 'weight_pct': weight}])
+
+
+def test_backtest_excludes_unavailable_fund_and_reports_changed_combination():
+    body = {'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 50.}, {'instrument_id': 'US:VOO', 'weight_pct': 50.}]}
+    result = work.run_backtest(body, {'KR:069500': record()}, date(2026, 10, 18), ['US:VOO'])
+    assert result['excluded'] == ['US:VOO']
+    assert result['return_pct'] == 10
+    assert result['history']['points'][0]['recommended'] == 1000000
+
+
+def test_total_return_uses_adjusted_prices_and_requested_period():
+    r = record((100., 100.))
+    r['frame']['Adj Close'] = [98., 100.]
+    result = work.run_backtest({'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 100.}], 'start': '2026-10-15', 'end': '2026-10-16'}, {'KR:069500': r}, date(2026, 10, 18), [])
+    assert result['return_pct'] == 2.04, 'A cash distribution must not disappear from the backtest'
+
+
+async def test_daily_worker_records_without_browser_and_keeps_history_on_edit(isolated_db, monkeypatch):
+    monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
+    async def prices(*args):
+        return {'KR:069500': record()}, []
+    monkeypatch.setattr(work, 'records_for', prices)
+    dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
+    assert await work.work_once()
+    result = work.tracking('owner')
+    assert result['days'][0]['value'] == 1100
+    assert work.tracking('other') == {'market': None, 'days': [], 'archives': []}
+    dashboard.save('owner', dashboard.Save(version=1, workbook=dashboard.Workbook(assets=[])))
+    assert await work.work_once()
+    assert work.tracking('owner')['days'] == result['days'], 'Removing holdings must not delete past results'
+
+
+async def test_edit_during_price_collection_cannot_publish_stale_holdings(isolated_db, monkeypatch):
+    dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
+    async def prices(*args):
+        dashboard.save('owner', dashboard.Save(version=1, workbook=dashboard.Workbook(assets=[])))
+        return {'KR:069500': record()}, []
+    monkeypatch.setattr(work, 'records_for', prices)
+    assert await work.work_once()
+    assert work.tracking('owner') == {'market': None, 'days': [], 'archives': []}
+
+
+async def test_backtest_is_private_idempotent_and_completed_by_worker(isolated_db, monkeypatch):
+    monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
+    body = work.Backtest(allocations=[{'instrument_id': 'KR:069500', 'weight_pct': 100.}])
+    job = work.submit('owner', body)
+    assert work.submit('owner', body) == job
+    assert work.read_backtest('other', job['id']) is None
+    async def prices(*args):
+        return {'KR:069500': record()}, []
+    monkeypatch.setattr(work, 'records_for', prices)
+    assert await work.work_once()
+    assert work.read_backtest('owner', job['id'])['result']['return_pct'] == 10
+
+
+async def test_price_failure_keeps_previous_daily_records(isolated_db, monkeypatch):
+    async def prices(*args):
+        return {}, ['KR:069500']
+    monkeypatch.setattr(work, 'records_for', prices)
+    dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
+    await work.work_once()
+    assert work.tracking('owner')['days'] == []
+    assert work.tracking('owner')['market']['payload']['missing'] == ['a']
+
+
+def test_a_temporary_outage_cannot_reset_amount_tracking_or_split_baselines():
+    a = {**asset(), 'quantity': None, 'amount': 1100.}
+    first = work.valuation({'assets': [a]}, {'KR:069500': record()}, None, date(2026, 10, 18))
+    failed = work.valuation({'assets': [a]}, {}, first, date(2026, 10, 19))
+    recovered = work.valuation({'assets': [a]}, {'KR:069500': record((110., 121.))}, failed, date(2026, 10, 20))
+    assert failed['bases'] == first['bases']
+    assert recovered['assets'][0]['value'] == 1210
+
+
+def test_selected_start_date_applies_weights_before_not_after_price_drift():
+    a, b = record(), record()
+    a['frame'] = pd.DataFrame({'Close': [100., 200., 300.], 'Adj Close': [100., 200., 300.]}, index=pd.to_datetime(['2026-10-14', '2026-10-15', '2026-10-16']))
+    b['frame'] = pd.DataFrame({'Close': [100., 100., 100.], 'Adj Close': [100., 100., 100.]}, index=a['frame'].index)
+    result = work.run_backtest({'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 50.}, {'instrument_id': 'KR:360750', 'weight_pct': 50.}], 'start': '2026-10-15'}, {'KR:069500': a, 'KR:360750': b}, date(2026, 10, 18), [])
+    assert result['return_pct'] == 25, 'A 50/50 allocation must start 50/50 on the requested date'
+
+
+def test_short_zero_dividend_series_is_unknown_not_a_zero_annual_forecast():
+    assert work.forecast(asset(), record(dividends=(0., 0.)), 10, 1, date(2026, 10, 18)) is None
+
+
+def test_replacing_holdings_archives_manual_history_with_original_names(isolated_db):
+    w = dashboard.Workbook(assets=[asset()], dividends=[{'id': 'd', 'asset_id': 'a', 'date': '2026-10-01', 'status': '실수령', 'amount': 100.}], months=[{'month': '2026-09', 'value': 1000.}])
+    dashboard.save('owner', dashboard.Save(version=0, workbook=w))
+    dashboard.save('owner', dashboard.Save(version=1, workbook=dashboard.Workbook()))
+    archived = work.tracking('owner')['archives'][0]['payload']
+    assert archived['dividends'][0]['amount'] == 100
+    assert archived['months'][0]['value'] == 1000
+    assert 'KODEX 200' in archived['assets'][0]['name']
+    assert work.tracking('other')['archives'] == []
+
+
+async def test_due_valuation_runs_even_when_backtests_are_queued(isolated_db, monkeypatch):
+    dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
+    job = work.submit('backtester', work.Backtest(allocations=[{'instrument_id': 'KR:069500', 'weight_pct': 100.}]))
+    async def prices(*args):
+        return {'KR:069500': record()}, []
+    monkeypatch.setattr(work, 'records_for', prices)
+    monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
+    assert await work.work_once()
+    assert work.tracking('owner')['days']
+    assert work.read_backtest('backtester', job['id'])['state'] == 'queued'
+    assert await work.work_once()
+    assert work.read_backtest('backtester', job['id'])['state'] == 'succeeded'
+
+
+async def test_collection_deadline_keeps_completed_prices(isolated_db, monkeypatch):
+    import asyncio
+    from edge_portfolio import market_data
+    original_timeout = asyncio.timeout
+    monkeypatch.setattr(work.asyncio, 'timeout', lambda _: original_timeout(1))
+    async def fetch(symbol, day, *, on_raw=None, provider_timeout=None):
+        if symbol == '360750.KS':
+            await asyncio.sleep(10)
+        return record()
+    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    records, failures = await work.records_for(['KR:069500', 'KR:360750'], date(2026, 10, 18))
+    assert set(records) == {'KR:069500'}
+    assert failures == ['KR:360750']
+
+
+async def test_a_slow_first_provider_cannot_starve_a_healthy_later_holding(isolated_db, monkeypatch):
+    import asyncio
+    from edge_portfolio import market_data
+    wait_for = asyncio.wait_for
+    monkeypatch.setattr(work.asyncio, 'wait_for', lambda task, timeout: wait_for(task, min(timeout, .05)))
+    async def fetch(symbol, day, *, on_raw=None, provider_timeout=None):
+        if symbol == '069500.KS':
+            await asyncio.sleep(20)
+        return record()
+    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    async with asyncio.timeout(5):
+        records, failures = await work.records_for(['KR:069500', 'KR:360750'], date(2026, 10, 18))
+    assert set(records) == {'KR:360750'}
+    assert failures == ['KR:069500']
+
+
+@pytest.mark.parametrize('currency,fx,expected', [('KRW', None, 100.), ('USD', 1300., 130000.)])
+def test_legacy_cash_quantity_keeps_its_recorded_value(currency, fx, expected):
+    old = {**asset(), 'category': '현금', 'currency': currency, 'quantity': 100., 'price': 1., 'amount': None, 'instrument_id': None}
+    converted = work.identify(old, fx=fx)
+    assert converted['amount'] == expected
+    assert converted['quantity'] is None
+    assert converted['currency'] == 'KRW'
+    result = work.valuation({'assets': [old], 'fx': fx}, {}, None, date(2026, 10, 18))
+    assert result['assets'][0]['value'] == expected
+
+
+@pytest.mark.parametrize('currency', ['KRW', 'USD'])
+async def test_interrupted_optional_repair_keeps_valid_raw_prices_only(isolated_db, monkeypatch, currency):
+    import asyncio
+    from edge_portfolio import market_data
+    wait_for = asyncio.wait_for
+    monkeypatch.setattr(work.asyncio, 'wait_for', lambda task, timeout: wait_for(task, .05))
+    async def fetch(symbol, day, *, on_raw=None, provider_timeout=None):
+        try:
+            await asyncio.sleep(20)
+        except asyncio.CancelledError:
+            on_raw(record(currency=currency))
+            raise
+    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18))
+    assert list(records) == (['KR:069500'] if currency == 'KRW' else [])
+    assert failures == ([] if currency == 'KRW' else ['KR:069500'])
+
+
+def test_backtest_excludes_an_unusable_return_series_without_losing_the_healthy_fund():
+    bad = record()
+    bad['frame']['Adj Close'] = float('nan')
+    body = {'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 50.}, {'instrument_id': 'KR:360750', 'weight_pct': 50.}]}
+    result = work.run_backtest(body, {'KR:069500': record(), 'KR:360750': bad}, date(2026, 10, 18), [])
+    assert result['excluded'] == ['KR:360750']
+    assert result['return_pct'] == 10
+
+
+def test_cash_only_backtest_respects_the_requested_historical_period():
+    result = work.run_backtest({'allocations': [{'instrument_id': 'CASH:KRW', 'weight_pct': 100.}], 'start': '2020-01-01', 'end': '2021-01-01'}, {}, date(2026, 10, 18), [])
+    assert result['history']['start_date'] == '2020-01-01'
+    assert result['history']['end_date'] == '2021-01-01'
+    assert result['return_pct'] == 0
+
+
+def test_quantity_entered_on_split_day_is_not_split_again_when_prices_catch_up():
+    a = {**asset(), 'quantity': 20., 'average': 40., 'quantity_as_of': '2026-10-16', 'average_as_of': '2026-10-16'}
+    old = record()
+    old['frame'] = old['frame'].iloc[:1]
+    first = work.valuation({'assets': [a]}, {'KR:069500': old}, None, date(2026, 10, 16))
+    split = record((50., 55.))
+    split['frame']['Stock Splits'] = [0., 2.]
+    result = work.valuation({'assets': [a]}, {'KR:069500': split}, first, date(2026, 10, 17))
+    assert result['assets'][0]['quantity'] == 20
+    assert result['assets'][0]['average'] == 40
+    assert result['assets'][0]['value'] == 1100
+
+
+async def test_entry_dates_are_server_owned_and_unrelated_saves_preserve_them(isolated_db):
+    a = {**asset(), 'quantity_as_of': '1900-01-01', 'average_as_of': '1900-01-01'}
+    saved = dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[a])))
+    first = saved['workbook']['assets'][0]
+    assert first['quantity_as_of'] != '1900-01-01'
+    assert first['average_as_of'] == first['quantity_as_of']
+    first['account'] = 'IRP'
+    saved = dashboard.save('owner', dashboard.Save(version=1, workbook=dashboard.Workbook(assets=[first])))
+    assert saved['workbook']['assets'][0]['quantity_as_of'] == first['quantity_as_of']
+
+
+def test_adjusted_only_fallback_is_for_returns_not_current_asset_values():
+    r = {**record(), 'provider': 'FinanceDataReader:NAVER:069500'}
+    result = work.valuation({'assets': [asset()]}, {'KR:069500': r}, None, date(2026, 10, 18))
+    assert result['missing'] == ['a']
+    assert result['assets'] == []
+    backtest = work.run_backtest({'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 100.}]}, {'KR:069500': r}, date(2026, 10, 18), [])
+    assert backtest['return_pct'] == 10
+
+
+def test_legacy_currency_mismatch_requires_relinking_without_reinterpreting_cost():
+    a = {**asset(), 'name': 'VOO', 'instrument_id': None, 'currency': 'KRW', 'average': 500000.}
+    resolved = work.identify(a, strict=False)
+    assert resolved['instrument_id'] is None
+    assert resolved['currency'] == 'KRW'
+    assert resolved['average'] == 500000
+    with pytest.raises(ValueError, match='SELECT_LISTED_ETF'):
+        work.identify(a)
+
+
+def test_editing_split_adjusted_average_back_to_original_number_uses_the_new_entry_day():
+    a = {**asset(), 'quantity_as_of': '2026-10-15', 'average_as_of': '2026-10-15'}
+    old = record()
+    old['frame'] = old['frame'].iloc[:1]
+    first = work.valuation({'assets': [a]}, {'KR:069500': old}, None, date(2026, 10, 15))
+    split = record((50., 55.))
+    split['frame']['Stock Splits'] = [0., 2.]
+    prior = work.valuation({'assets': [a]}, {'KR:069500': split}, first, date(2026, 10, 16))
+    assert prior['assets'][0]['average'] == 40
+    corrected = {**a, 'average_revision': 'explicit-edit', 'average_as_of': '2026-10-16'}
+    result = work.valuation({'assets': [corrected]}, {'KR:069500': split}, prior, date(2026, 10, 17))
+    assert result['assets'][0]['average'] == 80
+    assert result['assets'][0]['quantity'] == 20
+
+
+def test_first_automatic_quote_uses_a_known_legacy_snapshot_date_for_splits():
+    a = {**asset(), 'price_date': '2026-10-15'}
+    split = record((50., 55.))
+    split['frame']['Stock Splits'] = [0., 2.]
+    result = work.valuation({'assets': [a]}, {'KR:069500': split}, None, date(2026, 10, 18))
+    assert result['assets'][0]['quantity'] == 20
+    assert result['assets'][0]['profit'] == 300
+
+
+async def test_adjusted_only_cached_prices_do_not_block_actual_close_recovery(isolated_db, monkeypatch):
+    from edge_portfolio import market_data
+    calls = []
+    async def fetch(symbol, day, *, on_raw=None, provider_timeout=None):
+        calls.append(symbol)
+        return {**record(), **({'provider': 'FinanceDataReader:NAVER:069500'} if len(calls) == 1 else {})}
+    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    await work.records_for(['KR:069500'], date(2026, 10, 18))
+    recovered, failures = await work.records_for(['KR:069500'], date(2026, 10, 18))
+    assert len(calls) == 2
+    assert failures == []
+    result = work.valuation({'assets': [asset()]}, recovered, None, date(2026, 10, 18))
+    assert result['assets'][0]['value'] == 1100
+
+
+async def test_each_provider_gets_time_even_when_the_primary_stalls(monkeypatch):
+    import asyncio
+    from edge_portfolio import market_data
+    calls = []
+    async def fetch(symbol, day, *, on_raw=None, provider='yahoo'):
+        calls.append(provider)
+        if provider == 'yahoo':
+            await asyncio.sleep(20)
+        return record()
+    monkeypatch.setattr(market_data, '_fetch_prices', fetch)
+    result = await market_data.fetch_prices('069500.KS', date(2026, 10, 18), provider_timeout=.02)
+    assert calls == ['yahoo', 'fallback']
+    assert result['currency'] == 'KRW'

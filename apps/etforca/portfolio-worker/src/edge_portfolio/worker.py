@@ -144,6 +144,14 @@ async def main():
                 from .newsletter_work import work_once as newsletter_once
                 worked = await newsletter_once(stopping)
                 HEARTBEAT.touch()
+            if not stopping.is_set():
+                from .dashboard_work import work_once as dashboard_once
+                # Run between analysis jobs as well: a busy queue must not starve daily records.
+                task = asyncio.create_task(dashboard_once(stopping))
+                while not task.done():
+                    await asyncio.wait({task}, timeout=15)
+                    HEARTBEAT.touch()
+                worked = await task or worked
             if not worked:
                 await asyncio.sleep(1)
     finally:

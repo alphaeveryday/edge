@@ -127,9 +127,9 @@ def load_prices(symbol, as_of, *, on_raw=None):
     return {**original, 'frame': frame, 'price_recovery': recovery}
 
 
-async def fetch_prices(symbol, as_of, *, on_raw=None):
+async def fetch_prices(symbol, as_of, *, on_raw=None, provider_timeout=None):
     try:
-        original = await _fetch_prices(symbol, as_of, on_raw=on_raw)
+        original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw), timeout=provider_timeout)
         columns = [original['frame'][name] for name in ('Adj Close', 'Close')]
         valid = [column[column.map(positive_price)] for column in columns]
         if all(not column.empty and (as_of - column.index[-1].date()).days <= 7 for column in valid):
@@ -137,7 +137,7 @@ async def fetch_prices(symbol, as_of, *, on_raw=None):
         primary_failure = 'PRICE_INVALID' if any(column.empty for column in valid) else 'PRICE_STALE'
     except (ValueError, TimeoutError) as error:
         primary_failure = price_failure(error)
-    record = await _fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback')
+    record = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback'), timeout=provider_timeout)
     record['primary_failure'] = primary_failure
     return record
 
@@ -352,10 +352,10 @@ def history_returns(history):
     return {'return_period_pct': period, 'return_1y_pct': annual}
 
 
-def comparison(target, current, records, as_of):
+def comparison(target, current, records, as_of, *, bounds=None):
     active = set(target) | set(current or {}) | {'FX'}
     records = {key: record for key, record in records.items() if key in active}
-    frame, urls = normalized_prices(set(target) | set(current or {}), records, as_of)
+    frame, urls = normalized_prices(set(target) | set(current or {}), records, as_of, bounds=bounds)
 
     def value(allocation):
         return sum(frame[key] * weight * 1000000 for key, weight in allocation.items())
@@ -463,31 +463,34 @@ class MarketData:
             'instruction': '과거 수익률은 미래 예상 수익률이 아닙니다. 시장 근거를 대조해 추정 근거를 설명하고 양수로 보정하지 마세요.'}
 
     def dividends(self, instrument_id):
-        record = self.records.get(instrument_id)
-        if record is None or 'Dividends' not in record['frame']:
-            return None
-        frame = record['frame']
-        end = frame.index[-1].date()
-        start = year_before(end)
-        if frame.index[0].date() > start + timedelta(days=7):
-            return None
-        if len(expected_sessions(instrument_id, pd.Timestamp(start), pd.Timestamp(end)).difference(frame['Close'].dropna().index)):
-            return None
-        recent = frame.loc[(frame.index.date > start) & (frame.index.date <= end)]
-        values = recent['Dividends']
-        if values.isna().any() or not values.map(lambda value: math.isfinite(value) and value >= 0).all():
-            return None
-        total = float(values.sum())
-        price = frame['Close'].iloc[-1]
-        if not positive_price(price):
-            return None
-        price = float(price)
-        return {'instrument_id': instrument_id, 'trailing_yield_pct': round(total / price * 100, 4),
-                'as_of': end.isoformat(), 'period_start': start.isoformat(), 'dividends_per_share': total,
-                'price': price, 'currency': record['currency'], 'source_url': record['source_url'],
-                'method': 'Yahoo Finance 최근 12개월 분배금 합계 ÷ 최근 종가 · 분배락일 기준',
-                'events': [{'date': day.date().isoformat(), 'amount': float(value)} for day, value in values.items() if value > 0],
-                'evidence': []}
+        return dividend_observation(self.records.get(instrument_id), instrument_id)
+
+
+def dividend_observation(record, instrument_id):
+    if record is None or 'Dividends' not in record['frame']:
+        return None
+    frame = record['frame']
+    end = frame.index[-1].date()
+    start = year_before(end)
+    if frame.index[0].date() > start + timedelta(days=7):
+        return None
+    if len(expected_sessions(instrument_id, pd.Timestamp(start), pd.Timestamp(end)).difference(frame['Close'].dropna().index)):
+        return None
+    recent = frame.loc[(frame.index.date > start) & (frame.index.date <= end)]
+    values = recent['Dividends']
+    if values.isna().any() or not values.map(lambda value: math.isfinite(value) and value >= 0).all():
+        return None
+    total = float(values.sum())
+    price = frame['Close'].iloc[-1]
+    if not positive_price(price):
+        return None
+    price = float(price)
+    return {'instrument_id': instrument_id, 'trailing_yield_pct': round(total / price * 100, 4),
+            'as_of': end.isoformat(), 'period_start': start.isoformat(), 'dividends_per_share': total,
+            'price': price, 'currency': record['currency'], 'source_url': record['source_url'],
+            'method': 'Yahoo Finance 최근 12개월 분배금 합계 ÷ 최근 종가 · 분배락일 기준',
+            'events': [{'date': day.date().isoformat(), 'amount': float(value)} for day, value in values.items() if value > 0],
+            'evidence': []}
 
 
 TOOL = {'type': 'function', 'function': {'name': 'read_portfolio_history',

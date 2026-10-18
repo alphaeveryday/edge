@@ -154,7 +154,7 @@ def submit(body: AnalysisInput, request: Request, idempotency_key: UUID = Header
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
     try:
-        return public(store.submit(owner(request), str(idempotency_key), body.model_dump(mode="json")))
+        return public(store.submit(owner(request), str(idempotency_key), body.model_dump(mode="json"), reuse=True))
     except ValueError as error:
         code = str(error)
         raise HTTPException(404 if code == 'NOT_FOUND' else 409 if code == "IDEMPOTENCY_CONFLICT" else 429, code) from None
@@ -169,6 +169,12 @@ def save_draft(draft_id: UUID, body: DraftInput, request: Request):
         code = str(error)
         raise HTTPException(404 if code == 'NOT_FOUND' else 429 if code == 'DRAFT_LIMIT' else 422, code) from None
     return {'status': 'saved'}
+
+
+@app.get('/api/portfolio/analyses/latest')
+def latest_analysis(request: Request):
+    row = store.latest(owner(request))
+    return public(row) if row else None
 
 
 @app.get("/api/portfolio/analyses/{job_id}")
@@ -194,7 +200,31 @@ def save_workbook(body: dashboard.Save, request: Request):
     try:
         return dashboard.save(owner(request), body)
     except ValueError as error:
-        raise HTTPException(409, str(error)) from None
+        raise HTTPException(409 if str(error) == 'WORKBOOK_CONFLICT' else 422, str(error)) from None
+
+
+from . import dashboard_work
+
+
+@app.get('/api/portfolio/workbook/tracking')
+def workbook_tracking(request: Request):
+    return dashboard_work.tracking(owner(request))
+
+
+@app.post('/api/portfolio/backtests', status_code=202)
+def backtest(body: dashboard_work.Backtest, request: Request):
+    try:
+        return dashboard_work.submit(owner(request), body)
+    except ValueError as error:
+        raise HTTPException(429 if str(error) == 'BACKTEST_LIMIT' else 409, str(error)) from None
+
+
+@app.get('/api/portfolio/backtests/{key}')
+def backtest_result(key: str, request: Request):
+    result = dashboard_work.read_backtest(owner(request), key)
+    if not result:
+        raise HTTPException(404, 'NOT_FOUND')
+    return result
 
 
 @app.get('/api/portfolio/analyses/{job_id}/workbook')

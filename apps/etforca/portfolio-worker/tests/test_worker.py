@@ -69,7 +69,11 @@ async def test_shutdown_during_database_claim_returns_unstarted_job(monkeypatch,
 
 def test_worker_only_marks_ready_after_db_initialization_and_cleans_up(monkeypatch, tmp_path):
     from edge_portfolio import newsletter_store
+    from edge_portfolio import dashboard_work
     monkeypatch.setattr(newsletter_store, 'claim_content', lambda: None)
+    async def dashboard_idle(*args):
+        return False
+    monkeypatch.setattr(dashboard_work, 'work_once', dashboard_idle)
     marker = tmp_path / 'ready'
     marker.touch()  # A previous process must not make this startup appear ready.
     monkeypatch.setattr(worker, 'HEARTBEAT', marker)

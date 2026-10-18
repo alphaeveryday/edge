@@ -1,5 +1,11 @@
 """Dedicated PostgreSQL queue. Claims and publication are atomic and fenced."""
 import os
+import hashlib
+import json
+from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
+from zoneinfo import ZoneInfo
 from uuid import uuid4
 
 import psycopg
@@ -27,6 +33,12 @@ def initialize():
         db.execute("CREATE INDEX IF NOT EXISTS portfolio_queue ON portfolio_jobs(state, created_at)")
         db.execute("ALTER TABLE portfolio_jobs ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'analysis'")
         db.execute("ALTER TABLE portfolio_jobs ADD COLUMN IF NOT EXISTS parent_id text")
+        db.execute('ALTER TABLE portfolio_jobs ADD COLUMN IF NOT EXISTS cache_key text')
+        db.execute('ALTER TABLE portfolio_jobs ADD COLUMN IF NOT EXISTS requested_at timestamptz')
+        db.execute('CREATE INDEX IF NOT EXISTS portfolio_analysis_cache ON portfolio_jobs(owner,cache_key) WHERE cache_key IS NOT NULL')
+        db.execute('''CREATE TABLE IF NOT EXISTS portfolio_analysis_requests (
+            owner text NOT NULL, request_key text NOT NULL, input jsonb NOT NULL,
+            job_id text NOT NULL REFERENCES portfolio_jobs(id), PRIMARY KEY(owner,request_key))''')
         db.execute("""CREATE TABLE IF NOT EXISTS portfolio_events (
             job_id text REFERENCES portfolio_jobs(id), at timestamptz NOT NULL DEFAULT now(),
             stage text NOT NULL)""")
@@ -72,10 +84,31 @@ def save_draft(draft_id, owner, payload):
             db.execute(f'INSERT INTO portfolio_input_{name}(draft_id,payload) VALUES (%s,%s) ON CONFLICT(draft_id) DO UPDATE SET payload=excluded.payload,updated_at=now()', (draft_id, Jsonb(value)))
 
 
-def submit(owner, key, payload, parent_id=None):
+@lru_cache(maxsize=1)
+def analysis_version():
+    root = Path(__file__).parent
+    digest = hashlib.sha256()
+    for path in sorted([*root.glob('*.py'), *root.glob('prompts/**/*.md')]):
+        digest.update(str(path.relative_to(root)).encode())
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def analysis_cache_key(payload):
+    content = {k: v for k, v in payload.items() if k != 'draft_id'}
+    context = [datetime.now(ZoneInfo('Asia/Seoul')).date().isoformat(), analysis_version(), content]
+    return hashlib.sha256(json.dumps(context, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def submit(owner, key, payload, parent_id=None, *, reuse=False):
     with connect() as db:
         # Serializes admission for this visitor, including duplicate browser requests.
         db.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (owner,))
+        alias = db.execute('SELECT input,job_id FROM portfolio_analysis_requests WHERE owner=%s AND request_key=%s', (owner, key)).fetchone()
+        if alias:
+            if alias['input'] != payload or parent_id:
+                raise ValueError('IDEMPOTENCY_CONFLICT')
+            return db.execute('SELECT * FROM portfolio_jobs WHERE id=%s AND owner=%s', (alias['job_id'], owner)).fetchone()
         existing = db.execute("SELECT * FROM portfolio_jobs WHERE owner=%s AND request_key=%s", (owner, key)).fetchone()
         if existing:
             if existing["input"] != payload or existing["parent_id"] != parent_id:
@@ -83,6 +116,15 @@ def submit(owner, key, payload, parent_id=None):
             return existing
         if payload.get('draft_id') and not db.execute('SELECT id FROM portfolio_input_drafts WHERE id=%s AND owner=%s', (payload['draft_id'], owner)).fetchone():
             raise ValueError('NOT_FOUND')
+        cache_key = analysis_cache_key(payload) if reuse and not parent_id else None
+        if cache_key:
+            expire(db)
+            cached = db.execute("""SELECT * FROM portfolio_jobs WHERE owner=%s AND cache_key=%s AND kind='analysis'
+                AND (state IN ('queued','running') OR (state='succeeded' AND result IS NOT NULL)) ORDER BY created_at DESC LIMIT 1""", (owner, cache_key)).fetchone()
+            if cached:
+                db.execute('INSERT INTO portfolio_analysis_requests VALUES (%s,%s,%s,%s)', (owner, key, Jsonb(payload), cached['id']))
+                db.execute('UPDATE portfolio_jobs SET requested_at=now() WHERE id=%s', (cached['id'],))
+                return cached
         db.execute("SELECT pg_advisory_xact_lock(1266)")
         recovery = bool(parent_id and payload.get('mode') == 'recovery')
         if parent_id:
@@ -106,8 +148,14 @@ def submit(owner, key, payload, parent_id=None):
         daily = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE created_at>now()-interval '1 day'").fetchone()["n"]
         if daily >= int(os.getenv("PORTFOLIO_DAILY_JOB_LIMIT", "50")):
             raise ValueError("DAILY_LIMIT")
-        return db.execute("INSERT INTO portfolio_jobs(id,owner,request_key,input,kind,parent_id) VALUES (%s,%s,%s,%s,%s,%s) RETURNING *",
-                          (uuid4().hex, owner, key, Jsonb(payload), "chat" if parent_id else "analysis", parent_id)).fetchone()
+        return db.execute("INSERT INTO portfolio_jobs(id,owner,request_key,input,kind,parent_id,cache_key,requested_at) VALUES (%s,%s,%s,%s,%s,%s,%s,now()) RETURNING *",
+                          (uuid4().hex, owner, key, Jsonb(payload), "chat" if parent_id else "analysis", parent_id, cache_key)).fetchone()
+
+
+def latest(owner):
+    with connect() as db:
+        expire(db)
+        return db.execute("SELECT * FROM portfolio_jobs WHERE owner=%s AND kind='analysis' ORDER BY COALESCE(requested_at,created_at) DESC,id DESC LIMIT 1", (owner,)).fetchone()
 
 
 def request_report(job_id, owner, email):
