@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 log = logging.getLogger('portfolio-newsletter-email')
 UNSUBSCRIBE = '{{amazonSESUnsubscribeUrl}}'
 SITE = 'https://etforca.com/portfolio/'
+# Hosted with the landing page (app-landing/assets): Gmail blocks data-URI images. Ink tile, so it reads in dark mode too.
+LOGO = 'https://etforca.com/assets/newsletter-logo.png'
 SERIF = "'Noto Serif KR','Nanum Myeongjo',AppleMyungjo,Batang,Georgia,serif"
 SANS = "-apple-system,'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif"
 PAPER, DESK, INK, BODY, MUTED, HAIR, BRASS = '#fbfaf6', '#efece4', '#17150f', '#2b2822', '#6b665b', '#e0dbcf', '#86652c'
@@ -117,6 +119,13 @@ def alert(card):
     return sigma is not None and bool(change) and abs(change) >= 2 * sigma
 
 
+def brand():
+    """Logo tile plus the wordmark; with images blocked the alt text and wordmark still name the sender."""
+    return (f'<table role="presentation" cellpadding="0" cellspacing="0"><tr><td style="padding-right:12px">'
+            f'<img src="{LOGO}" width="40" height="40" alt="ETF ORCA" style="display:block;border:0;outline:none;text-decoration:none"></td>'
+            f'<td style="font-family:{SERIF};font-size:23px;font-weight:700;letter-spacing:6px;color:{INK}">ETF ORCA</td></tr></table>')
+
+
 def issued(at):
     if at is None:
         return ''
@@ -125,7 +134,7 @@ def issued(at):
 
 def masthead(letter, edition, at):
     letter.add(row(f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-<td style="font-family:{SERIF};font-size:23px;font-weight:700;letter-spacing:6px;color:{INK}">ETF ORCA</td>
+<td>{brand()}</td>
 <td align="right" style="font-family:{SANS};font-size:11px;letter-spacing:1px;color:{MUTED}">보유 ETF 데일리</td></tr></table>
 {rule(2, INK, 0)}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid {INK}"><tr>
 <td style="padding:9px 0;font-family:{SANS};font-size:12px;color:{BODY}">{edition.year}년 {day(edition)} {'월화수목금토일'[edition.weekday()]}요일{issued(at)}</td></tr></table>''', '30px 32px 0'),
@@ -349,7 +358,7 @@ def colophon(body, action=''):
 def confirmation(token):
     title = 'ETF Orca · 보유 종목 데일리 구독을 확인해 주세요'
     url = SITE + '#newsletter-confirm=' + token
-    rows = [row(f'''<p style="margin:0 0 4px;font-family:{SERIF};font-size:23px;font-weight:700;letter-spacing:6px;color:{INK}">ETF ORCA</p>{rule(2, INK)}
+    rows = [row(f'''{brand()}<div style="height:12px"></div>{rule(2, INK)}
 <p style="{P};margin:34px 0 14px;color:{BRASS};font-size:12px;font-weight:700;letter-spacing:1px">구독 확인</p>
 <h1 class="hl" style="margin:0 0 18px;font-family:{SERIF};font-size:30px;line-height:1.4;color:{INK};word-break:keep-all">내 ETF의 하루,<br>핵심만 읽어요.</h1>
 {para('매일 보유 종목의 핵심 이슈와 가격이 움직인 이유를 짧게 정리해 드려요. 아래 버튼을 눌러 이메일 주소를 확인하면 구독이 시작돼요.', 16, BODY, 26)}
