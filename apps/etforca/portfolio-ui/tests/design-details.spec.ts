@@ -24,9 +24,9 @@ test('financial column headings align with their values and chart headings share
     expect(geometry.every(gap => gap <= 1)).toBe(true);
   }
   await expect(page.locator('.asset-row').first().locator('span').nth(3)).toContainText('+877,000원');
-  await expect(page.getByRole('button', { name: /^10월 실수령/ })).toHaveAttribute('aria-pressed', 'true');
-  await page.getByRole('button', { name: /^9월 실수령/ }).click();
-  await expect(page.getByRole('button', { name: /^9월 실수령/ })).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('button', { name: /^2026-10 실수령/ })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: /^2027-09 실수령/ }).click();
+  await expect(page.getByRole('button', { name: /^2027-09 실수령/ })).toHaveAttribute('aria-pressed', 'true');
 });
 
 test('input guidance describes the current decision and the optional selection limit is visible', async ({ page }) => {
@@ -62,11 +62,12 @@ test('adding and editing a holding have distinct titles and a saved result', asy
   await page.goto('/portfolio/?preview=dashboard');
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
   await expect(page.getByRole('heading', { name: '보유 자산 추가' })).toBeVisible();
-  await page.getByLabel('종목명', { exact: true }).fill('디테일 검증 ETF');
-  await page.getByLabel('평가금액 (원)', { exact: true }).fill('100000');
+  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await page.getByRole('option', { name: /KODEX 200/ }).click();
+  await page.getByLabel('보유 수량', { exact: true }).fill('2');
   await page.getByRole('button', { name: '저장', exact: true }).last().click();
-  await expect(page.locator('.dashboard [role=status]')).toHaveText('변경 내용을 저장했어요.');
-  await page.getByRole('button', { name: /디테일 검증 ETF/ }).click();
+  await expect(page.locator('.dashboard-save-status')).toContainText('저장했어요');
+  await page.locator('.asset-row').filter({ hasText: 'KODEX 200' }).click();
   await expect(page.getByRole('heading', { name: '보유 자산 수정' })).toBeVisible();
 });
 

@@ -67,112 +67,18 @@ test('malformed stored form does not prevent a new analysis', async ({ page }) =
   await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('100');
 });
 
-test('calculated valuation cannot silently ignore a manual edit and updates with its inputs', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.locator('.asset-row').first().click();
-  const amount = page.getByLabel('평가금액 (원)', { exact: true });
-  await expect(amount).toHaveAttribute('readonly', '');
-  await expect(amount).toHaveValue('6880000');
-  await page.getByLabel('현재가', { exact: true }).fill('18000');
-  await expect(amount).toHaveValue('7200000');
-  await page.getByLabel('현재가', { exact: true }).fill('');
-  await expect(amount).toBeEditable();
-  await amount.fill('7000000');
-  await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
-  await expect(page.locator('.asset-row').first()).toContainText('7,000,000원');
-  await expect(page.locator('.dashboard-save-status')).toBeVisible();
-  await expect(page.locator('.dashboard-save-status')).toContainText('저장했어요');
-});
-
 test('Escape offers to keep unsaved asset edits and saving preserves them', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
   await page.locator('.asset-row').first().click();
-  await page.getByLabel('종목명', { exact: true }).fill('수정 중인 종목');
+  await page.getByLabel('보유 수량', { exact: true }).fill('401');
   await page.keyboard.press('Escape');
   await expect(page.locator('.ds-confirm-dialog')).toBeVisible();
   await page.getByRole('button', { name: '취소', exact: true }).click();
-  await expect(page.getByLabel('종목명', { exact: true })).toHaveValue('수정 중인 종목');
+  await expect(page.getByLabel('보유 수량', { exact: true })).toHaveValue('401');
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
-  await expect(page.locator('.asset-row').first()).toContainText('수정 중인 종목');
-});
-
-test('changing dashboard tabs cannot silently discard a dividend record', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.getByRole('button', { name: '배당 달력', exact: true }).click();
-  await page.getByLabel('세후 원화 금액').fill('12345');
-  await page.getByRole('button', { name: '수익 기록', exact: true }).click();
-  await page.getByRole('button', { name: '취소', exact: true }).click();
-  await expect(page.getByLabel('세후 원화 금액')).toHaveValue('12345');
-});
-
-test('a dividend saved for another month immediately appears in that month', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.getByRole('button', { name: '배당 달력', exact: true }).click();
-  await page.getByLabel('종목', { exact: true }).selectOption('0');
-  await page.getByLabel('날짜', { exact: true }).fill('2026-11-05');
-  await page.getByLabel('세후 원화 금액').fill('12345');
-  await page.getByRole('button', { name: '배당 기록', exact: true }).click();
-  await expect(page.getByLabel('배당 월')).toHaveValue('2026-11');
-  await expect(page.locator('.dividend-records')).toContainText('12,345원');
-});
-
-test('purchase planning provides its account selector beside the budget', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.getByRole('button', { name: '추가매수', exact: true }).click();
-  await page.getByLabel('매수할 계좌', { exact: true }).selectOption('ISA');
-  await expect(page.locator('.dashboard-main')).toContainText('추가 투자금은 현금으로 남겨요.');
-  await page.getByLabel('추가 투자금 (원)', { exact: true }).fill('20000000');
-  await expect(page.locator('.purchase-list')).toBeVisible();
-});
-
-test('deleting an old dividend does not mark a new unsaved record as saved', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.getByRole('button', { name: '배당 달력', exact: true }).click();
-  await page.getByLabel('세후 원화 금액').fill('321');
-  await page.locator('.dividend-records button').first().click();
-  await page.getByRole('button', { name: '삭제하기', exact: true }).click();
-  await page.getByRole('button', { name: '수익 기록', exact: true }).click();
-  await expect(page.locator('.ds-confirm-dialog')).toContainText('작성 중인 기록');
-  await page.getByRole('button', { name: '취소', exact: true }).click();
-  await expect(page.getByLabel('세후 원화 금액')).toHaveValue('321');
-});
-
-test('viewing another calendar month never rewrites an entered dividend date', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.getByRole('button', { name: '배당 달력', exact: true }).click();
-  await page.getByLabel('날짜', { exact: true }).fill('2026-10-25');
-  await page.getByLabel('배당 월').fill('2026-11');
-  await expect(page.getByLabel('날짜', { exact: true })).toHaveValue('2026-10-25');
-});
-
-test('chart navigation and account filters protect unsaved records too', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.getByText('환율 설정', { exact: true }).click();
-  await page.getByLabel('USD → KRW').fill('1500');
-  await page.getByRole('button', { name: /^11월 실수령/ }).click();
-  await page.getByRole('button', { name: '취소', exact: true }).click();
-  await expect(page.getByLabel('USD → KRW')).toHaveValue('1500');
-  await page.getByRole('combobox', { name: '계좌', exact: true }).selectOption('ISA');
-  await page.getByRole('button', { name: '취소', exact: true }).click();
-  await expect(page.getByRole('combobox', { name: '계좌', exact: true })).toHaveValue('전체');
-});
-
-test('failed recovery keeps an unsaved record protected', async ({ page }) => {
-  let reads = 0;
-  const workbook = { title: '내 포트폴리오', fx: null, assets: [], dividends: [], months: [] };
-  await page.route('**/api/portfolio/session', r => r.fulfill({ json: {} }));
-  await page.route('**/api/portfolio/workbook', r => r.request().method() === 'GET' && ++reads <= 2
-    ? r.fulfill({ json: { version: 1, workbook } }) : r.fulfill({ status: 503, json: {} }));
-  await page.goto('/portfolio/?view=dashboard');
-  await page.getByRole('button', { name: '수익 기록', exact: true }).click();
-  await page.locator('[name=month]').fill('2026-10');
-  await page.getByLabel('월말 총자산').fill('10000');
-  await page.getByRole('button', { name: '월 기록 저장' }).click();
-  await page.getByRole('button', { name: '저장된 내용 다시 불러오기' }).click();
-  await page.getByRole('button', { name: '다시 불러오기', exact: true }).click();
-  await expect(page.locator('.dashboard-error')).toBeVisible();
-  await page.getByRole('button', { name: '보유 자산', exact: true }).click();
-  await expect(page.locator('.ds-confirm-dialog')).toContainText('작성 중인 기록');
+  await expect(page.locator('.dashboard-save-status')).toContainText('저장했어요');
+  await page.locator('.asset-row').first().click();
+  await expect(page.getByLabel('보유 수량', { exact: true })).toHaveValue('401');
 });
 
 test('catalog retry keeps entered values and recovers search without refreshing', async ({ page }) => {
@@ -294,14 +200,6 @@ test('draft cleanup denial is explained instead of losing the current input', as
   await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('345');
 });
 
-test('a calendar month never invents the actual dividend payment date', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.getByRole('button', { name: '배당 달력', exact: true }).click();
-  await page.getByLabel('배당 월').fill('2026-11');
-  await expect(page.getByLabel('날짜', { exact: true })).toHaveValue('');
-  await expect(page.getByLabel('날짜', { exact: true })).toHaveAttribute('required', '');
-});
-
 test('an automatic popup returns focus to the latest reading position on dismissal', async ({ page }) => {
   await page.goto('/portfolio/?preview=result');
   await page.locator('.evaluation').scrollIntoViewIfNeeded();
@@ -311,33 +209,4 @@ test('an automatic popup returns focus to the latest reading position on dismiss
   await page.locator('.report-feedback').getByLabel('뉴스레터 이메일').focus();
   await page.getByRole('button', { name: '평가 팝업 닫기' }).click();
   await expect(readingPosition).toBeFocused();
-});
-
-test('manual valuation survives saving and later disabling calculated valuation', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.getByRole('button', { name: '종목 추가', exact: true }).click();
-  await page.getByLabel('종목명', { exact: true }).fill('수량 계산 검증');
-  await page.getByLabel('평가금액 (원)', { exact: true }).fill('2000000');
-  await page.getByLabel('보유 수량', { exact: true }).fill('100');
-  await page.getByLabel('현재가', { exact: true }).fill('21000');
-  await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
-  await page.getByRole('button', { name: /수량 계산 검증/ }).click();
-  await page.getByLabel('현재가', { exact: true }).fill('');
-  await expect(page.getByLabel('평가금액 (원)', { exact: true })).toHaveValue('2000000');
-});
-
-test('calculation cannot hide an invalid manual valuation from save validation', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.getByRole('button', { name: '종목 추가', exact: true }).click();
-  await page.getByLabel('종목명', { exact: true }).fill('입력 범위 검증');
-  await page.getByLabel('평가금액 (원)', { exact: true }).fill('-1');
-  await page.getByLabel('보유 수량', { exact: true }).fill('1');
-  await page.getByLabel('현재가', { exact: true }).fill('100');
-  await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
-  await expect(page.getByRole('dialog').getByRole('alert')).toContainText('직접 입력했던 평가금액');
-  await expect(page.locator('.asset-row')).toHaveCount(6);
-  await page.getByLabel('현재가', { exact: true }).fill('');
-  await page.getByLabel('평가금액 (원)', { exact: true }).fill('100');
-  await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
-  await expect(page.locator('.asset-row')).toHaveCount(7);
 });

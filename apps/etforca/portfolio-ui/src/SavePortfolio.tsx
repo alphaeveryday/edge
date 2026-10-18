@@ -1,26 +1,27 @@
-import { useConfirmation } from './design-system/confirmation';
 import { Button } from './design-system/components';
 import { useEffect, useRef, useState } from 'react';
 import { request } from './api';
 import { preview } from './preview';
 import dashboardPreview from './dashboard-preview.png';
-import type { Saved, Workbook } from './workbook';
+import { needsSeed, withSeed, type Saved, type Workbook } from './workbook';
+import { SeedMoney } from './SeedMoney';
 
 export function SavePortfolio({ jobId }: { jobId: string }) {
   const saveButton = useRef<HTMLButtonElement>(null);
-  const { ask, confirmation, restoreFocus } = useConfirmation();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  useEffect(() => { if (error && !busy) saveButton.current?.focus(); }, [error, busy]);
-  async function save() {
+  const [pending, setPending] = useState<Workbook | null>(null);
+  useEffect(() => { if (error && !busy && !pending) saveButton.current?.focus(); }, [error, busy, pending]);
+  async function save(seed?: number) {
     if (busy) return;
     setBusy(true); setError('');
     try {
-      const [saved, workbook] = await Promise.all([request<Saved>('/workbook'), request<Workbook>(`/analyses/${jobId}/workbook`)]);
-      if (saved.version > 0 && !await ask('저장된 포트폴리오를 바꿀까요? 기존 배당·수익 기록도 함께 바뀌어요.', '바꾸고 저장하기', saveButton.current)) return;
+      const [saved, source] = pending ? [await request<Saved>('/workbook'), pending] : await Promise.all([request<Saved>('/workbook'), request<Workbook>(`/analyses/${jobId}/workbook`)]);
+      if (needsSeed(source) && seed === undefined) { setPending(source); return; }
+      const workbook = seed === undefined ? source : withSeed(source, seed);
       await request('/workbook', { method: 'POST', body: JSON.stringify({ version: saved.version, workbook }) });
       location.href = preview ? '?preview=dashboard' : '?view=dashboard';
-    } catch (e) { setError((e as Error).message); } finally { setBusy(false); restoreFocus(); }
+    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
   }
-  return <div className="save-portfolio"><h3>내 포트폴리오로 저장</h3><p>보유 종목과 배당, 수익을 이어서 관리하세요.</p><figure className="save-preview"><img src={dashboardPreview} alt="대시보드 예시: 총자산, 평가손익, 자산 구성과 보유 종목" width="1200" height="960" loading="lazy" /><figcaption>대시보드 예시</figcaption></figure><Button ref={saveButton} variant="primary" className="primary" loading={busy} onClick={() => void save()}>{busy ? '저장 중…' : '저장하고 대시보드 보기'}</Button>{error && <p role="alert">{error}</p>}{confirmation}</div>;
+  return <div className="save-portfolio"><h3>내 포트폴리오를 저장해 두세요</h3><p>입력한 보유 종목은 그대로 관리하고, 이번 추천 결과도 대시보드에서 언제든 다시 볼 수 있어요.</p><figure className="save-preview"><img src={dashboardPreview} alt="대시보드 예시: 총자산, 평가손익, 자산 구성과 보유 종목" width="1200" height="960" loading="lazy" /><figcaption>대시보드 예시</figcaption></figure>{!pending && <Button ref={saveButton} variant="primary" className="primary" loading={busy} onClick={() => void save()}>{busy ? '저장 중…' : '입력한 내 포트폴리오 저장하기'}</Button>}{pending && <SeedMoney busy={busy} onSubmit={amount => void save(amount)} />}{error && <p role="alert">{error}</p>}</div>;
 }

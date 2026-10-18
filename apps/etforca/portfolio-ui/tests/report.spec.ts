@@ -50,7 +50,6 @@ test('failed overwrite restores keyboard focus after the save button is enabled 
   await page.goto('/portfolio/');
   const save = page.locator('.feedback-anchor>.save-portfolio>button');
   await save.click();
-  await page.getByRole('button', { name: '바꾸고 저장하기' }).click();
   await expect(page.locator('.feedback-anchor .save-portfolio [role=alert]')).toBeVisible();
   await expect(save).toBeEnabled();
   await expect(save).toBeFocused();

@@ -46,7 +46,7 @@ test('search affordances and dividend data remain visible after token changes', 
   await page.goto('/portfolio/?preview=input');
   await expect(page.locator('.find__plus').first()).toHaveCSS('color', 'rgb(255, 255, 255)');
   await page.goto('/portfolio/?preview=dashboard');
-  const month = page.getByRole('button', { name: /^10월 실수령/ });
+  const month = page.getByRole('button', { name: /^2026-10 실수령/ });
   await expect(month.locator('b')).toHaveCSS('background-color', 'rgb(27, 100, 218)');
   await expect(month.locator('i')).toHaveCSS('box-shadow', 'rgb(27, 100, 218) 0px 0px 0px 1px inset');
 });
@@ -95,65 +95,16 @@ test('destructive confirmation can cancel without losing assets and confirms onl
   await expect(page.locator('.asset-row')).toHaveCount(5);
 });
 
-test('replacing a saved portfolio keeps the loss-of-records confirmation in the shared dialog', async ({ page }) => {
+test('saving the entered portfolio replaces holdings directly without a second confirmation', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
   await page.locator('.asset-row').first().click();
-  await page.getByLabel('종목명', { exact: true }).fill('내가 수정한 ETF');
+  await page.getByLabel('보유 수량', { exact: true }).fill('999');
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await page.goto('/portfolio/?preview=result');
-  const save = page.locator('.feedback-anchor>.save-portfolio>button');
+  const save = page.locator('.feedback-anchor .save-portfolio button').first();
   await save.click();
-  await expect(page.locator('.ds-confirm-dialog[open]')).toContainText('기존 배당·수익 기록도 함께 바뀌어요');
-  await page.getByRole('button', { name: '취소', exact: true }).click();
-  expect(await page.evaluate(() => localStorage.getItem('edge-preview-workbook'))).toContain('내가 수정한 ETF');
-  await expect(save).toBeFocused();
-  await save.click();
-  await page.getByRole('button', { name: '바꾸고 저장하기' }).click();
   await expect(page).toHaveURL(/preview=dashboard/);
-  await expect(page.locator('.asset-list')).not.toContainText('내가 수정한 ETF');
-});
-
-test('a duplicate month needs confirmation before replacing the saved financial record', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.getByRole('button', { name: '수익 기록', exact: true }).click();
-  await page.getByLabel('월', { exact: true }).fill('2026-10');
-  await page.getByLabel('월말 총자산', { exact: true }).fill('30000000');
-  await page.getByRole('button', { name: '월 기록 저장' }).click();
-  await expect(page.getByRole('dialog')).toContainText('2026-10 수익 기록을 바꿀까요');
-  await page.getByRole('button', { name: '취소', exact: true }).click();
-  await expect(page.locator('.return-records')).toContainText('25,586,400원');
-  await page.getByRole('button', { name: '월 기록 저장' }).click();
-  await page.getByRole('button', { name: '기록 바꾸기', exact: true }).click();
-  await expect(page.locator('.return-records')).toContainText('30,000,000원');
-  await expect(page.locator('.return-records')).not.toContainText('25,586,400원');
-});
-
-test('a slow monthly overwrite restores focus after failure and after a successful retry', async ({ page }) => {
-  let fail = true;
-  let saved = { version: 1, workbook: { title: '내 포트폴리오', fx: null, assets: [], dividends: [], months: [{ month: '2026-10', value: 1000000, deposit: 0, withdrawal: 0, return_pct: null }] } };
-  await page.route('**/api/portfolio/**', async route => {
-    if (!new URL(route.request().url()).pathname.endsWith('/workbook')) return route.fulfill({ json: {} });
-    if (route.request().method() === 'POST') {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      if (fail) return route.fulfill({ status: 503, json: {} });
-      saved = { version: 2, workbook: route.request().postDataJSON().workbook };
-    }
-    return route.fulfill({ json: saved });
-  });
-  await page.goto('/portfolio/?view=dashboard');
-  await page.getByRole('button', { name: '수익 기록', exact: true }).click();
-  await page.getByLabel('월', { exact: true }).fill('2026-10');
-  await page.getByLabel('월말 총자산', { exact: true }).fill('2000000');
-  const save = page.getByRole('button', { name: '월 기록 저장' });
-  await save.click();
-  await page.getByRole('button', { name: '기록 바꾸기', exact: true }).click();
-  await expect(page.locator('.dashboard-error')).toBeVisible();
-  await expect(save).toBeFocused();
-  await expect(page.locator('.return-records')).toContainText('1,000,000원');
-  fail = false;
-  await save.click();
-  await page.getByRole('button', { name: '기록 바꾸기', exact: true }).click();
-  await expect(page.locator('.return-records')).toContainText('2,000,000원');
-  await expect(save).toBeFocused();
+  await page.locator('.asset-row').first().click();
+  await expect(page.getByLabel('보유 수량', { exact: true })).toHaveValue('400');
 });

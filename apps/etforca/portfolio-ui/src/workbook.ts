@@ -1,8 +1,19 @@
-export type Asset = { id: string; name: string; account: string; category: string; currency: 'KRW' | 'USD'; quantity: number | null; average: number | null; price: number | null; cost_fx: number | null; amount: number | null; weight: number | null; target: number | null; fee: number; price_date: string | null };
+export type Asset = { id: string; instrument_id?: string | null; name: string; account: string; category: string; currency: 'KRW' | 'USD'; quantity: number | null; quantity_revision?: string | null; average_revision?: string | null; quantity_as_of?: string | null; average_as_of?: string | null; average: number | null; price: number | null; cost_fx: number | null; amount: number | null; weight: number | null; target: number | null; fee: number; price_date: string | null };
 export type Dividend = { id: string; asset_id: string; date: string; status: '실수령' | '예상'; amount: number };
 export type Month = { month: string; value: number; deposit: number; withdrawal: number; return_pct: number | null };
 export type Workbook = { title: string; fx: number | null; assets: Asset[]; dividends: Dividend[]; months: Month[] };
 export type Saved = { version: number; workbook: Workbook | null };
+export type Quote = { id: string; value: number | null; profit: number | null; price: number | null; price_date: string | null; quantity: number | null; average?: number | null; estimated_quantity?: boolean };
+export type Forecast = { asset_id: string; month: string; amount: number };
+export type Tracking = { market: { version: number; payload: { date: string; assets: Quote[]; fx: number | null; forecasts: Forecast[]; missing: string[]; dividend_missing: string[] } } | null; days: { date: string; value: number; assets: Quote[]; fx: number | null }[]; archives?: { version: number; payload: Workbook }[] };
+export function needsSeed(w: Workbook) { return w.assets.some(a => a.amount === null && a.quantity === null && a.weight !== null); }
+export function withSeed(w: Workbook, seed: number): Workbook {
+  const total = w.assets.reduce((s, a) => s + (a.weight ?? 0), 0);
+  if (!Number.isFinite(seed) || seed <= 0 || seed > 1e13 || Math.abs(total - 100) > .01 || w.assets.some(a => a.weight === null)) throw new Error('총 투자금액과 보유 비중을 확인해 주세요.');
+  let allocated = 0;
+  const cents = Math.round(seed * 100);
+  return { ...w, assets: w.assets.map((a, i) => { const amount = i === w.assets.length - 1 ? cents - allocated : Math.floor(cents * a.weight! / total); allocated += amount; return { ...a, amount: amount / 100, weight: null }; }) };
+}
 export const accounts = ['일반 계좌', 'ISA', '연금저축', 'IRP'];
 export const money = (n: number | null) => n === null ? '—' : Math.round(n).toLocaleString('ko-KR') + '원';
 export function value(a: Asset, fx: number | null): number | null {

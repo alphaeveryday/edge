@@ -15,7 +15,7 @@ export function PortfolioDonut({ holdings }: { holdings: { name: string; weight_
   })}</svg><div className="donut__c"><b>{holdings.length}개</b></div></div>;
 }
 
-export function PerformanceChart({ history }: { history: History }) {
+export function PerformanceChart({ history, label = '추천 구성' }: { history: History; label?: string }) {
   const ref = useRef<HTMLElement>(null);
   const [width, setWidth] = useState(320);
   const [visible, setVisible] = useState(false);
@@ -62,12 +62,12 @@ export function PerformanceChart({ history }: { history: History }) {
   const middle = Math.floor((points.length - 1) / 2), end = points.length - 1;
   const dateIndices = x(end) - x(0) < 120 ? [end]
     : x(middle) - x(0) > 90 && x(end) - x(middle) > 90 ? [0, middle, end] : [0, end];
-  const active = selected ?? points.length - 1;
+  const active = Math.min(selected ?? points.length - 1, points.length - 1);
   const isKRW = history.currency === 'KRW';
   const valueLabel = (value: number) => `${Math.round(value).toLocaleString('ko-KR')}${isKRW ? '원' : ''}`;
   return <figure ref={ref} className={'perf report-history' + (visible ? ' is-visible' : '')}>
-    <figcaption>{history.basis}</figcaption><div className="history-legend"><span>● 추천 구성</span>{hasCurrent && <span>● {baselineLabel}</span>}</div>
-    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${points[0].date}부터 ${points.at(-1)!.date}까지 ${hasCurrent ? `추천 구성과 ${baselineLabel}` : '추천 구성'}의 과거 성과`} onPointerMove={event => {
+    <figcaption>{history.basis}</figcaption><div className="history-legend"><span>● {label}</span>{hasCurrent && <span>● {baselineLabel}</span>}</div>
+    <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={`${points[0].date}부터 ${points.at(-1)!.date}까지 ${hasCurrent ? `${label}과 ${baselineLabel}` : label}의 과거 성과`} onPointerMove={event => {
       const rect = event.currentTarget.getBoundingClientRect();
       const time = first + Math.max(0, Math.min(1, ((event.clientX - rect.left) / rect.width * width - left) / plotWidth)) * (last - first);
       setSelected(points.reduce((best, p, i) => Math.abs(Date.parse(p.date) - time) < Math.abs(Date.parse(points[best].date) - time) ? i : best, 0));
@@ -78,7 +78,7 @@ export function PerformanceChart({ history }: { history: History }) {
       {dateIndices.map(i => <text key={i} className="x" x={x(i)} y={height - 6} style={{ textAnchor: i === 0 ? 'start' : i === points.length - 1 ? 'end' : 'middle' }}>{points[i].date.slice(2).replaceAll('-', '.')}</text>)}
     </svg>
     <TextInput className="history-slider" type="range" min="0" max={points.length - 1} value={active} onChange={event => setSelected(Number(event.target.value))} aria-label="과거 성과 날짜 선택" aria-valuetext={points[active].date} />
-    <p className="history-date">{points[active].date}</p><div className="history-values"><span>추천 구성 <b>{valueLabel(points[active].recommended)}</b></span>{hasCurrent && <span>{baselineLabel} <b>{valueLabel(points[active].current!)}</b></span>}</div>
+    <p className="history-date">{points[active].date}</p><div className="history-values"><span>{label} <b>{valueLabel(points[active].recommended)}</b></span>{hasCurrent && <span>{baselineLabel} <b>{valueLabel(points[active].current!)}</b></span>}</div>
     {history.current_unavailable_reason && <p className="notice">{history.current_unavailable_reason}</p>}<details><summary>계산 기준과 출처</summary><p>{history.method}</p>{history.sources?.length ? history.sources.map(source => <a key={source.instrument_id} href={safeReportUrl(source.url)} target="_blank" rel="noreferrer">{source.instrument_id} ↗</a>) : <a href={safeReportUrl(history.source_url)} target="_blank" rel="noreferrer">성과 자료 출처 ↗</a>}</details>
   </figure>;
 }

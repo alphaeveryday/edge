@@ -27,7 +27,7 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
     function check() {
       if (shown || finished.has(jobId) || popup.current || document.visibilityState !== 'visible' || !anchor.current || document.querySelector('dialog[open]')) return;
       if (document.activeElement?.closest('.followup')) return;
-      if (anchor.current.getBoundingClientRect().top > innerHeight - 64) return;
+      if (!anchor.current.getClientRects().length || anchor.current.getBoundingClientRect().top > innerHeight - 64) return;
       shown = true; setOpen(true); trackFeedback('shown');
     }
     function followupStarted(event: FocusEvent) { if (event.target instanceof Element && event.target.closest('.followup')) shown = true; }

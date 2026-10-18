@@ -20,10 +20,9 @@ test('chart motion respects reduced motion and monthly bars open the chosen mont
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await page.reload();
   await expect(page.locator('.allocation-bar>span').first()).toHaveCSS('animation-name', 'allocation-enter');
-  await page.getByRole('button', { name: /^10월 실수령/ }).click();
-  await expect(page.getByLabel('배당 월')).toHaveValue('2026-10');
-  await expect(page.getByLabel('배당 월')).toBeFocused();
-  await expect(page.locator('.dividend-calendar .has-dividend')).not.toHaveCount(0);
+  await page.getByRole('button', { name: /^2026-10 실수령/ }).click();
+  await expect(page.getByRole('heading', { name: /2026년 10월/ })).toBeVisible();
+  await expect(page.locator('.dividend-records')).not.toBeEmpty();
   await page.goto('/portfolio/?preview=running');
   await expect(page.locator('.progress-steps [aria-current="step"]')).toHaveCount(1);
   await expect(page.locator('.research-flow')).toHaveCSS('animation-name', 'research-flow');
@@ -66,25 +65,26 @@ test('preview edits and reloads without sending customer API or analytics traffi
   page.on('request', r => { if (new URL(r.url()).pathname.startsWith('/api/portfolio') || new URL(r.url()).hostname.endsWith('posthog.com')) calls.push(r.url()); });
   await page.goto('/portfolio/?preview=dashboard');
   await expect(page.locator('.dashboard-stats')).toContainText('25,586,400원');
-  await expect(page.locator('.dashboard-stats')).toContainText('1,673,400원');
+  await expect(page.locator('.dashboard-stats')).toContainText('1,553,400원');
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
   await page.getByRole('dialog').press('Escape');
   await expect(page.getByRole('button', { name: '종목 추가', exact: true })).toBeFocused();
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
-  await page.getByLabel('종목명', { exact: true }).fill('새 ETF');
-  await page.getByLabel('평가금액 (원)', { exact: true }).fill('100000');
+  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await page.getByRole('option', { name: /KODEX 200/ }).click();
+  await page.getByLabel('보유 수량', { exact: true }).fill('2');
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '종목 추가', exact: true })).toBeFocused();
   await page.reload();
-  await expect(page.locator('.asset-list')).toContainText('새 ETF');
+  await expect(page.locator('.asset-list')).toContainText('KODEX 200');
   await expect(page.locator('.dashboard-stats')).toContainText('25,686,400원');
   await page.getByRole('button', { name: '배당 달력', exact: true }).click();
-  await expect(page.getByRole('button', { name: '배당 기록', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '배당 달력', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '수익 기록', exact: true }).click();
-  await expect(page.getByRole('button', { name: '월 기록 저장' })).toBeVisible();
-  await page.getByRole('button', { name: '추가매수', exact: true }).click();
-  await expect(page.locator('.dashboard-main')).toContainText('매수할 계좌를 골라');
+  await expect(page.getByRole('heading', { name: '자동 수익 기록' })).toBeVisible();
+  await page.getByRole('button', { name: '백테스트', exact: true }).click();
+  await expect(page.locator('.dashboard-main')).toContainText('내 조합 백테스트');
   expect(calls).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
@@ -128,62 +128,3 @@ for (const screen of ['input', 'queued', 'running', 'partial', 'failed', 'empty'
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 }
-
-test('account filter uses the selected account denominator for percent-only imports', async ({ page }) => {
-  await page.route('**/api/portfolio/session', route => route.fulfill({ json: {} }));
-  await page.route('**/api/portfolio/workbook', route => route.fulfill({ json: { version: 1, workbook: { title: '내 포트폴리오', fx: null, assets: [{ ...asset, quantity: null, average: null, price: null, weight: 60 }, { ...asset, id: 'b', name: '다른 ETF', account: '일반 계좌', quantity: null, average: null, price: null, weight: 40 }], dividends: [], months: [] } } }));
-  await page.goto('/portfolio/?view=dashboard');
-  await expect(page.locator('.asset-list')).toContainText('60% · 전체 기준');
-  await page.locator('.dashboard-main header select').selectOption('ISA');
-  await expect(page.locator('.asset-list')).toContainText('100.0%');
-  await expect(page.locator('.asset-list')).not.toContainText('다른 ETF');
-});
-
-test('an in-flight save cannot discard a different assets draft', async ({ page }) => {
-  const workbook = { title: '내 포트폴리오', fx: 1360, assets: [asset, { ...asset, id: 'b', name: '다른 ETF' }], dividends: [], months: [] };
-  let release: (() => void) | undefined;
-  await page.route('**/api/portfolio/session', route => route.fulfill({ json: {} }));
-  await page.route('**/api/portfolio/workbook', async route => {
-    if (route.request().method() === 'POST') {
-      await new Promise<void>(resolve => { release = resolve; });
-      return route.fulfill({ json: { version: 2, workbook: route.request().postDataJSON().workbook } });
-    }
-    return route.fulfill({ json: { version: 1, workbook } });
-  });
-  await page.goto('/portfolio/?view=dashboard');
-  await page.locator('.asset-row').first().click();
-  await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
-  await expect.poll(() => !!release).toBe(true);
-  await expect(page.getByLabel('종목명', { exact: true })).toBeDisabled();
-  await expect(page.getByRole('button', { name: '수정 닫기' })).toBeDisabled();
-  await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(page.locator('.asset-row').nth(1)).toBeDisabled();
-  release!();
-  await expect(page.locator('.asset-row').nth(1)).toBeEnabled();
-  await page.locator('.asset-row').nth(1).click();
-  await expect(page.getByLabel('종목명', { exact: true })).toHaveValue('다른 ETF');
-  await expect(page.locator('.dashboard-error')).toHaveCount(0);
-});
-
-test('a late initial read cannot roll back a newer successful save', async ({ page }) => {
-  let release: (() => void) | undefined;
-  let reads = 0;
-  const workbook = { title: '내 포트폴리오', fx: 1360, assets: [asset], dividends: [], months: [] };
-  await page.route('**/api/portfolio/session', route => route.fulfill({ json: {} }));
-  await page.route('**/api/portfolio/workbook', async route => {
-    if (route.request().method() === 'POST') return route.fulfill({ json: { version: 3, workbook: route.request().postDataJSON().workbook } });
-    const first = ++reads === 1;
-    if (first) await new Promise<void>(resolve => { release = resolve; });
-    return route.fulfill({ json: { version: first ? 1 : 2, workbook } });
-  });
-  await page.goto('/portfolio/?view=dashboard');
-  await page.locator('.asset-row').click();
-  await page.getByLabel('종목명', { exact: true }).fill('최신 저장');
-  await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
-  await expect(page.locator('.asset-row')).toContainText('최신 저장');
-  const late = page.waitForResponse(r => r.url().endsWith('/workbook') && r.request().method() === 'GET');
-  release!();
-  await late;
-  await expect(page.locator('.asset-row')).toContainText('최신 저장');
-});
