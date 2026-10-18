@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useConfirmation } from './design-system/confirmation';
 import { Button, TextInput, Select, SectionHeading, Icon } from './design-system/components';
 import { request, ensureVisitorSession, type Catalog, type Instrument } from './api';
-import { accounts, money, needsSeed, withSeed, type Asset, type Saved, type Tracking, type Workbook } from './workbook';
+import { accounts, money, needsSeed, withSeed, dividendMonthCovered, type Asset, type Saved, type Tracking, type Workbook } from './workbook';
 import { preview } from './preview';
 import { AllocationChart, DividendChart, DividendSummary } from './WorkbookCharts';
 import { DividendReport } from './DividendReport';
@@ -87,6 +87,10 @@ export function Dashboard() {
   const returnPct = profit !== null && basis !== null && basis > 0 ? Number((profit / basis * 100).toFixed(2)) : null;
   const forecasts = (market?.forecasts ?? []).filter(d => d.month >= thisMonth() && assets.some(a => a.id === d.asset_id));
   const forecastComplete = !!market && market.date.slice(0, 7) === thisMonth() && !market.dividend_missing.some(id => assets.some(a => a.id === id));
+  const forecastMonths = Array.from({ length: 13 }, (_, i) => new Date(Date.UTC(Number(thisMonth().slice(0, 4)), Number(thisMonth().slice(5)) - 1 + i, 1)).toISOString().slice(0, 7));
+  const uncoveredMonths = forecastMonths.filter(m => assets.some(a => !dividendMonthCovered(a, quotes.get(a.id), m, market?.date.slice(0, 7) ?? null)));
+  const unavailableMonths = uncoveredMonths.filter(m => !forecasts.some(d => d.month === m));
+  const selectedComplete = forecastComplete && !uncoveredMonths.includes(month);
   const dividends = w.dividends.filter(d => assets.some(a => a.id === d.asset_id));
   const selected = forecasts.filter(d => d.month === month);
   function edit(a?: Asset) {
@@ -133,13 +137,13 @@ export function Dashboard() {
         {trackingError && <p role="alert">{trackingError} <Button onClick={() => void loadTracking()}>다시 확인</Button></p>}
         {market?.missing.some(id => !market.pending_splits?.includes(id) && assets.some(a => a.id === id)) && <p className="notice">일부 종목의 시세나 수량을 확인하지 못했어요. 종목을 눌러 보유 정보를 확인해 주세요.</p>}
         {market?.pending_splits?.some(id => assets.some(a => a.id === id)) && <p className="notice">분할된 종목은 분할 후 첫 종가를 확인하면 평가액을 표시해요.</p>}
-        {tab === '한눈에' && <><div className="dashboard-overview"><AllocationChart assets={graphAssets} fx={market?.fx ?? null} /><section className="dashboard-card dividend-summary" data-analytics-section="dividend_summary"><SectionHeading className="card-heading" title="배당 분석" action={<Button onClick={() => setTab('배당 달력')}>달력 보기 <Icon name="chevronRight" size={16} /></Button>} /><DividendSummary forecasts={forecasts} complete={forecastComplete} total={total} /><DividendChart dividends={[]} forecasts={forecasts} complete={forecastComplete} startMonth={thisMonth()} selectedMonth={month} onMonth={m => { setMonth(m); setTab('배당 달력'); }} /></section></div>
+        {tab === '한눈에' && <><div className="dashboard-overview"><AllocationChart assets={graphAssets} fx={market?.fx ?? null} /><section className="dashboard-card dividend-summary" data-analytics-section="dividend_summary"><SectionHeading className="card-heading" title="배당 분석" action={<Button onClick={() => setTab('배당 달력')}>달력 보기 <Icon name="chevronRight" size={16} /></Button>} /><DividendSummary forecasts={forecasts} complete={forecastComplete} total={total} /><DividendChart dividends={[]} forecasts={forecasts} complete={forecastComplete} unavailableMonths={unavailableMonths} startMonth={thisMonth()} selectedMonth={month} onMonth={m => { setMonth(m); setTab('배당 달력'); }} /></section></div>
           <section className="dashboard-card"><SectionHeading className="card-heading" title={`보유 자산 ${assets.length}`} action={<Button variant="primary" className="primary" ref={addButton} disabled={busy || loading || seedOnly || w.assets.length >= 30} onClick={() => edit()}><Icon name="plus" size={18} />종목 추가</Button>} />
             {!assets.length && <p className="empty-state">보유 종목을 검색하고 수량과 평균매수가를 입력해 주세요.</p>}
             <Holdings assets={assets} quotes={quotes} forecasts={forecasts} missing={market && market.date.slice(0, 7) === thisMonth() ? market.dividend_missing : assets.map(a => a.id)} total={total} fx={market?.fx ?? null} amountOf={amountOf} disabled={seedOnly} onEdit={edit} />
           </section></>}
-        {tab === '배당 달력' && <><section className="dashboard-card"><SectionHeading title="배당 달력" description="앞으로 12개월, 월별 예상 분배금을 확인해요." /><DividendSummary forecasts={forecasts} complete={forecastComplete} total={total} /><DividendChart dividends={[]} forecasts={forecasts} complete={forecastComplete} startMonth={thisMonth()} selectedMonth={month} onMonth={setMonth} /><h3>{month.replace('-', '년 ')}월 · {forecastComplete ? "예상 " : selected.length ? "확인된 예상 " : "예상 미확인"}{(forecastComplete || selected.length > 0) && money(selected.reduce((s, d) => s + d.amount, 0))}</h3><p className="editor-note">최근 12개월 배당락 이력으로 추정한 세전 금액이에요. 지급월과 금액은 실제 공시에 따라 달라질 수 있어요.</p>
-          <ul className="dividend-records">{selected.map((d, i) => <li key={d.asset_id + i}><span>{w.assets.find(a => a.id === d.asset_id)?.name}</span><b>예상 {money(d.amount)}</b></li>)}</ul>{!selected.length && <p className="empty-state">{forecastComplete ? "이 달의 예상 분배 내역이 없어요." : "배당 자료를 확인하지 못한 종목이 있어요. 확인된 내역부터 보여드려요."}</p>}
+        {tab === '배당 달력' && <><section className="dashboard-card"><SectionHeading title="배당 달력" description="앞으로 12개월, 월별 예상 분배금을 확인해요." /><DividendSummary forecasts={forecasts} complete={forecastComplete} total={total} /><DividendChart dividends={[]} forecasts={forecasts} complete={forecastComplete} unavailableMonths={unavailableMonths} startMonth={thisMonth()} selectedMonth={month} onMonth={setMonth} /><h3>{month.replace('-', '년 ')}월 · {selectedComplete ? "예상 " : selected.length ? "확인된 예상 " : "예상 미확인"}{(selectedComplete || selected.length > 0) && money(selected.reduce((s, d) => s + d.amount, 0))}</h3><p className="editor-note">최근 12개월 배당락 이력으로 추정한 세전 금액이에요. 지급월과 금액은 실제 공시에 따라 달라질 수 있어요.</p>
+          <ul className="dividend-records">{selected.map((d, i) => <li key={d.asset_id + i}><span>{w.assets.find(a => a.id === d.asset_id)?.name}</span><b>예상 {money(d.amount)}</b></li>)}</ul>{!selected.length && <p className="empty-state">{selectedComplete ? "이 달의 예상 분배 내역이 없어요." : "배당 자료를 확인하지 못한 종목이 있어요. 확인된 내역부터 보여드려요."}</p>}
           {dividends.length > 0 && <details><summary>저장된 지급 내역</summary><ul>{[...dividends].sort((a, b) => b.date.localeCompare(a.date)).map(d => <li key={d.id}>{d.date} · {w.assets.find(a => a.id === d.asset_id)?.name} · {d.status} {money(d.amount)}</li>)}</ul></details>}
         </section><DividendReport quotes={quotes} assets={assets} dividends={dividends} forecasts={forecasts} missing={market?.dividend_missing ?? assets.map(a => a.id)} startMonth={thisMonth()} forecastStartMonth={market?.date.slice(0, 7) ?? null} /></>}
         {tab === '수익 기록' && <section className="dashboard-card"><SectionHeading title="일별 수익 기록" description="전체 계좌 · 등록한 날부터 하루에 한 번 자동 기록해요." />

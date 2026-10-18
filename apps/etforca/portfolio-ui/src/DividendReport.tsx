@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Button, Select, SectionHeading } from './design-system/components';
 import { DividendChart } from './WorkbookCharts';
-import { money, type Asset, type Dividend, type Forecast, type Quote } from './workbook';
+import { money, dividendMonthCovered, type Asset, type Dividend, type Forecast, type Quote } from './workbook';
 
 export function DividendReport({ assets, dividends, forecasts, missing, startMonth, forecastStartMonth, quotes }: { assets: Asset[]; dividends: Dividend[]; forecasts: Forecast[]; missing: string[]; startMonth: string; forecastStartMonth: string | null; quotes: Map<string, Quote> }) {
   const currentYear = Number(startMonth.slice(0, 4));
@@ -13,16 +13,12 @@ export function DividendReport({ assets, dividends, forecasts, missing, startMon
   const actual = dividends.filter(d => d.status === '실수령');
   const missingSelected = missing.filter(id => assets.some(a => a.id === id));
   const rows = assets.filter(a => a.category !== '현금').map(a => {
-    // A valid dividend observation ends at the same final close as this quote.
-    const observed = quotes.get(a.id)?.price_date;
-    const lastMonth = observed ? `${Number(observed.slice(0, 4)) + 1}${observed.slice(4, 7)}` : null;
-    const fullLastMonth = observed && Number(observed.slice(8)) === new Date(Date.UTC(Number(observed.slice(0, 4)), Number(observed.slice(5, 7)), 0)).getUTCDate();
     return { asset: a, values: months.map(m => {
     if (mode === 'actual') {
       const recorded = actual.filter(d => d.asset_id === a.id && d.date.startsWith(m));
       return recorded.length ? recorded.reduce((s, d) => s + d.amount, 0) : null;
     }
-    const covered = forecastStartMonth !== null && lastMonth !== null && m >= startMonth && m >= forecastStartMonth && (m < lastMonth || m === lastMonth && fullLastMonth);
+    const covered = m >= startMonth && dividendMonthCovered(a, quotes.get(a.id), m, forecastStartMonth);
     const entries = forecasts.filter(d => d.asset_id === a.id && d.month === m);
     return entries.length ? entries.reduce((s, d) => s + d.amount, 0) : !covered || missing.includes(a.id) ? null : 0;
   }) }; });

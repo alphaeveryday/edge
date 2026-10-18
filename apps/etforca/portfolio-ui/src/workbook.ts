@@ -5,6 +5,14 @@ export type Workbook = { title: string; fx: number | null; assets: Asset[]; divi
 export type Saved = { version: number; workbook: Workbook | null };
 export type Quote = { id: string; value: number | null; profit: number | null; price: number | null; price_date: string | null; quantity: number | null; average?: number | null; estimated_quantity?: boolean; dividend_yield_pct?: number | null; dividend_cycle?: string };
 export type Forecast = { asset_id: string; month: string; amount: number };
+export function dividendMonthCovered(asset: Asset, quote: Quote | undefined, month: string, start: string | null) {
+  if (asset.category === '현금' || asset.quantity === 0 || asset.quantity === null && asset.amount === 0) return true;
+  const observed = quote?.price_date;
+  if (!observed || !start || month < start) return false;
+  const last = `${Number(observed.slice(0, 4)) + 1}${observed.slice(4, 7)}`;
+  const monthEnd = Number(observed.slice(8)) === new Date(Date.UTC(Number(observed.slice(0, 4)), Number(observed.slice(5, 7)), 0)).getUTCDate();
+  return month < last || month === last && monthEnd;
+}
 export type Tracking = { market: { version: number; payload: { date: string; assets: Quote[]; fx: number | null; forecasts: Forecast[]; missing: string[]; dividend_missing: string[]; pending_splits?: string[] } } | null; days: { date: string; value: number; assets: Quote[]; fx: number | null }[]; archives?: { version: number; payload: Workbook }[] };
 export function needsSeed(w: Workbook) { return w.assets.some(a => a.amount === null && a.quantity === null && a.weight !== null); }
 export function withSeed(w: Workbook, seed: number): Workbook {
