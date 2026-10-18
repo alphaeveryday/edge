@@ -179,6 +179,8 @@ class OpenGraphImage(HTMLParser):
 
 def public_https(url):
     """Search results are attacker-influenced: only https to hosts that resolve to public addresses."""
+    # ponytail: httpx resolves again on connect, so DNS rebinding can still reach an internal host once. Without redirects
+    # and with only an https og:image attribute read back, that is a blind probe; pin the vetted IP if it ever matters.
     try:
         parts = urlsplit(url)
         if parts.scheme != 'https' or not parts.hostname:

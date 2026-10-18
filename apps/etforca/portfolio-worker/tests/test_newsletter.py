@@ -950,11 +950,13 @@ def test_event_titles_differing_only_in_spacing_are_one_row():
 
 async def test_illustrate_takes_a_thumbnail_only_from_an_article_and_survives_failures(monkeypatch):
     monkeypatch.setattr(agent, 'public_https', lambda url: True)
+    requested = []
     pages = {'https://news.example/a': (200, '<meta property="og:image" content="https://img.example/a.jpg">'),
              'https://news.example/redirect': (302, ''), 'https://news.example/plain': (200, '<meta property="og:image" content="http://img.example/b.jpg">')}
     class Client:
         def stream(self, method, url, **kwargs):
             assert kwargs['follow_redirects'] is False, 'A redirect could point inside the network'
+            requested.append(url)
             status, body = pages[url]
             class Response:
                 status_code, headers, encoding = status, {'content-type': 'text/html'}, 'utf-8'
@@ -974,9 +976,34 @@ async def test_illustrate_takes_a_thumbnail_only_from_an_article_and_survives_fa
                'plain': {'url': 'https://news.example/plain'}, 'outlook': {'url': 'https://etforca.com/outlook/091160.json'}}
     value = await agent.illustrate(Client(), card, sources)
     assert [i['image'] for i in value['positives'] + value['negatives']] == ['https://img.example/a.jpg', None, None, None]
+    assert 'https://etforca.com/outlook/091160.json' not in requested, 'Our outlook JSON is never treated as an article picture'
 
 
-def test_public_https_refuses_internal_addresses():
+def test_public_https_refuses_internal_addresses(monkeypatch):
+    import socket
+    monkeypatch.setattr(socket, 'getaddrinfo', lambda host, *_ , **__: [(None, None, None, None, ('93.184.216.34', 443))])
+    assert agent.public_https('https://news.example/a'), 'A public article host must stay reachable, or no thumbnail ever shows'
+    monkeypatch.undo()
     assert not agent.public_https('http://example.com/')
     assert not agent.public_https('https://127.0.0.1/')
     assert not agent.public_https('https://169.254.170.2/v2/credentials')
+
+
+async def test_news_item_citing_the_price_row_is_sent_back_for_a_text_source():
+    calls = []
+    evidence = SimpleNamespace(sources=[{'id': 'outlook', 'url': 'https://etforca.com/', 'excerpt': '우리 전망'},
+                                        {'id': 'price', 'url': 'https://example.test/p', 'excerpt': json.dumps(QUOTE)}])
+    async def model(payload):
+        calls.append(payload)
+        news = {**NEWS, 'source_id': 'price' if len(calls) == 1 else 'outlook'}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({**H_CARD, 'positives': [news]})}}]}
+    await agent.write_card({'instrument_id': 'KR:091160', 'name': '반도체'}, date(2026, 10, 18), 'test', model_call=model,
+                           evidence=evidence, research=False)
+    assert len(calls) == 2, 'A price row is not news evidence'
+
+
+def test_same_title_from_two_companies_stays_two_rows():
+    a = letter_card('H', 'US:A', 'A', events=[{**EVENT, 'icon': None}])
+    b = letter_card('H', 'US:B', 'B', events=[{**EVENT, 'org': '삼성전자', 'icon': None}])
+    _, _, text = email.daily(date(2026, 10, 18), [a, b], 'H')
+    assert '(SK하이닉스) — A' in text and '(삼성전자) — B' in text

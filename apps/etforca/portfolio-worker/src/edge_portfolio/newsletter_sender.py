@@ -199,8 +199,12 @@ def process_daily(ses, now, *, deadline=float('inf')):
         try:
             rendered = newsletter_email.daily(edition, cards, newsletter_email.DEFAULT_FORMAT, issued_at=now)
         except Exception as error:
-            # One unrenderable edition must not stop the tick for every later recipient.
-            log.error('subscription=%s edition=%s newsletter_render_failed code=%s', row['id'], edition, type(error).__name__)
+            # One unrenderable edition must not stop the tick for every later recipient. Rendering is deterministic on
+            # the cached cards, so record the failure instead of retrying it every tick until midnight.
+            log.error('subscription=%s edition=%s newsletter_render_failed code=%s', row['id'], edition, type(error).__name__, exc_info=True)
+            with connect() as db:
+                db.execute("""UPDATE portfolio_newsletter_deliveries SET state='failed',failure='RENDER_FAILED',updated_at=now()
+                    WHERE email=%s AND edition=%s AND state IN ('queued','waiting_content')""", (row['email'], edition))
             continue
         if time.monotonic() >= deadline:
             # A contact lookup or rendering can cross midnight after the loop's initial check.

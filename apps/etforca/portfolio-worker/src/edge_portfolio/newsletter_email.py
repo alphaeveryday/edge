@@ -349,8 +349,10 @@ def calendar(letter, edition, cards):
     for card in cards:
         for event in card['events']:
             if event['date'] >= edition.isoformat():
-                # Titles come from separate model runs: '3분기 실적 발표' and '3분기 실적발표' are one event.
-                seen.setdefault((event['date'], ''.join(event['title'].split())), (event, []))[1].append(card['name'])
+                # Titles come from separate model runs: '3분기 실적 발표' and '3분기 실적발표' by the same org are one event,
+                # while the same title by two companies stays two rows.
+                key = (event['date'], ''.join(event['title'].split()), ''.join(event['org'].split()))
+                seen.setdefault(key, (event, []))[1].append(card['name'])
     if not seen:
         return
     lines, text = '', []
