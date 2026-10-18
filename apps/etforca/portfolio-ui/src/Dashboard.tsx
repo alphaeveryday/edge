@@ -86,7 +86,7 @@ export function Dashboard() {
   const profit = invested.length && invested.every(a => quotes.get(a.id)?.profit != null) ? invested.reduce((sum, a) => sum + quotes.get(a.id)!.profit!, 0) : null;
   const basis = profit !== null && invested.every(a => quotes.get(a.id)?.value != null) ? invested.reduce((sum, a) => sum + quotes.get(a.id)!.value!, 0) - profit : null;
   const returnPct = profit !== null && basis !== null && basis > 0 ? Number((profit / basis * 100).toFixed(2)) : null;
-  const forecasts = (market?.forecasts ?? []).filter(d => d.month >= thisMonth() && assets.some(a => a.id === d.asset_id));
+  const forecasts = (market?.forecasts ?? []).filter(d => (d.month > thisMonth() || d.month === thisMonth() && market?.date === today()) && assets.some(a => a.id === d.asset_id));
   const forecastComplete = !!market && market.date === today() && !market.dividend_missing.some(id => assets.some(a => a.id === id));
   // Annual estimates use the complete trailing-year cash yield, not a clipped calendar window.
   const annualCash = assets.map(a => annualDividend(a, quotes.get(a.id)));

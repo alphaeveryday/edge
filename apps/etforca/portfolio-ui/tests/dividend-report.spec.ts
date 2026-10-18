@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { annualDividend, type Asset } from '../src/workbook';
 
 test('switching to an account without old dividends keeps the selected year truthful', async ({ page }) => {
   await page.clock.setFixedTime(new Date('2026-10-18T03:00:00Z'));
@@ -28,15 +29,17 @@ for (const observed of ['2026-09-30', '2026-10-16', 'zero', 'mixed', 'partial', 
   await page.route('**/api/portfolio/**', route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/workbook')) return route.fulfill({ json: { version: 1, workbook: { title: '내 포트폴리오', fx: null, assets: observed === 'mixed' ? [asset, { ...asset, id: 'zero', quantity: 0 }] : [asset], months: [], dividends: [] } } });
-    return route.fulfill({ json: path.endsWith('/tracking') ? { market: { version: 1, payload: { date: observed === 'stale' ? '2026-10-01' : day, assets: [{ id: 'a', value: 350000, profit: 0, dividend_yield_pct: observed === 'annual' ? 4 : null, quantity: 10, average: 25, price: 25, price_date: observed === 'zero' ? null : ['mixed', 'partial', 'stale', 'annual'].includes(observed) ? '2026-10-16' : observed }], fx: 1400, forecasts: observed === 'partial' ? [{ asset_id: 'a', month: '2027-10', amount: 1234 }] : [], missing: [], dividend_missing: [] } }, days: [] } : {} });
+    return route.fulfill({ json: path.endsWith('/tracking') ? { market: { version: 1, payload: { date: observed === 'stale' ? '2026-10-01' : day, assets: [{ id: 'a', value: 350000, profit: 0, dividend_yield_pct: observed === 'annual' ? 4 : null, annual_dividend_per_share: observed === 'annual' ? 1 : null, quantity: 10, average: 25, price: 25, price_date: observed === 'zero' ? null : ['mixed', 'partial', 'stale', 'annual'].includes(observed) ? '2026-10-16' : observed }], fx: 1400, forecasts: observed === 'partial' ? [{ asset_id: 'a', month: '2027-10', amount: 1234 }] : observed === 'stale' ? [{ asset_id: 'a', month: '2026-10', amount: 998877 }] : [], missing: [], dividend_missing: [] } }, days: [] } : {} });
   });
   await page.goto('/portfolio/?view=dashboard');
   await page.getByRole('button', { name: '배당 달력', exact: true }).click();
   if (observed === 'annual') {
+    expect(annualDividend({ ...asset, quantity: 10000 } as Asset, { id: 'a', value: 8400000000, profit: 0, price: 600, price_date: '2026-10-16', quantity: 10000, dividend_yield_pct: 1.3333, annual_dividend_per_share: 8 })).toBe(112000000);
     await expect(page.locator('.dividend-metrics strong').nth(0)).toHaveText('4.0%');
     await expect(page.locator('.dividend-metrics strong').nth(1)).toHaveText('14,000원');
   }
   if (observed === 'stale') {
+    await expect(page.locator('.dashboard-main')).not.toContainText('998,877');
     await expect(page.locator('.dividend-metrics')).toContainText('확인된 예상');
     await expect(page.locator('.dividend-metrics strong').first()).toHaveText('—');
   }

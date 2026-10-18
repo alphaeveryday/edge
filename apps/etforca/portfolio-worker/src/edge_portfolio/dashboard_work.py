@@ -238,7 +238,7 @@ def dividend_details(record, instrument_id):
     from .market_data import dividend_observation
     observation = dividend_observation(record, instrument_id)
     if observation is None:
-        return {'dividend_yield_pct': None, 'dividend_cycle': '미확인'}
+        return {'dividend_yield_pct': None, 'annual_dividend_per_share': None, 'dividend_cycle': '미확인'}
     months = sorted({event['date'][:7] for event in observation['events']})
     indices = [int(m[:4]) * 12 + int(m[5:]) for m in months]
     gaps = [b - a for a, b in zip(indices, indices[1:])]
@@ -253,7 +253,7 @@ def dividend_details(record, instrument_id):
         cycle = '반기'
     elif single_payment and count == 1:
         cycle = '연 1회'
-    return {'dividend_yield_pct': observation['trailing_yield_pct'], 'dividend_cycle': cycle + (' · 최근 1년' if count else '')}
+    return {'dividend_yield_pct': observation['trailing_yield_pct'], 'annual_dividend_per_share': sum(event['amount'] for event in observation['events']), 'dividend_cycle': cycle + (' · 최근 1년' if count else '')}
 
 
 def valuation(workbook, records, prior, day):

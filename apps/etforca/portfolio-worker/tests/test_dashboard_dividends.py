@@ -29,7 +29,7 @@ def test_cycle_uses_observed_spacing_not_just_event_count(months, cycle):
 def test_short_history_stays_unknown_not_zero_or_annual():
     record = history(['2026-10'])
     record['frame'] = record['frame'].iloc[-20:]
-    assert work.dividend_details(record, 'KR:069500') == {'dividend_yield_pct': None, 'dividend_cycle': '미확인'}
+    assert work.dividend_details(record, 'KR:069500') == {'dividend_yield_pct': None, 'annual_dividend_per_share': None, 'dividend_cycle': '미확인'}
 
 
 def test_rolling_year_can_contain_thirteen_monthly_payment_months():
@@ -51,3 +51,12 @@ def test_cash_distributions_never_buy_additional_shares():
     assert len(forecast) == 4
     assert all(row['amount'] == 14000 for row in forecast)
     assert sum(row['amount'] for row in forecast) == 56000
+
+
+def test_annual_cash_keeps_original_distributions_instead_of_rounded_yield():
+    record = history(['2026-01', '2026-07'])
+    record['frame']['Close'] = 600.
+    record['frame']['Dividends'] *= 4
+    details = work.dividend_details(record, 'KR:069500')
+    assert details['dividend_yield_pct'] == 1.3333
+    assert details['annual_dividend_per_share'] == 8
