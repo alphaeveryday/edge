@@ -121,6 +121,51 @@ def test_authentication_failure_is_recorded_as_source_failure():
     assert objects[0].detail == "RuntimeError"
 
 
+def test_source_wide_stop_preserves_prior_raw_without_calling_remaining_symbols(tmp_path):
+    from data_pipeline.sources.http import StopFetch
+    class StoppingSource:
+        def __init__(self): self.calls = []
+        def fetch(self, instrument, start, end):
+            self.calls.append(instrument['ticker'])
+            if len(self.calls) == 2:
+                raise StopFetch('quota')
+            return source(Client(lambda p: ({'rt_cd': '0', 'output1': []}, 'E'))).fetch(instrument, start, end)
+    adapter = StoppingSource()
+    storage = LocalStorage(tmp_path)
+    assert dividend.collect_dividends(storage, adapter, 'stopped',
+        instruments=[{'ticker': s, 'market_code': 'XKRX'} for s in ['069500', '360750', '379800']],
+        start=date(2026, 1, 1), end=date(2026, 12, 31)) == 2
+    assert adapter.calls == ['069500', '360750']
+    manifest = so.existing_raw_manifest(storage, dividend.DIVIDEND.dataset, 'stopped')
+    assert manifest['counts'] == {'ok': 0, 'empty': 1, 'error': 2}
+
+
+def test_stop_inside_split_preserves_completed_window_and_parent_bytes(tmp_path):
+    from data_pipeline.sources.http import StopFetch
+    def response(params):
+        if params['F_DT'] == params['T_DT'] == ['20260731']:
+            raise StopFetch('quota')
+        return {'rt_cd': '0', 'output1': []}, 'M' if params['F_DT'] != params['T_DT'] else 'E'
+    storage = LocalStorage(tmp_path)
+    client = Client(response)
+    assert dividend.collect_dividends(storage, source(client), 'split_stop',
+        instruments=[INSTRUMENT, {**INSTRUMENT, 'ticker': '360750'}],
+        start=date(2026, 7, 30), end=date(2026, 7, 31)) == 2
+    assert client.calls == 3
+    manifest = so.existing_raw_manifest(storage, dividend.DIVIDEND.dataset, 'split_stop')
+    assert manifest['counts'] == {'ok': 1, 'empty': 1, 'error': 2}
+    assert len([e for e in manifest['objects'] if e.get('key')]) == 2
+
+
+def test_invalid_later_ticker_is_rejected_before_any_network_call(tmp_path):
+    client = Client(lambda p: ({'rt_cd': '0', 'output1': []}, 'E'))
+    with pytest.raises(ValueError):
+        dividend.collect_dividends(LocalStorage(tmp_path), source(client), 'bad_scope',
+            instruments=[INSTRUMENT, {**INSTRUMENT, 'ticker': 'INVALID'}],
+            start=date(2026, 1, 1), end=date(2026, 12, 31))
+    assert client.calls == 0
+
+
 @pytest.mark.parametrize("body,cont,status", [
     ({"rt_cd": "0", "output1": []}, "E", "empty"),
     ({"rt_cd": "1", "output1": []}, "E", "error"),

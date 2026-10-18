@@ -13,10 +13,18 @@ from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 from .kis_auth import KisAuth, domain_for
+from .http import StopFetch
 from ..steps.source_observations import RawObject
 
 PATH = "/uapi/domestic-stock/v1/ksdinfo/dividend"
 TR_ID = "HHKDB669102C0"
+
+
+class DividendSourceStopped(StopFetch):
+    """A source-wide stop carrying responses already received in this instrument."""
+    def __init__(self, objects):
+        super().__init__("source_stopped")
+        self.objects = objects
 
 
 class KisDividendSource:
@@ -42,7 +50,7 @@ class KisDividendSource:
                        "from": first.isoformat(), "to": last.isoformat()}
             params = dict(CTS="", GB1="0", F_DT=first.strftime("%Y%m%d"),
                           T_DT=last.strftime("%Y%m%d"), SHT_CD=symbol, HIGH_GB="")
-            body, status, detail = None, "error", None
+            body, status, detail, stopped = None, "error", None, False
             try:
                 headers = {**self.headers, "authorization": f"Bearer {self.auth.token()}"}
                 response_headers = {}
@@ -66,12 +74,16 @@ class KisDividendSource:
                         status = "ok" if data["output1"] else "empty"
                     else:
                         detail = "unknown_continuation"
+            except StopFetch:
+                detail, stopped = "source_stopped", True
             except Exception as error:
                 # Transport exceptions can include credential-bearing headers/URLs.
                 detail = type(error).__name__
             objects.append(RawObject("kis", "market", "KR",
                 f"{symbol}-{first.isoformat()}-{last.isoformat()}", "json", body,
                 request, status, detail, datetime.now(timezone.utc).isoformat()))
+            if stopped:
+                raise DividendSourceStopped(objects)
             if request.get("superseded_by_split"):
                 middle = first + (last - first) // 2
                 window(first, middle)

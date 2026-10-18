@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from .source_observations import (
-    Column, DatasetSpec, _PROVENANCE, ensure_same_request, existing_raw_manifest,
+    Column, DatasetSpec, RawObject, _PROVENANCE, ensure_same_request, existing_raw_manifest,
     record_already_collected, write_raw_run,
 )
+from ..sources.http import StopFetch
 
 
 def exact_date(value: str, *, required=False) -> str | None:
@@ -87,6 +89,11 @@ DIVIDEND = DatasetSpec(
 
 def collect_dividends(storage, source, run_id, *, instruments, start: date, end: date):
     """Write a replay-checked raw run for the requested instruments and dates."""
+    if not instruments or start > end or any(
+        row.get("market_code") != "XKRX" or not isinstance(row.get("ticker"), str)
+        or not re.fullmatch(r"[0-9A-Z]{6}", row["ticker"]) for row in instruments
+    ):
+        raise ValueError("Dividend scope must contain domestic instruments and a valid date range")
     scope = {"instruments": sorted(instruments, key=lambda row: (row["market_code"], row["ticker"])),
              "from": start.isoformat(), "to": end.isoformat()}
     producer = "ingest_raw_dividend"
@@ -94,9 +101,22 @@ def collect_dividends(storage, source, run_id, *, instruments, start: date, end:
     if done is not None:
         ensure_same_request(DIVIDEND.dataset, run_id, done, scope)
         return record_already_collected(storage, DIVIDEND, run_id, producer, done)
-    if not instruments or start > end:
-        raise ValueError("Dividend scope must contain instruments and a valid date range")
     started = datetime.now(timezone.utc)
-    objects = [obj for instrument in scope["instruments"] for obj in source.fetch(instrument, start, end)]
+    objects, stopped = [], False
+    for instrument in scope["instruments"]:
+        if not stopped:
+            try:
+                objects.extend(source.fetch(instrument, start, end))
+                continue
+            except StopFetch as error:
+                partial = getattr(error, "objects", [])
+                objects.extend(partial)
+                stopped = True
+                if partial:
+                    continue
+        # Preserve completed instruments and make every unattempted symbol visible.
+        objects.append(RawObject("kis", "market", "KR", instrument["ticker"], "json", None,
+            {**instrument, "from": start.isoformat(), "to": end.isoformat()},
+            "error", "source_stopped", datetime.now(timezone.utc).isoformat()))
     return write_raw_run(storage, DIVIDEND, run_id, producer=producer, objects=objects,
                          started_at=started, request_scope={"requested": scope})

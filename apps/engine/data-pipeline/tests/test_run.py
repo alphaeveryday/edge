@@ -23,6 +23,26 @@ def test_default_window_is_lookback_to_today_in_given_tz():
     assert from_date == "2026-07-02"  # DEFAULT_LOOKBACK_DAYS = 1
 
 
+def test_dividend_cli_series_reaches_collection_using_shared_kis_budget(monkeypatch):
+    monkeypatch.delenv('DATA_PIPELINE_CONFIG_FILE', raising=False)
+    monkeypatch.setenv('DATA_PIPELINE_KIS_NAV__SOURCE__APP_KEY', 'test')
+    monkeypatch.setenv('DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET', 'test')
+    captured = {}
+    def client(settings, **kwargs):
+        captured['budget'] = kwargs
+        return object()
+    def collect(storage, source, run_id, **kwargs):
+        captured.update(kwargs)
+        return 0
+    monkeypatch.setattr(run_mod, 'kis_http_client', client)
+    monkeypatch.setattr(run_mod.source_observations_dividend, 'collect_dividends', collect)
+    assert main(['ingest-raw-dividend', '--series', '069500', '--from', '2026-01-01',
+                 '--to', '2026-10-18', '--run-id', 'test_dividend']) == 0
+    assert captured['instruments'] == [{'ticker': '069500', 'market_code': 'XKRX'}]
+    assert captured['budget']['call_class'] == run_mod.CLASS_BATCH
+    assert captured['budget']['caller'] == 'dividend'
+
+
 def test_window_calendar_tz_is_declared_per_step_and_vendor():
     # WHY(ALPHA-883): 창의 날짜는 프로세스 시계가 아니라 **벤더 달력**이다 — 그 날짜 문자열이
     #      그대로 벤더 질의에 실린다(BigKinds startDate/endDate). 한쪽으로 통일하면 반드시

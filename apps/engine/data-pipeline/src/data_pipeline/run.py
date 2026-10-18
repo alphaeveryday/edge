@@ -408,7 +408,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="수집 루프의 벽시계 상한 초(미지정=무제한). 상한에 닿으면 남은 대상을 "
                              "미시도로 기록하고 **받은 것은 저장한 뒤** 조기 마감한다.")
     parser.add_argument("--series", default=None,
-                        help="ingest-raw-macro: 쉼표 구분 계열(미지정=전 계열 "
+                        help="ingest-raw-dividend: 쉼표 구분 국내 종목코드. ingest-raw-macro: 쉼표 구분 계열(미지정=전 계열 "
                              f"{','.join(sorted(macro_series.SERIES))})")
     parser.add_argument("--max-failed-symbols", type=int, default=None,
                         help="가격·투자자 수급 수집: exit 0 으로 허용할 격리 실패 심볼 수"
@@ -582,8 +582,8 @@ def main(argv: list[str] | None = None) -> int:
         # 키우는 게 아니라 명시적 --from/--to 백필이 그 경로다.
         if args.window_days > 3650:
             raise SystemExit(f"--window-days 가 소급 상한(3650일)을 넘는다: {args.window_days}")
-    if args.series is not None and args.step != "ingest-raw-macro":
-        raise SystemExit("--series 는 ingest-raw-macro 에서만 쓴다 — 무시되므로 거부한다")
+    if args.series is not None and args.step not in ("ingest-raw-macro", "ingest-raw-dividend"):
+        raise SystemExit("--series 는 ingest-raw-macro 또는 ingest-raw-dividend 에서만 쓴다")
     if args.all_partitions and args.step not in (
         "load-instruments", "tag-news", "load-documents", "load-price-daily", "load-price-triggers",
         "load-etf-nav", "load-market-series-daily", "load-etf-holdings", "load-etf-flow",
@@ -747,7 +747,8 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
             raise SystemExit("배당 수집에 일반 KIS 인증 설정(kis_nav.source)이 필요하다")
         instruments = [{"ticker": ticker, "market_code": "XKRX"} for ticker in sorted(set(tickers))]
         source = KisDividendSource(source_config.app_key, source_config.app_secret,
-                                   PoliteClient(min_interval=0.5, timeout=30), source_config.env)
+                                   kis_http_client(settings, min_interval=0.5, timeout=30,
+                                                   caller="dividend", call_class=CLASS_BATCH), source_config.env)
         return source_observations_dividend.collect_dividends(
             storage, source, run_id, instruments=instruments, start=start, end=end)
     if family == "sector":

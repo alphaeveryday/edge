@@ -48,6 +48,9 @@ Observed hazards and decisions:
 - Source failures, malformed rows and conflicting same-event amounts remain
   quality failures. Good observations are retained independently; failures never
   replace prior data with zero.
+- All requested tickers are validated before collection. KIS uses the shared
+  batch call budget. A source-wide stop preserves completed instruments and
+  split-window responses, and marks remaining instruments unattempted.
 
 US remains issuer-first ? verified KIS supplements ? yfinance fallback. US raw
 probe results have not been enabled as a production amount collector.
