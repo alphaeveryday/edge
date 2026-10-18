@@ -142,22 +142,22 @@ class PublicationStore:
                         and run["analysis_status"] != "completed")):
                 raise ToolInputError(f"Evidence {identity!r} is missing, foreign, future, failed, or not final-eligible")
             # Retired tools remain valid only as evidence from completed older publications.
-            archived = (run['function_name'] in {'get_factor_metrics', 'get_chart_metrics'}
+            archived = (run['function_name'] in {'get_factor_metrics', 'get_chart_metrics', 'get_issue_evidence'}
                 and run['analysis_status'] == 'completed'
                 and analysis['analysis_id'] not in (run['movement_analysis_id'], run['outlook_analysis_id']))
             if run["function_name"] not in self.final_tool_names and not archived:
-                hint = ("Call get_issue_evidence(include_body=false) and use its new tool_run_id."
+                hint = ("Call get_news_evidence(include_body=false) and use its new tool_run_id."
                         if run["function_name"] == "search_news_threads"
                         else "Use a successful final calculation or evidence tool_run_id.")
                 raise ToolInputError(f"Evidence {identity!r} from {run['function_name']} is not final-eligible. {hint}")
-            if run["function_name"] == "get_issue_evidence" and run["arguments"].get("include_body") is not False:
+            if run["function_name"] in {"get_issue_evidence", "get_news_evidence"} and run["arguments"].get("include_body") is not False:
                 raise ToolInputError(f"Evidence {identity!r}: final news evidence must exclude article body. "
-                                     "Call get_issue_evidence(include_body=false) and use its new tool_run_id.")
+                                     "Call get_news_evidence(include_body=false) and use its new tool_run_id.")
             output = run.get("output") or {}
             if run['function_name'] == 'read_web_document' and output.get('result', {}).get('final_eligible') is not True:
                 raise ToolInputError('Web document publication time is future or unverified; use dated evidence before the analysis cutoff.')
             result = output.get("result", {})
-            if run["function_name"] == "get_issue_evidence":
+            if run["function_name"] in {"get_issue_evidence", "get_news_evidence"}:
                 candidates = result.get("news", [])
                 for article in candidates if isinstance(candidates, list) else []:
                     url = _public_source_url(article.get("source_uri"))

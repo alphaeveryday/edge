@@ -1,7 +1,7 @@
 """Individual and complete-portfolio finalized net-flow calculations."""
 from datetime import date
 
-from edge_analysis_v2.tools.execution import ToolInputError
+from edge_analysis_v2.tools.execution import ToolInputError, ToolDataUnavailableError, ToolSourceDataError
 from edge_analysis_v2.tools.fixture_data.common import available, decimal, holdings, instant, number
 
 
@@ -35,13 +35,13 @@ def observation(rows, instrument_id, day, investor, window):
     detail = f'target={instrument_id}, date={day}, investor={investor}, window={window}. '
     action = 'Do not retry the same request; use a fully available window or report this data gap.'
     if not matches:
-        raise ToolInputError('MISSING_FLOW: missing finalized flow; ' + detail + action)
+        raise ToolDataUnavailableError('MISSING_FLOW: missing finalized flow; ' + detail + action)
     if len(matches) != 1:
-        raise ToolInputError('DUPLICATE_FLOW: duplicate source observations; ' + detail + action)
+        raise ToolSourceDataError('DUPLICATE_FLOW: duplicate source observations; ' + detail + action)
     if matches[0].get('finalized') is not True:
-        raise ToolInputError('UNFINALIZED_FLOW: source observation is not finalized; ' + detail + action)
+        raise ToolDataUnavailableError('UNFINALIZED_FLOW: source observation is not finalized; ' + detail + action)
     if type(matches[0]['net_amount_krw']) is not int:
-        raise ToolInputError('INVALID_FLOW_AMOUNT: source flow must be integer KRW; ' + detail + action)
+        raise ToolSourceDataError('INVALID_FLOW_AMOUNT: source flow must be integer KRW; ' + detail + action)
     return matches[0]
 
 
@@ -64,7 +64,7 @@ def input_tables(rows):
         values = days.setdefault(row["date"], {})
         investor = row["investor"]
         if investor not in columns[1:]:
-            raise ToolInputError('INVALID_FLOW_INVESTOR: unknown investor observation in initial input. Do not retry this snapshot; repair source data.')
+            raise ToolSourceDataError('INVALID_FLOW_INVESTOR: unknown investor observation in initial input. Do not retry this snapshot; repair source data.')
         if investor in values:
             # Preserve fail-fast for corrupt input; use the same safe diagnostic as direct tools.
             observation(rows, row['instrument_id'], row['date'], investor, 'initial input up to 30 sessions')
@@ -99,13 +99,13 @@ def calculate(fixture, investor, lookback_days, operation, direction, instrument
     cutoff = instant(context["analysis_at"])
     end = date.fromisoformat(context["flow_as_of_date"])
     if end >= cutoff.date():
-        raise ToolInputError('INVALID_FLOW_CUTOFF: flow cutoff must be a completed prior day. Do not retry this fixed analysis snapshot.')
+        raise ToolSourceDataError('INVALID_FLOW_CUTOFF: flow cutoff must be a completed prior day. Do not retry this fixed analysis snapshot.')
     dates = [date.fromisoformat(d) for d in fixture.get("trading_dates", [])]
     if len(set(dates)) != len(dates):
-        raise ToolInputError('INVALID_FLOW_CALENDAR: duplicate trading date. Do not retry this fixed analysis snapshot; calendar repair is required.')
+        raise ToolSourceDataError('INVALID_FLOW_CALENDAR: duplicate trading date. Do not retry this fixed analysis snapshot; calendar repair is required.')
     dates = sorted(d for d in dates if d <= end)[-lookback_days:]
     if len(dates) != lookback_days or dates[-1] != end:
-        raise ToolInputError(f'INSUFFICIENT_CALENDAR: missing trading calendar window for {lookback_days} sessions ending {end.isoformat()}. Do not retry the same request; choose a covered window or report the gap.')
+        raise ToolDataUnavailableError(f'INSUFFICIENT_CALENDAR: missing trading calendar window for {lookback_days} sessions ending {end.isoformat()}. Do not retry the same request; choose a covered window or report the gap.')
     rows = available(fixture.get("flow", []), cutoff)
     if instrument_id == context['etf_code']:
         raise ToolInputError('UNSUPPORTED_ETF_FLOW: ETF own investor flow is not used. Choose a constituent from get_etf_holdings or use sum_weighted_net_flow/calculate_weighted_flow without instrument_id.')
@@ -114,7 +114,7 @@ def calculate(fixture, investor, lookback_days, operation, direction, instrument
     portfolio = holdings(fixture) if instrument_id is None else None
     weights = portfolio['holdings'] if portfolio else [{'instrument_id': instrument_id, 'weight': 1}]
     if any(r['instrument_id'] == context['etf_code'] for r in weights):
-        raise ToolInputError('INVALID_HOLDINGS: ETF own flow cannot be a constituent of its weighted flow. Do not retry this snapshot; holdings repair is required.')
+        raise ToolSourceDataError('INVALID_HOLDINGS: ETF own flow cannot be a constituent of its weighted flow. Do not retry this snapshot; holdings repair is required.')
     values = []
     for day in dates:
         total = decimal(0)

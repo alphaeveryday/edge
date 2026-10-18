@@ -271,7 +271,7 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                     cur.execute("""SELECT r.output->'result'->'news'
                         FROM tool_runs r JOIN tool_definitions d USING(tool_id)
                         WHERE r.tool_run_id=ANY(%s) AND r.status='completed'
-                          AND d.function_name='get_issue_evidence' AND r.arguments->>'include_body'='false'
+                          AND d.function_name IN ('get_issue_evidence','get_news_evidence') AND r.arguments->>'include_body'='false'
                         ORDER BY r.started_at,r.tool_run_id""", (sorted(set(listed_references(
                             [previous, initial.get('previous_issue_detail')]))),))
                     return {article['news_id']: article for (articles,) in cur.fetchall() for article in articles}

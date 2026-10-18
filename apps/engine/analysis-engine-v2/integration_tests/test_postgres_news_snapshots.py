@@ -144,7 +144,7 @@ def test_internal_baseline_cannot_be_cited_as_final_news_evidence(database):
         cur.execute('SELECT tool_run_id FROM tool_runs WHERE outlook_analysis_id=%s', (identity,))
         run_id = cur.fetchone()['tool_run_id']
         with pytest.raises(ToolInputError, match='not final-eligible'):
-            PublicationStore(conn, final_tool_names={'get_issue_evidence'})._evidence(cur, [run_id], parent)
+            PublicationStore(conn, final_tool_names={'get_news_evidence'})._evidence(cur, [run_id], parent)
 
 
 def test_stored_v2_payload_is_compressed_and_restores_original_snapshot(database):

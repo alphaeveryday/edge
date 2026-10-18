@@ -9,7 +9,7 @@ def material_key(material):
     original = deepcopy(material)
     if original.get('kind') == 'tool':
         original.get('output', {}).pop('tool_run_id', None)
-        if original.get('definition', {}).get('function_name') in ('get_issue_evidence', 'search_news_threads', 'search_news_articles'):
+        if original.get('definition', {}).get('function_name') in ('get_news_evidence', 'get_issue_evidence', 'search_news_threads', 'search_news_articles'):
             original.pop('context', None)  # Execution/flow cutoff does not change an identical news original.
         else:
             original.get('context', {}).pop('analysis_at', None)

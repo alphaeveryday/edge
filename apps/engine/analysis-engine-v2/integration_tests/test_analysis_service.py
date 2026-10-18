@@ -49,7 +49,7 @@ def test_removed_topic_audit_does_not_keep_its_research_active(run_context):
     fixture = make_fixture()
     answer = {}
     async def first(**kwargs):
-        refs = [kwargs['call']('get_issue_evidence', {'news_ids': [n['news_id']], 'include_body': False})['tool_run_id']
+        refs = [kwargs['call']('get_news_evidence', {'news_ids': [n['news_id']], 'include_body': False})['tool_run_id']
                 for n in kwargs['initial']['news'][:2]]
         kwargs['call']('write_outlook_body', {'title': '계약 확인', 'items': [dict(
             id=identity, title_keyword='계약', sentences=['확인된 자료를 살펴봐요.'], sentiment='neutral', tool_run_ids=[ref])
@@ -132,7 +132,7 @@ def test_revision_receives_uncited_research_and_keeps_state_after_no_change(run_
     _, identity = request('movement', first, fixture)
     with factory() as connection:
         state = load_research(connection, 'movement', identity).snapshot()
-    assert any(m['definition']['function_name'] == 'get_issue_evidence' for m in state['materials'].values())
+    assert any(m['definition']['function_name'] == 'get_news_evidence' for m in state['materials'].values())
     assert state['gaps'] == []
     later = deepcopy(fixture)
     later['context']['analysis_at'] = (datetime.fromisoformat(fixture['context']['analysis_at']) + timedelta(minutes=1)).isoformat()
@@ -294,7 +294,7 @@ def run_context(tmp_path):
 
 
 def news_reference(kwargs):
-    return kwargs['call']('get_issue_evidence',{'news_ids':[kwargs['initial']['news'][0]['news_id']], 'include_body':False})['tool_run_id']
+    return kwargs['call']('get_news_evidence',{'news_ids':[kwargs['initial']['news'][0]['news_id']], 'include_body':False})['tool_run_id']
 
 
 def test_saved_prompt_snapshot_reaches_actual_model_boundary(run_context):
@@ -393,7 +393,7 @@ def test_movement_calls_commit_before_final_publication_and_retry_does_not_call_
         reference=news_reference(kwargs)
         with factory() as connection:
             assert connection.execute('''SELECT r.status FROM tool_runs r JOIN tool_definitions d USING(tool_id)
-                WHERE r.movement_analysis_id=%s AND d.function_name='get_issue_evidence' ''',
+                WHERE r.movement_analysis_id=%s AND d.function_name='get_news_evidence' ''',
                 (kwargs['artifacts'].name,)).fetchone()==('completed',)
         return {'new_items':[dict(candidate_id='new',type='이슈',title_keyword='신규 계약',sentence='공급 물량을 확보했어요.',sentiment='positive',tool_run_ids=[reference])],
                 'selected_item_ids':['new'],'summary':'공급 물량을 확보했어요.'}

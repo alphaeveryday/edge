@@ -24,7 +24,7 @@ def factor_db():
             connection.execute("INSERT INTO outlook_analyses (analysis_id,etf_code,analysis_at) VALUES (%s,'TEST','2026-09-21T10:00:00+09:00')", (key,))
             for factor in list(METRICS) + ['이슈']:
                 connection.execute("INSERT INTO outlook_factors VALUES (%s,%s,%s,'상승','Test')", (key+factor,key,factor))
-            connection.execute("INSERT INTO tool_definitions(tool_id,function_name,version,description) VALUES (%s,'get_issue_evidence',%s,'Test')", (key,key))
+            connection.execute("INSERT INTO tool_definitions(tool_id,function_name,version,description) VALUES (%s,'get_news_evidence',%s,'Test')", (key,key))
             connection.execute('''INSERT INTO tool_runs(tool_run_id,tool_id,outlook_analysis_id,arguments,output,status,finished_at)
                 VALUES (%s,%s,%s,'{"include_body":false}','{}','completed',now())''', (key,key,key))
             metric = dict(key='ma20_distance_pct',value=8.2,observed_at='2026-09-18')

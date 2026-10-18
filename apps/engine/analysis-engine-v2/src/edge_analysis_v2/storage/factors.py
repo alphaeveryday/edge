@@ -203,7 +203,7 @@ def save_factor_details(connection, analysis_id: str, metrics: dict, issue: dict
         if set(evidence) != references:
             raise ValueError('Evidence must belong to this execution or its completed matching ancestors')
         for run in evidence.values():
-            if run['function_name'] == 'get_issue_evidence' and run['arguments'].get('include_body') is not False:
+            if run['function_name'] in {'get_issue_evidence', 'get_news_evidence'} and run['arguments'].get('include_body') is not False:
                 raise ValueError('Final news evidence must exclude body')
         for row in rows:
             if any(evidence[identity]['outlook_analysis_id'] != analysis_id for identity in row['tool_run_ids']):

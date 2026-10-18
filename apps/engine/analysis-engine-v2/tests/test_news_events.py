@@ -30,6 +30,21 @@ def result(tools, name, **arguments):
     return tools.call(name, arguments)['result']
 
 
+@pytest.mark.parametrize('scope', ['events', 'unlinked_articles'])
+def test_availability_date_filter_uses_utc_even_when_korea_has_entered_the_next_day(scope):
+    data = source()
+    data['context']['analysis_at'] = '2026-10-19T00:00:00Z'
+    when = '2026-10-17T16:00:00Z'
+    add(data, 'late-evening', when=when)
+    if scope == 'unlinked_articles':
+        data['news_events'] = []
+    tools = DatabaseTools(data)
+    same_day = result(tools, 'list_events', scope=scope, start_date='2026-10-17', end_date='2026-10-17')
+    assert same_day['total_count'] == 1
+    next_day = result(tools, 'list_events', scope=scope, start_date='2026-10-18', end_date='2026-10-18')
+    assert next_day['total_count'] == 0
+
+
 def test_rebroadcasts_cannot_displace_a_distinct_event_or_hide_a_correction():
     data = source()
     add(data, 'first', thread='t', novelty='FIRST_IN_THREAD')
@@ -45,8 +60,8 @@ def test_rebroadcasts_cannot_displace_a_distinct_event_or_hide_a_correction():
     assert {row['event_id'] for row in timeline['items']} >= {'first', 'correction'}
     assert timeline['folded_rebroadcast_count'] == 1001
     assert all('repeated_by' not in row for row in timeline['items'])
-    assert result(tools, 'get_issue_evidence', news_ids=['correction'], include_body=True)['news'][0]['body']
-    assert result(tools, 'get_issue_evidence', news_ids=['correction'], include_body=False)['news'][0]['news_id'] == 'correction'
+    assert result(tools, 'get_news_evidence', news_ids=['correction'], include_body=True)['news'][0]['body']
+    assert result(tools, 'get_news_evidence', news_ids=['correction'], include_body=False)['news'][0]['news_id'] == 'correction'
     assert 'search_news_threads' not in {s['function']['name'] for s in tools.schemas}
 
 
@@ -63,7 +78,7 @@ def test_cursor_binds_snapshot_and_filters_and_visits_every_event_once():
     page = result(tools, 'list_events', limit=20)
     ids = [x['event_key'] for x in page['items']]
     cursor = page['next_cursor']
-    with pytest.raises(ToolInputError): result(tools, 'list_events', cursor=cursor, event_types=['OTHER'])
+    with pytest.raises(ToolInputError): result(tools, 'list_events', scope='events', cursor=cursor, event_types=['OTHER'])
     changed = deepcopy(data); add(changed, 'new')
     with pytest.raises(ToolInputError): result(DatabaseTools(changed), 'list_events', cursor=cursor)
     while page['next_cursor']:
@@ -105,8 +120,8 @@ def test_unthreaded_search_and_future_data_are_not_silently_included():
     add(data, 'future', when='2026-10-17T00:00:00+00:00')
     data['news'].append({'news_id':'loose', 'title':'loose', 'body':None, 'published_at':AT, 'available_at':AT})
     tools = DatabaseTools(data)
-    assert result(tools, 'list_events')['total_count'] == 1
-    assert [r['news_id'] for r in result(tools, 'search_news_articles', query='', offset=0, unlinked_only=True)['articles']] == ['loose']
+    assert result(tools, 'list_events', scope='events')['total_count'] == 1
+    assert [r['news_ids'][0] for r in result(tools, 'list_events', scope='unlinked_articles')['items']] == ['loose']
 
 
 def test_new_snapshot_initial_input_replaces_titles_and_legacy_snapshot_stays_absent():
@@ -169,11 +184,11 @@ def test_latest_fact_supplies_summary_and_rejected_evidence_remains_searchable()
     add(data, 'z-correction', thread='t', novelty='CORRECTION')
     add(data, 'rejected', status='REJECTED')
     tools = DatabaseTools(data)
-    listing = result(tools, 'list_events')
+    listing = result(tools, 'list_events', scope='events')
     assert listing['items'][0]['title'] == 'z-correction'
     assert listing['items'][0]['news_ids'][0] == 'z-correction'
     assert listing['unlinked_article_count'] == 1
-    assert result(tools, 'search_news_articles', query='', offset=0, unlinked_only=True)['articles'][0]['news_id'] == 'rejected'
+    assert result(tools, 'list_events', scope='unlinked_articles')['items'][0]['news_ids'] == ['rejected']
 
 
 def test_corrections_precede_repeat_only_changes_and_repeats_are_counted():
@@ -198,15 +213,15 @@ def test_company_filter_uses_captured_issuer_mapping_and_binds_cursor():
     add(data, 'other')
     data['news_events'][-1]['issuer_ids'] = ['other-issuer']
     tools = DatabaseTools(data)
-    page = result(tools, 'list_events', instrument_ids=['000001'], limit=1)
+    page = result(tools, 'list_events', scope='events', instrument_ids=['000001'], limit=1)
     assert page['total_count'] == 3
     assert page['items'][0]['related_instrument_ids'] == ['000001']
     with pytest.raises(ToolInputError):
-        result(tools, 'list_events', instrument_ids=['000002'], cursor=page['next_cursor'])
+        result(tools, 'list_events', scope='events', instrument_ids=['000002'], cursor=page['next_cursor'])
     with pytest.raises(ToolInputError, match='Allowed'):
-        result(tools, 'list_events', instrument_ids=['BAD'])
+        result(tools, 'list_events', scope='events', instrument_ids=['BAD'])
     with pytest.raises(ToolInputError, match='unavailable'):
-        result(DatabaseTools(source()), 'list_events', instrument_ids=['000001'])
+        result(DatabaseTools(source()), 'list_events', scope='events', instrument_ids=['000001'])
 
 
 def test_rebroadcast_only_thread_keeps_one_representative_without_inventing_original():
@@ -282,7 +297,7 @@ def test_event_keyword_search_groups_repeats_and_preserves_later_correction():
     data['news'][-1].update(title='효성', body='미국 관세 소송')
     add(data, 'irrelevant')
     tools = DatabaseTools(data)
-    assert next(d['tool_id'] for d in tools.definitions if d['function_name'] == 'list_events') == 'list_events:database-v2'
+    assert next(d['tool_id'] for d in tools.definitions if d['function_name'] == 'list_events') == 'list_events:database-v3'
     page = result(tools, 'list_events', query='효성 관세', limit=1)
     assert page['total_count'] == 2
     with pytest.raises(ToolInputError):
@@ -298,3 +313,77 @@ def test_event_keyword_search_groups_repeats_and_preserves_later_correction():
     for invalid in (None, ['효성'], 'x' * 201):
         with pytest.raises(ToolInputError):
             result(tools, 'list_events', query=invalid)
+
+
+def test_unified_discovery_includes_unlinked_without_claiming_an_event():
+    data = source(); add(data, 'linked')
+    data['news'].append({'news_id': 'loose', 'title': 'loose', 'body': 'tariff', 'published_at': AT, 'available_at': AT})
+    tools = DatabaseTools(data)
+    names = {s['function']['name'] for s in tools.schemas}
+    assert not {'search_news_articles', 'search_news_threads', 'get_issue_evidence'} & names
+    page = result(tools, 'list_events')
+    assert {r['kind'] for r in page['items']} == {'event', 'unlinked_article'}
+    article = result(tools, 'list_events', scope='unlinked_articles', query='tariff')['items'][0]
+    assert article['news_ids'] == ['loose'] and 'event_key' not in article
+    assert result(tools, 'get_news_evidence', news_ids=article['news_ids'], include_body=True)['news'][0]['body'] == 'tariff'
+    with pytest.raises(ToolInputError):
+        result(tools, 'get_event_timeline', event_key='loose')
+
+
+def test_unified_cursor_cannot_cross_scopes_and_unavailable_filters_fail_explicitly():
+    data = source(); add(data, 'a'); add(data, 'b')
+    tools = DatabaseTools(data)
+    page = result(tools, 'list_events', scope='events', limit=1)
+    with pytest.raises(ToolInputError):
+        result(tools, 'list_events', scope='all', cursor=page['next_cursor'])
+    for args in ({'scope': 'bad'}, {'scope': 'unlinked_articles', 'event_types': ['CONTRACT']},
+                 {'scope': 'all', 'instrument_ids': ['091160']}):
+        with pytest.raises(ToolInputError):
+            result(tools, 'list_events', **args)
+
+
+def test_legacy_fixture_has_unified_article_discovery_without_invented_events():
+    from edge_analysis_v2.tools.fixture_data import FixtureTools
+    from test_real_sources import source as old_source
+    for tools in (FixtureTools(old_source()), DatabaseTools(old_source())):
+        names = {s['function']['name'] for s in tools.schemas}
+        assert not {'search_news_articles', 'search_news_threads', 'get_issue_evidence'} & names
+        assert result(tools, 'list_events', scope='events')['total_count'] == 0
+        assert all(r['kind'] == 'unlinked_article' for r in result(tools, 'list_events')['items'])
+
+
+@pytest.mark.parametrize('name,args', [
+    ('list_events', {'start_date': False}), ('list_events', {'end_date': ''}),
+    ('list_events', {'unknown': 1}), ('get_event_timeline', {'event_key': []}),
+    ('get_news_evidence', {'news_ids': [{}], 'include_body': True}),
+    ('get_news_evidence', {'news_ids': ['missing'], 'include_body': False}),
+    ('get_news_evidence', {'news_ids': ['a'], 'include_body': 1}),
+    ('get_news_evidence', {}), ('get_news_evidence', []),
+])
+def test_news_input_errors_are_recoverable_not_internal_failures(name, args):
+    data = source(); add(data, 'a')
+    with pytest.raises(ToolInputError):
+        DatabaseTools(data).call(name, args)
+
+
+def test_database_reuses_one_news_corpus_for_discovery_and_snapshot_comparison(monkeypatch):
+    from edge_analysis_v2.tools.news_events import NewsEvents
+    original = NewsEvents.__init__
+    constructions = []
+    def capture(instance, fixture):
+        constructions.append(instance)
+        original(instance, fixture)
+    monkeypatch.setattr(NewsEvents, '__init__', capture)
+    data = source(); add(data, 'a')
+    tools = DatabaseTools(data)
+    assert constructions == [tools.news_events]
+    assert tools.news_events is tools._news_discovery
+    assert tools._tools['list_events']['callback'].__self__ is tools.news_events
+    assert tools._tools['get_event_changes']['callback'].__self__ is tools.news_events
+
+
+@pytest.mark.parametrize('ids', ['', [], [''], [' '], ['a', 'a'], [1], [{}]])
+def test_article_identifiers_must_be_unique_nonblank_strings_before_lookup(ids):
+    data = source(); add(data, 'a')
+    with pytest.raises(ToolInputError, match='unique nonempty'):
+        result(DatabaseTools(data), 'get_news_evidence', news_ids=ids, include_body=True)

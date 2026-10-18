@@ -8,7 +8,7 @@ from edge_analysis_v2.tools.execution import ToolExecutionError
 
 def test_text_replacement_preserves_conditions_and_rejected_evidence_leaves_draft_intact(revisions):
     async def initial(**kwargs):
-        ref = kwargs['call']('get_issue_evidence', {'news_ids': [kwargs['initial']['news'][0]['news_id']],
+        ref = kwargs['call']('get_news_evidence', {'news_ids': [kwargs['initial']['news'][0]['news_id']],
                                                    'include_body': False})['tool_run_id']
         kwargs['call']('write_outlook_body', {'title': '실적 일정', 'items': [
             {'id': 'dates', 'title_keyword': '발표를 확인해요',

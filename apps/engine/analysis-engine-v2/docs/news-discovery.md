@@ -2,29 +2,45 @@
 
 ## 조사 순서
 
-최초 전망은 `list_events`로 사건을 찾고, 필요한 사건의 `get_event_timeline`을 읽는다. 기사는 `get_issue_evidence(include_body=true)`로 발췌를 확인한 뒤, 실제 사용할 기사만 `include_body=false`로 호출해 최종 근거로 저장한다. 사건 조회 도구의 실행 ID는 최종 근거가 아니다.
+최초 전망은 `list_events`로 사건을 찾고, 필요한 사건의 `get_event_timeline`을 읽는다. 기사는 `get_news_evidence(include_body=true)`로 발췌를 확인한 뒤, 실제 사용할 기사만 `include_body=false`로 호출해 최종 근거로 저장한다. 사건 조회 도구의 실행 ID는 최종 근거가 아니다.
 
 이전 전망이 있으면 실제 단일 대화 갱신 경로(`outlook.yaml`)에서 이전 논점·결론을 읽고 `get_event_changes`부터 확인한다. 새 사건과 기존 논점의 변경, 결론을 바꿀 조건을 점검한다. 스냅샷이 없는 기존 발행본은 `baseline_status=missing`이며 변경 없음으로 해석하지 않는다.
 
 `news_research.previous_news`에는 이전 글이 실제 인용한 기사 ID·제목·이전 스냅샷의 발행시각과 현재 조회 범위에 있는지를 전달한다. 이전 스냅샷이 없으면 발행시각은 null이다. 유지하는 본문과 이슈 상세는 검증된 이전 근거 실행 ID를 재사용한다. 새로 추가하거나 변경한 주장, 재확인이 필요한 사실은 이번 실행에서 확인한 근거를 연결한다. 변경이 없고 새로 확인할 질문도 없으면 같은 뉴스 검색을 반복하지 않는다. 뉴스 탐색 안내는 직전 분석·이슈 상세·조사 상태와 함께 초기 입력에 포함된다.
 
-기사 검색과 웹 검색은 사건 경로의 결손을 보완한다. 새 원본 bundle에서는 `search_news_threads`를 모델에게 제공하지 않는다. 저장된 구버전 bundle과 synthetic `FixtureTools`는 기존 경로를 유지하므로 과거 자료 재생이 가능하다. 수치 계산과 최초 전망의 조사·글쓰기·필드 작성 단계는 유지한다.
+뉴스 검색은 `list_events`로 통합한다. `search_news_articles`와 `search_news_threads`는 제거했으며 과거 원본 bundle과 synthetic 실행에도 노출하지 않는다. 사건 정보가 없는 원본은 미연결 기사로 표시한다. `get_issue_evidence`의 새 이름은 `get_news_evidence`다. 과거 완료 분석에 저장된 옛 이름의 인용 근거는 계속 검증·조회하지만 새 호출 별칭으로 제공하지 않는다. 수치 계산과 최초 전망의 조사·글쓰기·필드 작성 단계는 유지한다.
 
 ## 도구 계약
 
 | 도구 | 입력 | 반환·용도 |
 |---|---|---|
-| `list_events` | `query`, `instrument_ids`(티커), `start_date`, `end_date`, `event_types`, `cursor`, `limit` 모두 선택 | 사건 요약과 관련 티커, `total_count`, `remaining_count`, `next_cursor`, 미연결 기사 통계 |
+| `list_events` | 선택적 `scope`(`all`/`events`/`unlinked_articles`), `query`, `instrument_ids`(티커), `start_date`, `end_date`, `event_types`, `cursor`, `limit`, 조사 의도 `hypothesis`/`looking_for` | 사건은 `kind=event`, 미연결 기사는 `kind=unlinked_article`. 전체 건수·남은 범위·다음 커서를 함께 반환 |
 | `get_event_timeline` | `event_key`, 선택적 `cursor`, `limit` | 최초·후속·정정 관측과 기사 ID. 저장된 재보도만 접는다 |
 | `get_event_changes` | 선택적 `cursor`, `limit` | 서버가 선택한 이전 완료 분석과의 변경 목록·유형별 건수·범위 변경 여부 |
-| `search_news_articles` | `query`, `offset`, 선택적 `unlinked_only` | 현재 전체 원본 bundle에서 제목·발췌를 검색한다. 50기사씩 반환 |
-| `get_issue_evidence` | `news_ids`, `include_body` | 기존 발췌 읽기·최종 근거 저장 계약 유지. 초기 1,000기사 밖의 ID도 현재 bundle에 있으면 허용 |
+| `get_news_evidence` | `news_ids`, `include_body` | true는 발췌 읽기, false는 최종 근거 확보. 초기 1,000기사 밖의 ID도 현재 bundle에 있으면 허용 |
 
 사건 페이지 기본 요청량은 20개, 최대 50개다. 큰 응답은 더 적은 사건을 반환할 수 있다. 커서는 해당 스냅샷과 필터에 고정되며 다른 필터·분석에 재사용하면 거절한다. 날짜 필터는 마지막 비재보도 사건의 `available_at` **UTC 날짜**다. 사건 발생일이나 기사 발행일 필터가 아니다.
 
-`query`는 기존 기사 검색처럼 한 기사의 제목·발췌에 모든 검색어가 있는지 확인하고, 일치 기사를 사건 단위로 묶는다. `matched_news_ids`는 일치 기사이며 대표 제목은 그 사건의 최신 사실이다. 과거 기사로 검색됐어도 이후 정정을 놓치지 않도록 타임라인은 사건 전체를 유지한다. 사건이 없는 기사는 별도 기사 검색에서 확인한다.
+`query`는 한 기사의 제목·발췌에 모든 검색어가 있는지 확인하고, 일치 기사를 사건 단위로 묶는다. `matched_news_ids`는 일치 기사이며 대표 제목은 그 사건의 최신 사실이다. 과거 기사로 검색됐어도 이후 정정을 놓치지 않도록 타임라인은 사건 전체를 유지한다. 미연결 기사에는 `event_key`가 없으므로 타임라인 조회를 시도하지 않고 `news_ids`로 발췌를 읽는다.
+
+기본 범위는 `all`이다. `instrument_ids`와 `event_types`는 `scope=events`에서 사용한다. 미연결 기사의 종목·사건 유형을 추정해서 필터하지 않는다. 미연결 기사는 `scope=unlinked_articles`와 기업명 등 검색어로 보충한다. 커서는 scope에도 묶인다.
 
 도구 결과를 모델에 전달하는 기존 6,000자 페이지(`workspace.read_tool_result`)는 별개다. 에이전트가 전체 페이지를 읽도록 강제하지 않으며, 읽지 않은 범위의 부재를 주장하면 안 된다.
+
+## 에이전트 오류 상태 검증
+
+설치된 SDK의 실제 `tools/list`와 `tools/call` 요청 처리기를 실행해 이름·설명·입력 스키마와 다음 상태 전이를 검증한다. 모델의 대화 생성만 테스트 클라이언트로 대체하며, 실제 LLM 행동이나 분석 품질을 입증하는 검증은 아니다.
+
+| 상태 | 에이전트에게 전달되는 내용 | 다음 동작 |
+|---|---|---|
+| 정상·검색 결과 없음 | 성공 결과와 조회 범위, 결과가 없으면 빈 목록 | 필요한 다른 질문 조사 |
+| 없는 도구·잘못된 스키마 입력 | SDK 오류 응답. 계산과 감사 저장은 실행 전 거절 | 제공된 이름·형식으로 수정 |
+| 잘못된 커서·기사 ID·편집 대상 | `invalid_arguments`, 수정 안내, 감사된 실패라면 실행 ID | 입력을 고쳐 재호출 |
+| 자료 부족 | `data_unavailable`, `retryable=false` | 같은 요청을 반복하지 않고 다른 자료 사용 |
+| 이미 확인한 원천 데이터 불일치 | `invalid_source_data`, `retryable=false` | 해당 수치는 근거로 쓰지 않고 다른 자료 사용 |
+| 내부 실행·DB·감사 저장·작업 파일·응답 변환 장애 | 안전한 `tool_execution_failed`, `retryable=false` | 후속 도구 실행과 최종 응답 저장 차단 |
+
+`retryable=false`만으로 분석 중단을 뜻하지 않는다. 자료 부족·명시적 원천 거절은 다른 자료를 조사할 수 있다. 내부 장애는 분석·작업공간 서버가 공유하는 중단 상태로 기록하고, SDK가 예외를 오류 응답으로 바꾸더라도 최종 결과를 반환할 수 없게 한다. 오류 원문의 접속 정보나 자격증명은 모델 응답에 포함하지 않는다.
 
 ## 원본과 변경 비교
 

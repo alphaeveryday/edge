@@ -3,9 +3,24 @@ import json
 from claude_agent_sdk import create_sdk_mcp_server, tool
 from edge_analysis_v2.agent.work_context import SourceInputError, TOOL_PAGE_CHARACTERS
 from edge_analysis_v2.agent.work_session import CLOSURES
+from edge_analysis_v2.agent.tool_errors import ToolFailureState
 
 
-def make_workspace_server(context, session):
+def make_workspace_server(context, session, failure_state=None):
+    failure_state = failure_state or ToolFailureState()
+
+    def guarded(name, description, schema):
+        def decorate(handler):
+            async def invoke(args):
+                if blocked := failure_state.blocked():
+                    return blocked
+                try:
+                    return await handler(args)
+                except Exception as error:
+                    return failure_state.fail(error)
+            return tool(name, description, schema)(invoke)
+        return decorate
+
     def response(value):
         return {'content': [{'type': 'text', 'text': json.dumps(value, ensure_ascii=False)}]}
 
@@ -13,7 +28,7 @@ def make_workspace_server(context, session):
     if context.sources:
         source_rule['enum'] = list(context.sources)
 
-    @tool('read_source', 'Read a page of initial observations from available_sources. research_state requires a catalog material ID as subject. For other sources, omit subject for lists or use a listed dictionary key. Large research originals return result_id/next_offset for read_tool_result. On invalid_argument, use retry_arguments or allowed_values instead of guessing. Empty rows mean an empty source/page, not a tool failure. Exploration only; not a final evidence ID.',
+    @guarded('read_source', 'Read a page of initial observations from available_sources. research_state requires a catalog material ID as subject. For other sources, omit subject for lists or use a listed dictionary key. Large research originals return result_id/next_offset for read_tool_result. On invalid_argument, use retry_arguments or allowed_values instead of guessing. Empty rows mean an empty source/page, not a tool failure. Exploration only; not a final evidence ID.',
           {'type':'object', 'properties':{'source':source_rule,
            'subject':{'type':'string','default':'','description':'Optional dictionary key or research_state catalog material ID; omit for list sources.'},
            'offset':{'type':'integer','minimum':0,'default':0},
@@ -26,7 +41,7 @@ def make_workspace_server(context, session):
         except SourceInputError as error:
             return response({'error': error.details}) | {'is_error': True}
 
-    @tool('read_tool_result', 'Read original JSON text pages from a large analysis tool result in this run. '
+    @guarded('read_tool_result', 'Read original JSON text pages from a large analysis tool result in this run. '
           'Use its result_id and next_offset; no file access or new research. Keep the original tool_run_id for evidence.',
           {'type': 'object', 'properties': {
               'result_id': {'type': 'string'}, 'offset': {'type': 'integer', 'minimum': 0, 'default': 0},
@@ -38,15 +53,16 @@ def make_workspace_server(context, session):
         except SourceInputError as error:
             return response({'error': error.details}) | {'is_error': True}
 
-    @tool('create_directory', 'Create a directory under notes/ for Markdown working notes.', {'path': str})
+    @guarded('create_directory', 'Create a directory under notes/ for Markdown working notes.', {'type': 'object', 'properties': {'path': {'type': 'string', 'minLength': 1}},
+           'required': ['path'], 'additionalProperties': False})
     async def create_directory(args):
         try:
             path = session.note_path(args['path'], create=True, directory=True)
             return response({'path': path.relative_to(session.workspace).as_posix()})
-        except (ValueError, OSError) as error:
+        except ValueError as error:
             return response({'error': str(error)}) | {'is_error': True}
 
-    @tool('update_tasks', 'Register questions before using analysis tools. Replace the nonempty work list, retaining important unanswered questions; complete only actually resolved tasks. '
+    @guarded('update_tasks', 'Register questions before using analysis tools. Replace the nonempty work list, retaining important unanswered questions; complete only actually resolved tasks. '
           'Every question about a cause whose answer would change the direction carries explanations: the competing explanations being compared. Up, down and neutral are answer options, not explanations. '
           'Revise them as evidence arrives. Completing such a question needs closure and answer.',
           {'type':'object', 'properties':{'todos':{'type':'array', 'minItems':1, 'items':{'type':'object',
@@ -64,7 +80,7 @@ def make_workspace_server(context, session):
         except ValueError as error:
             return response({'error': str(error)}) | {'is_error': True}
 
-    @tool('retire_research_materials', 'Explicitly retire obsolete inherited research by material ID with a reason. Omission keeps material. Original audit records remain. Do not retire evidence still used by the final report.',
+    @guarded('retire_research_materials', 'Explicitly retire obsolete inherited research by material ID with a reason. Omission keeps material. Original audit records remain. Do not retire evidence still used by the final report.',
           {'type': 'object', 'properties': {'changes': {'type': 'array', 'items': {
               'type': 'object', 'properties': {'id': {'type': 'string'}, 'reason': {'type': 'string'},
                   'replacement_id': {'type': 'string'}}, 'required': ['id', 'reason'], 'additionalProperties': False}}},

@@ -21,7 +21,7 @@ def test_issue_phrase_correction_preserves_kolmar_condition_and_rejects_bad_evid
         invalid['old_text'] = '없는 원문'
         assert 'exactly once' in kwargs['final_check']({'text_replacements': [invalid]})
         assert 'conflict' in kwargs['final_check']({'issue_detail': {'items': []}, 'text_replacements': [edit]})
-        ref = kwargs['call']('get_issue_evidence', {'news_ids': [kwargs['initial']['news'][0]['news_id']],
+        ref = kwargs['call']('get_news_evidence', {'news_ids': [kwargs['initial']['news'][0]['news_id']],
                                                    'include_body': False})['tool_run_id']
         edit['tool_run_ids'] = issue['items'][0]['tool_run_ids'] + [ref]
         result = {'text_replacements': [edit]}

@@ -13,8 +13,8 @@ def scenario(case):
     calls = []
     def call(name, args):
         identity = f'run-{len(calls) + 1}'
-        if name == 'search_news_articles':
-            value = {'articles': [], 'scope': 'local database only'}
+        if name == 'list_events':
+            value = {'items': [], 'total_items': 0, 'scope': 'local database only'}
         elif name == 'search_web':
             value = {'results': [
                 {'url': 'https://example.com/filing.pdf', 'title': 'Nova quarterly filing'},
@@ -36,7 +36,7 @@ def scenario(case):
         return {'tool_run_id':identity, 'result':value}
     schemas = []
     for name, fields, description in [
-        ('search_news_articles', {'query':{'type':'string'}}, 'Search the local database of news; empty means absent from this database only.'),
+        ('list_events', {'query':{'type':'string'}}, 'Search the local database of news; empty means absent from this database only.'),
         ('search_web', {'query':{'type':'string'}}, 'Search public sources outside the local database.'),
         ('read_web_document', {'url':{'type':'string'}}, 'Read a public source returned by search. A failed page can have alternatives.')]:
         schemas.append({'type':'function', 'function':{'name':name, 'description':description,

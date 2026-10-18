@@ -148,7 +148,7 @@ def test_duplicate_alias_removals_fail_atomically():
 
 def test_same_original_under_a_new_tool_run_id_does_not_resurrect_retired_material():
     def observation(run, at):
-        return {'kind': 'tool', 'definition': {'function_name': 'get_issue_evidence'},
+        return {'kind': 'tool', 'definition': {'function_name': 'get_news_evidence'},
                 'arguments': {'news_ids': ['a']}, 'context': {'analysis_at': at, 'flow_as_of_date': at},
                 'output': {'tool_run_id': run, 'result': {'news': [{'news_id': 'a', 'body': 'original'}]}}}
     state = ResearchState()

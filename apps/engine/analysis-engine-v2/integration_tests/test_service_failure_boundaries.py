@@ -43,7 +43,7 @@ def execution(tmp_path):
 
 
 def write_body(kwargs):
-    reference = kwargs['call']('get_issue_evidence',
+    reference = kwargs['call']('get_news_evidence',
         {'news_ids': [kwargs['initial']['news'][0]['news_id']], 'include_body': False})['tool_run_id']
     kwargs['call']('write_outlook_body', {'title': '공급 계약 확인', 'items': [
         {'id': 'supply', 'title_keyword': '계약 물량', 'sentences': ['계약 물량을 확보했어요.'], 'sentiment': 'positive',

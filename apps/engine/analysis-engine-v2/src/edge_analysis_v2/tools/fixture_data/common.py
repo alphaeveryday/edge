@@ -2,7 +2,7 @@
 from datetime import date, datetime, timedelta, timezone
 from decimal import Context, Decimal
 
-from edge_analysis_v2.tools.execution import ToolInputError
+from edge_analysis_v2.tools.execution import ToolInputError, ToolDataUnavailableError, ToolSourceDataError
 
 
 def instant(value):
@@ -63,11 +63,11 @@ def holdings(fixture, day=None, *, require_complete=True):
     rows = [r for r in rows if r["as_of_date"] == latest]
     detail = f'as_of_date={latest}, analysis_at={cutoff.isoformat()}. Do not retry this snapshot; report unavailable holdings or repair source data.'
     if not rows:
-        raise ToolInputError('NO_HOLDINGS: no holdings available at the analysis cutoff. ' + detail)
+        raise ToolDataUnavailableError('NO_HOLDINGS: no holdings available at the analysis cutoff. ' + detail)
     try:
         weights = [decimal(r["weight"]) for r in rows]
     except (ValueError, ArithmeticError):
-        raise ToolInputError('INVALID_HOLDINGS_WEIGHT: finite numeric weights required. ' + detail) from None
+        raise ToolSourceDataError('INVALID_HOLDINGS_WEIGHT: finite numeric weights required. ' + detail) from None
     # Weights are stored as doubles, which carry 15 significant decimal digits, so the sum is judged at 15 digits:
     # a snapshot whose equities are exactly 100.00% must not read as 1.0000000000000000362 because 27.94% was
     # stored as 0.27940000000000004 (ALPHA-1162). This is deliberate: a sum that differs from one only below
@@ -80,19 +80,19 @@ def holdings(fixture, day=None, *, require_complete=True):
     # rejected; without an ingestion status (fixtures) it cannot be explained either.
     unloaded = len(statuses) == 1 and statuses[0]['input_count'] > len(rows)
     if len({r["instrument_id"] for r in rows}) != len(rows):
-        raise ToolInputError('DUPLICATE_HOLDINGS: duplicate constituent in latest snapshot. ' + detail)
+        raise ToolSourceDataError('DUPLICATE_HOLDINGS: duplicate constituent in latest snapshot. ' + detail)
     if any(w < 0 for w in weights) or total <= 0 or total > 1 and not unloaded:
-        raise ToolInputError('INVALID_HOLDINGS_WEIGHT: positive equity weights with a valid total required. ' + detail)
+        raise ToolSourceDataError('INVALID_HOLDINGS_WEIGHT: positive equity weights with a valid total required. ' + detail)
     complete = total == 1
     if statuses:
         if len(statuses) != 1 or statuses[0]['valid_count'] != len(rows):
-            raise ToolInputError('INVALID_HOLDINGS_STATUS: holdings status does not match observed rows. ' + detail)
+            raise ToolSourceDataError('INVALID_HOLDINGS_STATUS: holdings status does not match observed rows. ' + detail)
         complete = complete and statuses[0]['input_count'] == len(rows)
     # A whole-ETF weighted figure is allowed once the observed weights cover MIN_WEIGHT_COVERAGE of the fund.
     # Weights are never renormalized, so every such figure must be shown with observed_weight_ratio.
     if require_complete and total < MIN_WEIGHT_COVERAGE:
         # ToolInputError text is what the agent is shown; a plain ValueError reaches it as a generic failure.
-        raise ToolInputError('INSUFFICIENT_HOLDINGS_COVERAGE: observed constituent weights below the 70% coverage required for a whole-ETF figure. ' + detail)
+        raise ToolDataUnavailableError('INSUFFICIENT_HOLDINGS_COVERAGE: observed constituent weights below the 70% coverage required for a whole-ETF figure. ' + detail)
     return {"as_of_date": latest, "holdings": [{"instrument_id": r["instrument_id"], "weight": number(r["weight"])} for r in rows],
             "coverage": 'full' if complete else 'partial', "observed_weight_ratio": number(total)}
 

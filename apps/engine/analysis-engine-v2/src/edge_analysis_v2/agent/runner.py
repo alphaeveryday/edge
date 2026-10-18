@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 from time import monotonic
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, create_sdk_mcp_server, tool
-from jsonschema import Draft202012Validator
+from jsonschema import Draft202012Validator, FormatChecker
 import yaml
 
 from edge_analysis_v2.tools.model_schema import agent_tool_schemas
@@ -18,6 +18,7 @@ from edge_analysis_v2.agent.work_session import WorkSession
 from edge_analysis_v2.agent.work_context import WorkContext
 from edge_analysis_v2.agent.work_tools import make_workspace_server
 from edge_analysis_v2.tools.execution import ToolExecutionError
+from edge_analysis_v2.agent.tool_errors import ToolFailureState, input_error
 from edge_analysis_v2.quality.measure import describe_environment, measure
 
 
@@ -51,7 +52,7 @@ def describe_schema_error(error) -> str:
     return f'{path}: {error.message[:300]}'
 
 
-def make_server(schemas: list[dict], call, format_result=None):
+def make_server(schemas: list[dict], call, format_result=None, failure_state=None):
     """Expose registered schemas and transport the committed callback result, optionally in pages.
 
     Args:
@@ -62,13 +63,16 @@ def make_server(schemas: list[dict], call, format_result=None):
     Returns:
         SDK MCP server and its allowed tool names.
     """
+    failure_state = failure_state or ToolFailureState()
     registered, allowed = [], []
     gate = asyncio.Lock()
     for schema, visible in zip(schemas, agent_tool_schemas(schemas)):
         function = schema['function']
         name = function['name']
-        validator = Draft202012Validator(function['parameters'])
+        validator = Draft202012Validator(function['parameters'], format_checker=FormatChecker())
         async def handler(arguments, tool_name=name, validator=validator):
+            if blocked := failure_state.blocked():
+                return blocked
             invalid = list(validator.iter_errors(arguments))
             if invalid:
                 # Every failure at once: one round trip per over-long bullet would eat the deadline.
@@ -76,8 +80,10 @@ def make_server(schemas: list[dict], call, format_result=None):
                 if len(invalid) > 40:
                     # Never hide that more remain: a fixed draft would be rejected again for the unseen ones.
                     lines.append(f'{len(invalid) - 40} more fields fail the same way; check every field against its limit.')
-                return {'is_error': True, 'content': [{'type': 'text', 'text': '\n'.join(lines)}]}
+                return input_error('\n'.join(lines))
             async with gate:
+                if blocked := failure_state.blocked():
+                    return blocked
                 # Cancellation must not leave a database write racing publication failure.
                 pending = asyncio.create_task(asyncio.to_thread(call, tool_name, arguments))
                 try:
@@ -88,8 +94,16 @@ def make_server(schemas: list[dict], call, format_result=None):
                     finally:
                         raise
                 except ToolExecutionError as error:
-                    return {'is_error': True, 'content': [{'type': 'text', 'text': str(error)}]}
-            return {'content': [{'type': 'text', 'text': json.dumps(format_result(result) if format_result else result, ensure_ascii=False)}]}
+                    if error.recoverable:
+                        return input_error(str(error), tool_run_id=error.tool_run_id,
+                                           code=error.code, retryable=error.retryable)
+                    return failure_state.fail(error)
+                except Exception as error:
+                    return failure_state.fail(error)
+            try:
+                return {'content': [{'type': 'text', 'text': json.dumps(format_result(result) if format_result else result, ensure_ascii=False)}]}
+            except Exception as error:
+                return failure_state.fail(error)
         registered.append(tool(name, function['description'], visible['function']['parameters'])(handler))
         allowed.append('mcp__analysis__' + name)
     return create_sdk_mcp_server(name='analysis', version='1.0.0', tools=registered), allowed
@@ -154,8 +168,9 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                           separators=(',', ':') if compact else None, default=str).replace(key, '[redacted]')
     started_at = datetime.now(timezone.utc)
     repairs = 0
+    failure_state = ToolFailureState()
     source_context = WorkContext(initial) if not structured_only else None
-    server, allowed = make_server(schemas, call, source_context.tool_response) if not structured_only else (None, [])
+    server, allowed = make_server(schemas, call, source_context.tool_response, failure_state) if not structured_only else (None, [])
     if web_search:
         allowed = allowed + [SEARCH_TOOL]
     with TemporaryDirectory(prefix='analysis-worker-') as directory:
@@ -182,7 +197,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                 hooks={'PreToolUse':[HookMatcher(hooks=[session.before])],
                        'PreCompact':[HookMatcher(hooks=[session.precompact])],
                        'PostToolUse':[HookMatcher(hooks=[session.after])]},
-                mcp_servers={'analysis': server, 'workspace': make_workspace_server(source_context, session)}
+                mcp_servers={'analysis': server, 'workspace': make_workspace_server(source_context, session, failure_state)}
                             | ({'search': SEARCH_SERVER} if web_search else {}))
         (artifacts / 'model_input.json').write_text(encode(query_input), encoding='utf-8')
         # DeepSeek's documented SDK model tag prevents the unknown-model 200K default.
@@ -219,6 +234,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                 while True:
                     final = None
                     async for message in client.receive_response():
+                        failure_state.check()
                         event = json.loads(encode(asdict(message) if is_dataclass(message) else vars(message)))
                         if type(message).__name__ == 'SystemMessage' and event.get('subtype') == 'thinking_tokens':
                             # Per-token progress ticks: tens of thousands per run and nothing reads them.
@@ -239,6 +255,7 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                             value = json.loads(event.get('result') or '')
                         Draft202012Validator(output_schema).validate(value)
                         final = value
+                    failure_state.check()
                     if final is None:
                         raise ValueError('SDK ended without a final result')
                     problem = final_check(final) if final_check else None

@@ -24,14 +24,14 @@ def saved():
     key = uuid4().hex
     now = datetime.fromisoformat('2026-10-02T10:00:00+09:00')
     with psycopg.connect(dsn, autocommit=True) as conn:
-        store = PublicationStore(conn, final_tool_names={'sum', 'get_issue_evidence'})
+        store = PublicationStore(conn, final_tool_names={'sum', 'get_news_evidence'})
         audit = ToolStore(conn)
         old, current = key + '-old', key + '-current'
         definitions = [key + '-sum', key + '-news']
         audit.register_definition(tool_id=definitions[0], function_name='sum', version=key,
                                   description='외국인 순매수 금액 합계',
                                   source_names=['일별 투자자 수급'], formula_latex=r'\sum_{d=1}^{5} N_d')
-        audit.register_definition(tool_id=definitions[1], function_name='get_issue_evidence',
+        audit.register_definition(tool_id=definitions[1], function_name='get_news_evidence',
                                   version=key, description='기사 식별', source_names=['뉴스'])
         try:
             for index, identity in enumerate((old, current)):
@@ -162,7 +162,7 @@ def test_publication_writer_and_reader_agree_when_previous_explanation_is_reused
     conn, old, current, _ = saved
     conn.execute("""UPDATE movement_analyses SET status='running', published_at=NULL,
                     previous_analysis_id=%s WHERE analysis_id=%s""", (old, current))
-    store = PublicationStore(conn, final_tool_names={'sum', 'get_issue_evidence'})
+    store = PublicationStore(conn, final_tool_names={'sum', 'get_news_evidence'})
     store.save_movement(current, {'new_items': [], 'selected_item_ids': [old + '-selected'],
                                  'summary': '이전 설명이 여전히 가장 중요합니다.'})
     result = inspection.read_published_movement_evidence(conn, current)

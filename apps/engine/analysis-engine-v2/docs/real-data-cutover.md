@@ -20,12 +20,12 @@
 | 툴 | 실제 원천 | 반환·제한 |
 |---|---|---|
 | get_etf_holdings | etf_holding_snapshot + status + instrument/entity | 현재 시각까지 적재된 최신 구성. 원래 비중 유지. 누락 시 coverage=partial, observed_weight_ratio 표시. 주식 비중 합이 1을 넘으면 적재되지 않은 원천 행(현금 등, 입력 행 수 > 적재 행 수)이 있을 때만 partial로 받고 합은 넘는 그대로 표시, 그런 행이 없으면 거부. 가중 계산은 관측 비중 70% 이상일 때만 |
-| search_news_threads | document → assertion → event_evidence → source_event → event_thread_link | DB 사건 ID·단계·스레드로 묶음. 같은 사건의 추가 기사만 중복 수로 표시. 연결 없는 기사도 unthreaded_news로 제공 |
-| get_issue_evidence | document + news_document | true는 확보된 발췌와 body_kind=excerpt, false는 동일 기사 ID·제목. 발췌 확보 시점이 늦으면 body=null |
+| list_events | document → assertion → event_evidence → source_event → event_thread_link | 저장된 사건·스레드로 묶고 미연결 기사는 별도 kind로 표시. scope로 사건/미연결/전체 선택 |
+| get_news_evidence | document + news_document | true는 확보된 발췌와 body_kind=excerpt, false는 동일 기사 ID·제목. 발췌 확보 시점이 늦으면 body=null |
 
 - 읽기 전용·repeatable read로 원천을 한 번 읽고 DB 연결을 닫은 후 에이전트 실행.
 - 조회는 DB instrument_id, 에이전트의 instrument_id와 화면 종목 코드는 KRX ticker로 통일. 종목 마스터의 일대일 매핑을 사용.
-- ETF와 상위 5개 편입종목·발행기업에 연결된 최근 30일 기사 최대 300개. 초기 제목 100개, 탐색 사건 100개. 한도 도달을 표시.
+- ETF·편입기업 관련 최근 180일 사건과 근거·관련 기사를 확보한다. 원본을 기사 수로 자르지 않으며 모델에는 목록 페이지와 범위를 전달한다. [현재 뉴스 탐색 계약](news-discovery.md)을 따른다.
 - 스레드 관계는 현존하는 연결 중 분석 시각 이전에 확인된 것만 사용. 삭제·정정된 과거 관계까지 복원한 과거 재생은 보장하지 않음.
 - 원천이 비어 있는 다른 요인을 목자료로 채우지 않음. 반환 JSON과 저장할 툴 결과는 동일.
 

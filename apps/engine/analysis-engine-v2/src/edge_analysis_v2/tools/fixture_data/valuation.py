@@ -3,13 +3,9 @@ from calendar import monthrange
 from datetime import date
 from decimal import Context
 import re
-from edge_analysis_v2.tools.execution import ToolInputError
+from edge_analysis_v2.tools.execution import ToolInputError, ToolDataUnavailableError, ToolSourceDataError
 
 from edge_analysis_v2.tools.fixture_data.common import MIN_WEIGHT_COVERAGE, available, decimal, holdings, instant, number
-
-# A constituent without a usable ratio is left out of a fund average; corrupted source data is not.
-ABSENT = ("MISSING_", "RATIO_NOT_APPLICABLE")
-
 
 def calculate(fixture, instrument_id):
     """Calculate a constituent's TTM PER and latest PBR from available releases.
@@ -24,28 +20,28 @@ def calculate(fixture, instrument_id):
     cutoff = instant(fixture["context"]["analysis_at"])
     prices = sorted([r for r in available(fixture.get("prices", []), cutoff) if r["instrument_id"] == instrument_id and r["date"] <= cutoff.date().isoformat()], key=lambda r: r["date"])
     if not prices:
-        raise ToolInputError("MISSING_PRICE: no database price before cutoff; investigate another public source")
+        raise ToolDataUnavailableError("MISSING_PRICE: no database price before cutoff; investigate another public source")
     if len({r["date"] for r in prices}) != len(prices):
-        raise ToolInputError("CONFLICTING_PRICE: duplicate valuation price; do not retry unchanged input")
+        raise ToolSourceDataError("CONFLICTING_PRICE: duplicate valuation price; do not retry unchanged input")
     periods = {}
     rows = [r for r in available(fixture.get("financials", []), cutoff) if r["instrument_id"] == instrument_id]
     for row in sorted(rows, key=lambda r: instant(r["available_at"])):
         match = re.fullmatch(r"(\d{4})-Q([1-4])", row["period"])
         if not match:
-            raise ToolInputError("INVALID_PERIOD: invalid fiscal quarter; source data requires repair")
+            raise ToolSourceDataError("INVALID_PERIOD: invalid fiscal quarter; source data requires repair")
         year, quarter = int(match[1]), int(match[2])
         if date(year, quarter*3, monthrange(year, quarter*3)[1]) > cutoff.date():
             # A quarter that has not ended cannot have been reported; using it would look ahead.
-            raise ToolInputError("INVALID_PERIOD: financial period ends after analysis time; source data requires repair")
+            raise ToolSourceDataError("INVALID_PERIOD: financial period ends after analysis time; source data requires repair")
         index = year*4+quarter-1
         if index in periods and periods[index]["available_at"] == row["available_at"]:
-            raise ToolInputError("CONFLICTING_RELEASE: conflicting financial release; source data requires repair")
+            raise ToolSourceDataError("CONFLICTING_RELEASE: conflicting financial release; source data requires repair")
         periods[index] = row
     if not periods:
-        raise ToolInputError("MISSING_QUARTERS: no released quarter in database; investigate public filings")
+        raise ToolDataUnavailableError("MISSING_QUARTERS: no released quarter in database; investigate public filings")
     price = decimal(prices[-1]["close"])
     if price <= 0:
-        raise ToolInputError("INVALID_PRICE: the latest price is not positive; source data requires repair")
+        raise ToolSourceDataError("INVALID_PRICE: the latest price is not positive; source data requires repair")
     selected = sorted(periods)[-4:]
     latest = periods[selected[-1]]
     unavailable, eps, bps = {}, None, None
@@ -67,7 +63,7 @@ def calculate(fixture, instrument_id):
         # A loss-maker with no book value is "not applicable", not a data gap.
         codes = [reason.split(":")[0] for reason in unavailable.values()]
         code = "RATIO_NOT_APPLICABLE" if "RATIO_NOT_APPLICABLE" in codes else codes[0] if len(set(codes)) == 1 else "MISSING_FINANCIAL_VALUE"
-        raise ToolInputError(code + ": neither PER nor PBR can be calculated (" + "; ".join(unavailable.values()) + "); investigate public filings")
+        raise ToolDataUnavailableError(code + ": neither PER nor PBR can be calculated (" + "; ".join(unavailable.values()) + "); investigate public filings")
     # Each ratio is stamped by its own inputs: a late restatement of an older quarter dates PER, not PBR.
     stamps = {"per": max([prices[-1]["available_at"]] + [periods[index]["available_at"] for index in selected], key=instant) if eps is not None else None,
               "pbr": max([prices[-1]["available_at"], latest["available_at"]], key=instant) if bps is not None else None}
@@ -95,9 +91,7 @@ def weighted(fixture):
     for row in portfolio["holdings"]:
         try:
             values.append(calculate(fixture, row["instrument_id"]) | {"weight": row["weight"]})
-        except ToolInputError as error:
-            if not str(error).startswith(ABSENT):
-                raise   # duplicate prices or conflicting releases must stop the fund figure, not shrink it
+        except ToolDataUnavailableError as error:
             missing.append({"instrument_id": row["instrument_id"], "weight": row["weight"], "reason": str(error).split(";")[0]})
     result = {"as_of_date": portfolio["as_of_date"], "constituents": values, "missing_constituents": missing, "ratio_coverage": {},
               "coverage": {"constituents": len(portfolio["holdings"]), "weight": number(covered_weight(portfolio["holdings"]))}}
@@ -113,7 +107,7 @@ def weighted(fixture):
         result["ratio_observed_at"][metric] = max((v["ratio_observed_at"][metric] for v in usable), key=instant) if enough else None
     published = [stamp for stamp in result["ratio_observed_at"].values() if stamp]
     if not published:
-        raise ToolInputError("INSUFFICIENT_RATIO_COVERAGE: constituents with a PER cover "
+        raise ToolDataUnavailableError("INSUFFICIENT_RATIO_COVERAGE: constituents with a PER cover "
             + str(result["ratio_coverage"]["per"]["weight"]) + " and with a PBR " + str(result["ratio_coverage"]["pbr"]["weight"])
             + " of the fund, below the 70% needed for a whole-ETF ratio; use calculate_valuation per company and state the gap")
     per_rows = [v for v in values if v["per"] is not None] if result["weighted_per"] is not None else []

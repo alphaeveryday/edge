@@ -14,13 +14,13 @@ KST = timezone(timedelta(hours=9))
 
 def _text(value):
     if not isinstance(value, str) or not value.strip():
-        raise ValueError("Expected nonempty text")
+        raise ToolInputError("Expected nonempty text")
     return value
 
 
 def _topic(raw, *, added=False, allow_legacy=False):
     if set(raw) - {"id", "title_keyword", "sentences", "sentiment", "tool_run_ids", "updated_sentence_numbers"}:
-        raise ValueError("Unknown topic field")
+        raise ToolInputError("Unknown topic field")
     sentiment = raw.get("sentiment")
     if sentiment is None and not allow_legacy:
         raise ToolInputError("Topic requires sentiment")
@@ -30,13 +30,13 @@ def _topic(raw, *, added=False, allow_legacy=False):
     numbers = raw.get("updated_sentence_numbers", [])
     sentences = raw["sentences"]
     if not isinstance(sentences, list) or not sentences:
-        raise ValueError("Topic requires sentences")
+        raise ToolInputError("Topic requires sentences")
     if (not isinstance(numbers, list) or any(type(n) is not int or not 1 <= n <= len(sentences) for n in numbers)
             or len(set(numbers)) != len(numbers)):
-        raise ValueError("Invalid updated sentence numbers")
+        raise ToolInputError("Invalid updated sentence numbers")
     refs = raw["tool_run_ids"]
     if not isinstance(refs, list) or not refs or len(set(refs)) != len(refs):
-        raise ValueError("Topic requires unique tool_run_ids")
+        raise ToolInputError("Topic requires unique tool_run_ids")
     return {"id": _text(raw["id"]), "title_keyword": _text(raw["title_keyword"]),
             "sentences": [{"sentence": _text(text), "is_updated": added or i in numbers}
                           for i, text in enumerate(sentences, 1)],
@@ -90,27 +90,27 @@ class BodyEditor:
     def apply(self, changes: list, title: str | None = None, item_order: list | None = None) -> dict:
         """Apply one atomic batch of additions, field edits, and removals."""
         if self.base is None and not self.draft["title"]:
-            raise ValueError("First publication requires write")
+            raise ToolInputError("First publication requires write")
         draft = deepcopy(self.draft)
         touched = set()
         updated_positions = set()
         for change in changes:
             identity, action = change["id"], change["action"]
             if identity in touched:
-                raise ValueError("Duplicate topic in change batch")
+                raise ToolInputError("Duplicate topic in change batch")
             touched.add(identity)
             current = next((item for item in draft["items"] if item["id"] == identity), None)
             if action == "add":
                 if current is not None:
-                    raise ValueError("Topic already exists")
+                    raise ToolInputError("Topic already exists")
                 draft["items"].append(_topic({key: value for key, value in change.items() if key != "action"}, added=True))
             elif action == "remove":
                 if current is None or set(change) != {"action", "id"}:
-                    raise ValueError("Removal requires existing topic ID only")
+                    raise ToolInputError("Removal requires existing topic ID only")
                 draft["items"].remove(current)
             elif action == "update":
                 if current is None:
-                    raise ValueError("Unknown topic")
+                    raise ToolInputError("Unknown topic")
                 if "text_replacements" in change:
                     if "sentiment" not in change:
                         raise ToolInputError("Sentence changes require sentiment together")
@@ -133,7 +133,7 @@ class BodyEditor:
                     change.update(sentences=sentences, updated_sentence_numbers=numbers)
                     updated_positions.update((identity, number) for number in numbers)
                 if set(change) & {"title_keyword", "sentences"} and "tool_run_ids" not in change:
-                    raise ValueError("Changed text requires tool_run_ids")
+                    raise ToolInputError("Changed text requires tool_run_ids")
                 raw = {"id": identity, "title_keyword": current["title_keyword"],
                        "sentences": [s["sentence"] for s in current["sentences"]],
                        "sentiment": current.get("sentiment"),
@@ -151,13 +151,13 @@ class BodyEditor:
                     replacement["sentences"] = current["sentences"]
                 draft["items"][draft["items"].index(current)] = replacement
             else:
-                raise ValueError("Unknown edit action")
+                raise ToolInputError("Unknown edit action")
         if title is not None:
             draft["title"] = _text(title)
         if item_order is not None:
             lookup = {item["id"]: item for item in draft["items"]}
             if len(item_order) != len(lookup) or set(item_order) != set(lookup):
-                raise ValueError("item_order must contain all topic IDs once")
+                raise ToolInputError("item_order must contain all topic IDs once")
             draft["items"] = [lookup[identity] for identity in item_order]
         return self._commit(draft, self.mode, updated_positions=updated_positions)
 
@@ -170,7 +170,7 @@ class BodyEditor:
                 + (f' and {len(over) - 8} more' if len(over) > 8 else '') + hint)
         current = {item["id"]: item for item in draft["items"]}
         if len(current) != len(draft["items"]) or len(current) > 15:
-            raise ValueError("Expected at most 15 unique topics")
+            raise ToolInputError("Expected at most 15 unique topics")
         base = {item["id"]: item for item in (self.base or {}).get("items", [])}
         previous = {item["id"]: item for item in self.draft["items"]}
         # Enforce pairing for each edit and for the final change from the published body.
