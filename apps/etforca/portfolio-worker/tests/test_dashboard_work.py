@@ -494,6 +494,12 @@ def test_holiday_start_keeps_the_first_trading_days_return():
     assert result['history']['start_date'] == '2026-10-17'
 
 
+def test_cash_only_weekend_has_valid_zero_return_and_requested_boundaries():
+    result = work.run_backtest({'allocations': [{'instrument_id': 'CASH:KRW', 'weight_pct': 100.}], 'start': '2026-10-17', 'end': '2026-10-18'}, {}, date(2026, 10, 20), [])
+    assert result['return_pct'] == 0
+    assert [p['date'] for p in result['history']['points']] == ['2026-10-17', '2026-10-18']
+
+
 async def test_new_holdings_require_actions_checked_after_save_even_with_same_close(isolated_db, monkeypatch):
     from edge_portfolio import market_data
     calls = []

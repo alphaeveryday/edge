@@ -39,9 +39,11 @@ export function Backtest({ assets, catalog }: { assets: Asset[]; catalog: Catalo
     if (next.length > 20) { setError('백테스트에는 최대 20개 종목을 담을 수 있어요. 비교할 종목을 검색해 담아 주세요.'); return; }
     const sum = next.reduce((s, a) => s + Number(a.weight), 0);
     const complete = included.every(a => a.amount !== null && a.instrument_id) && sum > 0;
-    let allocated = 0;
-    setRows(next.map((r, i) => { const weight = i === next.length - 1 ? 10000 - allocated : Math.floor(Number(r.weight) / sum * 10000); allocated += weight; return { ...r, weight: complete ? String(weight / 100) : '' }; }));
-    setResult(null); setError(complete ? '' : '보유금액을 확인하지 못한 종목이 있어요. 비교할 비중을 입력해 주세요.');
+    const units = complete ? next.map(r => Math.max(1, Math.floor(Number(r.weight) / sum * 10000))) : [];
+    if (complete) { const largest = units.indexOf(Math.max(...units)); units[largest] += 10000 - units.reduce((s, n) => s + n, 0); }
+    setRows(next.map((r, i) => ({ ...r, weight: complete ? String(units[i] / 100) : '' })));
+    const tiny = complete && next.some(r => Number(r.weight) / sum < .0001);
+    setResult(null); setError(complete ? tiny ? '0.01%보다 작은 보유분은 0.01%로 맞췄어요.' : '' : '보유금액을 확인하지 못한 종목이 있어요. 비교할 비중을 입력해 주세요.');
   }
   const total = rows.reduce((s, r) => s + Number(r.weight), 0);
   async function submit(e: React.FormEvent<HTMLFormElement>) {

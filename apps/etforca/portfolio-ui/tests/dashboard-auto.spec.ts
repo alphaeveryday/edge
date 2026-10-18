@@ -29,6 +29,46 @@ async function mock(page: Page, saved: Saved = { version: 1, workbook }) {
   });
 }
 
+test('tiny positive holdings stay represented by a valid hundredth-percent allocation', async ({ page }) => {
+  const cash: Asset = { ...asset, id: 'cash', instrument_id: 'CASH:KRW', name: '현금', category: '현금', quantity: null, amount: 100000000 };
+  await mock(page, { version: 1, workbook: { ...workbook, assets: [asset, cash] } });
+  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { ...tracking, market: { ...tracking.market, payload: { ...tracking.market.payload, assets: [{ ...tracking.market.payload.assets[0], value: 1 }, { id: 'cash', value: 100000000, profit: 0 }] } } } }));
+  await page.goto('/portfolio/?view=dashboard');
+  await expect(page.locator('.asset-row')).toHaveCount(2);
+  await page.getByRole('button', { name: '백테스트', exact: true }).click();
+  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
+  await expect(page.getByLabel('KODEX 200 비중 (%)')).toHaveValue('0.01');
+  await expect(page.getByLabel('현금 비중 (%)')).toHaveValue('99.99');
+  await expect(page.getByRole('alert')).toContainText('0.01%보다 작은 보유분');
+});
+
+test('an older poll cannot replace the fresh valuation returned after saving', async ({ page }) => {
+  await page.clock.install();
+  await mock(page);
+  let calls = 0;
+  let release!: () => void;
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  await page.route('**/api/portfolio/workbook/tracking', async r => {
+    calls++;
+    if (calls === 2) { await pending; return r.fulfill({ json: tracking }); }
+    return r.fulfill({ json: calls > 2 ? { ...tracking, market: { ...tracking.market, version: 2, payload: { ...tracking.market.payload, assets: [{ ...tracking.market.payload.assets[0], value: 600000, profit: 200000 }] } } } : tracking });
+  });
+  await page.goto('/portfolio/?view=dashboard');
+  const profit = page.locator('.dashboard-stats article').nth(1).locator('strong');
+  await expect(profit).toHaveText('+100,000원 (+25.00%)');
+  await page.clock.fastForward(30000);
+  await expect.poll(() => calls).toBe(2);
+  await page.locator('.asset-row').first().click();
+  await page.getByLabel('보유 수량', { exact: true }).fill('12');
+  await page.getByRole('button', { name: '저장', exact: true }).click();
+  await expect(profit).toHaveText('+200,000원 (+50.00%)');
+  const oldResponse = page.waitForResponse('**/api/portfolio/workbook/tracking');
+  release();
+  await (await oldResponse).finished();
+  await page.clock.runFor(100);
+  await expect(profit).toHaveText('+200,000원 (+50.00%)');
+});
+
 test('holdings need only instrument quantity and optional average, never a customer quote or weight', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
   await page.locator('.asset-row').first().click();

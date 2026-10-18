@@ -35,9 +35,14 @@ export function Dashboard() {
   const launcher = useRef<HTMLElement | null>(null);
   const addButton = useRef<HTMLButtonElement>(null);
   const loadSequence = useRef(0);
+  const trackingSequence = useRef(0);
   const { ask, confirmation, restoreFocus } = useConfirmation();
   async function loadCatalog() { try { setCatalog(await request<Catalog>('/catalog')); setCatalogError(''); } catch { setCatalogError('종목 목록을 불러오지 못했어요.'); } }
-  async function loadTracking() { try { const next = await request<Tracking>('/workbook/tracking'); if (!Array.isArray(next.days)) throw new Error('Invalid tracking'); setTracking(next); setTrackingError(''); } catch { setTrackingError('자동 기록을 불러오지 못했어요. 잠시 후 다시 확인해 주세요.'); } }
+  async function loadTracking() {
+    const sequence = ++trackingSequence.current;
+    try { const next = await request<Tracking>('/workbook/tracking'); if (!Array.isArray(next.days)) throw new Error('Invalid tracking'); if (sequence === trackingSequence.current) { setTracking(next); setTrackingError(''); } }
+    catch { if (sequence === trackingSequence.current) setTrackingError('자동 기록을 불러오지 못했어요. 잠시 후 다시 확인해 주세요.'); }
+  }
   async function load() {
     const sequence = ++loadSequence.current;
     setLoading(true);
@@ -46,7 +51,7 @@ export function Dashboard() {
     finally { if (sequence === loadSequence.current) setLoading(false); }
     return false;
   }
-  useEffect(() => { void load().then(ok => { if (ok) { void loadCatalog(); void loadTracking(); } }); const timer = setInterval(() => { if (!document.hidden) void loadTracking(); }, 30000); return () => { loadSequence.current++; clearInterval(timer); }; }, []);
+  useEffect(() => { void load().then(ok => { if (ok) { void loadCatalog(); void loadTracking(); } }); const timer = setInterval(() => { if (!document.hidden) void loadTracking(); }, 30000); return () => { loadSequence.current++; trackingSequence.current++; clearInterval(timer); }; }, []);
   useEffect(() => { if (editing && dialog.current && !dialog.current.open) dialog.current.showModal(); }, [editing]);
   useEffect(() => { if (!editing && !busy && launcher.current) { const target = launcher.current.isConnected ? launcher.current : addButton.current; launcher.current = null; target?.focus(); } }, [editing, busy]);
   useEffect(() => { if (!busy && error) restoreFocus(); }, [busy, error]);

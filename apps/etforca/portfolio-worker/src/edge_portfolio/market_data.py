@@ -328,7 +328,7 @@ def normalized_prices(ids, records, as_of, bounds=None, *, column=None):
         if any((end.date() - records[key]['frame'].index[-1].date()).days > 7 for key in ids - {'CASH:KRW'}):
             raise ValueError('PRICE_STALE')
     else:
-        frame = pd.DataFrame(index=pd.bdate_range(start, end))
+        frame = pd.DataFrame(index=pd.bdate_range(start, end).union(pd.DatetimeIndex([start, end])))
     frame['CASH:KRW'] = 1.0
     return frame / frame.iloc[0], urls
 
