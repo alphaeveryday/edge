@@ -469,7 +469,7 @@ def calendar(letter, edition, cards):
     lines, text = '', []
     for _, event in sorted(seen.items())[:8]:
         when = event['when'] + (' (한국시간)' if event.get('market') == '미국' else '')
-        name = event['title'] if event['org'] in event['title'] else f"{event['org']} {event['title']}"
+        name = event['title'] if ''.join(event['org'].split()) in ''.join(event['title'].split()) else f"{event['org']} {event['title']}"
         lines += f'''<tr><td width="104" valign="top" style="padding:14px 10px 14px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:15px;font-weight:700;color:{INK};word-break:keep-all">{e(when)}</td>
 <td valign="top" style="padding:14px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:16px;line-height:1.6;color:{INK};word-break:keep-all">{mark_of(event, EVENT_ICONS)}{e(name)}</td></tr>'''
         text.append(f"  {when} · {name}")
@@ -487,7 +487,10 @@ def brief_letter(edition, cards, weights, at, detailed):
     if top:
         headline, dek = top['headline'], top['dek']
     elif ready:
-        headline, dek = '오늘은 보유 이유를 흔드는 변화가 없어요', '보유 종목의 등락은 평소 범위 안이었어요.'
+        missing = sum(bool(card.get('unavailable')) for card in cards)
+        headline = '오늘은 보유 이유를 흔드는 변화가 없어요'
+        dek = (f'자료를 확인한 {len(ready)}종목은 등락이 평소 범위 안이고 보유 이유를 흔드는 새 사건이 없었어요.'
+               + (f' {missing}종목은 오늘 자료를 확보하지 못했어요.' if missing else ''))
     elif legacy:
         headline, dek = legacy[0]['headline'], legacy[0].get('dek') or legacy[0].get('issue', '')
     else:

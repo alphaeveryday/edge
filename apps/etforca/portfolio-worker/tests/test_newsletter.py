@@ -1074,3 +1074,16 @@ def test_calendar_merges_an_event_whose_title_repeats_the_company():
     b = letter_card('H', 'US:B', 'B', events=[{**EVENT, 'title': 'SK하이닉스 3분기 실적 발표', 'icon': None}])
     _, _, text = email.daily(date(2026, 10, 18), [a, b], 'H')
     assert text.count('3분기 실적 발표') == 1
+
+
+def test_calm_day_still_says_which_holdings_went_unchecked():
+    calm = letter_card('H', 'US:A', 'A', important=False, positives=[])
+    missing = {'instrument_id': 'US:X', 'name': 'X', 'unavailable': True, 'headline': '확인하지 못했어요', 'dek': '', 'sources': []}
+    _, html, _ = email.daily(date(2026, 10, 18), [calm, missing], 'H')
+    assert '1종목은 오늘 자료를 확보하지 못했어요' in html, 'A quiet headline must not vouch for a holding nobody checked'
+
+
+def test_event_title_that_already_names_the_company_is_not_prefixed_again():
+    spaced = {**EVENT, 'title': 'SK 하이닉스 3분기 실적 발표', 'icon': None}
+    _, _, text = email.daily(date(2026, 10, 18), [letter_card('H', events=[spaced])], 'H')
+    assert '10월 23일 · SK 하이닉스 3분기 실적 발표' in text and 'SK하이닉스 SK 하이닉스' not in text
