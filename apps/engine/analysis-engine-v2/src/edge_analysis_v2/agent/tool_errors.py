@@ -7,8 +7,8 @@ from edge_analysis_v2.tools.execution import ToolExecutionError
 LOG = logging.getLogger(__name__)
 
 
-def input_error(message, *, tool_run_id=None):
-    error = {'code': 'invalid_arguments', 'message': message, 'retryable': True}
+def input_error(message, *, tool_run_id=None, code="invalid_arguments", retryable=True):
+    error = {'code': code, 'message': message, 'retryable': retryable}
     if tool_run_id:
         error['tool_run_id'] = tool_run_id
     return error_response(error)

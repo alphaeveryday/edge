@@ -95,7 +95,8 @@ def make_server(schemas: list[dict], call, format_result=None, failure_state=Non
                         raise
                 except ToolExecutionError as error:
                     if error.recoverable:
-                        return input_error(str(error), tool_run_id=error.tool_run_id)
+                        return input_error(str(error), tool_run_id=error.tool_run_id,
+                                           code=error.code, retryable=error.retryable)
                     return failure_state.fail(error)
                 except Exception as error:
                     return failure_state.fail(error)

@@ -3,6 +3,7 @@
 advertise -> invalid schema/unknown name -> reject before execution -> corrected call
 advertise -> expected domain error -> failed audit + actionable error -> committed evidence
 committed evidence -> invalid final reference -> same-client repair -> accepted final
+missing frozen observation -> non-retryable data_unavailable -> alternative source -> evidence
 internal/database/audit/workspace failure -> fatal error -> later calls blocked -> no final
 
 Only the model conversation is simulated; tools/list and tools/call execute the SDK handlers.
@@ -324,3 +325,27 @@ def test_workspace_failure_cannot_be_ignored_by_model_final(tmp_path, monkeypatc
             output_schema={'type': 'object'}, artifacts=tmp_path, key='offline-key', model='model', client_factory=Client))
     assert seen[0].is_error and 'private-password' not in text(seen[0])
     assert not (tmp_path/'response.json').exists()
+
+
+@pytest.mark.parametrize('error_type,code', [('ToolDataUnavailableError', 'data_unavailable'),
+                                            ('ToolSourceDataError', 'invalid_source_data')])
+def test_unavailable_data_is_not_retryable_but_alternative_observations_remain_usable(error_type, code):
+    # Metadata is typed at the raising site, never inferred by parsing this message.
+    from edge_analysis_v2.tools import execution
+    expected_refusal = getattr(execution, error_type)
+    store = MemoryStore()
+    def call(name, args):
+        if args.get('date') == '2026-10-16':
+            raise expected_refusal('This observation cannot be used. Choose another covered source.')
+        return {'tool_run_id': 'alternative-evidence', 'result': {'value': 17}}
+    server, _ = make_server([SCHEMA], audited(call, store).call)
+    async def scenario():
+        missing = await sdk_call(server, 'read_observation', {'instrument_id': 'known', 'date': '2026-10-16'})
+        error = json.loads(text(missing))['error']
+        assert missing.is_error and error['code'] == code
+        assert error['retryable'] is False and error['tool_run_id'] == store.runs[0]['tool_run_id']
+        alternative = await sdk_call(server, 'read_observation', {'instrument_id': 'known', 'date': '2026-10-15'})
+        assert not alternative.is_error
+        assert json.loads(text(alternative)) == store.runs[-1]['output']
+        assert [row['output'] is None for row in store.runs] == [True, False]
+    asyncio.run(scenario())
