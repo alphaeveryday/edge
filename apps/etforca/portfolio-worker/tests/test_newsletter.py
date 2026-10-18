@@ -323,7 +323,7 @@ def test_failed_holding_does_not_suppress_all_other_daily_news(newsletter_db, mo
     sender.process_daily(ses, now)
     assert len(sends) == 1
     html = sends[0]['Content']['Simple']['Body']['Html']['Data']
-    assert 'QQQ' in html and '오늘의 소식을 확인하지 못했어요' in html
+    assert 'QQQ' in html and '자료 없음' in html, 'A holding whose research failed is marked, not silently dropped'
     assert '변동 요인 후보' not in html, 'A missing holding must not render empty analysis sections'
     with store.connect() as db:
         row = db.execute("""SELECT d.subscription_id=s.id AS correct_subscription FROM portfolio_newsletter_deliveries d
