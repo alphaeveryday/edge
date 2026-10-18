@@ -34,9 +34,9 @@ def test_reordered_duplicate_changes_no_calculation():
     tools = [FixtureTools(make_quality_fixture(n,'2026-09-21T08:30:00+09:00')) for n in ('structural_base','structural_order')]
     args = {'eps_id':'eps-new','per_low':9,'per_high':11}
     assert tools[0].call('calculate_valuation_range',args)['result'] == tools[1].call('calculate_valuation_range',args)['result']
-    result = tools[1].call('search_news_threads',{})['result']
-    events = [e for t in result['threads'] for s in t['stages'] for e in s['events']]
-    assert sum(e['duplicate_count'] for e in events) == 1
+    result = tools[1].call('list_events', {})['result']
+    assert all(row['kind'] == 'unlinked_article' for row in result['items'])
+    assert len({tuple(row['news_ids']) for row in result['items']}) == len(result['items'])
 
 
 def test_priced_in_world_reduces_conditional_upside_without_changing_eps():

@@ -48,14 +48,16 @@ def test_one_article_can_belong_to_two_real_events_without_duplicate_article():
             'available_at': '2026-09-30T09:01:00+09:00'})
     data['news_links'] = [dict(news_id=n, thread_id=t, event_id=e, stage=None)
         for n,t,e in [('a','t1','e1'),('a','t2','e2'),('b','t1','e1')]]
+    data['news_events'] = [dict(event_id=e, event_type='CONTRACT', status='ACTIVE', available_at='2026-09-30T09:01:00+09:00',
+                               thread_id=t, novelty='UNKNOWN', news_ids=ids)
+                           for e,t,ids in [('e1','t1',['a','b']), ('e2','t2',['a'])]]
     tools = DatabaseTools(data)
-    result = tools.call('search_news_threads', {})['result']
-    assert len(result['threads']) == 2
-    assert result['threads'][0]['stages'][0]['events'][0]['duplicate_count'] == 1
-    assert result['unthreaded_news'][0]['news_id'] == 'unlinked'
-    body = tools.call('get_issue_evidence', {'news_ids': ['a'], 'include_body': True})['result']['news'][0]
+    result = tools.call('list_events', {})['result']
+    assert sum(r['kind'] == 'event' for r in result['items']) == 2
+    assert [r['news_ids'] for r in result['items'] if r['kind'] == 'unlinked_article'] == [['unlinked']]
+    body = tools.call('get_news_evidence', {'news_ids': ['a'], 'include_body': True})['result']['news'][0]
     assert body['body_kind'] == 'excerpt'
-    final = tools.call('get_issue_evidence', {'news_ids': ['a'], 'include_body': False})['result']
+    final = tools.call('get_news_evidence', {'news_ids': ['a'], 'include_body': False})['result']
     assert final == {'news': [{'news_id': 'a', 'title': 'a'}]}
 
 
@@ -76,5 +78,5 @@ def test_database_factor_tool_version_moves_with_its_response_shape():
     # Whole-ETF figures are allowed from 70% observed weight; the same name must not mix old and new meaning.
     assert versions['get_etf_holdings'] == 'database-v2'
     # The audit store also freezes descriptions: moved citation instructions need a new identity.
-    assert versions['get_issue_evidence'] == 'database-v3'  # Final evidence now includes the source URL.
+    assert versions['get_news_evidence'] == 'database-v3'  # Final evidence now includes the source URL.
     assert versions['calculate_chart_indicators'] == 'database-v1'          # 모양이 안 바뀐 툴은 그대로

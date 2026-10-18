@@ -18,17 +18,29 @@ class FixtureTools:
 
     data_source = "synthetic"
 
-    final_tool_names = {"get_issue_evidence", "get_etf_holdings", "calculate_investor_flow", "calculate_weighted_flow", "calculate_chart_indicators", "evaluate_indicator_transition", "compare_macro_observations", "calculate_valuation", "calculate_weighted_valuation", "get_instrument_factors", "get_instrument_factor_table", "compare_financial_observations", "calculate_valuation_range"}
+    final_tool_names = {"get_news_evidence", "get_etf_holdings", "calculate_investor_flow", "calculate_weighted_flow", "calculate_chart_indicators", "evaluate_indicator_transition", "compare_macro_observations", "calculate_valuation", "calculate_weighted_valuation", "get_instrument_factors", "get_instrument_factor_table", "compare_financial_observations", "calculate_valuation_range"}
 
     def __init__(self, fixture):
         self.fixture = deepcopy(fixture)
         instant(self.fixture["context"]["analysis_at"])
         self._tools = {}
+        from edge_analysis_v2.tools.news_events import NewsEvents
+        self._news_discovery = NewsEvents(self.fixture)
+        self._register('list_events',
+            '사건과 미연결 기사를 함께 탐색합니다. scope=all(기본), events, unlinked_articles. kind=unlinked_article은 확인된 사건이 아닙니다. query의 모든 단어가 같은 기사 제목·발췌에 있어야 일치합니다. 빈 query는 전체 범위입니다. 날짜는 UTC 확보일이며 사건은 최신 비반복 사실 기준입니다. instrument_ids/event_types는 scope=events에서만 사용합니다. next_cursor로 다음 페이지를 읽으세요. 사건은 event_key로 get_event_timeline(제공되는 경우), 미연결 기사는 news_ids로 get_news_evidence를 읽으세요. 결과 없음은 확보 범위 안에서만 의미합니다.',
+            {'scope': {'type': 'string', 'enum': ['all', 'events', 'unlinked_articles']},
+             'query': {'type': 'string', 'maxLength': 200},
+             'start_date': {'type': 'string'}, 'end_date': {'type': 'string'},
+             'event_types': {'type': 'array', 'items': {'type': 'string'}},
+             'instrument_ids': {'type': 'array', 'items': {'type': 'string'}},
+             'hypothesis': {'type': 'string', 'maxLength': 200},
+             'looking_for': {'type': 'string', 'maxLength': 200},
+             'cursor': {'type': 'string'}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 50}},
+            self._news_discovery.listing, '', ['뉴스 기사', '저장된 사건 관계'], required=[])
         self._register('get_financial_observations', '기업의 공개 실적·예상 이력을 표로 읽습니다. 실제/예상, 대상 연도, 작성자와 기사 ID를 보존합니다. 비어 있으면 전망을 만들어 채우지 마세요. 비교는 compare_financial_observations, 조건부 가격 계산은 calculate_valuation_range를 사용합니다.', {'instrument_id':{'type':'string'}}, lambda **args:financial_observations.read(self.fixture, **args), '', ['공개 실적·예상 자료'])
         self._register('compare_financial_observations', '같은 기업·지표·단위·대상 기간의 두 원천 값을 비교합니다. get_financial_observations의 ID를 사용하세요. 예상 수정은 실제 실적 증가가 아닙니다. 예: previous_id=eps-old, current_id=eps-new.', {'previous_id':{'type':'string'},'current_id':{'type':'string'}}, lambda **args:financial_observations.compare(self.fixture, **args), r'\Delta=C-P;\ r=100(C-P)/P\quad(P>0)', ['공개 실적·예상 자료'])
         self._register('calculate_valuation_range', '공개 연간 EPS와 선택한 PER 배수로 개별 종목의 조건부 가격 범위와 현재 PER을 계산합니다. eps_id는 get_financial_observations에서 선택하고, per_low/high는 원문으로 정당화한 가정입니다. 배수 근거도 함께 인용하세요. return_low/high_pct는 각 가정 가격까지의 변화율이며 최대 손실·최대 수익이 아닙니다. 양수는 현재가 위입니다. 밴드 밖으로도 주가가 움직일 수 있습니다. 현재 PER이 과거보다 낮다고 시장 미반영이 입증되지는 않습니다.', {'eps_id':{'type':'string'},'per_low':{'type':'number','exclusiveMinimum':0},'per_high':{'type':'number','exclusiveMinimum':0}}, lambda **args:financial_observations.valuation_range(self.fixture, **args), r'P_{lo}=EPS\times PER_{lo};\ P_{hi}=EPS\times PER_{hi};\ r=100(P/P_{close}-1);\ PER_{current}=P_{close}/EPS', ['공개 연간 EPS 자료','종목 확정 종가','분석자가 선택한 PER 가정'], version='v2')
-        self._register("search_news_threads", "공개된 뉴스의 단계별 사건과 중복 보도 수를 탐색합니다. 기사 근거는 get_issue_evidence로 확보하세요.", {}, lambda: news.search(self.fixture), "", ["뉴스 기사"])
-        self._register("get_issue_evidence", "기사 ID로 원문을 읽습니다. include_body=true는 탐색이며 이 호출 ID는 최종 근거로 쓸 수 없습니다. 읽은 뒤 사용할 기사 ID들로 include_body=false를 다시 호출하고 새 tool_run_id를 최종 문장의 기사 근거로 연결하세요.", {"news_ids": {"type": "array", "items": {"type": "string"}}, "include_body": {"type": "boolean"}}, lambda **args: news.evidence(self.fixture, **args), "", ["뉴스 기사"], version="v2")
+        self._register("get_news_evidence", "기사 ID로 원문을 읽습니다. include_body=true는 탐색이며 이 호출 ID는 최종 근거로 쓸 수 없습니다. 읽은 뒤 사용할 기사 ID들로 include_body=false를 다시 호출하고 새 tool_run_id를 최종 문장의 기사 근거로 연결하세요.", {"news_ids": {"type": "array", "items": {"type": "string"}}, "include_body": {"type": "boolean"}}, lambda **args: news.evidence(self.fixture, **args), "", ["뉴스 기사"], version="v2")
         self._register("get_etf_holdings", "분석 시각까지 공개된 구성종목과 저장된 비중을 확인합니다. observed_weight_ratio는 확인된 비중의 합이며 100%로 환산하지 않습니다.", {}, lambda: holdings(self.fixture), r"W=\sum_i w_i\ge 0.7", ["ETF 구성종목 비중"], version="v2")
         parameters = {"investor": {"type": "string", "enum": ["foreign", "institution", "individual"]}, "lookback_days": {"type": "integer", "minimum": 1, "maximum": 30}, "operation": {"type": "string", "enum": ["sum", "frequency", "streak"]}, "direction": {"type": "string", "enum": ["net_buy", "net_sell", "none"]}}
         for name, extra in (('sum_investor_net_flow',{'instrument_id':{'type':'string'}}), ('sum_weighted_net_flow',{})):
@@ -95,12 +107,17 @@ class FixtureTools:
 
     def call(self, name, arguments):
         """Calculate once and return the exact object to be stored and shown."""
+        news_tools = ('list_events', 'get_event_timeline', 'get_event_changes', 'get_news_evidence')
+        if name in news_tools and not isinstance(arguments, dict):
+            raise ToolInputError('News tool arguments must be an object matching its schema.')
         if name in ('calculate_investor_flow', 'calculate_weighted_flow', 'sum_investor_net_flow', 'sum_weighted_net_flow') and not isinstance(arguments, dict):
             raise ToolInputError('INVALID_FLOW_ARGUMENTS: supply an object matching the tool schema before retrying.')
         if name not in self._tools or not isinstance(arguments, dict):
             raise ValueError("unknown tool or invalid arguments")
         tool = self._tools[name]
         if not set(tool["required"]) <= set(arguments) <= set(tool["parameters"]):
+            if name in news_tools:
+                raise ToolInputError('Arguments must match the news tool schema. Required: ' + ', '.join(tool['required']))
             if name in ('calculate_investor_flow', 'calculate_weighted_flow', 'sum_investor_net_flow', 'sum_weighted_net_flow'):
                 raise ToolInputError('INVALID_FLOW_ARGUMENTS: arguments must match the tool schema. '
                                      + 'Required: ' + ', '.join(tool['required'])

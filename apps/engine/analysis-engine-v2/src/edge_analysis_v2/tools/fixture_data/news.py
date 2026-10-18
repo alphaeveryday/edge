@@ -1,4 +1,5 @@
 """Read news with source identity instead of semantic deduplication."""
+from edge_analysis_v2.tools.execution import ToolInputError
 from edge_analysis_v2.tools.fixture_data.common import available, instant
 
 
@@ -11,46 +12,13 @@ def visible(fixture):
     return sorted(rows, key=lambda r: (instant(r["published_at"]), r["news_id"]), reverse=True)
 
 
-def search(fixture):
-    """Group up to 100 unique events, preserving stages and duplicate counts."""
-    threads = {}
-    event_count = 0
-    articles = visible(fixture)
-    if 'news_links' in fixture:
-        by_id = {r['news_id']: r for r in articles}
-        rows = [by_id[link['news_id']] | link for link in fixture['news_links'] if link['news_id'] in by_id]
-        rows.sort(key=lambda r: (instant(r['published_at']), r['news_id']), reverse=True)
-    else:
-        rows = articles
-    seen = set()
-    for row in rows:
-        identity = (row['thread_id'], row['stage'], row['event_id'], row['news_id'])
-        if identity in seen:
-            continue
-        seen.add(identity)
-        thread = threads.setdefault(row["thread_id"], {})
-        stage = thread.setdefault(row["stage"], {})
-        event = stage.get(row["event_id"])
-        if event is not None:
-            event["duplicate_count"] += 1
-        elif event_count < 100:
-            stage[row["event_id"]] = {k: row[k] for k in ("event_id", "news_id", "title", "published_at")} | {"duplicate_count": 0}
-            event_count += 1
-    result = {"threads": [{"thread_id": identity, "stages": [{"stage": name, "events": list(events.values())} for name, events in stages.items() if events]} for identity, stages in threads.items() if any(stages.values())]}
-    if 'news_links' in fixture:
-        linked = {r['news_id'] for r in rows}
-        result['unthreaded_news'] = [{k:r[k] for k in ('news_id','title','published_at')} for r in articles if r['news_id'] not in linked]
-        result['limit_reached'] = bool(fixture.get('news_limit_reached')) or len({(r['thread_id'],r['stage'],r['event_id']) for r in rows}) > 100
-    return result
-
-
 def evidence(fixture, news_ids, include_body):
     """Read exact article IDs; body-free results are final news evidence."""
-    if not news_ids or len(news_ids) != len(set(news_ids)) or type(include_body) is not bool:
-        raise ValueError("unique nonempty news_ids and boolean include_body required")
+    if not isinstance(news_ids, list) or not news_ids or not all(isinstance(n, str) for n in news_ids) or len(news_ids) != len(set(news_ids)) or type(include_body) is not bool:
+        raise ToolInputError("unique nonempty news_ids and boolean include_body required")
     rows = {r["news_id"]: r for r in visible(fixture)}
     if any(identity not in rows for identity in news_ids):
-        raise ValueError("news unavailable at analysis time")
+        raise ToolInputError("news unavailable at analysis time")
     keys = ("news_id", "title", "body") if include_body else ("news_id", "title")
     evidence_rows = []
     for identity in news_ids:
@@ -62,16 +30,3 @@ def evidence(fixture, news_ids, include_body):
             evidence["body_kind"] = row["body_kind"]
         evidence_rows.append(evidence)
     return {"news": evidence_rows}
-
-
-def search_articles(fixture, query, offset):
-    """Page an immutable, cutoff-filtered corpus without treating its boundary as public absence."""
-    if not isinstance(query, str) or len(query) > 200 or type(offset) is not int or offset < 0:
-        raise ValueError('Bounded query and nonnegative offset required')
-    words = query.casefold().split()
-    matches = [r for r in visible(fixture)
-               if all(word in (r['title'] + ' ' + (r.get('body') or '')).casefold() for word in words)]
-    page = matches[offset:offset+50]
-    return {'articles':[{k:r[k] for k in ('news_id','title','published_at')} for r in page],
-            'matched_count':len(matches), 'next_offset':offset+50 if offset+50 < len(matches) else None,
-            'scope':dict(fixture.get('news_scope', {}))}

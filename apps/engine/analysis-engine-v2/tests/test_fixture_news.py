@@ -15,35 +15,33 @@ def fixture():
     }
 
 
-def test_duplicate_reports_collapse_only_by_event_identity(fixture):
-    tools = FixtureTools(fixture)
-    result = tools.call("search_news_threads", {})["result"]
-    event = result["threads"][0]["stages"][0]["events"][0]
-    assert event["news_id"] == "1"
-    assert event["duplicate_count"] == 1
+def test_legacy_article_labels_do_not_establish_confirmed_event_membership(fixture):
+    page = FixtureTools(fixture).call('list_events', {})['result']
+    assert page['total_count'] == 2
+    assert all(row['kind'] == 'unlinked_article' for row in page['items'])
 
 
 def test_evidence_omits_body_and_rejects_unavailable_id(fixture):
     tools = FixtureTools(fixture)
-    result = tools.call("get_issue_evidence", {"news_ids": ["0"], "include_body": False})
+    result = tools.call("get_news_evidence", {"news_ids": ["0"], "include_body": False})
     assert result["result"] == {"news": [{"news_id": "0", "title": "Title 0"}]}
     fixture["news"][0]["available_at"] = "2026-09-21T11:00:00+09:00"
     with pytest.raises(ValueError, match="unavailable"):
-        FixtureTools(fixture).call("get_issue_evidence", {"news_ids": ["0"], "include_body": True})
+        FixtureTools(fixture).call("get_news_evidence", {"news_ids": ["0"], "include_body": True})
 
 
 def test_final_news_evidence_carries_article_url_for_server_assembled_sources(fixture):
     fixture["news"][0]["source_uri"] = "https://news.example.com/article/0"
-    result = FixtureTools(fixture).call("get_issue_evidence", {"news_ids": ["0"], "include_body": False})
+    result = FixtureTools(fixture).call("get_news_evidence", {"news_ids": ["0"], "include_body": False})
     assert result["result"]["news"][0]["source_uri"] == "https://news.example.com/article/0"
-    exploratory = FixtureTools(fixture).call("get_issue_evidence", {"news_ids": ["0"], "include_body": True})
+    exploratory = FixtureTools(fixture).call("get_news_evidence", {"news_ids": ["0"], "include_body": True})
     assert "source_uri" not in exploratory["result"]["news"][0]
 
 
 def test_exploratory_evidence_preserves_an_explicitly_missing_body(fixture):
     fixture["news"][0]["body"] = None
     fixture["news"][0]["body_kind"] = "excerpt"
-    result = FixtureTools(fixture).call("get_issue_evidence", {"news_ids": ["0"], "include_body": True})
+    result = FixtureTools(fixture).call("get_news_evidence", {"news_ids": ["0"], "include_body": True})
     assert result["result"]["news"] == [{
         "news_id": "0", "title": "Title 0", "body": None, "body_kind": "excerpt"}]
 

@@ -77,15 +77,17 @@ def test_article_search_reaches_older_candidates_and_never_returns_future_eviden
         available_at='2026-09-29T09:01:00+09:00') for i in range(65)]
     data['news'].append(data['news'][0] | {'news_id':'future', 'available_at':'2026-10-01T00:00:00+09:00'})
     tools = database.DatabaseTools(data)
-    first = tools.call('search_news_articles', {'query':'납기 고객', 'offset':0})['result']
-    second = tools.call('search_news_articles', {'query':'납기 고객', 'offset':first['next_offset']})['result']
-    assert len(first['articles']) == 50 and len(second['articles']) == 15
-    assert second['next_offset'] is None
-    assert 'future' not in {r['news_id'] for r in first['articles'] + second['articles']}
-    assert second['scope']['limit_reached']  # Exhausting this snapshot is not exhausting public sources.
-    assert 'search_news_articles' not in tools.final_tool_names
+    page = tools.call('list_events', {'query':'납기 고객'})['result']
+    items = list(page['items'])
+    while page['next_cursor']:
+        page = tools.call('list_events', {'query':'납기 고객', 'cursor':page['next_cursor']})['result']
+        items.extend(page['items'])
+    assert len(items) == 65
+    assert 'future' not in {r['news_ids'][0] for r in items}
+    assert page['scope']['limit_reached']
+    assert 'list_events' not in tools.final_tool_names
     with pytest.raises(ValueError):
-        tools.call('search_news_articles', {'query':'납기', 'offset':-1})
+        tools.call('list_events', {'query':'납기', 'limit':-1})
 
 
 def _load_stored_weights(monkeypatch, stored, input_rows):
@@ -136,7 +138,7 @@ def test_a_search_may_state_the_hypothesis_it_checks_and_what_it_looks_for():
     data['news'] = [dict(news_id='1', title='납기 비교', body='고객 구성', body_kind='excerpt',
         published_at='2026-09-29T09:00:00+09:00', available_at='2026-09-29T09:01:00+09:00')]
     tools = database.DatabaseTools(data)
-    plain = tools.call('search_news_articles', {'query': '납기', 'offset': 0})['result']
-    stated = tools.call('search_news_articles', {'query': '납기', 'offset': 0, 'hypothesis': '납기가 늦어져 매출 인식이 밀렸다',
+    plain = tools.call('list_events', {'query': '납기'})['result']
+    stated = tools.call('list_events', {'query': '납기', 'hypothesis': '납기가 늦어져 매출 인식이 밀렸다',
                                                  'looking_for': '고객사가 납기 지연을 밝힌 날짜'})['result']
     assert {k: v for k, v in plain.items() if k != 'tool_run_id'} == {k: v for k, v in stated.items() if k != 'tool_run_id'}

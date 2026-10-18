@@ -8,7 +8,7 @@ import json
 
 from edge_analysis_v2.tools.execution import ToolInputError
 from edge_analysis_v2.tools.fixture_data.common import instant
-from edge_analysis_v2.tools.fixture_data.news import search_articles, visible
+from edge_analysis_v2.tools.fixture_data.news import visible
 
 
 def digest(value):
@@ -91,15 +91,22 @@ class NewsEvents:
                 'remaining_count': len(rows) - end, 'next_cursor': next_cursor,
                 'scope': self.public_scope(), **metadata}
 
-    def listing(self, start_date=None, end_date=None, event_types=None, instrument_ids=None, query='', cursor=None, limit=20):
+    def listing(self, start_date=None, end_date=None, event_types=None, instrument_ids=None, query='', cursor=None, limit=20, scope='all', hypothesis=None, looking_for=None):
+        if scope not in ('all', 'events', 'unlinked_articles'):
+            raise ToolInputError('scope must be all, events, or unlinked_articles.')
+        if scope != 'events' and (instrument_ids is not None or event_types is not None):
+            raise ToolInputError('instrument_ids/event_types require scope=events. Unlinked articles lack event/issuer mappings; use query to search their text.')
+        for label, value in (('hypothesis', hypothesis), ('looking_for', looking_for)):
+            if value is not None and (not isinstance(value, str) or len(value) > 200):
+                raise ToolInputError(label + ' must be a string of at most 200 characters')
         if not isinstance(query, str) or len(query) > 200:
             raise ToolInputError('query must be a string of at most 200 characters')
         words = query.casefold().split()
         matches = {identity for identity, article in self.articles.items()
                    if all(word in (article['title'] + ' ' + (article.get('body') or '')).casefold() for word in words)} if words else None
         try:
-            start = date.fromisoformat(start_date) if start_date else None
-            end = date.fromisoformat(end_date) if end_date else None
+            start = date.fromisoformat(start_date) if start_date is not None else None
+            end = date.fromisoformat(end_date) if end_date is not None else None
             if start and end and start > end:
                 raise ValueError()
         except (ValueError, TypeError):
@@ -115,7 +122,7 @@ class NewsEvents:
             if not isinstance(instrument_ids, list) or not instrument_ids or any(not isinstance(s, str) or s not in mapped for s in instrument_ids):
                 raise ToolInputError('instrument_ids must be a nonempty ticker array. Allowed: ' + ', '.join(sorted(mapped)))
         rows = []
-        for key, reports in self.groups.items():
+        for key, reports in (self.groups.items() if scope != 'unlinked_articles' else []):
             matched = sorted({identity for row in reports for identity in row['news_ids']} & matches,
                              key=lambda identity: (instant(self.articles[identity]['published_at']), identity),
                              reverse=True) if matches is not None else None
@@ -132,7 +139,7 @@ class NewsEvents:
                 continue
             ids = latest['news_ids']
             title = self.articles[ids[0]]['title'] if ids else latest['event_type']
-            rows.append({'event_key': key, 'event_type': latest['event_type'], 'title': title[:180],
+            rows.append({'kind': 'event', 'event_key': key, 'event_type': latest['event_type'], 'title': title[:180],
                          'title_source': 'latest_event_article' if ids else 'event_type_no_visible_article',
                          'related_instrument_ids': symbols[:10], 'related_instrument_count': len(symbols),
                          'last_change_at': latest['available_at'], 'stage': latest.get('stage'),
@@ -140,15 +147,25 @@ class NewsEvents:
                          'news_ids': ids[:2]})
             if matched is not None:
                 rows[-1].update(matched_news_ids=matched[:2], matched_article_count=len(matched))
-        rows.sort(key=lambda r: r['event_key'])
+        if scope != 'events':
+            for identity in sorted(self.unlinked):
+                article = self.articles[identity]
+                day = instant(article['available_at']).date()
+                if matches is not None and identity not in matches or start and day < start or end and day > end:
+                    continue
+                rows.append({'kind': 'unlinked_article', 'news_ids': [identity], 'title': article['title'][:180],
+                             'published_at': article['published_at'], 'available_at': article['available_at'],
+                             'last_change_at': article['available_at']})
+        rows.sort(key=lambda r: r['event_key'] if r['kind'] == 'event' else 'article:' + r['news_ids'][0])
         rows.sort(key=lambda r: instant(r['last_change_at']), reverse=True)
-        return self.page(rows, ['events', start_date, end_date, event_types, instrument_ids, query], cursor, limit,
-                         unlinked_article_count=len(self.unlinked),
+        return self.page(rows, ['events', scope, start_date, end_date, event_types, instrument_ids, query], cursor, limit,
+                         selected_scope=scope, unlinked_article_count=len(self.unlinked),
                          unlinked_by_publication_month=dict(sorted(Counter(self.articles[n]['published_at'][:7] for n in self.unlinked).items())),
-                         date_filter='UTC date of latest non-rebroadcast availability; unknown novelty retained')
+                         date_filter='UTC availability date: latest non-rebroadcast for events, acquisition for unlinked articles',
+                         interpretation='Unlinked articles are not confirmed events. Empty results describe this captured corpus only; read news_ids with get_news_evidence.')
 
     def timeline(self, event_key, cursor=None, limit=20):
-        if event_key not in self.groups:
+        if not isinstance(event_key, str) or event_key not in self.groups:
             raise ToolInputError('Unknown event_key. Select one from list_events.')
         reports = sorted(self.groups[event_key], key=lambda r: (instant(r['available_at']), r['event_id']))
         rows = []
@@ -167,14 +184,6 @@ class NewsEvents:
                          folded_rebroadcast_count=folded,
                          only_rebroadcasts=only_rebroadcasts,
                          interpretation='Recorded rebroadcasts counted for the thread, not attributed to a particular fact. Stages are reported, not independently verified.')
-
-    def search_articles(self, query, offset, unlinked_only=False):
-        if type(unlinked_only) is not bool:
-            raise ToolInputError('unlinked_only must be boolean')
-        source = self.fixture
-        if unlinked_only:
-            source = source | {'news': [r for n, r in self.articles.items() if n in self.unlinked]}
-        return search_articles(source, query, offset) | {'scope': self.public_scope()}
 
     def changes(self, cursor=None, limit=20):
         if self.previous is None:
