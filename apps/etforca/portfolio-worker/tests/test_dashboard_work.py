@@ -448,6 +448,27 @@ async def test_resolving_a_legacy_symbol_does_not_rebase_unchanged_split_inputs(
     assert result['assets'][0]['profit'] == 300
 
 
+def test_manually_linking_a_legacy_alias_keeps_snapshot_but_replacing_a_known_fund_resets_it(isolated_db):
+    from psycopg.types.json import Jsonb
+    a = {**asset(), 'name': 'my old fund alias', 'instrument_id': None, 'price_date': '2026-10-15'}
+    payload = dashboard.Workbook(assets=[a]).model_dump(mode='json')
+    with store.connect() as db:
+        db.execute('INSERT INTO portfolio_workbooks(owner,version,payload) VALUES (%s,1,%s)', ('owner', Jsonb(payload)))
+    loaded = dashboard.read('owner')
+    loaded['workbook']['assets'][0].update(instrument_id='KR:069500', name='KODEX 200', price_date=None)
+    saved = dashboard.save('owner', dashboard.Save.model_validate(loaded))
+    assert saved['workbook']['assets'][0]['quantity_as_of'] == '2026-10-15'
+    assert saved['workbook']['assets'][0]['average_as_of'] == '2026-10-15'
+    split = record((50., 55.))
+    split['frame']['Stock Splits'] = [0., 2.]
+    result = work.valuation(saved['workbook'], {'KR:069500': split}, None, date(2026, 10, 18))
+    assert result['assets'][0]['quantity'] == 20
+    assert result['assets'][0]['profit'] == 300
+    saved['workbook']['assets'][0]['instrument_id'] = 'KR:360750'
+    replaced = dashboard.save('owner', dashboard.Save.model_validate(saved))
+    assert replaced['workbook']['assets'][0]['quantity_as_of'] != '2026-10-15'
+
+
 async def test_adjusted_fallback_keeps_captured_actual_prices_actions_and_source(isolated_db, monkeypatch):
     from edge_portfolio import market_data
     async def fetch(symbol, day, *, on_raw=None, provider='yahoo'):

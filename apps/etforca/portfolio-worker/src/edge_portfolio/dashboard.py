@@ -112,8 +112,9 @@ def save(owner, body):
             if previous:
                 previous = identify(previous, strict=False, fx=row['payload'].get('fx'))
             entered = str(datetime.now(ZoneInfo('America/New_York' if asset['currency'] == 'USD' else 'Asia/Seoul')).date())
+            linking_legacy = bool(previous) and not previous.get('instrument_id') and previous.get('currency') == asset['currency']
             for field in ('quantity', 'average'):
-                changed = previous.get(field) != asset.get(field) or previous.get('instrument_id') != asset.get('instrument_id')
+                changed = previous.get(field) != asset.get(field) or (previous.get('instrument_id') != asset.get('instrument_id') and not linking_legacy)
                 changed |= previous.get(field + '_revision') != asset.get(field + '_revision')
                 asset[field + '_as_of'] = entered if changed and asset.get(field) is not None else previous.get(field + '_as_of') or previous.get('price_date')
         if row and any(item not in payload[field] for field in ('dividends', 'months') for item in row['payload'].get(field, [])):
