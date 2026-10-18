@@ -50,7 +50,7 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
   useLayoutEffect(() => {
     if (!open) return;
     previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    popup.current?.focus({ preventScroll: true });
+    if (newsletterOnly) popup.current?.focus({ preventScroll: true });
     function escape(event: KeyboardEvent) { if (event.key === 'Escape' && !document.querySelector('dialog[open]')) close(); }
     function followupFocus(event: FocusEvent) { if (event.target instanceof Element && event.target.closest('.followup')) close(); }
     document.addEventListener('keydown', escape);
@@ -83,7 +83,7 @@ export function ReportFeedback({ jobId }: { jobId: string }) {
   return <div ref={anchor} className="feedback-anchor">
     <SavePortfolio jobId={jobId} />
     <Button variant="secondary" className="secondary" aria-expanded={open} onClick={() => { if (open) return; setNewsletterOnly(true); setSubscription(''); setOpen(true); }}>보유 종목 뉴스레터 받기</Button>
-    {open && <aside ref={popup} tabIndex={-1} className="report-feedback" role="dialog" aria-label={newsletterOnly ? '내 ETF 소식, 매일 메일로' : '포트폴리오 저장'} aria-modal="false" data-analytics-section="feedback">
+    {open && <aside onFocusCapture={e => { if (e.relatedTarget instanceof HTMLElement && !e.currentTarget.contains(e.relatedTarget)) previousFocus.current = e.relatedTarget; }} ref={popup} tabIndex={-1} className="report-feedback" role="dialog" aria-label={newsletterOnly ? '내 ETF 소식, 매일 메일로' : '포트폴리오 저장'} aria-modal="false" data-analytics-section="feedback">
       <Button className="feedback-close" aria-label="평가 팝업 닫기" onClick={close}>×</Button>
       {!newsletterOnly && <SavePortfolio jobId={jobId} />}
       <div className="feedback-newsletter">

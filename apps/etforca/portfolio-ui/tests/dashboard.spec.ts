@@ -84,7 +84,7 @@ test('preview edits and reloads without sending customer API or analytics traffi
   await page.getByRole('button', { name: '수익 기록', exact: true }).click();
   await expect(page.getByRole('button', { name: '월 기록 저장' })).toBeVisible();
   await page.getByRole('button', { name: '추가매수', exact: true }).click();
-  await expect(page.locator('.dashboard-main')).toContainText('매수할 계좌를 선택');
+  await expect(page.locator('.dashboard-main')).toContainText('매수할 계좌를 골라');
   expect(calls).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
@@ -155,9 +155,10 @@ test('an in-flight save cannot discard a different assets draft', async ({ page 
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
   await expect.poll(() => !!release).toBe(true);
   await expect(page.getByLabel('종목명', { exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '수정 닫기' }).click();
+  await expect(page.getByRole('button', { name: '수정 닫기' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toBeVisible();
   await expect(page.locator('.asset-row').nth(1)).toBeDisabled();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
   release!();
   await expect(page.locator('.asset-row').nth(1)).toBeEnabled();
   await page.locator('.asset-row').nth(1).click();
