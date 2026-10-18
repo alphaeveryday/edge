@@ -401,14 +401,17 @@ def verdict_tag(verdict):
 
 
 def news_line(item, colour, sign, detailed):
-    """One line per item with a red (good) or blue (bad) bar. The line itself opens the detail where the client folds
-    <details> (Apple Mail, Samsung, Outlook for Windows); Gmail turns the tags into <u> and shows it open."""
+    """One line per item, signed and with a red (good) or blue (bad) bar. The line itself opens the detail where the client
+    folds <details> (Apple Mail and other WebKit/Chromium clients); Gmail replaces the tags with <u> and shows it open
+    (caniemail, HTML5 semantics). Outlook for Windows support is unverified."""
     moved, plain, prefix = tag(item)
-    line = f'{mark_of(item, NEWS_ICONS)}{e(item["title"])}<span style="color:{MUTED};font-size:14px;white-space:nowrap">&nbsp;· {prefix}{moved}</span>'
+    line = (f'<b style="color:{colour}">{sign}</b> {mark_of(item, NEWS_ICONS)}{e(item["title"])}'
+            f'<span style="color:{MUTED};font-size:14px;white-space:nowrap">&nbsp;· {prefix}{moved}</span>')
     bar = f'border-left:3px solid {colour};padding:2px 0 2px 12px;margin:0 0 14px'
     if not detailed:
-        return f'<p style="{P};{bar};font-size:17px;line-height:1.6;color:{INK}">{line}</p>', f"  {sign} {item['title']} · {plain}"
-    return (f'<details style="{bar}"><summary style="list-style:none;cursor:pointer;font-family:{SANS};font-size:17px;line-height:1.6;color:{INK};word-break:keep-all;overflow-wrap:anywhere">{line}</summary>'
+        # The HTML drops the detail to stay under the clip budget; the plain-text edition keeps it.
+        return f'<p style="{P};{bar};font-size:17px;line-height:1.6;color:{INK}">{line}</p>', f"  {sign} {item['title']} · {plain} — {item['detail']}"
+    return (f'<details style="{bar}"><summary style="cursor:pointer;font-family:{SANS};font-size:17px;line-height:1.6;color:{INK};word-break:keep-all;overflow-wrap:anywhere">{line}</summary>'
             f'<p style="{P};margin:6px 0 0;color:{MUTED};font-size:15px;line-height:1.8">{e(item["detail"])}</p></details>',
             f"  {sign} {item['title']} · {plain} — {item['detail']}")
 
@@ -459,7 +462,8 @@ def calendar(letter, edition, cards):
             if event['date'] >= edition.isoformat():
                 # Titles come from separate model runs: '3분기 실적 발표' and '3분기 실적발표' by the same org are one event,
                 # while the same title by two companies stays two rows.
-                seen.setdefault((event['date'], ''.join(event['title'].split()), ''.join(event['org'].split())), event)
+                org = ''.join(event['org'].split())
+                seen.setdefault((event['date'], ''.join(event['title'].split()).replace(org, ''), org), event)
     if not seen:
         return
     lines, text = '', []
@@ -505,7 +509,8 @@ def brief_letter(edition, cards, weights, at, detailed):
     calendar(letter, edition, ready)
     names = source_names(shaken)
     if names:
-        letter.add(row(f'<p style="{P};color:{MUTED};font-size:13px;line-height:1.8">출처 · {e(" · ".join(names))}</p>', '0 32px 28px'), '출처: ' + ' · '.join(names), '')
+        shown = ' · '.join(names[:10]) + (f' 외 {len(names) - 10}건' if len(names) > 10 else '')
+        letter.add(row(f'<p style="{P};color:{MUTED};font-size:13px;line-height:1.8">출처 · {e(shown)}</p>', '0 32px 28px'), '출처: ' + ' · '.join(names), '')
     return finish(letter, edition, headline, dek, 'H')
 
 
@@ -536,8 +541,8 @@ def compose(edition, cards, fmt, weights, purpose, full, at):
     ready = [card for card in cards if fits(card, fmt)]
     top = lead(ready, fmt)
     missing = sum(bool(c.get('unavailable')) for c in cards)
-    if fmt in 'FH' and top is None and ready:
-        headline = '오늘은 보유 이유를 흔드는 변화가 없어요' if fmt == 'H' else '오늘은 중요한 변화가 없어요'
+    if fmt == 'F' and top is None and ready:
+        headline = '오늘은 중요한 변화가 없어요'
         dek = (f'자료를 확인한 {len(ready)}종목은 등락이 평소 범위 안이고 보유 이유를 흔드는 새 사건이 없었어요.'
                + (f' {missing}종목은 오늘 자료를 확보하지 못했어요.' if missing else ''))
     elif top:

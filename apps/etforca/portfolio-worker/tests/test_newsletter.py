@@ -867,13 +867,14 @@ def test_twenty_worst_case_holdings_stay_under_gmail_clipping(fmt):
     # 20 is the most holdings a subscription can carry (contracts.Holding list max_length).
     schema = agent.FORMATS[fmt][1].model_json_schema()
     worst = {'significant': True} if fmt == 'F' else {}  # a quiet F day is all one-liners; every holding flagged is the long case
-    cards = [padded(letter_card(fmt, f'US:E{i}', f'ETF{i}', sources=[{'url': f'https://news{j}.example/{i}'} for j in range(5)], **worst),
+    cards = [padded(letter_card(fmt, f'US:E{i}', f'ETF{i}', sources=[{'url': f'https://news{j}.example/{i}', 'title': f'{i}번 종목 {j}번 기사 제목이 꽤 길어요'} for j in range(5)], **worst),
                     schema, schema.get('$defs', {}))
              for i in range(20)]
     _, html, text = email.daily(date(2026, 10, 18), cards, fmt, weights={f'US:E{i}': .05 for i in range(20)})
     assert len(html.encode()) <= email.BUDGET, 'Over ~102KB Gmail hides the footer: disclaimer and unsubscribe link'
     assert html.count(email.UNSUBSCRIBE) == 1 and '매매 지시가 아닙니다' in html
-    assert ('나머지 종목은 제목과 요약만 실었어요' in text if fmt != 'H' else True), 'Trimmed holdings must say so instead of vanishing'
+    trimmed = '메일이 길어 일부 소식의 자세한 내용은 뺐어요' if fmt == 'H' else '나머지 종목은 제목과 요약만 실었어요'
+    assert trimmed in text, 'Trimmed holdings must say so instead of vanishing'
     assert all(f'ETF{i}' in text for i in range(20)), 'Every holding stays in the letter, at least as a brief'
 
 
@@ -1059,3 +1060,17 @@ def test_news_detail_folds_under_its_own_headline():
     assert '삼성전자 실적' in summary and '자세히' not in html, 'The headline itself opens the detail; no repeated "more" links'
     assert html.index('</summary>') < html.index('새 계약이 수요 가정을 뒷받침해요.') < html.index('</details>')
     assert '새 계약이 수요 가정을 뒷받침해요.' in text, 'The plain-text edition never folds anything away'
+
+
+def test_good_and_bad_news_differ_by_sign_not_only_colour():
+    good = {**STORED_NEWS, 'title': '좋은 소식'}
+    bad = {**STORED_NEWS, 'title': '나쁜 소식'}
+    _, html, _ = email.daily(date(2026, 10, 18), [letter_card('H', positives=[good], negatives=[bad])], 'H')
+    assert html.index('＋</b>') < html.index('좋은 소식') < html.index('－</b>') < html.index('나쁜 소식')
+
+
+def test_calendar_merges_an_event_whose_title_repeats_the_company():
+    a = letter_card('H', 'US:A', 'A', events=[{**EVENT, 'icon': None}])
+    b = letter_card('H', 'US:B', 'B', events=[{**EVENT, 'title': 'SK하이닉스 3분기 실적 발표', 'icon': None}])
+    _, _, text = email.daily(date(2026, 10, 18), [a, b], 'H')
+    assert text.count('3분기 실적 발표') == 1
