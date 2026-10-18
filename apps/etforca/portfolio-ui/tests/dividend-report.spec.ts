@@ -20,3 +20,21 @@ test('switching to an account without old dividends keeps the selected year trut
   await expect(report.locator('tfoot td').last()).toHaveText('—');
   await expect(report.getByRole('button', { name: '2025-01 실수령 미기록', exact: true })).toBeVisible();
 });
+
+for (const observed of ['2026-09-30', '2026-10-16']) test(`a valuation date cannot extend dividend observation coverage: ${observed}`, async ({ page }) => {
+  const day = observed === '2026-09-30' ? '2026-10-01' : '2026-10-18';
+  await page.clock.setFixedTime(new Date(`${day}T03:00:00Z`));
+  const asset = { id: 'a', instrument_id: 'US:SCHD', name: 'SCHD', account: '일반 계좌', category: '주식', currency: 'USD', quantity: 10, average: 25, price: null, cost_fx: null, amount: null, weight: null, target: null, fee: 0, price_date: null };
+  await page.route('**/api/portfolio/**', route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/workbook')) return route.fulfill({ json: { version: 1, workbook: { title: '내 포트폴리오', fx: null, assets: [asset], months: [], dividends: [] } } });
+    return route.fulfill({ json: path.endsWith('/tracking') ? { market: { version: 1, payload: { date: day, assets: [{ id: 'a', value: 350000, profit: 0, quantity: 10, average: 25, price: 25, price_date: observed }], fx: 1400, forecasts: [], missing: [], dividend_missing: [] } }, days: [] } : {} });
+  });
+  await page.goto('/portfolio/?view=dashboard');
+  await page.getByRole('button', { name: '배당 달력', exact: true }).click();
+  const report = page.locator('.dividend-report');
+  await report.getByLabel('연도').selectOption('2027');
+  await expect(report.locator('tbody tr').first().locator('td').nth(8)).toHaveText('0');
+  await expect(report.locator('tbody tr').first().locator('td').nth(9)).toHaveText('—');
+  await expect(report.getByRole('button', { name: '2027-10 예상 미확인', exact: true })).toBeVisible();
+});

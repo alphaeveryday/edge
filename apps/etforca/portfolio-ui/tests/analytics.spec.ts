@@ -14,7 +14,12 @@ test.use({ launchOptions: { args: ['--disable-blink-features=AutomationControlle
 test('session replay masks customer text and cookies while linking visits and respecting opt out', async ({ page, baseURL }) => {
   test.setTimeout(60000);
   const events = await instrument(page, baseURL!, false, true);
-  await page.addInitScript(() => { document.cookie = 'auth-secret=never-record-this;path=/;Secure'; });
+  await page.addInitScript(() => {
+    document.cookie = 'auth-secret=never-record-this;path=/;Secure';
+    document.addEventListener('DOMContentLoaded', () => {
+      const tax = document.createElement('div'); tax.className = 'tax-dialog'; tax.innerHTML = '<input type="checkbox" class="private-tax-check"><input type="radio" class="private-tax-radio">'; document.body.append(tax);
+    });
+  });
   await page.goto('https://etforca.com/portfolio/?email=private@example.com#private-token');
   await expect.poll(() => events.some(e => e.event === '$pageview')).toBe(true);
   await page.getByRole('button', { name: '종목부터 추천받기' }).click();
@@ -25,13 +30,15 @@ test('session replay masks customer text and cookies while linking visits and re
     const chart = document.createElement('div'); chart.className = 'dividend-plot'; chart.innerHTML = '<i style="height:37.1234567%">private-financial-chart</i>'; document.body.append(chart);
     const gain = document.createElement('span'); gain.className = 'gain'; gain.textContent = 'private-profit'; document.body.append(gain);
     const choices = document.createElement('div'); choices.className = 'chips big'; choices.innerHTML = '<button class="private-choice-marker" aria-pressed="true">private-answer</button>'; document.querySelector('.step')!.append(choices);
+    document.querySelector<HTMLInputElement>('.private-tax-check')!.click();
+    document.querySelector<HTMLInputElement>('.private-tax-radio')!.click();
     return Date.now();
   });
   await expect.poll(() => events.filter(e => e.event === '$snapshot').flatMap(e => unpackReplay(e.properties.$snapshot_data)).some(e => e.type === 3 && e.timestamp >= mutationTime && e.data.source === 0), { timeout: 20000 }).toBe(true);
   const serialized = JSON.stringify(unpackReplay(events));
   expect(serialized).not.toMatch(/private@example|private-token|private-holdings|private-input|private-title|never-record-this|auth-secret|private-financial-chart|37\.1234567/);
   expect(serialized).toContain('.nav__pill');
-  expect(serialized).not.toMatch(/"class"\s*:\s*"gain"|private-profit|private-choice-marker|private-answer/);
+  expect(serialized).not.toMatch(/"class"\s*:\s*"gain"|private-profit|private-choice-marker|private-answer|private-tax-check|private-tax-radio|"isChecked":true/);
   const id = events.find(e => e.event === '$pageview')!.properties.distinct_id;
   expect(events.filter(e => e.event === '$snapshot').every(e => e.properties.$session_id && e.properties.distinct_id === id)).toBe(true);
   await page.reload({ waitUntil: 'domcontentloaded' });

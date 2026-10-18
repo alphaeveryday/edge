@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Button, Select, SectionHeading } from './design-system/components';
 import { DividendChart } from './WorkbookCharts';
-import { money, type Asset, type Dividend, type Forecast } from './workbook';
+import { money, type Asset, type Dividend, type Forecast, type Quote } from './workbook';
 
-export function DividendReport({ assets, dividends, forecasts, missing, startMonth, forecastStartMonth }: { assets: Asset[]; dividends: Dividend[]; forecasts: Forecast[]; missing: string[]; startMonth: string; forecastStartMonth: string | null }) {
+export function DividendReport({ assets, dividends, forecasts, missing, startMonth, forecastStartMonth, quotes }: { assets: Asset[]; dividends: Dividend[]; forecasts: Forecast[]; missing: string[]; startMonth: string; forecastStartMonth: string | null; quotes: Map<string, Quote> }) {
   const currentYear = Number(startMonth.slice(0, 4));
   const [mode, setMode] = useState<'expected' | 'actual'>('expected');
   const [year, setYear] = useState(currentYear);
@@ -12,15 +12,20 @@ export function DividendReport({ assets, dividends, forecasts, missing, startMon
   const months = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
   const actual = dividends.filter(d => d.status === '실수령');
   const missingSelected = missing.filter(id => assets.some(a => a.id === id));
-  const rows = assets.filter(a => a.category !== '현금').map(a => ({ asset: a, values: months.map(m => {
+  const rows = assets.filter(a => a.category !== '현금').map(a => {
+    // A valid dividend observation ends at the same final close as this quote.
+    const observed = quotes.get(a.id)?.price_date;
+    const lastMonth = observed ? `${Number(observed.slice(0, 4)) + 1}${observed.slice(4, 7)}` : null;
+    const fullLastMonth = observed && Number(observed.slice(8)) === new Date(Date.UTC(Number(observed.slice(0, 4)), Number(observed.slice(5, 7)), 0)).getUTCDate();
+    return { asset: a, values: months.map(m => {
     if (mode === 'actual') {
       const recorded = actual.filter(d => d.asset_id === a.id && d.date.startsWith(m));
       return recorded.length ? recorded.reduce((s, d) => s + d.amount, 0) : null;
     }
-    const covered = forecastStartMonth !== null && m >= startMonth && m >= forecastStartMonth && m <= `${Number(forecastStartMonth.slice(0, 4)) + 1}${forecastStartMonth.slice(4)}`;
+    const covered = forecastStartMonth !== null && lastMonth !== null && m >= startMonth && m >= forecastStartMonth && (m < lastMonth || m === lastMonth && fullLastMonth);
     const entries = forecasts.filter(d => d.asset_id === a.id && d.month === m);
     return entries.length ? entries.reduce((s, d) => s + d.amount, 0) : !covered || missing.includes(a.id) ? null : 0;
-  }) }));
+  }) }; });
   const sum = (values: (number | null)[]) => values.every(v => v === null) ? null : values.reduce<number>((s, v) => s + (v ?? 0), 0);
   const totals = months.map((_, i) => sum(rows.map(r => r.values[i])));
   return <section className="dashboard-card dividend-report"><SectionHeading title="연간 배당 내역" action={<label>연도<Select value={year} onChange={e => { setYear(Number(e.target.value)); setMonth(`${e.target.value}-01`); }}>{years.map(y => <option key={y} value={y}>{y}년</option>)}</Select></label>} />
