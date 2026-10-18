@@ -7,7 +7,8 @@ import sys
 import subprocess
 import tempfile
 from pathlib import Path
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from decimal import Decimal
 from functools import lru_cache
 from numbers import Real
@@ -108,17 +109,22 @@ def repair_prices(ticker, frame, symbol, as_of, currency):
 def load_prices(symbol, as_of, *, on_raw=None):
     yf.set_tz_cache_location(str(Path(tempfile.gettempdir()) / 'portfolio-yfinance'))
     ticker = yf.Ticker(symbol)
-    frame = ticker.history(period='max', end=as_of.isoformat(),
+    actions_day = datetime.now(ZoneInfo('Asia/Seoul')).date()
+    frame = ticker.history(period='max', end=(max(as_of, actions_day) + timedelta(days=1)).isoformat(),
                            interval='1d', auto_adjust=False, actions=True, timeout=12)
     metadata = ticker.history_metadata
     if frame.empty or not {'Adj Close', 'Close'} <= set(frame.columns):
         raise ValueError('PRICE_UNAVAILABLE')
     frame.index = pd.to_datetime([i.date() for i in frame.index])
     frame = frame[~frame.index.duplicated(keep='last')].sort_index()
+    # Inspect current-session actions without publishing its unfinished prices.
+    pending_splits = [str(stamp.date()) for stamp, ratio in frame.get('Stock Splits', pd.Series(dtype=float)).items()
+                      if stamp.date() >= as_of and positive_price(ratio)]
     frame = frame.loc[frame.index < pd.Timestamp(as_of)]
     if frame.empty or (as_of - frame.index[-1].date()).days > 7:
         raise ValueError('PRICE_STALE')
     original = {'frame': frame, 'currency': metadata.get('currency'), 'symbol': symbol,
+                'pending_splits': pending_splits,
                 'source_url': f'https://finance.yahoo.com/quote/{quote(symbol, safe="")}/history/'}
     if on_raw:
         on_raw(original)
@@ -127,11 +133,11 @@ def load_prices(symbol, as_of, *, on_raw=None):
     return {**original, 'frame': frame, 'price_recovery': recovery}
 
 
-async def fetch_prices(symbol, as_of, *, on_raw=None, provider_timeout=None):
+async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None):
     try:
         original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw), timeout=provider_timeout)
-        if on_raw:
-            on_raw(original)
+        if on_primary:
+            on_primary(original)
         columns = [original['frame'][name] for name in ('Adj Close', 'Close')]
         valid = [column[column.map(positive_price)] for column in columns]
         if all(not column.empty and (as_of - column.index[-1].date()).days <= 7 for column in valid):
@@ -288,6 +294,7 @@ def normalized_prices(ids, records, as_of, bounds=None, *, column=None):
             expected = expected.union(preceding[-1:])
         prices, price_fill = carry_missing_prices(prices, expected, start, end)
         values = prices['Adj Close']
+        values = values.reindex(values.index.union(pd.DatetimeIndex([start]))).ffill()
         if record['currency'] == 'USD':
             fx = records['FX']['frame']['Close']
             fx_expected = sessions[sessions >= start]

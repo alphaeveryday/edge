@@ -160,7 +160,7 @@ def test_total_return_uses_adjusted_prices_and_requested_period():
 
 async def test_daily_worker_records_without_browser_and_keeps_history_on_edit(isolated_db, monkeypatch):
     monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
-    async def prices(*args):
+    async def prices(*args, **kwargs):
         return {'KR:069500': record()}, []
     monkeypatch.setattr(work, 'records_for', prices)
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
@@ -175,12 +175,14 @@ async def test_daily_worker_records_without_browser_and_keeps_history_on_edit(is
 
 async def test_edit_during_price_collection_cannot_publish_stale_holdings(isolated_db, monkeypatch):
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
-    async def prices(*args):
+    async def prices(*args, **kwargs):
         dashboard.save('owner', dashboard.Save(version=1, workbook=dashboard.Workbook(assets=[])))
         return {'KR:069500': record()}, []
     monkeypatch.setattr(work, 'records_for', prices)
     assert await work.work_once()
     assert work.tracking('owner') == {'market': None, 'days': [], 'archives': []}
+    assert dashboard.read('owner')['version'] == 2
+    assert dashboard.read('owner')['workbook']['assets'] == []
 
 
 async def test_backtest_is_private_idempotent_and_completed_by_worker(isolated_db, monkeypatch):
@@ -189,7 +191,7 @@ async def test_backtest_is_private_idempotent_and_completed_by_worker(isolated_d
     job = work.submit('owner', body)
     assert work.submit('owner', body) == job
     assert work.read_backtest('other', job['id']) is None
-    async def prices(*args):
+    async def prices(*args, **kwargs):
         return {'KR:069500': record()}, []
     monkeypatch.setattr(work, 'records_for', prices)
     assert await work.work_once()
@@ -197,7 +199,7 @@ async def test_backtest_is_private_idempotent_and_completed_by_worker(isolated_d
 
 
 async def test_price_failure_keeps_previous_daily_records(isolated_db, monkeypatch):
-    async def prices(*args):
+    async def prices(*args, **kwargs):
         return {}, ['KR:069500']
     monkeypatch.setattr(work, 'records_for', prices)
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
@@ -241,7 +243,7 @@ def test_replacing_holdings_archives_manual_history_with_original_names(isolated
 async def test_due_valuation_runs_even_when_backtests_are_queued(isolated_db, monkeypatch):
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
     job = work.submit('backtester', work.Backtest(allocations=[{'instrument_id': 'KR:069500', 'weight_pct': 100.}]))
-    async def prices(*args):
+    async def prices(*args, **kwargs):
         return {'KR:069500': record()}, []
     monkeypatch.setattr(work, 'records_for', prices)
     monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
@@ -257,7 +259,7 @@ async def test_collection_deadline_keeps_completed_prices(isolated_db, monkeypat
     from edge_portfolio import market_data
     original_timeout = asyncio.timeout
     monkeypatch.setattr(work.asyncio, 'timeout', lambda _: original_timeout(1))
-    async def fetch(symbol, day, *, on_raw=None, provider_timeout=None):
+    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None):
         if symbol == '360750.KS':
             await asyncio.sleep(10)
         return record()
@@ -272,7 +274,7 @@ async def test_a_slow_first_provider_cannot_starve_a_healthy_later_holding(isola
     from edge_portfolio import market_data
     wait_for = asyncio.wait_for
     monkeypatch.setattr(work.asyncio, 'wait_for', lambda task, timeout: wait_for(task, min(timeout, .05)))
-    async def fetch(symbol, day, *, on_raw=None, provider_timeout=None):
+    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None):
         if symbol == '069500.KS':
             await asyncio.sleep(20)
         return record()
@@ -300,7 +302,7 @@ async def test_interrupted_optional_repair_keeps_valid_raw_prices_only(isolated_
     from edge_portfolio import market_data
     wait_for = asyncio.wait_for
     monkeypatch.setattr(work.asyncio, 'wait_for', lambda task, timeout: wait_for(task, .05))
-    async def fetch(symbol, day, *, on_raw=None, provider_timeout=None):
+    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None):
         try:
             await asyncio.sleep(20)
         except asyncio.CancelledError:
@@ -332,7 +334,10 @@ def test_quantity_entered_on_split_day_is_not_split_again_when_prices_catch_up()
     a = {**asset(), 'quantity': 20., 'average': 40., 'quantity_as_of': '2026-10-16', 'average_as_of': '2026-10-16'}
     old = record()
     old['frame'] = old['frame'].iloc[:1]
+    old['pending_splits'] = ['2026-10-16']
     first = work.valuation({'assets': [a]}, {'KR:069500': old}, None, date(2026, 10, 16))
+    assert first['assets'] == []
+    assert first['pending_splits'] == ['a']
     split = record((50., 55.))
     split['frame']['Stock Splits'] = [0., 2.]
     result = work.valuation({'assets': [a]}, {'KR:069500': split}, first, date(2026, 10, 17))
@@ -398,7 +403,7 @@ def test_first_automatic_quote_uses_a_known_legacy_snapshot_date_for_splits():
 async def test_adjusted_only_cached_prices_do_not_block_actual_close_recovery(isolated_db, monkeypatch):
     from edge_portfolio import market_data
     calls = []
-    async def fetch(symbol, day, *, on_raw=None, provider_timeout=None):
+    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None):
         calls.append(symbol)
         return {**record(), **({'provider': 'FinanceDataReader:NAVER:069500'} if len(calls) == 1 else {})}
     monkeypatch.setattr(market_data, 'fetch_prices', fetch)
@@ -479,3 +484,54 @@ async def test_incomplete_cached_returns_are_retried_without_losing_actual_close
     assert calls == ['069500.KS']
     assert failures == []
     assert records['KR:069500']['frame']['Adj Close'].notna().all()
+
+
+def test_holiday_start_keeps_the_first_trading_days_return():
+    r = record()
+    r['frame'] = pd.DataFrame({'Close': [100., 110., 110.], 'Adj Close': [100., 110., 110.]}, index=pd.to_datetime(['2026-10-16', '2026-10-19', '2026-10-20']))
+    result = work.run_backtest({'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 100.}], 'start': '2026-10-17'}, {'KR:069500': r}, date(2026, 10, 21), [])
+    assert result['return_pct'] == 10
+    assert result['history']['start_date'] == '2026-10-17'
+
+
+async def test_new_holdings_require_actions_checked_after_save_even_with_same_close(isolated_db, monkeypatch):
+    from edge_portfolio import market_data
+    calls = []
+    async def fetch(symbol, day, **kwargs):
+        calls.append(symbol)
+        return {**record(), 'pending_splits': [] if len(calls) == 1 else ['2026-10-19']}
+    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    await work.records_for(['KR:069500'], date(2026, 10, 18))
+    saved_at = datetime.now().astimezone()
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), required_after=saved_at)
+    assert len(calls) == 2, 'The same completed close must not hide newly announced corporate actions'
+    assert failures == []
+    assert records['KR:069500']['pending_splits'] == ['2026-10-19']
+
+
+def test_backtests_and_analyses_share_existing_global_admission_limit(isolated_db):
+    body = work.Backtest(allocations=[{'instrument_id': 'KR:069500', 'weight_pct': 100.}])
+    for i in range(20):
+        work.submit(f'owner-{i}', body)
+    with pytest.raises(ValueError, match='QUEUE_FULL'):
+        work.submit('extra', body)
+    with pytest.raises(ValueError, match='QUEUE_FULL'):
+        store.submit('analysis-owner', 'analysis-key', {'holdings': []})
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_backtests SET state='failed'")
+    assert work.submit('extra', body)['id']
+
+
+async def test_expired_valuation_cannot_publish_over_a_newer_worker_lease(isolated_db, monkeypatch):
+    dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
+    leases = []
+    async def prices(*args, **kwargs):
+        with store.connect() as db:
+            leases.append(db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '20 minutes' WHERE owner='owner' RETURNING refresh_after").fetchone()['refresh_after'])
+        return {'KR:069500': record()}, []
+    monkeypatch.setattr(work, 'records_for', prices)
+    assert await work.work_once()
+    assert len(leases) == 1
+    assert work.tracking('owner') == {'market': None, 'days': [], 'archives': []}
+    with store.connect() as db:
+        assert db.execute("SELECT refresh_after FROM portfolio_workbooks WHERE owner='owner'").fetchone()['refresh_after'] == leases[0]

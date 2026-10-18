@@ -216,7 +216,7 @@ def backtest(body: dashboard_work.Backtest, request: Request):
     try:
         return dashboard_work.submit(owner(request), body)
     except ValueError as error:
-        raise HTTPException(429 if str(error) == 'BACKTEST_LIMIT' else 409, str(error)) from None
+        raise HTTPException(429 if str(error) in ('BACKTEST_LIMIT', 'QUEUE_FULL') else 409, str(error)) from None
 
 
 @app.get('/api/portfolio/backtests/{key}')

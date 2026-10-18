@@ -20,7 +20,7 @@ def test_provider_requests_maximum_history_with_the_analysis_cutoff(monkeypatch)
     monkeypatch.setattr('edge_portfolio.market_data.yf.Ticker', lambda _: Ticker())
     load_prices('069500.KS', date(2026, 10, 12))
     assert calls[0].get('period') == 'max'
-    assert calls[0]['end'] == '2026-10-12'
+    assert calls[0]['end'] > date.today().isoformat()
     assert 'start' not in calls[0]
 
 
@@ -342,3 +342,49 @@ def test_verified_krx_closures_are_not_treated_as_missing_prices():
     assert pd.Timestamp('2026-06-03') not in sessions
     assert pd.Timestamp('2026-07-17') not in sessions
     assert pd.Timestamp('2026-07-16') in sessions
+
+
+def test_current_session_split_is_retained_without_using_its_unfinished_price(monkeypatch):
+    from edge_portfolio.market_data import load_prices
+    class Ticker:
+        history_metadata = {'currency': 'KRW'}
+        def history(self, **kwargs):
+            return pd.DataFrame({'Close': [100., 50.], 'Adj Close': [50., 50.], 'Stock Splits': [0., 2.]}, index=pd.to_datetime(['2026-10-15', '2026-10-16']))
+    monkeypatch.setattr('edge_portfolio.market_data.yf.Ticker', lambda _: Ticker())
+    result = load_prices('069500.KS', date(2026, 10, 16))
+    assert result['pending_splits'] == ['2026-10-16']
+    assert result['frame'].index[-1].date() == date(2026, 10, 15)
+
+
+async def test_dashboard_primary_capture_does_not_change_analysis_raw_callback_semantics(monkeypatch):
+    from edge_portfolio import market_data
+    raw = record()
+    raw['frame']['Adj Close'] = float('nan')
+    async def provider(symbol, day, *, on_raw=None, provider='yahoo'):
+        if provider == 'yahoo':
+            return raw
+        raise TimeoutError()
+    monkeypatch.setattr(market_data, '_fetch_prices', provider)
+    captured = []
+    with pytest.raises(TimeoutError):
+        await market_data.fetch_prices('069500.KS', date(2026, 10, 12), on_raw=captured.append)
+    assert captured == []
+
+
+def test_weekend_price_cutoff_still_checks_monday_actions(monkeypatch):
+    from datetime import datetime
+    from edge_portfolio import market_data
+    class Monday(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 10, 19, 10, tzinfo=tz)
+    class Ticker:
+        history_metadata = {'currency': 'KRW'}
+        def history(self, **kwargs):
+            assert kwargs['end'] == '2026-10-20'
+            return pd.DataFrame({'Close': [100., 50.], 'Adj Close': [50., 50.], 'Stock Splits': [0., 2.]}, index=pd.to_datetime(['2026-10-16', '2026-10-19']))
+    monkeypatch.setattr(market_data, 'datetime', Monday)
+    monkeypatch.setattr(market_data.yf, 'Ticker', lambda _: Ticker())
+    result = market_data.load_prices('069500.KS', date(2026, 10, 17))
+    assert result['pending_splits'] == ['2026-10-19']
+    assert result['frame'].index[-1].date() == date(2026, 10, 16)

@@ -20,6 +20,12 @@ def connect():
                            connect_timeout=5, options='-c statement_timeout=5000')
 
 
+def queued_count(db):
+    return db.execute("""SELECT
+        (SELECT count(*) FROM portfolio_jobs WHERE state IN ('queued','running')) +
+        (SELECT count(*) FROM portfolio_backtests WHERE state IN ('queued','running')) AS n""").fetchone()['n']
+
+
 def initialize():
     with connect() as db:
         db.execute('SELECT pg_advisory_xact_lock(1266001)')
@@ -142,7 +148,7 @@ def submit(owner, key, payload, parent_id=None, *, reuse=False):
         active = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE owner=%s AND NOT (kind='chat' AND (state='failed' OR COALESCE(input->>'mode','question')='recovery')) AND (state IN ('queued','running') OR created_at>now()-interval '1 day')", (owner,)).fetchone()["n"]
         if not recovery and active >= 3:
             raise ValueError("REQUEST_LIMIT")
-        queued = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE state IN ('queued','running')").fetchone()["n"]
+        queued = queued_count(db)
         if queued >= 20:
             raise ValueError("QUEUE_FULL")
         daily = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE created_at>now()-interval '1 day'").fetchone()["n"]

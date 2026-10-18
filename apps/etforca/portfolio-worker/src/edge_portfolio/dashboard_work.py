@@ -104,6 +104,9 @@ def submit(owner, body):
         count = db.execute("SELECT count(*) AS n FROM portfolio_backtests WHERE owner=%s AND created_at>now()-interval '1 day'", (owner,)).fetchone()['n']
         if count >= 50:
             raise ValueError('BACKTEST_LIMIT')
+        db.execute('SELECT pg_advisory_xact_lock(1266)')
+        if store.queued_count(db) >= 20:
+            raise ValueError('QUEUE_FULL')
         key = str(uuid4())
         db.execute('INSERT INTO portfolio_backtests(id,owner,input) VALUES (%s,%s,%s)', (key, owner, Jsonb(payload)))
     return {'id': key}
@@ -125,7 +128,7 @@ def price_end(key, day, now=None):
     return completed.index[-1].date() + timedelta(days=1)
 
 
-async def records_for(ids, day):
+async def records_for(ids, day, *, required_after=None):
     from .market_data import decode_prices, fetch_prices, positive_price
     from .price_fetch import serialize
     records, failures = {}, []
@@ -146,6 +149,8 @@ async def records_for(ids, day):
                         incomplete = saved.get('provider', '').startswith('FinanceDataReader:NAVER:') or saved.get('price_recovery', {}).get('status') in ('unavailable', 'partial')
                         incomplete |= key != 'FX' and (saved.get('return_basis') == 'price' or adjusted.sum() < 2)
                         incomplete |= last_close(saved)[1] != str(end - timedelta(days=1))
+                        incomplete |= saved.get('actions_checked_on') != str(day)
+                        incomplete |= key != 'FX' and required_after is not None and (not saved.get('fetched_at') or datetime.fromisoformat(saved['fetched_at']) < required_after)
                         if incomplete:
                             records[key] = saved
                             cached = None  # Retain usable observations while retrying missing data.
@@ -154,18 +159,21 @@ async def records_for(ids, day):
                     else:
                         symbol = 'KRW=X' if key == 'FX' else key[3:] + ('.KS' if key.startswith('KR:') else '')
                         expected = 'KRW' if key == 'FX' or key.startswith('KR:') else 'USD'
+                        captured = None
                         def capture(record):
+                            nonlocal captured
                             _, stamp = last_close(record)
                             if record['currency'] == expected and 0 <= (end - date.fromisoformat(stamp)).days <= 7:
-                                records[key] = record
+                                captured = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat()}
+                                records[key] = captured
                         try:
                             budget = 200 / max(1, len(keys))
-                            record = await asyncio.wait_for(fetch_prices(symbol, end, on_raw=capture, provider_timeout=budget * .45), timeout=budget)
+                            record = await asyncio.wait_for(fetch_prices(symbol, end, on_raw=capture, on_primary=capture, provider_timeout=budget * .45), timeout=budget)
+                            record = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat()}
                         except TimeoutError:
                             if key not in records:
                                 raise
                             record = records[key]
-                        captured = records.get(key)
                         if record.get('provider', '').startswith('FinanceDataReader:NAVER:') and captured and not captured.get('provider', '').startswith('FinanceDataReader:NAVER:'):
                             frame = captured['frame'].copy()
                             frame['Adj Close'] = record['frame']['Adj Close'].reindex(frame.index)
@@ -182,6 +190,12 @@ async def records_for(ids, day):
     except TimeoutError:
         log.warning('dashboard price collection deadline; retaining completed records')
         failures = sorted(keys - records.keys())
+    if required_after is not None:
+        for key, record in list(records.items()):
+            if key != 'FX' and (not record.get('fetched_at') or datetime.fromisoformat(record['fetched_at']) < required_after):
+                del records[key]
+                if key not in failures:
+                    failures.append(key)
     return records, failures
 
 
@@ -213,6 +227,7 @@ def forecast(asset, record, quantity, fx, day):
 def valuation(workbook, records, prior, day):
     fx = last_close(records['FX'])[0] if 'FX' in records else None
     assets, forecasts, missing, dividend_missing = [], [], [], []
+    pending_splits = []
     bases = (prior or {}).get('bases', {})
     next_bases = {a['id']: bases[a['id']] for a in workbook['assets'] if a['id'] in bases}
     for original in workbook['assets']:
@@ -226,6 +241,11 @@ def valuation(workbook, records, prior, day):
             dividend_missing.append(a['id'])
             continue
         record = records[key]
+        if any(date.fromisoformat(stamp) <= day for stamp in record.get('pending_splits', [])):
+            missing.append(a['id'])
+            dividend_missing.append(a['id'])
+            pending_splits.append(a['id'])
+            continue
         price, price_date = last_close(record)
         rate = fx if a['currency'] == 'USD' else 1
         signature = [key, a.get('quantity'), a.get('amount'), a.get('quantity_revision')]
@@ -259,7 +279,7 @@ def valuation(workbook, records, prior, day):
         else:
             dividend_missing.append(a['id'])
     return {'date': str(day), 'assets': assets, 'fx': fx, 'forecasts': forecasts, 'missing': missing, 'bases': next_bases,
-            'dividend_missing': dividend_missing}
+            'dividend_missing': dividend_missing, 'pending_splits': pending_splits}
 
 
 def run_backtest(body, records, day, failures):
@@ -308,7 +328,7 @@ async def work_once(stopping=None):
                 ORDER BY refresh_after FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone()
         if book and (not job or book['refresh_after'] <= job['created_at']):
             job = None
-            db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '10 minutes' WHERE owner=%s", (book['owner'],))
+            book = db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '10 minutes' WHERE owner=%s RETURNING *", (book['owner'],)).fetchone()
         elif job:
             book = None
             job = db.execute("UPDATE portfolio_backtests SET state='running',lease_until=now()+interval '10 minutes' WHERE id=%s RETURNING *", (job['id'],)).fetchone()
@@ -324,12 +344,12 @@ async def work_once(stopping=None):
                     db.execute("UPDATE portfolio_backtests SET state='succeeded',result=%s WHERE id=%s AND lease_until=%s", (Jsonb(result), job['id'], job['lease_until']))
             else:
                 assets = [identify(a, strict=False, fx=book['payload'].get('fx')) for a in book['payload']['assets']]
-                records, failures = await records_for([a.get('instrument_id') for a in assets], day)
+                records, failures = await records_for([a.get('instrument_id') for a in assets], day, required_after=book['updated_at'])
                 previous = tracking(book['owner'])['market']
                 result = valuation({**book['payload'], 'assets': assets}, records, previous['payload'] if previous else None, day)
                 with store.connect() as db:
-                    current = db.execute('SELECT version FROM portfolio_workbooks WHERE owner=%s FOR UPDATE', (book['owner'],)).fetchone()
-                    if current['version'] != book['version']:
+                    current = db.execute('SELECT version,refresh_after FROM portfolio_workbooks WHERE owner=%s FOR UPDATE', (book['owner'],)).fetchone()
+                    if current['version'] != book['version'] or current['refresh_after'] != book['refresh_after']:
                         return True
                     db.execute('''INSERT INTO portfolio_dashboard_market VALUES (%s,%s,%s)
                         ON CONFLICT(owner) DO UPDATE SET version=excluded.version,payload=excluded.payload''', (book['owner'], book['version'], Jsonb(result)))
@@ -344,5 +364,5 @@ async def work_once(stopping=None):
             if job:
                 db.execute("UPDATE portfolio_backtests SET state='failed',result=%s WHERE id=%s AND lease_until=%s", (Jsonb({'message': '가격 자료를 가져오지 못했어요. 잠시 후 다시 조회해 주세요.'}), job['id'], job['lease_until']))
             else:
-                db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 hour' WHERE owner=%s AND version=%s", (book['owner'], book['version']))
+                db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 hour' WHERE owner=%s AND version=%s AND refresh_after=%s", (book['owner'], book['version'], book['refresh_after']))
     return True

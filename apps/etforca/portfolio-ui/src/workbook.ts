@@ -5,7 +5,7 @@ export type Workbook = { title: string; fx: number | null; assets: Asset[]; divi
 export type Saved = { version: number; workbook: Workbook | null };
 export type Quote = { id: string; value: number | null; profit: number | null; price: number | null; price_date: string | null; quantity: number | null; average?: number | null; estimated_quantity?: boolean };
 export type Forecast = { asset_id: string; month: string; amount: number };
-export type Tracking = { market: { version: number; payload: { date: string; assets: Quote[]; fx: number | null; forecasts: Forecast[]; missing: string[]; dividend_missing: string[] } } | null; days: { date: string; value: number; assets: Quote[]; fx: number | null }[]; archives?: { version: number; payload: Workbook }[] };
+export type Tracking = { market: { version: number; payload: { date: string; assets: Quote[]; fx: number | null; forecasts: Forecast[]; missing: string[]; dividend_missing: string[]; pending_splits?: string[] } } | null; days: { date: string; value: number; assets: Quote[]; fx: number | null }[]; archives?: { version: number; payload: Workbook }[] };
 export function needsSeed(w: Workbook) { return w.assets.some(a => a.amount === null && a.quantity === null && a.weight !== null); }
 export function withSeed(w: Workbook, seed: number): Workbook {
   const total = w.assets.reduce((s, a) => s + (a.weight ?? 0), 0);

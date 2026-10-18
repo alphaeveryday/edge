@@ -5,6 +5,19 @@ const asset: Asset = { id: 'a', instrument_id: 'KR:069500', name: 'KODEX 200', a
 const workbook: Workbook = { title: '내 포트폴리오', fx: null, assets: [asset], dividends: [], months: [] };
 const catalog = { instruments: [{ id: 'KR:069500', name: 'KODEX 200', ticker: '069500', code: '069500', market: 'KR', kind: 'etf' }] };
 const tracking = { market: { version: 1, payload: { date: '2026-10-18', assets: [{ id: 'a', value: 500000, profit: 100000, price: 50000, price_date: '2026-10-16', quantity: 10 }], fx: null, forecasts: [{ asset_id: 'a', month: '2027-01', amount: 1000 }], missing: [], dividend_missing: [] } }, days: [] };
+
+for (const amount of [500000, 0]) test(`copying holdings excludes zero balances instead of producing invalid allocations: ${amount}`, async ({ page }) => {
+  const cash: Asset = { ...asset, id: 'cash', instrument_id: 'CASH:KRW', name: '현금', category: '현금', quantity: null, amount: 0 };
+  await mock(page, { version: 1, workbook: { ...workbook, assets: [asset, cash] } });
+  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { ...tracking, market: { ...tracking.market, payload: { ...tracking.market.payload, assets: [{ ...tracking.market.payload.assets[0], value: amount }, { id: 'cash', value: 0, profit: 0 }] } } } }));
+  await page.goto('/portfolio/?view=dashboard');
+  await expect(page.locator('.asset-row')).toHaveCount(2);
+  await page.getByRole('button', { name: '백테스트', exact: true }).click();
+  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
+  await expect(page.locator('.backtest-rows input')).toHaveCount(amount ? 1 : 0);
+  if (amount) await expect(page.getByLabel('KODEX 200 비중 (%)')).toHaveValue('100');
+  else await expect(page.getByRole('alert')).toContainText('보유금액이 있는 종목을 먼저 담아 주세요.');
+});
 async function mock(page: Page, saved: Saved = { version: 1, workbook }) {
   await page.route('**/api/portfolio/**', async r => {
     const path = new URL(r.request().url()).pathname;
@@ -394,4 +407,13 @@ test('correcting a split-adjusted average back to its old number records an expl
   const changed = (await write).postDataJSON().workbook.assets[0];
   expect(changed.average).toBe(40000);
   expect(changed.average_revision).toBeTruthy();
+});
+
+
+test('a known split waiting for its first close never asks the owner to re-enter correct holdings', async ({ page }) => {
+  await mock(page);
+  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { ...tracking, market: { ...tracking.market, payload: { ...tracking.market.payload, assets: [], missing: ['a'], pending_splits: ['a'] } } } }));
+  await page.goto('/portfolio/?view=dashboard');
+  await expect(page.locator('.notice')).toHaveText('분할된 종목은 분할 후 첫 종가를 확인하면 평가액을 표시해요.');
+  await expect(page.locator('.dashboard-stats article').first().locator('strong')).toHaveText('—');
 });
