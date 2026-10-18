@@ -2,7 +2,7 @@
 from copy import deepcopy
 from decimal import InvalidOperation
 
-from edge_analysis_v2.tools.execution import ToolInputError
+from edge_analysis_v2.tools.execution import ToolInputError, ToolDataUnavailableError
 
 from edge_analysis_v2.tools.fixture_data.common import available, decimal, holdings, instant, number, table
 
@@ -88,14 +88,16 @@ def valuation_range(fixture, eps_id, per_low, per_high):
     value = decimal(eps['value'])
     if eps['metric'] != 'eps' or eps['unit'] != 'KRW_per_share' or not (len(eps['period']) == 4 and eps['period'].isdigit()):
         raise ToolInputError('annual KRW EPS observation required; select a matching row from get_financial_observations.')
-    if not 0 < low <= high or value <= 0:
+    if not 0 < low <= high:
         raise ToolInputError('positive EPS and ordered positive multiples required; use a positive annual EPS and ordered assumptions, or leave this calculation unavailable.')
+    if value <= 0:
+        raise ToolDataUnavailableError('positive EPS required for this valuation. Do not retry this observation; report the ratio as not applicable.')
     cutoff = instant(fixture['context']['analysis_at'])
     rows = sorted([r for r in available(fixture.get('prices', []), cutoff)
                    if r['instrument_id'] == eps['instrument_id'] and r['date'] < cutoff.date().isoformat()],
                   key=lambda r:r['date'])
     if not rows:
-        raise ToolInputError('completed closing price unavailable. Do not retry this snapshot; use other factors or external evidence.')
+        raise ToolDataUnavailableError('completed closing price unavailable. Do not retry this snapshot; use other factors or external evidence.')
     if len({r['date'] for r in rows}) != len(rows) or decimal(rows[-1]['close']) <= 0:
         raise ValueError('unique positive completed closing price required')
     price = decimal(rows[-1]['close'])

@@ -1,7 +1,7 @@
 """Published macro observations with exact comparison instants and units."""
 from datetime import timedelta, timezone
 
-from edge_analysis_v2.tools.execution import ToolInputError
+from edge_analysis_v2.tools.execution import ToolInputError, ToolDataUnavailableError
 
 from edge_analysis_v2.tools.fixture_data.common import available, decimal, instant, number, observed, table
 
@@ -74,7 +74,7 @@ def metrics(fixture):
         end = observed(rows[-1]["observed_at"]).date().isoformat()
         expected = sorted(d for d in calendar if d <= end)[-21:]
         if [observed(r["observed_at"]).date().isoformat() for r in rows] != expected:
-            raise ToolInputError("missing commodity trading session. Do not retry this snapshot; read available observations with get_macro_observations.")
+            raise ToolDataUnavailableError("missing commodity trading session. Do not retry this snapshot; read available observations with get_macro_observations.")
         result.append({"key": "commodity_return_20d_pct", "value": number(100*(decimal(rows[-1]["value"])/decimal(rows[0]["value"])-1)), "observed_at": rows[-1]["observed_at"], "subject": rows[-1].get("subject", "commodity")})
     cutoff = instant(fixture["context"]["analysis_at"])
     events = sorted([r for r in available(fixture.get("policy_decisions", []), cutoff) if instant(r["decision_at"]) > cutoff], key=lambda r: instant(r["decision_at"]))

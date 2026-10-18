@@ -6,7 +6,7 @@ import re
 from edge_analysis_v2.tools.fixture_data import chart, etf, flow, macro
 from edge_analysis_v2.tools.fixture_data.common import MIN_WEIGHT_COVERAGE, available, covers_whole_etf, decimal, holdings, instant, number
 from edge_analysis_v2.tools.fixture_data.valuation import covered_weight
-from edge_analysis_v2.tools.execution import ToolInputError
+from edge_analysis_v2.tools.execution import ToolInputError, ToolSourceDataError
 
 FORMULA_LATEX = (
     r"M_n=\frac1n\sum_{j=0}^{n-1}C_j;\ d_{20}=100(P/M_{20}-1);\ "
@@ -128,7 +128,7 @@ def flow_data(fixture, instrument_id):
         try:
             portfolio = holdings(fixture)
             if any(row['instrument_id'] == context['etf_code'] for row in portfolio['holdings']):
-                raise ToolInputError('INVALID_HOLDINGS: ETF own flow cannot be a constituent. Do not retry this snapshot; holdings repair is required.')
+                raise ToolSourceDataError('INVALID_HOLDINGS: ETF own flow cannot be a constituent. Do not retry this snapshot; holdings repair is required.')
         except ToolInputError as error:
             unavailable = str(error)
     elif instrument_id not in flow.constituent_ids(fixture):

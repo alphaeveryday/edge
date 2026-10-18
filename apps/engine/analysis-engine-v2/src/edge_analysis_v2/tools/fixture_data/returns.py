@@ -1,5 +1,6 @@
 """A window's return split into the market's share and the rest, by the market model."""
-from edge_analysis_v2.tools.execution import ToolInputError
+from edge_analysis_v2.tools.execution import ToolInputError, ToolDataUnavailableError
+from edge_analysis_v2.tools.fixture_data.flow import constituent_ids
 from edge_analysis_v2.tools.fixture_data.common import available, decimal, holdings, instant, number, table
 
 # ponytail: a KOSPI 200 tracker stands in for the market because market_series holds no index values;
@@ -59,6 +60,8 @@ def window(fixture, start_date, end_date):
     """
     cutoff = instant(fixture['context']['analysis_at'])
     market = _closes(fixture.get('market_prices', []), cutoff)
+    if not market:
+        raise ToolDataUnavailableError('No completed market prices in this snapshot. Do not retry; use other available factors or external evidence.')
     if not start_date < end_date or start_date not in market or end_date not in market:
         raise ToolInputError('start_date와 end_date는 종가가 확정된 거래일이어야 하고 start_date가 앞서야 합니다. '
                              f'확정된 거래일은 {min(market, default="없음")}부터 {max(market, default="없음")}까지입니다.')
@@ -94,10 +97,12 @@ def daily(fixture, lookback_days, instrument_id=None):
     cutoff = instant(fixture['context']['analysis_at'])
     market = _closes(fixture.get('market_prices', []), cutoff)
     target = instrument_id or fixture['context']['etf_code']
+    if not isinstance(target, str) or target not in {fixture['context']['etf_code']} | constituent_ids(fixture):
+        raise ToolInputError('Choose this ETF or a current constituent from get_etf_holdings.')
     own = _series(fixture, target, cutoff)
     days = _sessions(market, own)[-lookback_days:]
     if not days:
-        raise ToolInputError('이 ETF나 구성종목의 코드를 넣으세요. 가격이 확보된 종목만 볼 수 있습니다.')
+        raise ToolDataUnavailableError('No paired completed prices for this target in the snapshot. Do not retry; use other available factors or external evidence.')
     rows = [{'date': b, 'market_return_pct': _percent(market[b] / market[a] - 1), **_measure(market, own, a, b)}
             for a, b in days]
     return {'instrument_id': target, 'market': MARKET_PROXY,
