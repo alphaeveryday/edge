@@ -112,8 +112,9 @@ def source_buttons(card):
 def alert(card):
     """Price exception is arithmetic, not model judgement: today's move beyond twice the typical daily move."""
     quote = quote_of(card)
-    sigma = quote.get('sigma_pct')
-    return bool(sigma and quote.get('change_pct') is not None and abs(quote['change_pct']) >= 2 * sigma)
+    sigma, change = quote.get('sigma_pct'), quote.get('change_pct')
+    # A flat history (sigma 0) makes any real move exceptional; no history means no judgement.
+    return sigma is not None and bool(change) and abs(change) >= 2 * sigma
 
 
 def issued(at):
@@ -142,7 +143,8 @@ def ledger(letter, cards, weights, big):
     usable = [card for card in cards if quote_of(card)]
     if not usable:
         return
-    known = bool(weights) and all(card['instrument_id'] in weights for card in usable)
+    # A portfolio figure needs every holding's weight and quote; a partial sum would pass for the whole.
+    known = bool(weights) and all(card['instrument_id'] in weights and quote_of(card) for card in cards)
     head = ''
     if big and known:
         total = sum(weights[c['instrument_id']] * quote_of(c)['change_pct'] for c in usable)

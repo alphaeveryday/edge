@@ -850,3 +850,21 @@ async def test_fixed_evidence_mode_makes_no_live_outlook_or_quote_lookups(monkey
                                     evidence=evidence, quote_loader=forbidden, research=False)
     assert seen[0]['published_outlook']['excerpt'] == '우리 전망' and seen[0]['daily_quote']['id'] == 'price'
     assert result['quote'] == QUOTE
+
+
+def test_portfolio_return_is_not_shown_when_a_holding_has_no_quote():
+    up = letter_card('A', 'KR:1', '반도체', quote={**QUOTE, 'change_pct': 10.0})
+    blind = {**letter_card('A', 'KR:2', '2차전지'), 'quote': None}
+    _, html, text = email.daily(date(2026, 10, 18), [up, blind], 'A', weights={'KR:1': .5, 'KR:2': .5})
+    assert '포트폴리오 하루' not in text, 'Half the portfolio is unknown; +5% would be a made-up total'
+
+
+def test_volatility_baseline_excludes_the_move_being_tested(monkeypatch):
+    import pandas as pd
+    import yfinance
+    closes = [100, 101, 99, 100, 120]
+    index = pd.to_datetime(['2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16'])
+    monkeypatch.setattr(yfinance, 'Ticker', lambda symbol: SimpleNamespace(history=lambda **_: pd.DataFrame({'Close': closes}, index=index)))
+    data = json.loads(agent.daily_quote('US:QQQ', date(2026, 10, 17))['excerpt'])
+    assert data['change_pct'] == 20 and data['sigma_pct'] < 2, 'The 20% jump must not inflate its own baseline'
+    assert email.alert({'quote': data}) and email.alert({'quote': {'change_pct': 1.0, 'sigma_pct': 0.0}})
