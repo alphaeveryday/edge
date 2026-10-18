@@ -46,9 +46,10 @@ test('search affordances and dividend data remain visible after token changes', 
   await page.goto('/portfolio/?preview=input');
   await expect(page.locator('.find__plus').first()).toHaveCSS('color', 'rgb(255, 255, 255)');
   await page.goto('/portfolio/?preview=dashboard');
-  const month = page.getByRole('button', { name: /^2026-10 실수령/ });
-  await expect(month.locator('b')).toHaveCSS('background-color', 'rgb(27, 100, 218)');
-  await expect(month.locator('i')).toHaveCSS('box-shadow', 'rgb(27, 100, 218) 0px 0px 0px 1px inset');
+  const month = page.getByRole('button', { name: /^2026-10 예상/ });
+  await expect(month.locator('b')).toHaveCSS('background-color', 'rgb(32, 105, 133)');
+  await expect(month.locator('i')).toHaveCSS('background-color', 'rgb(0, 119, 128)');
+  await expect(month.locator('i')).toHaveCSS('box-shadow', 'none');
 });
 
 test('keyboard focus stays distinct and the final CTA grows with enlarged text', async ({ page }) => {
@@ -81,23 +82,23 @@ test('keyboard focus stays distinct and the final CTA grows with enlarged text',
 
 test('destructive confirmation can cancel without losing assets and confirms only the chosen deletion', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
-  await expect(page.locator('.asset-row')).toHaveCount(6);
-  await page.locator('.asset-row').first().click();
+  await expect(page.locator('.holding-edit')).toHaveCount(6);
+  await page.locator('.holding-edit').first().click();
   await page.getByRole('button', { name: '종목 삭제', exact: true }).click();
   await expect(page.locator('.ds-confirm-dialog')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(page.getByRole('button', { name: '종목 삭제', exact: true })).toBeFocused();
-  await expect(page.locator('.asset-row')).toHaveCount(6);
+  await expect(page.locator('.holding-edit')).toHaveCount(6);
   await page.getByRole('button', { name: '종목 삭제', exact: true }).click();
   await page.getByRole('button', { name: '삭제하기', exact: true }).click();
-  await expect(page.locator('.asset-row')).toHaveCount(5);
+  await expect(page.locator('.holding-edit')).toHaveCount(5);
   await page.reload();
-  await expect(page.locator('.asset-row')).toHaveCount(5);
+  await expect(page.locator('.holding-edit')).toHaveCount(5);
 });
 
 test('saving the entered portfolio replaces holdings directly without a second confirmation', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
-  await page.locator('.asset-row').first().click();
+  await page.locator('.holding-edit').filter({ hasText: '미국시장 ETF 예시' }).click();
   await page.getByLabel('보유 수량', { exact: true }).fill('999');
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
   await expect(page.getByRole('dialog')).toHaveCount(0);
@@ -105,6 +106,6 @@ test('saving the entered portfolio replaces holdings directly without a second c
   const save = page.locator('.feedback-anchor .save-portfolio button').first();
   await save.click();
   await expect(page).toHaveURL(/preview=dashboard/);
-  await page.locator('.asset-row').first().click();
+  await page.locator('.holding-edit').filter({ hasText: '미국시장 ETF 예시' }).click();
   await expect(page.getByLabel('보유 수량', { exact: true })).toHaveValue('400');
 });

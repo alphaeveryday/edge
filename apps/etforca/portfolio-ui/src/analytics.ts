@@ -1,10 +1,24 @@
 import posthog from 'posthog-js';
 import { preview } from './preview';
 
-export type Screen = 'input_holdings' | 'input_funding' | 'input_horizon' | 'input_interests' | 'input_question' | 'loading' | 'queued' | 'running' | 'result' | 'failed';
-const events = new Set(['$pageview', '$pageleave', 'portfolio_screen_engagement', 'portfolio_scroll_pause', 'portfolio_feedback']);
+export type Screen = 'input_holdings' | 'input_funding' | 'input_horizon' | 'input_interests' | 'input_question' | 'loading' | 'queued' | 'running' | 'result' | 'failed' | 'dashboard_overview' | 'dashboard_dividends' | 'dashboard_returns' | 'dashboard_backtest';
+const events = new Set(['$pageview', '$pageleave', 'portfolio_screen_engagement', 'portfolio_scroll_pause', 'portfolio_feedback', 'portfolio_action']);
 const properties = new Set(['token', 'distinct_id', '$lib', '$lib_version', '$device_type', '$browser', '$os', '$viewport_height', '$viewport_width', '$screen_height', '$screen_width', '$process_person_profile', '$cookieless_mode', 'screen', 'section', 'visible_seconds', 'pause_seconds', 'scroll_y', 'scroll_depth_pct', 'max_scroll_depth_pct', 'action', 'rating']);
 let initialized = false;
+const preferenceKey = 'orca-usage-analytics';
+export function analyticsEnabled() { try { return localStorage.getItem(preferenceKey) !== 'off' && navigator.doNotTrack !== '1'; } catch { return false; } }
+export function setAnalyticsEnabled(enabled: boolean) {
+  try { localStorage.setItem(preferenceKey, enabled ? 'on' : 'off'); } catch { return; }
+  if (initialized) {
+    if (enabled) { posthog.set_config({ disable_persistence: false }); posthog.opt_in_capturing({ captureEventName: false }); posthog.startSessionRecording(true); }
+    else { posthog.stopSessionRecording(); posthog.opt_out_capturing(); posthog.set_config({ disable_persistence: true }); }
+  } else if (enabled) initialize();
+  window.dispatchEvent(new Event('orca-analytics-change'));
+}
+export function trackAction(action: 'holding_add_opened' | 'holding_edit_opened' | 'holdings_saved' | 'holdings_save_failed' | 'backtest_requested' | 'backtest_completed' | 'backtest_failed' | 'portfolio_saved' | 'newsletter_requested') {
+  if (!initialize()) return;
+  try { posthog.capture('portfolio_action', { action }); } catch { /* Optional analytics. */ }
+}
 
 export type FeedbackRating = 'good' | 'okay' | 'needs_improvement';
 export function trackFeedback(action: 'shown' | 'dismissed' | 'submitted', rating?: FeedbackRating) {
@@ -15,21 +29,37 @@ export function trackFeedback(action: 'shown' | 'dismissed' | 'submitted', ratin
 }
 
 function initialize() {
-  if (preview) return false;
+  if (preview || !analyticsEnabled()) return false;
   if (!['etforca.com', 'www.etforca.com'].includes(location.hostname) || location.pathname !== '/portfolio/') return false;
   if (!initialized) {
     try {
-      // Same public ingestion key and cookieless policy as the landing page.
       posthog.init('phc_yiMfdC2Hi7iPBWHg7F9n3dBokvnXkjcsqFzN8Bs496R3', {
-        api_host: 'https://us.i.posthog.com', cookieless_mode: 'always', person_profiles: 'never',
+        api_host: 'https://us.i.posthog.com', persistence: 'localStorage+cookie', persistence_name: 'orca_portfolio',
+        cookie_expiration: 365, secure_cookie: true, cross_subdomain_cookie: false, person_profiles: 'never', respect_dnt: true,
+        save_referrer: false, save_campaign_params: false, disable_capture_url_hashes: true,
         capture_pageview: false, capture_pageleave: false, autocapture: false,
-        disable_session_recording: true, disable_surveys: true, capture_performance: false,
-        advanced_disable_flags: true, enable_heatmaps: false, capture_dead_clicks: false,
+        disable_session_recording: false, disable_surveys: true, capture_performance: false, enable_recording_console_log: false,
+        session_recording: {
+          maskAllInputs: true, maskTextSelector: '*',
+          blockSelector: 'svg, canvas, img, video, iframe, .dividend-plot, .gain, .loss, .step .chips, .tax-dialog, input[type="hidden"], input[type="file"], .ph-no-capture',
+          // rrweb's _cssText contains the public stylesheet needed to reconstruct the layout.
+          maskAttributeFn: (name, value) => name === 'class' ? value.replace(/\b(gain|loss)\b/g, 'financial-value') : ['style', '_cssText', 'type', 'role', 'width', 'height', 'aria-expanded', 'aria-pressed', 'data-variant', 'data-tone'].includes(name) || name === 'id' && ['root', 'report'].includes(value) ? value : '',
+          recordHeaders: false, recordBody: false, recordCrossOriginIframes: false,
+          maskCapturedNetworkRequestFn: data => Object.keys(data).length === 1 ? { ...data, name: 'https://etforca.com/portfolio/' } : null,
+        },
+        loaded: instance => { instance.opt_in_capturing(); instance.startSessionRecording(true); },
+        advanced_disable_feature_flags: true, enable_heatmaps: false, capture_dead_clicks: false,
         before_send: event => {
+          if (event?.event === '$snapshot') {
+            event.properties = Object.fromEntries(Object.entries(event.properties).filter(([key]) => ['token', 'distinct_id', '$session_id', '$window_id', '$snapshot_data', '$snapshot_bytes', '$lib', '$lib_version'].includes(key)));
+            return event;
+          }
           if (!event || !events.has(event.event)) return null;
-          event.properties = Object.fromEntries(Object.entries(event.properties).filter(([key]) => properties.has(key)));
+          event.properties = Object.fromEntries(Object.entries(event.properties).filter(([key]) => properties.has(key) || ['$session_id', '$window_id'].includes(key)));
           event.properties.$current_url = 'https://etforca.com/portfolio/';
-          event.properties.$pathname = '/portfolio/';
+          const screen = event.properties.screen;
+          event.properties.$pathname = screen ? `/portfolio/${String(screen).replaceAll('_', '/')}` : '/portfolio/';
+          event.properties.$current_url = 'https://etforca.com' + event.properties.$pathname;
           event.properties.$host = 'etforca.com';
           return { event: event.event, properties: event.properties, timestamp: event.timestamp, uuid: event.uuid };
         },
@@ -41,6 +71,13 @@ function initialize() {
 }
 
 export function trackScreen(screen: Screen) {
+  let stop = startScreen(screen);
+  const restart = () => { stop(); stop = startScreen(screen); };
+  window.addEventListener('orca-analytics-change', restart);
+  return () => { stop(); window.removeEventListener('orca-analytics-change', restart); };
+}
+
+function startScreen(screen: Screen) {
   let stop = () => {};
   // React StrictMode's discarded mount must not create a second visit.
   const start = window.setTimeout(() => {

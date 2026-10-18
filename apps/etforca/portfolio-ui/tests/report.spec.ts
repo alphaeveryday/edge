@@ -66,8 +66,8 @@ for (const fallbackFont of [false, true]) test(`large balances with small change
     const ticks = page.locator('.report-history svg g text');
     await expect(ticks).toHaveCount(3);
     expect(new Set(await ticks.allTextContents()).size).toBe(3);
-    expect(await ticks.evaluateAll(nodes => nodes.every(node => (node as SVGGraphicsElement).getBBox().x >= 0))).toBe(true);
     await page.evaluate(() => document.fonts.ready);
+    await expect.poll(() => ticks.evaluateAll(nodes => nodes.every(node => (node as SVGGraphicsElement).getBBox().x >= 0))).toBe(true);
     await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
     await expect.poll(() => ticks.evaluateAll(nodes => nodes.every(node => (node as SVGGraphicsElement).getBBox().x >= 0))).toBe(true);
     await page.locator('.report-history').evaluate(el => { el.style.width = '240px'; });
@@ -77,7 +77,7 @@ for (const fallbackFont of [false, true]) test(`large balances with small change
       return points.getItem(points.numberOfItems - 1).x - points.getItem(0).x;
     })).toBeGreaterThanOrEqual(80);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    expect(await page.locator('.report-history svg>text').evaluateAll(nodes => nodes.every((node, i) => {
+    await expect.poll(() => page.locator('.report-history svg>text').evaluateAll(nodes => nodes.every((node, i) => {
       if (!i) return true;
       const previous = (nodes[i - 1] as SVGGraphicsElement).getBBox(), current = (node as SVGGraphicsElement).getBBox();
       return previous.x + previous.width + 4 <= current.x;

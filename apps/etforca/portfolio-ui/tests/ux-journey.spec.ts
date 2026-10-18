@@ -69,7 +69,7 @@ test('malformed stored form does not prevent a new analysis', async ({ page }) =
 
 test('Escape offers to keep unsaved asset edits and saving preserves them', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
-  await page.locator('.asset-row').first().click();
+  await page.locator('.holding-edit').first().click();
   await page.getByLabel('보유 수량', { exact: true }).fill('401');
   await page.keyboard.press('Escape');
   await expect(page.locator('.ds-confirm-dialog')).toBeVisible();
@@ -77,7 +77,7 @@ test('Escape offers to keep unsaved asset edits and saving preserves them', asyn
   await expect(page.getByLabel('보유 수량', { exact: true })).toHaveValue('401');
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
   await expect(page.locator('.dashboard-save-status')).toContainText('저장했어요');
-  await page.locator('.asset-row').first().click();
+  await page.locator('.holding-edit').first().click();
   await expect(page.getByLabel('보유 수량', { exact: true })).toHaveValue('401');
 });
 

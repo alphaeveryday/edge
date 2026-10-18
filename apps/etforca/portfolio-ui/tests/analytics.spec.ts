@@ -1,9 +1,64 @@
 import { test, expect, type Page } from '@playwright/test';
 import { gunzipSync } from 'node:zlib';
+import { readFileSync } from 'node:fs';
 
 type Event = { event: string; properties: Record<string, any> };
+function unpackReplay(value: any): any {
+  if (typeof value === 'string' && value.charCodeAt(0) === 31 && value.charCodeAt(1) === 139) return unpackReplay(JSON.parse(gunzipSync(Buffer.from(value, 'latin1')).toString()));
+  if (Array.isArray(value)) return value.map(unpackReplay);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, unpackReplay(v)]));
+  return value;
+}
 test.use({ launchOptions: { args: ['--disable-blink-features=AutomationControlled'] }, userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36' });
-async function instrument(page: Page, baseURL: string, blocked = false) {
+
+test('session replay masks customer text and cookies while linking visits and respecting opt out', async ({ page, baseURL }) => {
+  test.setTimeout(60000);
+  const events = await instrument(page, baseURL!, false, true);
+  await page.addInitScript(() => {
+    document.cookie = 'auth-secret=never-record-this;path=/;Secure';
+    document.addEventListener('DOMContentLoaded', () => {
+      const tax = document.createElement('div'); tax.className = 'tax-dialog'; tax.innerHTML = '<input type="checkbox" class="private-tax-check"><input type="radio" class="private-tax-radio">'; document.body.append(tax);
+    });
+  });
+  await page.goto('https://etforca.com/portfolio/?email=private@example.com#private-token');
+  await expect.poll(() => events.some(e => e.event === '$pageview')).toBe(true);
+  await page.getByRole('button', { name: '종목부터 추천받기' }).click();
+  await expect.poll(() => events.some(e => e.event === '$snapshot'), { timeout: 20000 }).toBe(true);
+  const mutationTime = await page.evaluate(() => {
+    const p = document.createElement('p'); p.textContent = 'private-holdings-value-123456789'; p.title = 'private-title-value'; document.body.append(p);
+    const input = document.createElement('input'); input.value = 'private-input-value'; document.body.append(input); input.dispatchEvent(new Event('input', { bubbles: true }));
+    const chart = document.createElement('div'); chart.className = 'dividend-plot'; chart.innerHTML = '<i style="height:37.1234567%">private-financial-chart</i>'; document.body.append(chart);
+    const gain = document.createElement('span'); gain.className = 'gain'; gain.textContent = 'private-profit'; document.body.append(gain);
+    const choices = document.createElement('div'); choices.className = 'chips big'; choices.innerHTML = '<button class="private-choice-marker" aria-pressed="true">private-answer</button>'; document.querySelector('.step')!.append(choices);
+    document.querySelector<HTMLInputElement>('.private-tax-check')!.click();
+    document.querySelector<HTMLInputElement>('.private-tax-radio')!.click();
+    return Date.now();
+  });
+  await expect.poll(() => events.filter(e => e.event === '$snapshot').flatMap(e => unpackReplay(e.properties.$snapshot_data)).some(e => e.type === 3 && e.timestamp >= mutationTime && e.data.source === 0), { timeout: 20000 }).toBe(true);
+  const serialized = JSON.stringify(unpackReplay(events));
+  expect(serialized).not.toMatch(/private@example|private-token|private-holdings|private-input|private-title|never-record-this|auth-secret|private-financial-chart|37\.1234567/);
+  expect(serialized).toContain('.nav__pill');
+  expect(serialized).not.toMatch(/"class"\s*:\s*"gain"|private-profit|private-choice-marker|private-answer|private-tax-check|private-tax-radio|"isChecked":true/);
+  const id = events.find(e => e.event === '$pageview')!.properties.distinct_id;
+  expect(events.filter(e => e.event === '$snapshot').every(e => e.properties.$session_id && e.properties.distinct_id === id)).toBe(true);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await expect(page.getByText('이용 통계 설정', { exact: true })).toBeVisible();
+  const cookie = (await page.context().cookies()).find(c => c.name === 'ph_orca_portfolio')!;
+  expect(JSON.parse(decodeURIComponent(cookie.value)).distinct_id).toBe(id);
+  await page.getByText('이용 통계 설정', { exact: true }).click();
+  await page.getByRole('button', { name: '이용 통계 끄기' }).click();
+  await page.waitForTimeout(3000);
+  const count = events.length;
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(4000);
+  expect(events.length).toBe(count);
+  expect((await page.context().cookies()).filter(c => c.name.startsWith('ph_'))).toEqual([]);
+  await page.getByText('이용 통계 설정', { exact: true }).click();
+  await page.getByRole('button', { name: '이용 통계 켜기' }).click();
+  await expect.poll(async () => (await page.context().cookies()).some(c => c.name === 'ph_orca_portfolio')).toBe(true);
+  expect(await page.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('__ph_opt_in_out_')).map(k => localStorage.getItem(k)))).toContain('1');
+});
+async function instrument(page: Page, baseURL: string, blocked = false, replay = false) {
   const events: Event[] = [];
   // Match a human Chromium client, including metadata retained during navigation.
   const cdp = await page.context().newCDPSession(page);
@@ -14,8 +69,14 @@ async function instrument(page: Page, baseURL: string, blocked = false) {
   await page.context().route('https://*.posthog.com/**', async route => {
     if (blocked) return route.abort();
     const request = route.request();
+    if (replay && request.url().includes('recorder') && request.url().includes('.js')) return route.fulfill({ body: readFileSync('node_modules/posthog-js/dist/posthog-recorder.js'), contentType: 'application/javascript' });
+    if (replay && request.url().includes('/config')) {
+      const config = { sessionRecording: { endpoint: '/s/', recorderVersion: 'v2', sampleRate: 1, scriptConfig: { script: 'posthog-recorder' }, consoleLogRecordingEnabled: true } };
+      if (request.resourceType() === 'script') return route.fulfill({ body: `window._POSTHOG_REMOTE_CONFIG = { phc_yiMfdC2Hi7iPBWHg7F9n3dBokvnXkjcsqFzN8Bs496R3: { config: ${JSON.stringify(config)} } };`, contentType: 'application/javascript' });
+      return route.fulfill({ json: config });
+    }
     const buffer = request.postDataBuffer();
-    if (buffer && new URL(request.url()).pathname === '/e/') {
+    if (buffer && ['/e/', '/s/'].includes(new URL(request.url()).pathname)) {
       const compression = new URL(request.url()).searchParams.get('compression');
       const raw = buffer[0] === 0x1f && buffer[1] === 0x8b ? gunzipSync(buffer).toString() : compression === 'base64' ? Buffer.from(new URLSearchParams(buffer.toString()).get('data')!, 'base64').toString() : buffer.toString();
       const data = JSON.parse(raw);
@@ -61,13 +122,14 @@ test('each input screen has one visit and visible dwell excludes hidden time wit
   expect(dwell).toBeGreaterThanOrEqual(8);
   expect(dwell).toBeLessThan(20);
   expect(JSON.stringify(events)).not.toMatch(/private@example|private-customer|#secret|email=/);
-  expect(events.every(e => e.properties.distinct_id === '$posthog_cookieless')).toBe(true);
-  // Without the mode flag, ingestion cannot replace the shared sentinel with anonymous visit IDs.
+  expect(events.every(e => typeof e.properties.distinct_id === 'string' && e.properties.distinct_id !== '$posthog_cookieless')).toBe(true);
+  expect((await page.context().cookies()).some(c => c.name.startsWith('ph_'))).toBe(true);
+  // Anonymous cookie identity connects repeat visits without customer identity.
   for (const event of events) expect(event.properties).toMatchObject({
-    $cookieless_mode: true, $host: 'etforca.com',
-    $current_url: 'https://etforca.com/portfolio/', $pathname: '/portfolio/',
+    $host: 'etforca.com',
+    $current_url: 'https://etforca.com/portfolio/' + String(event.properties.screen).replaceAll('_', '/'), $pathname: '/portfolio/' + String(event.properties.screen).replaceAll('_', '/'),
   });
-  expect(await page.evaluate(() => Object.keys(localStorage).filter(k => k.startsWith('ph_')))).toEqual([]);
+  expect(await page.evaluate(() => Object.keys(localStorage).some(k => k.startsWith('ph_')))).toBe(true);
 });
 
 test('real navigation hands final scroll, dwell and leave events to browser beacons', async ({ page, baseURL }) => {
@@ -196,7 +258,7 @@ for (const [label, rating] of [['좋아요', 'good'], ['그냥 그래요', 'okay
     await expect(popup).toBeFocused();
     await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(['shown', 'submitted']);
     const response = events.find(e => e.properties.action === 'submitted')!;
-    expect(response.properties).toMatchObject({ rating, screen: 'result', section: 'feedback', $cookieless_mode: true, $host: 'etforca.com' });
+    expect(response.properties).toMatchObject({ rating, screen: 'result', section: 'feedback', $host: 'etforca.com' });
     expect(JSON.stringify(events)).not.toMatch(/feedback-private-id|private recommendation|private result text/);
     await popup.getByRole('button', { name: '평가 팝업 닫기' }).click();
     await page.reload();

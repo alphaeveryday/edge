@@ -3,6 +3,7 @@ import { request, ensureVisitorSession, type Catalog, type History } from './api
 import { InstrumentSearch } from './InstrumentSearch';
 import { Button, TextInput, SectionHeading } from './design-system/components';
 import { PerformanceChart } from './ReportCharts';
+import { trackAction } from './analytics';
 import type { Asset } from './workbook';
 
 type Row = { instrument_id: string; name: string; weight: string };
@@ -22,8 +23,8 @@ export function Backtest({ assets, catalog }: { assets: Asset[]; catalog: Catalo
         const next = await request<{ state: string; result: Result }>(`/backtests/${job}`);
         if (stopped) return;
         setError('');
-        if (next.state === 'succeeded') { setResult(next.result); setJob(null); setBusy(false); }
-        else if (next.state === 'failed') { setError(next.result.message || '가격 자료를 가져오지 못했어요. 다시 조회해 주세요.'); setJob(null); setBusy(false); }
+        if (next.state === 'succeeded') { trackAction('backtest_completed'); setResult(next.result); setJob(null); setBusy(false); }
+        else if (next.state === 'failed') { trackAction('backtest_failed'); setError(next.result.message || '가격 자료를 가져오지 못했어요. 다시 조회해 주세요.'); setJob(null); setBusy(false); }
         else timer = setTimeout(poll, 3000);
       } catch (error) { if (!stopped) {
         if (error instanceof Error && 'status' in error && [401, 404].includes(Number(error.status))) { setError(error.message); setJob(null); setBusy(false); }
@@ -57,7 +58,7 @@ export function Backtest({ assets, catalog }: { assets: Asset[]; catalog: Catalo
     try {
       await ensureVisitorSession();
       const response = await request<{ id: string }>('/backtests', { method: 'POST', body: JSON.stringify({ allocations: rows.map(r => ({ instrument_id: r.instrument_id, weight_pct: Number(r.weight) })), start: data.get('start') || null, end: data.get('end') || null }) });
-      setJob(response.id);
+      trackAction('backtest_requested'); setJob(response.id);
     } catch (e) { setError((e as Error).message); setBusy(false); }
   }
   return <section className="dashboard-card"><SectionHeading title="내 조합 백테스트" description="원하는 종목과 비중으로 과거 수익률을 확인해요." />
@@ -71,6 +72,6 @@ export function Backtest({ assets, catalog }: { assets: Asset[]; catalog: Catalo
       <Button variant="primary" loading={busy} disabled={!rows.length}>{busy ? '과거 가격을 조회하고 있어요' : '과거 수익률 조회'}</Button>
     </fieldset></form>
     {error && <p role="alert">{error}</p>}
-    {result && <div aria-live="polite"><h3>기간 수익률 {result.return_pct > 0 ? '+' : ''}{result.return_pct.toLocaleString()}%</h3>{result.excluded.length > 0 && <p className="notice">자료가 없는 {result.excluded.join(', ')}을 제외하고 나머지 비중을 100%로 맞췄어요.</p>}<PerformanceChart history={result.history} label="내 조합" /></div>}
+    {result && <div aria-live="polite"><h3>기간 수익률 {result.return_pct > 0 ? '+' : ''}{result.return_pct.toLocaleString()}%</h3>{result.excluded.length > 0 && <p className="notice">자료가 없는 {result.excluded.join(', ')}을 제외하고 나머지 비중을 100%로 맞췄어요.</p>}<PerformanceChart showSources={false} history={result.history} label="내 조합" /></div>}
   </section>;
 }
