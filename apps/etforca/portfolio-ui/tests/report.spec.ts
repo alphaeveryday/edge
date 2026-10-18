@@ -77,7 +77,7 @@ for (const fallbackFont of [false, true]) test(`large balances with small change
       return points.getItem(points.numberOfItems - 1).x - points.getItem(0).x;
     })).toBeGreaterThanOrEqual(80);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    expect(await page.locator('.report-history svg>text').evaluateAll(nodes => nodes.every((node, i) => {
+    await expect.poll(() => page.locator('.report-history svg>text').evaluateAll(nodes => nodes.every((node, i) => {
       if (!i) return true;
       const previous = (nodes[i - 1] as SVGGraphicsElement).getBBox(), current = (node as SVGGraphicsElement).getBBox();
       return previous.x + previous.width + 4 <= current.x;
