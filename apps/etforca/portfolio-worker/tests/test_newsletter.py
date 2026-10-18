@@ -20,6 +20,11 @@ B_CARD = {'headline': '반도체 실적 기대가 이어져요', 'dek': '주요 
           'watch_next': '다음 실적 발표의 수주 전망을 살펴봐요.', 'source_ids': ['outlook']}
 
 
+H_CARD = {'headline': '반도체 보유 가설은 그대로예요', 'dek': '새 공급 계약이 수요 가정을 뒷받침했어요.', 'thesis': 'AI 수요가 이어진다',
+          'verdict': '유지', 'important': True, 'changes': [B_CARD['factors'][0]], 'meaning': '가설을 바꾸지 않아요.',
+          'next_check': '다음 실적 발표', 'source_ids': ['outlook']}
+
+
 @pytest.fixture
 def newsletter_db(isolated_db, monkeypatch):
     monkeypatch.setattr(news, 'connect', store.connect)
@@ -279,7 +284,7 @@ def test_confirmed_subscription_gets_one_complete_daily_email_and_unsubscribe_st
     sender.tick(ses, now)
     assert len(sends) == 1, 'A verified address must wait for its actual holdings content'
     claimed = news.claim_content()
-    card = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'format': agent.DEFAULT_FORMAT, **B_CARD, 'headline': '기술주 소식', 'sources': []}
+    card = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'format': agent.DEFAULT_FORMAT, **H_CARD, 'headline': '기술주 소식', 'sources': []}
     news.finish_content(claimed, value=card)
     sender.tick(ses, now)
     sender.tick(ses, now)
@@ -370,7 +375,7 @@ async def test_optional_quote_process_is_killed_and_reaped_when_cancelled(monkey
 
 async def test_newsletter_harness_reuses_our_outlook_and_does_not_pass_customer_amounts():
     payloads = []
-    card = B_CARD
+    card = H_CARD
     async def model(payload):
         payloads.append(payload)
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(card)}}]}
@@ -386,7 +391,7 @@ async def test_newsletter_harness_reuses_our_outlook_and_does_not_pass_customer_
 async def test_newsletter_requires_body_evidence_beyond_a_quote_for_its_issue_and_cause():
     calls = []
     evidence = SimpleNamespace(sources=[])
-    card = {**B_CARD, 'source_ids': ['price']}
+    card = {**H_CARD, 'source_ids': ['price']}
     async def model(payload):
         calls.append(payload)
         if len(calls) == 2:
@@ -419,7 +424,7 @@ def test_price_basis_uses_completed_etf_dates_and_never_intraday_or_index_values
 
 async def test_long_editorial_output_gets_specific_length_feedback_and_can_finish():
     calls = []
-    card = B_CARD
+    card = H_CARD
     async def model(payload):
         calls.append(payload)
         value = {**card, 'dek': '긴 설명' * 50} if len(calls) == 1 else card
@@ -434,7 +439,7 @@ async def test_long_editorial_output_gets_specific_length_feedback_and_can_finis
 
 async def test_structured_adapter_errors_are_repaired_without_restarting_research():
     calls = []
-    card = B_CARD
+    card = H_CARD
     async def model(payload):
         calls.append(payload)
         if len(calls) <= 2:
@@ -449,6 +454,7 @@ async def test_structured_adapter_errors_are_repaired_without_restarting_researc
 
 VIEW = {'state': '업황 회복 구간이에요.', 'keep_if': '수주 유지', 'change_if': '수요 둔화'}
 FORMAT_CARDS = {
+    'H': {k: v for k, v in H_CARD.items() if k not in {'headline', 'dek', 'source_ids'}},
     'A': {'why_moved': '업종 강세', 'new_info': '공급 계약', 'judgment_impact': '판단 유지'},
     'B': {k: v for k, v in B_CARD.items() if k not in {'headline', 'dek', 'source_ids'}},
     'C': {'events': [{'title': '공급 계약', 'what': '계약 체결', 'why_it_matters': '최대 구성종목', 'price_link': '이미 반영', 'importance': '높음'}],
@@ -492,13 +498,36 @@ def test_external_card_text_and_urls_cannot_receive_the_recipients_ses_unsubscri
     assert f'수신 거부: {email.UNSUBSCRIBE}' in plain
 
 
-def test_email_preserves_quote_dates_even_when_the_model_omits_them():
-    card = letter_card('B', outlook_at='2026-10-16T00:00:00+00:00')
-    _, html, plain = email.daily(date(2026, 10, 16), [card], 'B')
+def test_masthead_states_when_the_letter_was_issued_and_drops_price_basis_clutter():
+    from datetime import datetime
+    card = letter_card('H', outlook_at='2026-10-16T00:00:00+00:00')
+    _, html, plain = email.daily(date(2026, 10, 16), [card], 'H', issued_at=datetime(2026, 10, 16, 8, 5, tzinfo=agent.KST))
     for rendered in (html, plain):
-        assert '10월 15일 종가 105.00 USD' in rendered
-        assert '10월 14일 대비 ' in rendered and '▲ 5.00%' in rendered
-        assert 'ETF ORCA 전망 10월 16일 09:00 기준' in rendered
+        assert '오전 8:05 발행' in rendered
+        assert '종가' not in rendered and '전망 10월' not in rendered and '분 읽기' not in rendered
+
+
+def test_every_link_is_a_button_and_the_letter_ends_with_a_kind_word():
+    _, html, plain = email.daily(date(2026, 10, 18), [letter_card('H', sources=[{'url': 'https://news.example/a'}])], 'H')
+    assert '>출처 · news.example</a>' in html and '>내 포트폴리오 보기</a>' in html
+    assert sum(cheer in plain for cheer in email.CHEERS) == 1, 'Exactly one closing line, chosen by date'
+
+
+def test_core_letter_explains_only_what_touches_the_thesis():
+    shaken = letter_card('H', 'US:A', 'A', headline='가설 흔들림', verdict='약화')
+    calm = letter_card('H', 'US:B', 'B', important=False, changes=[], meaning='업종 흐름 안의 등락이에요.')
+    subject, html, text = email.daily(date(2026, 10, 18), [calm, shaken], 'H')
+    assert '가설 흔들림' in subject and '무엇이 바뀌었나' in html
+    assert 'B ▲ 5.00% — 가설 유지 · 업종 흐름 안의 등락이에요.' in text and text.count('내 보유 가설:') == 1
+    subject, _, _ = email.daily(date(2026, 10, 18), [calm], 'H')
+    assert '보유 가설을 흔드는 변화가 없어요' in subject
+
+
+def test_core_card_keeps_changes_only_for_important_days():
+    with pytest.raises(ValueError):
+        agent.CoreCard.model_validate({**H_CARD, 'important': False})
+    with pytest.raises(ValueError):
+        agent.CoreCard.model_validate({**H_CARD, 'changes': []})
 
 
 def test_profit_letter_never_invents_portfolio_weights():
@@ -726,7 +755,7 @@ async def test_shared_evidence_mode_refuses_a_search_the_model_invents():
         calls.append(payload)
         if len(calls) == 1:
             return {'choices': [{'message': {'role': 'assistant', 'tool_calls': [{'id': '1', 'function': {'name': 'search_sources', 'arguments': '{}'}}]}}]}
-        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(B_CARD)}}]}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(H_CARD)}}]}
     await agent.write_card({'instrument_id': 'KR:091160', 'name': '반도체'}, date(2026, 10, 18), 'test', model_call=model,
                            evidence=evidence, outlook=evidence.sources[0], quote_loader=lambda *_: None, research=False)
     assert any('TOOL_NOT_ALLOWED' in (m.get('content') or '') for m in calls[-1]['messages'] if m['role'] == 'tool'),         'A format compared on fixed evidence must not fetch new sources'
@@ -749,7 +778,7 @@ def test_exception_lead_story_is_printed_first():
     minor = letter_card('F', 'US:A', 'A', headline='작은 소식', significant=True, quote={**QUOTE, 'change_pct': 0.5, 'sigma_pct': 2.0})
     shock = letter_card('F', 'US:B', 'B', headline='큰 급락', quote={**QUOTE, 'change_pct': -9.0, 'sigma_pct': 2.0})
     _, _, text = email.daily(date(2026, 10, 18), [minor, shock], 'F')
-    assert text.index('01. B') < text.index('02. A — 작은 소식')
+    assert text.index('01. B ▼ 9.00%') < text.index('02. A ▲ 0.50% — 작은 소식')
 
 
 def test_sender_process_does_not_import_the_research_stack():
@@ -759,3 +788,46 @@ def test_sender_process_does_not_import_the_research_stack():
              "print([m for m in ('edge_portfolio.newsletter_agent', 'mcp', 'yfinance', 'pandas') if m in sys.modules])")
     loaded = subprocess.run([sys.executable, '-c', probe], capture_output=True, text=True, check=True).stdout.strip()
     assert loaded == '[]', 'The sender runs under a small memory limit; the research stack would push it toward OOM'
+
+
+def padded(value, schema, defs):
+    """Fill every free-text field to its schema maxLength and every list to maxItems: the model's worst case."""
+    schema = defs[schema['$ref'].rsplit('/', 1)[1]] if '$ref' in schema else schema
+    if isinstance(value, dict):
+        return {k: padded(v, schema['properties'][k], defs) if k in schema.get('properties', {}) else v for k, v in value.items()}
+    if isinstance(value, list) and value:
+        return [padded(value[0], schema['items'], defs)] * schema.get('maxItems', len(value))
+    if isinstance(value, str) and 'maxLength' in schema:
+        return '가' * schema['maxLength']
+    return value
+
+
+@pytest.mark.parametrize('fmt', list(agent.FORMATS))
+def test_twenty_worst_case_holdings_stay_under_gmail_clipping(fmt):
+    # 20 is the most holdings a subscription can carry (contracts.Holding list max_length).
+    schema = agent.FORMATS[fmt][1].model_json_schema()
+    worst = {'significant': True} if fmt == 'F' else {}  # a quiet F day is all one-liners; every holding flagged is the long case
+    cards = [padded(letter_card(fmt, f'US:E{i}', f'ETF{i}', sources=[{'url': f'https://news{j}.example/{i}'} for j in range(5)], **worst),
+                    schema, schema.get('$defs', {}))
+             for i in range(20)]
+    _, html, text = email.daily(date(2026, 10, 18), cards, fmt, weights={f'US:E{i}': .05 for i in range(20)})
+    assert len(html.encode()) <= email.BUDGET, 'Over ~102KB Gmail hides the footer: disclaimer and unsubscribe link'
+    assert html.count(email.UNSUBSCRIBE) == 1 and '매매 지시가 아닙니다' in html
+    assert '나머지 종목은 제목과 요약만 실었어요' in text, 'Trimmed holdings must say so instead of vanishing'
+    assert all(f'ETF{i}' in text for i in range(20)), 'Every holding stays in the letter, at least as a brief'
+
+
+async def test_fixed_evidence_mode_makes_no_live_outlook_or_quote_lookups(monkeypatch):
+    async def forbidden(*_):
+        raise AssertionError('live lookup in fixed-evidence mode')
+    monkeypatch.setattr(agent, 'published_outlook', forbidden)
+    evidence = SimpleNamespace(sources=[{'id': 'outlook', 'url': 'https://etforca.com/', 'excerpt': '우리 전망'},
+                                        {'id': 'price', 'url': 'https://example.test/p', 'excerpt': json.dumps(QUOTE)}])
+    seen = []
+    async def model(payload):
+        seen.append(json.loads(payload['messages'][1]['content']))
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(H_CARD)}}]}
+    result = await agent.write_card({'instrument_id': 'KR:091160', 'name': '반도체'}, date(2026, 10, 18), 'test', model_call=model,
+                                    evidence=evidence, quote_loader=forbidden, research=False)
+    assert seen[0]['published_outlook']['excerpt'] == '우리 전망' and seen[0]['daily_quote']['id'] == 'price'
+    assert result['quote'] == QUOTE

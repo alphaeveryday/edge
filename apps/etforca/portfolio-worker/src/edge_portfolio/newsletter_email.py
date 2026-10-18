@@ -1,27 +1,31 @@
-"""Magazine-style letter: a fixed masthead and colophon around seven editorial layouts (formats A-G).
+"""Magazine-style letter: a fixed masthead and colophon around the production layout H and the experiment layouts A-G.
 
 Inline styles on presentation tables with an equivalent plain-text edition. Gmail drops web fonts,
 so the hierarchy must hold in system Korean serif/sans faces alone.
 """
 from html import escape
-from datetime import date, datetime
+from datetime import date
 from urllib.parse import urlsplit
-from zoneinfo import ZoneInfo
 
 UNSUBSCRIBE = '{{amazonSESUnsubscribeUrl}}'
 SITE = 'https://etforca.com/portfolio/'
 SERIF = "'Noto Serif KR','Nanum Myeongjo',AppleMyungjo,Batang,Georgia,serif"
-SANS = "-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',Arial,sans-serif"
+SANS = "-apple-system,'Apple SD Gothic Neo','Malgun Gothic','Noto Sans KR',sans-serif"
 PAPER, DESK, INK, BODY, MUTED, HAIR, BRASS = '#fbfaf6', '#efece4', '#17150f', '#2b2822', '#6b665b', '#e0dbcf', '#86652c'
 UP, DOWN = '#c8322a', '#2453b8'  # Korean market convention: rise red, fall blue. Always paired with ▲▼.
-FORMATS = {'A': ('손익 리포트', '오늘 내 계좌는 어땠나'), 'B': ('원인 노트', '왜 움직였나'),
+FORMATS = {'H': ('보유 가설 브리핑', '내 보유 이유에 중요한 것만'), 'A': ('손익 리포트', '오늘 내 계좌는 어땠나'), 'B': ('원인 노트', '왜 움직였나'),
            'C': ('새 소식', '오늘 새로 나온 일'), 'D': ('판단 점검', '보유 이유는 그대로인가'),
            'E': ('결정 노트', '지금 결정이 필요한가'), 'F': ('변화 감지', '중요한 변화만 골라'),
            'G': ('목적별 브리핑', '내 목적에서 본 오늘')}
 # Production edition. Lives here, not in newsletter_agent, so the 128 MB sender never imports the research stack.
-DEFAULT_FORMAT = 'B'
+DEFAULT_FORMAT = 'H'
 PURPOSES = {'long_term': '장기 적립', 'mid_term': '중기 보유', 'short_term': '단기 매매'}
 LEAN = {'약화': 0, '강화': 1, '유지': 2}
+# One line to close each letter, picked by date so every edition differs but re-renders stay identical.
+CHEERS = ('오늘도 수고 많으셨어요. 시장은 내일 또 열려요.', '흔들리는 날에도 기준을 지키는 당신, 충분히 잘하고 있어요.',
+          '좋은 투자는 매일 조금씩 쌓여요. 오늘도 힘내세요.', '숫자보다 내 기준을 믿는 하루가 되길 바라요.',
+          '바쁜 하루 끝, 잠깐의 확인이면 충분해요. 푹 쉬세요.', '급할 것 없어요. 오늘도 차분하게, 수고 많았어요.',
+          '내일의 시장은 내일의 일. 오늘 하루도 고생 많으셨어요.')
 P = f'margin:0;font-family:{SANS};word-break:keep-all;overflow-wrap:anywhere'
 
 
@@ -78,38 +82,28 @@ def rule(weight=1, colour=HAIR, space=0):
 
 class Letter:
     def __init__(self):
-        self.rows, self.plain, self.notes = [], [], []
+        self.rows, self.plain = [], []
 
     def add(self, html, *text):
         self.rows.append(html)
         self.plain.extend(text)
-
-    def cite(self, card):
-        refs = []
-        for source in card.get('sources', []):
-            url = safe_url(source['url'])
-            if url not in self.notes:
-                self.notes.append(url)
-            refs.append(self.notes.index(url) + 1)
-        return refs
 
 
 def quote_of(card):
     return card.get('quote') or {}
 
 
-def price_line(card):
-    quote, parts = quote_of(card), []
-    if quote:
-        close = f"{quote['close']:,.0f}원" if quote.get('currency') == 'KRW' else f"{quote['close']:,.2f} {quote['currency']}"
-        change = move(quote['change_pct'])
-        parts.append((e(f"{day(quote['trading_date'])} 종가 {close}"), f"{day(quote['trading_date'])} 종가 {close}"))
-        parts.append((e(f"{day(quote['previous_date'])} 대비 ") + change[0], f"{day(quote['previous_date'])} 대비 {change[1]}"))
-    if card.get('outlook_at'):
-        stamp = datetime.fromisoformat(card['outlook_at']).astimezone(ZoneInfo('Asia/Seoul'))
-        text = f'ETF ORCA 전망 {day(stamp.date())} {stamp:%H:%M} 기준'
-        parts.append((e(text), text))
-    return ' &nbsp;·&nbsp; '.join(html for html, _ in parts), ' · '.join(text for _, text in parts)
+def button(url, text, primary=False):
+    colour, fill = (PAPER, INK) if primary else (INK, PAPER)
+    return (f'<a href="{escape(safe_url(url), quote=True)}" style="display:inline-block;margin:0 6px 8px 0;padding:{"14px 22px" if primary else "8px 12px"};'
+            f'background:{fill};border:1px solid {INK if primary else HAIR};color:{colour};font-family:{SANS};font-size:{15 if primary else 12}px;'
+            f'font-weight:700;text-decoration:none;white-space:nowrap">{e(text)}</a>')
+
+
+def source_buttons(card):
+    urls = list(dict.fromkeys(safe_url(source['url']) for source in card.get('sources', [])))
+    html = ''.join(button(url, '출처 · ' + (urlsplit(url).hostname or '').removeprefix('www.')) for url in urls)
+    return (f'<p style="margin:6px 0 0;line-height:1">{html}</p>' if html else ''), [f'출처: {url}' for url in urls]
 
 
 def alert(card):
@@ -119,23 +113,24 @@ def alert(card):
     return bool(sigma and quote.get('change_pct') is not None and abs(quote['change_pct']) >= 2 * sigma)
 
 
-def masthead(letter, edition, fmt):
-    name, question = FORMATS[fmt]
+def issued(at):
+    if at is None:
+        return ''
+    return f" · {'오전' if at.hour < 12 else '오후'} {(at.hour - 1) % 12 + 1}:{at.minute:02d} 발행"
+
+
+def masthead(letter, edition, at):
     letter.add(row(f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
-<td style="font-family:{SERIF};font-size:23px;font-weight:700;letter-spacing:6px;color:{INK}"><a href="{SITE}" style="color:{INK};text-decoration:none">ETF ORCA</a></td>
+<td style="font-family:{SERIF};font-size:23px;font-weight:700;letter-spacing:6px;color:{INK}">ETF ORCA</td>
 <td align="right" style="font-family:{SANS};font-size:11px;letter-spacing:1px;color:{MUTED}">보유 ETF 데일리</td></tr></table>
 {rule(2, INK, 0)}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid {INK}"><tr>
-<td style="padding:9px 0;font-family:{SANS};font-size:12px;color:{BODY}">{edition.year}년 {day(edition)} {'월화수목금토일'[edition.weekday()]}요일</td>
-<td align="right" style="padding:9px 0;font-family:{SANS};font-size:12px;color:{BODY}"><b>{fmt}</b> &nbsp;{e(name)}</td></tr></table>''', '30px 32px 0'),
-               f'ETF ORCA 보유 ETF 데일리 — {edition.isoformat()} · {fmt} {name}', '')
+<td style="padding:9px 0;font-family:{SANS};font-size:12px;color:{BODY}">{edition.year}년 {day(edition)} {'월화수목금토일'[edition.weekday()]}요일{issued(at)}</td></tr></table>''', '30px 32px 0'),
+               f'ETF ORCA 보유 ETF 데일리 — {edition.isoformat()}{issued(at)}', '')
 
 
-def cover(letter, fmt, headline, dek, minutes, basis):
-    name, question = FORMATS[fmt]
-    letter.add(row(f'''<p style="{P};margin:0 0 14px;color:{BRASS};font-size:12px;font-weight:700;letter-spacing:1px">{e(question)}</p>
-<h1 class="hl" style="margin:0 0 16px;font-family:{SERIF};font-size:31px;line-height:1.36;letter-spacing:-.6px;color:{INK};font-weight:700;word-break:keep-all;overflow-wrap:anywhere">{e(headline)}</h1>
-<p style="{P};margin:0 0 18px;color:{BODY};font-size:17px;line-height:1.7">{e(dek)}</p>
-<p style="{P};color:{MUTED};font-size:12px">ETF ORCA 리서치 데스크 &nbsp;·&nbsp; {minutes}분 읽기 &nbsp;·&nbsp; {e(basis)}</p>''', '34px 32px 30px'),
+def cover(letter, headline, dek):
+    letter.add(row(f'''<h1 class="hl" style="margin:0 0 16px;font-family:{SERIF};font-size:31px;line-height:1.36;letter-spacing:-.6px;color:{INK};font-weight:700;word-break:keep-all;overflow-wrap:anywhere">{e(headline)}</h1>
+<p style="{P};color:{BODY};font-size:17px;line-height:1.7">{e(dek)}</p>''', '34px 32px 32px'),
                headline, dek, '')
 
 
@@ -172,9 +167,8 @@ def ledger(letter, cards, weights, big):
 <td align="right" valign="top" style="padding:12px 0 12px 12px;border-top:1px solid {HAIR};font-family:{SANS};font-size:15px;font-weight:700">{move(quote['change_pct'])[0]}</td>
 <td align="right" valign="top" style="padding:12px 0 12px 12px;border-top:1px solid {HAIR};font-family:{SANS};font-size:13px">{move(quote.get('week_pct'))[0]}</td></tr>'''
         letter.plain.append(f"{card['name']}: 하루 {move(quote['change_pct'])[1]} · 5거래일 {move(quote.get('week_pct'))[1]}")
-    stamp = day(quote_of(usable[0])['trading_date'])
     letter.add(row(f'''{rule(1, INK)}<div style="height:18px"></div>{head}<table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-<tr><td style="padding:0 0 8px;font-family:{SANS};font-size:11px;color:{MUTED}">{stamp} 종가 기준</td><td align="right" style="padding:0 0 8px;font-family:{SANS};font-size:11px;color:{MUTED}">하루</td><td align="right" style="padding:0 0 8px 12px;font-family:{SANS};font-size:11px;color:{MUTED};white-space:nowrap">5거래일</td></tr>
+<tr><td style="padding:0 0 8px"></td><td align="right" style="padding:0 0 8px;font-family:{SANS};font-size:11px;color:{MUTED}">하루</td><td align="right" style="padding:0 0 8px 12px;font-family:{SANS};font-size:11px;color:{MUTED};white-space:nowrap">5거래일</td></tr>
 {lines}</table>''', '0 32px 34px'), '')
 
 
@@ -182,21 +176,20 @@ def section(name, text, colour=INK):
     return label(name, colour) + para(text)
 
 
-def story(letter, number, card, body, text, lead=False):
-    """The lead story's headline and dek are already the cover, so the story opens straight into its body."""
-    refs = letter.cite(card)
-    price_html, price_text = price_line(card)
+def story(letter, number, card, body, text, lead=False, brief=False):
+    """The lead story's headline and dek are already the cover, so the story opens straight into its body.
+    A brief keeps only headline and dek so long letters stay under the clipping budget."""
+    sources_html, sources_text = ('', []) if brief else source_buttons(card)
+    change = quote_of(card).get('change_pct')
     heading = f'''<h2 style="margin:18px 0 10px;font-family:{SERIF};font-size:23px;line-height:1.42;letter-spacing:-.4px;color:{INK};font-weight:700;word-break:keep-all;overflow-wrap:anywhere">{e(card['headline'])}</h2>
 <p style="{P};margin:0 0 22px;color:{INK};font-size:16px;line-height:1.75;font-weight:700">{e(card.get('dek', ''))}</p>'''
-    cites = (f'<p style="{P};margin:4px 0 0;color:{MUTED};font-size:12px">출처 ' + ' '.join(f'[{n}]' for n in refs) + '</p>') if refs else ''
     letter.add(row(f'''<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
 <td width="44" valign="top" style="padding-top:2px;font-family:{SERIF};font-size:22px;color:{BRASS};font-weight:700">{number:02d}</td>
-<td valign="top" style="border-top:1px solid {INK};padding-top:10px"><p style="{P};color:{INK};font-size:13px;font-weight:700">{e(card['name'])}</p>
-<p style="{P};margin:3px 0 0;color:{MUTED};font-size:12px;line-height:1.6">{price_html}</p></td></tr></table>
+<td valign="top" style="border-top:1px solid {INK};padding-top:10px"><p style="{P};color:{INK};font-size:14px;font-weight:700">{e(card['name'])} &nbsp;{move(change)[0] if change is not None else ''}</p></td></tr></table>
 {'<div style="height:22px"></div>' if lead else heading}
-{body}{cites}''', '0 32px 40px'),
-               f'{number:02d}. {card["name"]}' + ('' if lead else f' — {card["headline"]}'), *([price_text] if price_text else []), *([] if lead else [card.get('dek', '')]), *text,
-               *([f'출처 {" ".join(f"[{n}]" for n in refs)}'] if refs else []), '')
+{body}{sources_html}''', '0 32px 40px'),
+               f'{number:02d}. {card["name"]}' + (f' {move(change)[1]}' if change is not None else '') + ('' if lead else f' — {card["headline"]}'),
+               *([] if lead else [card.get('dek', '')]), *text, *sources_text, '')
 
 
 LEGACY = (('issue', '무슨 일이 있었나'), ('why_moved', '왜 움직였나'), ('watch_next', '다음에 볼 것'))
@@ -226,8 +219,7 @@ def write_a(number, card, purpose):
 
 
 def write_b(number, card, purpose):
-    factors = ''.join(f'''<tr><td width="46" valign="top" style="padding:13px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:12px;font-weight:700;color:{INK if f['certainty'] == '확인' else BRASS}">{e(f['certainty'])}</td>
-<td style="padding:13px 0;border-top:1px solid {HAIR}"><p style="{P};color:{INK};font-size:15px;font-weight:700">{e(f['label'])}</p><p style="{P};margin:4px 0 0;color:{BODY};font-size:15px;line-height:1.7">{e(f['detail'])}</p></td></tr>''' for f in card['factors'])
+    factors = changes_table(card['factors'])
     body = (label('변동 요인 후보') + f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;border-bottom:1px solid {HAIR}">{factors}</table>'
             + section('새로 나온 정보', card['new_info']) + section('보유 판단과의 관계', card['thesis_relation']))
     return body, ['변동 요인 후보:', *[f"  [{f['certainty']}] {f['label']} — {f['detail']}" for f in card['factors']],
@@ -290,18 +282,39 @@ def write_g(number, card, purpose):
                   f"변경 신호: {view['change_if']}", *[f"  {PURPOSES[k]}: {card[k]['state']}" for k in PURPOSES if k != purpose]]
 
 
-WRITERS = {'A': write_a, 'B': write_b, 'C': write_c, 'D': write_d, 'E': write_e, 'F': write_f, 'G': write_g}
+def changes_table(factors):
+    return ''.join(f'''<tr><td width="46" valign="top" style="padding:13px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:12px;font-weight:700;color:{INK if f['certainty'] == '확인' else BRASS}">{e(f['certainty'])}</td>
+<td style="padding:13px 0;border-top:1px solid {HAIR}"><p style="{P};color:{INK};font-size:15px;font-weight:700">{e(f['label'])}</p><p style="{P};margin:4px 0 0;color:{BODY};font-size:15px;line-height:1.7">{e(f['detail'])}</p></td></tr>''' for f in factors)
+
+
+def write_h(number, card, purpose):
+    note = '하루 변동이 평소 변동 폭의 2배를 넘었어요.' if alert(card) else ''
+    verdict = f'<p style="{P};margin:0 0 22px;color:{INK};font-size:16px;font-weight:700">오늘 판정: {e(card["verdict"])}</p>'
+    changes = (label('무엇이 바뀌었나') + f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;border-bottom:1px solid {HAIR}">'
+               f'{changes_table(card["changes"])}</table>') if card['changes'] else ''
+    body = (pull(card['thesis'], '내 보유 가설') + verdict + changes + section('가설에 주는 의미', card['meaning'])
+            + section('다음 확인', card['next_check']) + (para(note, 13, MUTED) if note else ''))
+    return body, [f"내 보유 가설: {card['thesis']}", f"오늘 판정: {card['verdict']}",
+                  *[f"  [{f['certainty']}] {f['label']} — {f['detail']}" for f in card['changes']],
+                  f"가설에 주는 의미: {card['meaning']}", f"다음 확인: {card['next_check']}", *([note] if note else [])]
+
+
+WRITERS = {'H': write_h, 'A': write_a, 'B': write_b, 'C': write_c, 'D': write_d, 'E': write_e, 'F': write_f, 'G': write_g}
 NEXT = {'B': ('다음에 확인할 것', lambda c: c['watch_next']), 'D': ('판단이 바뀌는 조건', lambda c: c['change_trigger']),
         'F': ('다음에 볼 지점', lambda c: c['watch_next'])}
+
+
+def flags(card, fmt):
+    return card['significant' if fmt == 'F' else 'important'] or alert(card)
 
 
 def lead(cards, fmt):
     def size(card):
         return abs(quote_of(card).get('change_pct') or 0)
-    if fmt == 'F':
+    if fmt in 'FH':
         # Same definition as the stamp: a 2-sigma move is news even when the model calls the day quiet.
-        flagged = [c for c in cards if c['significant'] or alert(c)]
-        return max(flagged, key=size) if flagged else None
+        flagged = [c for c in cards if flags(c, fmt)]
+        return max(flagged, key=lambda c: (-LEAN[c['verdict']], size(c)) if fmt == 'H' else size(c)) if flagged else None
     rank = {'D': lambda c: (-LEAN[c['verdict']], size(c)), 'E': lambda c: (c['decision_needed'], size(c)),
             'C': lambda c: (-min(['높음', '보통', '낮음'].index(x['importance']) for x in c['events']), size(c))}.get(fmt, lambda c: size(c))
     return max(cards, key=rank) if cards else None
@@ -321,9 +334,9 @@ def shell(title, preheader, rows, footer):
 </td></tr></table></body></html>'''
 
 
-def colophon(body):
-    return f'''{rule(2, INK)}<p style="margin:16px 0 10px;font-family:{SERIF};font-size:15px;font-weight:700;letter-spacing:3px;color:{INK}">ETF ORCA</p>
-<p style="{P};color:{MUTED};font-size:12px;line-height:1.85">{body}</p>'''
+def colophon(body, action=''):
+    return f'''{rule(2, INK)}<p style="margin:16px 0 14px;font-family:{SERIF};font-size:15px;font-weight:700;letter-spacing:3px;color:{INK}">ETF ORCA</p>
+{action}<p style="{P};margin-top:8px;color:{MUTED};font-size:12px;line-height:1.85">{body}</p>'''
 
 
 def confirmation(token):
@@ -339,13 +352,28 @@ def confirmation(token):
     return title, shell(title, '확인 버튼을 누르면 보유 종목 데일리 구독이 시작돼요.', rows, colophon('직접 신청한 이메일 주소를 확인하는 메일입니다.')), text
 
 
-def daily(edition, cards, fmt=DEFAULT_FORMAT, *, weights=None, purpose='long_term'):
-    """weights: instrument_id → portfolio share (A only, when the reader gave one). purpose: G's reading lens."""
+# Gmail clips HTML beyond ~102KB and hides the footer: the disclaimer and the unsubscribe link go with it.
+BUDGET = 95_000
+
+
+def daily(edition, cards, fmt=DEFAULT_FORMAT, *, weights=None, purpose='long_term', issued_at=None):
+    """weights: instrument_id → portfolio share (A only, when the reader gave one). purpose: G's reading lens.
+    issued_at: the send time shown in the masthead.
+
+    Stories print in full in importance order until the letter would pass BUDGET; the rest become briefs
+    (headline and dek), the way a magazine runs the remainder as short items."""
+    for full in range(len(cards), -1, -1):
+        rendered = compose(edition, cards, fmt, weights, purpose, full, issued_at)
+        if len(rendered[1].encode()) <= BUDGET or full == 0:
+            return rendered
+
+
+def compose(edition, cards, fmt, weights, purpose, full, at):
     ready = [card for card in cards if not card.get('unavailable') and card.get('format') == fmt]
     top = lead(ready, fmt)
-    if fmt == 'F' and top is None and ready:
-        missing = len(cards) - len(ready)
-        headline = '오늘은 중요한 변화가 없어요'
+    missing = len(cards) - len(ready)
+    if fmt in 'FH' and top is None and ready:
+        headline = '오늘은 보유 가설을 흔드는 변화가 없어요' if fmt == 'H' else '오늘은 중요한 변화가 없어요'
         dek = (f'자료를 확인한 {len(ready)}종목은 등락이 평소 범위 안이고 보유 이유를 흔드는 새 사건이 없었어요.'
                + (f' {missing}종목은 오늘 자료를 확보하지 못했어요.' if missing else ''))
     elif top:
@@ -355,11 +383,14 @@ def daily(edition, cards, fmt=DEFAULT_FORMAT, *, weights=None, purpose='long_ter
     else:
         headline, dek = '오늘의 소식을 준비하지 못했어요', '최신 자료를 확보하지 못했어요. 다음 발행에서 다시 확인할게요.'
     order = sorted(ready, key=lambda c: c is not top) + [c for c in cards if c not in ready]
-    stamp = next((quote_of(c)['trading_date'] for c in cards if quote_of(c)), None)
-    basis = f'가격 기준 {day(stamp)} 종가' if stamp else '가격 기준일 확인 불가'
     letter = Letter()
-    masthead(letter, edition, fmt)
-    cover_at = len(letter.rows)
+    masthead(letter, edition, at)
+    cover(letter, headline, dek)
+    calm = []
+    if fmt == 'H':
+        # Only what touches the thesis gets a story; everything else is one line.
+        calm = [c for c in ready if not flags(c, fmt)]
+        order = sorted([c for c in ready if c not in calm], key=lambda c: c is not top) + [c for c in cards if c not in ready]
     if fmt == 'F':
         flagged = [c for c in ready if c['significant'] or alert(c)]
         letter.add(row(f'''{rule(1, INK)}<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:18px 0 0"><tr>
@@ -385,7 +416,7 @@ def daily(edition, cards, fmt=DEFAULT_FORMAT, *, weights=None, purpose='long_ter
     if fmt == 'G':
         lens = ' &nbsp;/&nbsp; '.join(f'<b style="color:{INK};border-bottom:2px solid {INK}">{name}</b>' if key == purpose else f'<span style="color:{MUTED}">{name}</span>' for key, name in PURPOSES.items())
         letter.add(row(f'''{rule(1, INK)}<p style="{P};margin:16px 0 6px;font-size:15px">{lens}</p>
-<p style="{P};color:{MUTED};font-size:12px">이 호는 <b>{PURPOSES[purpose]}</b> 관점으로 편집했어요. 목적은 <a href="{SITE}" style="color:{MUTED}">포트폴리오 화면</a>에서 바꿀 수 있어요.</p>''', '0 32px 38px'),
+<p style="{P};margin:0 0 12px;color:{MUTED};font-size:12px">이 호는 <b>{PURPOSES[purpose]}</b> 관점으로 편집했어요.</p>{button(SITE, '목적 바꾸기')}''', '0 32px 38px'),
                        f'읽는 관점: {PURPOSES[purpose]}', '')
     if fmt == 'E':
         needed = sum(c['decision_needed'] for c in ready)
@@ -395,35 +426,36 @@ def daily(edition, cards, fmt=DEFAULT_FORMAT, *, weights=None, purpose='long_ter
     number = 0
     for card in order:
         number += 1
-        if card in ready:
+        if card in ready and number <= full:
             body, text = WRITERS[fmt](number, card, purpose)
             story(letter, number, card, body, text, lead=card is top)
+        elif card in ready:
+            if number == full + 1:
+                letter.add(row(label('나머지 종목은 제목과 요약만 실었어요', MUTED) + para('메일이 길어 잘리지 않도록 줄였어요.', 13, MUTED), '0 32px 20px'),
+                           '나머지 종목은 제목과 요약만 실었어요.', '')
+            story(letter, number, card, '', [], brief=True)
         else:
             notice(letter, number, card)
+    if calm:
+        lines = ''.join(f'''<tr><td style="padding:12px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:14px;font-weight:700;color:{INK};word-break:keep-all" width="40%">{e(c['name'])} &nbsp;{move(quote_of(c).get('change_pct'))[0]}</td>
+<td style="padding:12px 0 12px 12px;border-top:1px solid {HAIR};font-family:{SANS};font-size:14px;line-height:1.65;color:{BODY};word-break:keep-all">가설 {e(c['verdict'])} · {e(c['meaning'])}</td></tr>''' for c in calm)
+        letter.add(row(label('변화 없음') + f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-bottom:1px solid {HAIR}">{lines}</table>', '0 32px 38px'),
+                   '변화 없음:', *[f"  {c['name']} {move(quote_of(c).get('change_pct'))[1]} — 가설 {c['verdict']} · {c['meaning']}" for c in calm], '')
     if fmt in NEXT and any(c in ready for c in order):
         title, pick = NEXT[fmt]
         lines = ''.join(f'''<tr><td width="34%" valign="top" style="padding:11px 10px 11px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:13px;font-weight:700;color:{INK};word-break:keep-all">{e(c['name'])}</td>
 <td style="padding:11px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:14px;line-height:1.65;color:{BODY};word-break:keep-all">{e(pick(c))}</td></tr>''' for c in order if c in ready)
         letter.add(row(f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{DESK}"><tr><td style="padding:18px 18px 8px">{label(title)}<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{lines}</table></td></tr></table>', '0 32px 36px'),
                    f'{title}:', *[f"  {c['name']}: {pick(c)}" for c in order if c in ready], '')
-    if letter.notes:
-        notes = ''.join(f'<a href="{escape(url, quote=True)}" style="color:{MUTED};text-decoration:underline">[{i + 1}] {e(urlsplit(url).hostname or url)}</a> &nbsp; ' for i, url in enumerate(letter.notes))
-        letter.add(row(f'{label("출처", MUTED)}<p style="{P};color:{MUTED};font-size:12px;line-height:2">{notes}</p>', '0 32px 26px'),
-                   '출처:', *[f'  [{i + 1}] {url}' for i, url in enumerate(letter.notes)], '')
-    words = sum(len(line) for line in letter.plain)
-    cover_letter = Letter()
-    cover(cover_letter, fmt, headline, dek, max(1, round(words / 500)), basis)
-    letter.rows[cover_at:cover_at] = cover_letter.rows
-    letter.plain[2:2] = cover_letter.plain  # after the masthead lines
-    name, _ = FORMATS[fmt]
+    cheer = CHEERS[edition.toordinal() % len(CHEERS)]
+    letter.add(row(f'<p style="margin:0;font-family:{SERIF};font-size:18px;line-height:1.7;color:{INK};word-break:keep-all">{e(cheer)}</p>', '4px 32px 34px'), cheer, '')
     title = f'[ETF Orca] {day(edition)} · {headline}'
-    footer = colophon(f'''편집 원칙 — 사실과 해석을 나눠 적어요. ‘확인’은 자료로 직접 확인한 사실, ‘추정’은 시점과 방향이 맞는 변동 요인 후보예요. 가격은 미조정 종가 기준이며 기간 수익률은 매입가 기준 손익이 아니에요.<br>
-AI가 공개 자료를 조사·요약한 정보이며 투자 권유나 매매 지시가 아닙니다. 투자 판단과 그 결과의 책임은 투자자 본인에게 있어요. 신청하신 보유 종목을 기준으로 보내드렸어요.<br><br>
-<a href="{SITE}" style="color:{INK}">ETF Orca에서 포트폴리오 보기</a> &nbsp;·&nbsp; <a href="{UNSUBSCRIBE}" style="color:{MUTED}">수신 거부</a>''')
+    footer = colophon(f'''‘확인’은 자료로 확인한 사실, ‘추정’은 시점과 방향이 맞는 요인 후보예요. AI가 공개 자료를 조사·요약한 정보이며 투자 권유나 매매 지시가 아닙니다. 투자 판단과 그 결과의 책임은 투자자 본인에게 있어요.<br><br>
+<a href="{UNSUBSCRIBE}" style="color:{MUTED}">수신 거부</a>''', button(SITE, '내 포트폴리오 보기', primary=True))
     # SES expands this marker after rendering. Only our footer may contain it, never external text/URLs.
     rows = [scrub(part) for part in letter.rows]
     plain = [scrub(line) for line in letter.plain]
     # Model text reaches the Subject header now: never let a line break into it.
     title, preheader = (' '.join(scrub(value).split()) for value in (title, dek))
-    plain += ['ETF Orca: ' + SITE, '수신 거부: ' + UNSUBSCRIBE, 'AI가 공개 자료를 조사·요약한 정보이며 투자 권유나 매매 지시가 아닙니다.']
+    plain += ['내 포트폴리오 보기: ' + SITE, '수신 거부: ' + UNSUBSCRIBE, 'AI가 공개 자료를 조사·요약한 정보이며 투자 권유나 매매 지시가 아닙니다.']
     return title, shell(title, preheader, rows, footer), '\n'.join(plain)

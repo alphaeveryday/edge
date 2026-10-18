@@ -123,8 +123,24 @@ class PurposeCard(Card):
     new_info: str = text(130)
 
 
-# Hypothesis A-G of docs/design/portfolio-newsletter-formats.md. Each has its own writing skill.
-FORMATS = {'A': ('profit', ProfitCard), 'B': ('cause', CauseCard), 'C': ('event', EventCard), 'D': ('thesis', ThesisCard),
+class CoreCard(Card):
+    """Production letter: D's thesis check, F's 'only what matters', B's cause breakdown."""
+    thesis: str = text(90)
+    verdict: Literal['강화', '유지', '약화']
+    important: bool
+    changes: list[Factor] = Field(max_length=2)
+    meaning: str = text(130)
+    next_check: str = text(90)
+
+    @model_validator(mode='after')
+    def changes_only_when_important(self):
+        if self.important != bool(self.changes):
+            raise ValueError('important가 true면 changes를 1~2개, false면 빈 배열로 내세요.')
+        return self
+
+
+# H is the production combination; A-G are the hypotheses of docs/design/portfolio-newsletter-formats.md.
+FORMATS = {'H': ('core', CoreCard), 'A': ('profit', ProfitCard), 'B': ('cause', CauseCard), 'C': ('event', EventCard), 'D': ('thesis', ThesisCard),
            'E': ('action', ActionCard), 'F': ('exception', ExceptionCard), 'G': ('purpose', PurposeCard)}
 
 
@@ -184,7 +200,14 @@ async def write_card(holding, edition, key, *, fmt=DEFAULT_FORMAT, model_call=No
     card_model = FORMATS[fmt][1]
     async with asyncio.timeout(600), AsyncExitStack() as stack:
         client = await stack.enter_async_context(httpx.AsyncClient(timeout=90))
-        if outlook is None:
+        if not research:
+            # Fixed evidence: no live outlook or quote lookups, or formats could see different data.
+            if evidence is None:
+                raise ValueError('FIXED_EVIDENCE_REQUIRED')
+            known = {source['id']: source for source in evidence.sources}
+            outlook = outlook or known.get('outlook')
+            quote_loader = lambda *_: known.get('price')  # noqa: E731
+        if outlook is None and research:
             try:
                 outlook = await published_outlook(client, holding['instrument_id'], edition)
             except (httpx.HTTPError, ValueError) as error:
