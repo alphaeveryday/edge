@@ -126,8 +126,7 @@ class PurposeCard(Card):
 
 
 class NewsItem(StrictModel):
-    title: str = text(40)
-    detail: str = text(140)
+    title: str = text(40)  # the whole item: readers see this one line, nothing more
     kind: Literal['실적', '물가', '금리', '정책', '제품', '계약', '수급', '기타']
     org: str = text(20)
     domain: str = Field(max_length=60)  # official site of `org`, for its logo; '' if unknown

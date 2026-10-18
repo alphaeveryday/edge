@@ -21,7 +21,7 @@ B_CARD = {'headline': '반도체 실적 기대가 이어져요', 'dek': '주요 
           'watch_next': '다음 실적 발표의 수주 전망을 살펴봐요.', 'source_ids': ['outlook']}
 
 
-NEWS = {'title': '공급 계약 체결', 'detail': '새 계약이 수요 가정을 뒷받침해요.', 'kind': '계약', 'org': '삼성SDI', 'domain': '',
+NEWS = {'title': '공급 계약 체결', 'kind': '계약', 'org': '삼성SDI', 'domain': '',
         'ticker': '', 'importance': '상', 'source_id': 'outlook'}
 EVENT = {'date': '2026-10-23', 'when': '10월 23일', 'title': '3분기 실적 발표', 'kind': '실적', 'org': 'SK하이닉스', 'domain': '', 'market': '국내'}
 H_CARD = {'headline': '반도체 보유 이유는 견고해요', 'dek': '새 공급 계약이 수요 가정을 뒷받침했어요.', 'thesis': 'AI 수요가 이어진다',
@@ -873,8 +873,10 @@ def test_twenty_worst_case_holdings_stay_under_gmail_clipping(fmt):
     _, html, text = email.daily(date(2026, 10, 18), cards, fmt, weights={f'US:E{i}': .05 for i in range(20)})
     assert len(html.encode()) <= email.BUDGET, 'Over ~102KB Gmail hides the footer: disclaimer and unsubscribe link'
     assert html.count(email.UNSUBSCRIBE) == 1 and '매매 지시가 아닙니다' in html
-    trimmed = '메일이 길어 일부 소식의 자세한 내용은 뺐어요' if fmt == 'H' else '나머지 종목은 제목과 요약만 실었어요'
-    assert trimmed in text, 'Trimmed holdings must say so instead of vanishing'
+    if fmt == 'H':
+        assert text.count(' · ') >= 20 * 4, 'One headline line per item fits twenty holdings without dropping any'
+    else:
+        assert '나머지 종목은 제목과 요약만 실었어요' in text, 'Trimmed holdings must say so instead of vanishing'
     assert all(f'ETF{i}' in text for i in range(20)), 'Every holding stays in the letter, at least as a brief'
 
 
@@ -979,7 +981,7 @@ def test_news_item_shows_its_company_move_or_its_importance_never_a_certainty_ta
     _, html, text = email.daily(date(2026, 10, 18), [letter_card('H', positives=[company], negatives=[macro])], 'H')
     assert '＋ 삼성전자 실적 · 삼성전자 ▲ 2.62%' in text and '－ 미국 CPI 상회 · 🔥 중요도 최상' in text
     assert '· 확인' not in html and '‘확인’은' not in html, 'H no longer shows certainty labels or explains them'
-    assert f'border-left:3px solid {email.UP}' in html and f'border-left:3px solid {email.DOWN}' in html, 'Good news red, bad news blue'
+    assert f'border-left:4px solid {email.UP}' in html and f'border-left:4px solid {email.DOWN}' in html, 'Good news red, bad news blue'
 
 
 def test_us_events_are_labelled_korean_time():
@@ -1053,14 +1055,13 @@ def test_headline_keeps_a_spaced_dash_inside_the_title():
     assert agent.headline({'id': 's', 'url': 'https://a.example/', 'excerpt': '# LG엔솔-엘앤에프, LFP 첫 공급계약 - 머니투데이'}) == 'LG엔솔-엘앤에프, LFP 첫 공급계약'
 
 
-def test_news_detail_folds_under_its_own_headline():
+def test_news_is_one_large_headline_with_nothing_folded_away():
     item = {**STORED_NEWS, 'title': '삼성전자 실적', 'org': '삼성전자', 'change_pct': 2.62}
     _, html, text = email.daily(date(2026, 10, 18), [letter_card('H', positives=[item])], 'H')
-    summary = html[html.index('<summary'):html.index('</summary>')]
-    assert '삼성전자 실적' in summary and '자세히' not in html, 'The headline itself opens the detail; no repeated "more" links'
-    assert html.index('</summary>') < html.index('새 계약이 수요 가정을 뒷받침해요.') < html.index('</details>')
-    assert '새 계약이 수요 가정을 뒷받침해요.' in text, 'The plain-text edition never folds anything away'
-
+    line = html[html.rindex('<p', 0, html.index('삼성전자 실적')):html.index('삼성전자 실적')]
+    assert 'font-size:20px' in line and 'font-weight:700' in line, 'The headline is the item; it must read at a glance'
+    assert '<details' not in html and '<summary' not in html
+    assert '  ＋ 삼성전자 실적 · 삼성전자 ▲ 2.62%' in text
 
 def test_good_and_bad_news_differ_by_sign_not_only_colour():
     good = {**STORED_NEWS, 'title': '좋은 소식'}
