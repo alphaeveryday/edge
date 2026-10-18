@@ -1,0 +1,26 @@
+id: CashDistribution_ForSecurity_ETF
+source: CashDistribution
+definition:
+  name: ForSecurity
+  label: For security
+  description: The security whose cash distribution is reported, matched by its existing internal instrument identity.
+  target: ETF
+  sourceProperty: etfInstrumentId
+  targetProperty: id
+  cardinality: N:1
+  status: experimental
+  sourceMapping:
+    kind: propertyMatch
+  mappingStatus: defined
+  apiName: forSecurity
+  displayName: For security
+  inverse:
+    apiName: cashDistributions
+    displayName: Cash distributions
+    description: Cash distributions reported for this security, with source revision provenance.
+  backing:
+    type: foreignKey
+    configurationStatus: specified
+    objectType: CashDistribution
+    foreignKeyProperty: etfInstrumentId
+    referencedObjectType: ETF

@@ -1,0 +1,44 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="edge">
+  <diagram id="distributions" name="distributions">
+    <mxGraphModel>
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="table-cash_distribution_observation" value="cash_distribution_observation" style="swimlane;html=0;startSize=38;" parent="1" vertex="1">
+          <mxGeometry as="geometry" x="30" y="100" width="390" height="310" />
+        </mxCell>
+        <mxCell id="table-cash_distribution_observation-row-0" value="PK market_code / ticker" style="text;html=0;" parent="table-cash_distribution_observation" vertex="1">
+          <mxGeometry as="geometry" y="38" width="390" height="25" />
+        </mxCell>
+        <mxCell id="table-cash_distribution_observation-row-1" value="PK source_vendor" style="text;html=0;" parent="table-cash_distribution_observation" vertex="1">
+          <mxGeometry as="geometry" y="63" width="390" height="25" />
+        </mxCell>
+        <mxCell id="table-cash_distribution_observation-row-2" value="PK source_event_key" style="text;html=0;" parent="table-cash_distribution_observation" vertex="1">
+          <mxGeometry as="geometry" y="88" width="390" height="25" />
+        </mxCell>
+        <mxCell id="table-cash_distribution_observation-row-3" value="PK raw_run_id" style="text;html=0;" parent="table-cash_distribution_observation" vertex="1">
+          <mxGeometry as="geometry" y="113" width="390" height="25" />
+        </mxCell>
+        <mxCell id="table-cash_distribution_observation-row-4" value="record_date / ex_date / pay_date" style="text;html=0;" parent="table-cash_distribution_observation" vertex="1">
+          <mxGeometry as="geometry" y="138" width="390" height="25" />
+        </mxCell>
+        <mxCell id="table-cash_distribution_observation-row-5" value="amount_per_share / currency" style="text;html=0;" parent="table-cash_distribution_observation" vertex="1">
+          <mxGeometry as="geometry" y="163" width="390" height="25" />
+        </mxCell>
+        <mxCell id="table-cash_distribution_observation-row-6" value="confirmation / distribution_kind" style="text;html=0;" parent="table-cash_distribution_observation" vertex="1">
+          <mxGeometry as="geometry" y="188" width="390" height="25" />
+        </mxCell>
+        <mxCell id="table-cash_distribution_observation-row-7" value="received_at / available_at" style="text;html=0;" parent="table-cash_distribution_observation" vertex="1">
+          <mxGeometry as="geometry" y="213" width="390" height="25" />
+        </mxCell>
+        <mxCell id="table-cash_distribution_observation-row-8" value="raw_key / raw_sha256" style="text;html=0;" parent="table-cash_distribution_observation" vertex="1">
+          <mxGeometry as="geometry" y="238" width="390" height="25" />
+        </mxCell>
+        <mxCell id="table-cash_distribution_observation-row-9" value="canonical_run_id / artifact_key / artifact_sha256" style="text;html=0;" parent="table-cash_distribution_observation" vertex="1">
+          <mxGeometry as="geometry" y="263" width="390" height="25" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

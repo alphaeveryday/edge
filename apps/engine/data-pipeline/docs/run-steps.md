@@ -1,5 +1,25 @@
 # data-pipeline — 실행 단계별 명령과 주의
 
+## 국내 ETF 배당 원천 관측
+
+일반 KIS 인증(`kis_nav.source`, 기존 `kis` 태스크 정의)을 재사용한다. 분 가격 전용 키는
+사용하지 않는다. 기본 대상은 `krx_etf.source.etf_map`의 종목코드이며 `--series`로 좁힌다.
+종목 마스터 미등록은 원천 수집을 막지 않는다. 날짜는 기준일 범위이고, 생략하면 오늘 기준
+과거 730일부터 미래 90일까지 조회한다. 적재 전에 배당 마이그레이션이 적용돼 있어야 한다.
+정제·적재에는 날짜나 종목 필터를 넘기지 않는다.
+
+```bash
+uv run --package data-pipeline python -m data_pipeline.run ingest-raw-dividend --series 069500 --from 2025-01-01 --to 2026-10-18 --run-id dividend-check
+uv run --package data-pipeline python -m data_pipeline.run normalize-dividend --input-run-id dividend-check --run-id dividend-check-normalized
+uv run --package data-pipeline python -m data_pipeline.run load-dividend --input-run-id dividend-check-normalized --run-id dividend-check-loaded
+```
+
+스토리지·DB 설정과 시크릿은 기존 파이프라인 설정과 환경 주입을 사용한다. 원본 manifest와
+해시, 실행별 canonical artifact, 추가 전용 DB 판본, 소비 마커를 재사용한다. CLI는 구현됐으며
+정기 스케줄과 포트폴리오 소비자 연결은 별도 배포 단위다. 해외 KIS 금액은 운용사와 불일치가
+확인돼 이 수집기에 포함하지 않는다. 근거와 객체 모델은
+[배당 설계](../../../../docs/design/portfolio-dividend-ledger.md)에 있다.
+
 > 모듈 [README](../README.md) 의 상세 문서다. 레인·단계별 동작과 도입 경위가 함께 있다.
 
 ## 실행

@@ -107,6 +107,34 @@ Table "call_budget_class" {
   }
 }
 
+Table "cash_distribution_observation" {
+  "market_code" text [not null]
+  "ticker" text [not null]
+  "source_vendor" text [not null]
+  "source_event_key" text [not null]
+  "record_date" date [not null]
+  "ex_date" date
+  "pay_date" date
+  "amount_per_share" numeric
+  "currency" text [not null]
+  "distribution_kind" text [not null]
+  "confirmation" text [not null]
+  "received_at" timestamptz [not null]
+  "available_at" timestamptz [not null]
+  "availability_basis" text [not null]
+  "raw_run_id" text [not null]
+  "raw_key" text [not null]
+  "raw_sha256" text [not null]
+  "canonical_run_id" text [not null]
+  "artifact_key" text [not null]
+  "artifact_sha256" text [not null]
+  "loaded_at" timestamptz [not null]
+
+  indexes {
+    ("market_code", "ticker", "source_vendor", "source_event_key", "raw_run_id") [pk]
+  }
+}
+
 Table "company_profile" {
   "actor_id" text [pk]
   "actor_type" varchar(30)
