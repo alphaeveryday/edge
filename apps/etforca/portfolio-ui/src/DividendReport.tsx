@@ -12,7 +12,7 @@ export function DividendReport({ assets, dividends, forecasts, missing, startMon
   const months = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
   const actual = dividends.filter(d => d.status === '실수령');
   const missingSelected = missing.filter(id => assets.some(a => a.id === id));
-  const rows = assets.filter(a => a.category !== '현금').map(a => {
+  const rows = assets.filter(a => a.category !== '현금' || mode === 'actual' && actual.some(d => d.asset_id === a.id)).map(a => {
     return { asset: a, values: months.map(m => {
     if (mode === 'actual') {
       const recorded = actual.filter(d => d.asset_id === a.id && d.date.startsWith(m));
