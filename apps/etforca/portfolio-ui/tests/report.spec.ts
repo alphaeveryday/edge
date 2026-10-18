@@ -66,8 +66,8 @@ for (const fallbackFont of [false, true]) test(`large balances with small change
     const ticks = page.locator('.report-history svg g text');
     await expect(ticks).toHaveCount(3);
     expect(new Set(await ticks.allTextContents()).size).toBe(3);
-    expect(await ticks.evaluateAll(nodes => nodes.every(node => (node as SVGGraphicsElement).getBBox().x >= 0))).toBe(true);
     await page.evaluate(() => document.fonts.ready);
+    await expect.poll(() => ticks.evaluateAll(nodes => nodes.every(node => (node as SVGGraphicsElement).getBBox().x >= 0))).toBe(true);
     await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
     await expect.poll(() => ticks.evaluateAll(nodes => nodes.every(node => (node as SVGGraphicsElement).getBBox().x >= 0))).toBe(true);
     await page.locator('.report-history').evaluate(el => { el.style.width = '240px'; });
