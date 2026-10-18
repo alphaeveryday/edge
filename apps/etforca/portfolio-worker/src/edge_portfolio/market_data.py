@@ -130,6 +130,8 @@ def load_prices(symbol, as_of, *, on_raw=None):
 async def fetch_prices(symbol, as_of, *, on_raw=None, provider_timeout=None):
     try:
         original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw), timeout=provider_timeout)
+        if on_raw:
+            on_raw(original)
         columns = [original['frame'][name] for name in ('Adj Close', 'Close')]
         valid = [column[column.map(positive_price)] for column in columns]
         if all(not column.empty and (as_of - column.index[-1].date()).days <= 7 for column in valid):
@@ -304,7 +306,7 @@ def normalized_prices(ids, records, as_of, bounds=None, *, column=None):
         elif record['currency'] != 'KRW':
             raise ValueError('UNSUPPORTED_CURRENCY')
         series[key] = values
-        urls.append({'instrument_id': key, 'url': record['source_url'], 'price_recovery': record.get('price_recovery'), 'price_fill': price_fill})
+        urls.append({'instrument_id': key, 'url': record.get('return_source_url', record['source_url']), 'price_recovery': record.get('price_recovery'), 'price_fill': price_fill})
     if needs_fx:
         urls.append({'instrument_id': 'USD/KRW', 'url': records['FX']['source_url'], 'price_recovery': records['FX'].get('price_recovery'),
                      'price_fill': {'method': 'previous_observation', 'count': len(fx_fill_dates), 'dates': sorted(fx_fill_dates)}})

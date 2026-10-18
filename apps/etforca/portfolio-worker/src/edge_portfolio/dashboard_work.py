@@ -118,16 +118,15 @@ def price_end(key, day, now=None):
     now = now or datetime.now(ZoneInfo('UTC'))
     if key == 'FX':
         return min(day, now.astimezone(ZoneInfo('UTC')).date())
-    if not key.startswith('US:'):
-        return day
     from .market_data import calendars
-    schedule = calendars.get_calendar('XNYS', start=day - timedelta(days=30), end=day + timedelta(days=1)).schedule
-    completed = schedule[(schedule['close'] <= now) & (schedule.index.date < day)]
+    korean = key.startswith('KR:')
+    schedule = calendars.get_calendar('XKRX' if korean else 'XNYS', start=day - timedelta(days=30), end=day + timedelta(days=1)).schedule
+    completed = schedule[(schedule['close'] <= now) & (schedule.index.date <= day if korean else schedule.index.date < day)]
     return completed.index[-1].date() + timedelta(days=1)
 
 
 async def records_for(ids, day):
-    from .market_data import decode_prices, fetch_prices
+    from .market_data import decode_prices, fetch_prices, positive_price
     from .price_fetch import serialize
     records, failures = {}, []
     keys = set(ids) - {'CASH:KRW', None}
@@ -141,9 +140,15 @@ async def records_for(ids, day):
                 with store.connect() as db:
                     cached = db.execute('SELECT payload FROM portfolio_dashboard_prices WHERE instrument=%s AND day=%s', (key, end)).fetchone()
                 try:
-                    if cached and cached['payload'].get('provider', '').startswith('FinanceDataReader:NAVER:'):
-                        records[key] = decode_prices(json.dumps(cached['payload']))
-                        cached = None  # Preserve usable return history while retrying an actual close.
+                    if cached:
+                        saved = decode_prices(json.dumps(cached['payload']))
+                        adjusted = saved['frame']['Adj Close'].map(positive_price)
+                        incomplete = saved.get('provider', '').startswith('FinanceDataReader:NAVER:') or saved.get('price_recovery', {}).get('status') in ('unavailable', 'partial')
+                        incomplete |= key != 'FX' and (saved.get('return_basis') == 'price' or adjusted.sum() < 2)
+                        incomplete |= last_close(saved)[1] != str(end - timedelta(days=1))
+                        if incomplete:
+                            records[key] = saved
+                            cached = None  # Retain usable observations while retrying missing data.
                     if cached:
                         record = decode_prices(json.dumps(cached['payload']))
                     else:
@@ -160,6 +165,11 @@ async def records_for(ids, day):
                             if key not in records:
                                 raise
                             record = records[key]
+                        captured = records.get(key)
+                        if record.get('provider', '').startswith('FinanceDataReader:NAVER:') and captured and not captured.get('provider', '').startswith('FinanceDataReader:NAVER:'):
+                            frame = captured['frame'].copy()
+                            frame['Adj Close'] = record['frame']['Adj Close'].reindex(frame.index)
+                            record = {**captured, 'frame': frame, 'return_basis': record['return_basis'], 'return_source_url': record['source_url']}
                         if record['currency'] != expected:
                             raise ValueError('UNSUPPORTED_CURRENCY')
                         with store.connect() as db:

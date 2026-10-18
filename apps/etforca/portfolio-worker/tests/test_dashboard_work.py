@@ -21,6 +21,12 @@ def test_us_cache_advances_only_after_the_session_closes_even_within_one_korean_
     assert work.price_end('FX', day, datetime.fromisoformat('2026-10-16T01:00:00+09:00')) == date(2026, 10, 15)
 
 
+def test_korean_cache_includes_todays_close_only_after_the_market_closes():
+    day = date(2026, 10, 16)
+    assert work.price_end('KR:069500', day, datetime.fromisoformat('2026-10-16T15:29:00+09:00')) == date(2026, 10, 16)
+    assert work.price_end('KR:069500', day, datetime.fromisoformat('2026-10-16T15:31:00+09:00')) == date(2026, 10, 17)
+
+
 def test_instrument_identity_survives_analysis_import():
     result = dashboard.from_analysis({'input': {'holdings': [{'instrument_id': 'KR:069500', 'name': 'KODEX 200', 'account': 'ISA', 'amount_krw': '100000'}]}})
     assert result['assets'][0]['instrument_id'] == 'KR:069500'
@@ -417,3 +423,59 @@ async def test_each_provider_gets_time_even_when_the_primary_stalls(monkeypatch)
     result = await market_data.fetch_prices('069500.KS', date(2026, 10, 18), provider_timeout=.02)
     assert calls == ['yahoo', 'fallback']
     assert result['currency'] == 'KRW'
+
+
+async def test_resolving_a_legacy_symbol_does_not_rebase_unchanged_split_inputs(isolated_db):
+    from psycopg.types.json import Jsonb
+    a = {**asset(), 'instrument_id': None, 'price_date': '2026-10-15'}
+    payload = dashboard.Workbook(assets=[a]).model_dump(mode='json')
+    with store.connect() as db:
+        db.execute('INSERT INTO portfolio_workbooks(owner,version,payload) VALUES (%s,1,%s)', ('owner', Jsonb(payload)))
+    loaded = dashboard.read('owner')
+    loaded['workbook']['title'] = 'renamed'
+    loaded['workbook']['assets'][0]['price_date'] = None
+    saved = dashboard.save('owner', dashboard.Save.model_validate(loaded))
+    assert saved['workbook']['assets'][0]['quantity_as_of'] == '2026-10-15'
+    split = record((50., 55.))
+    split['frame']['Stock Splits'] = [0., 2.]
+    result = work.valuation(saved['workbook'], {'KR:069500': split}, None, date(2026, 10, 18))
+    assert result['assets'][0]['quantity'] == 20
+    assert result['assets'][0]['profit'] == 300
+
+
+async def test_adjusted_fallback_keeps_captured_actual_prices_actions_and_source(isolated_db, monkeypatch):
+    from edge_portfolio import market_data
+    async def fetch(symbol, day, *, on_raw=None, provider='yahoo'):
+        if provider == 'yahoo':
+            raw = record()
+            raw['frame']['Adj Close'] = float('nan')
+            return raw
+        return {**record((100., 120.)), 'provider': 'FinanceDataReader:NAVER:069500', 'return_basis': 'total_return', 'source_url': 'https://example.com/returns'}
+    monkeypatch.setattr(market_data, '_fetch_prices', fetch)
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18))
+    result = work.valuation({'assets': [asset()]}, records, None, date(2026, 10, 18))
+    assert result['assets'][0]['value'] == 1100
+    assert records['KR:069500']['frame']['Dividends'].iloc[-1] == 2
+    backtest = work.run_backtest({'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 100.}]}, records, date(2026, 10, 18), [])
+    assert backtest['return_pct'] == 20
+    assert backtest['history']['source_url'] == 'https://example.com/returns'
+
+
+async def test_incomplete_cached_returns_are_retried_without_losing_actual_closes(isolated_db, monkeypatch):
+    from psycopg.types.json import Jsonb
+    from edge_portfolio import market_data
+    from edge_portfolio.price_fetch import serialize
+    import json
+    r = record()
+    r['frame']['Adj Close'] = float('nan')
+    with store.connect() as db:
+        db.execute('INSERT INTO portfolio_dashboard_prices VALUES (%s,%s,%s)', ('KR:069500', work.price_end('KR:069500', date(2026, 10, 18)), Jsonb(json.loads(serialize(r)))))
+    calls = []
+    async def fetch(symbol, day, **kwargs):
+        calls.append(symbol)
+        return record()
+    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18))
+    assert calls == ['069500.KS']
+    assert failures == []
+    assert records['KR:069500']['frame']['Adj Close'].notna().all()
