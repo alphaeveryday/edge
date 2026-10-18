@@ -14,11 +14,11 @@ def visible(fixture):
 
 def evidence(fixture, news_ids, include_body):
     """Read exact article IDs; body-free results are final news evidence."""
-    if not isinstance(news_ids, list) or not news_ids or not all(isinstance(n, str) for n in news_ids) or len(news_ids) != len(set(news_ids)) or type(include_body) is not bool:
+    if not isinstance(news_ids, list) or not news_ids or not all(isinstance(n, str) and n.strip() for n in news_ids) or len(news_ids) != len(set(news_ids)) or type(include_body) is not bool:
         raise ToolInputError("unique nonempty news_ids and boolean include_body required")
     rows = {r["news_id"]: r for r in visible(fixture)}
     if any(identity not in rows for identity in news_ids):
-        raise ToolInputError("news unavailable at analysis time")
+        raise ToolInputError("news unavailable at analysis time. Select news_ids from list_events or get_event_timeline and retry.")
     keys = ("news_id", "title", "body") if include_body else ("news_id", "title")
     evidence_rows = []
     for identity in news_ids:

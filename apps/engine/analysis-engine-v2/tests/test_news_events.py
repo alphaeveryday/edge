@@ -349,3 +349,26 @@ def test_news_input_errors_are_recoverable_not_internal_failures(name, args):
     data = source(); add(data, 'a')
     with pytest.raises(ToolInputError):
         DatabaseTools(data).call(name, args)
+
+
+def test_database_reuses_one_news_corpus_for_discovery_and_snapshot_comparison(monkeypatch):
+    from edge_analysis_v2.tools.news_events import NewsEvents
+    original = NewsEvents.__init__
+    constructions = []
+    def capture(instance, fixture):
+        constructions.append(instance)
+        original(instance, fixture)
+    monkeypatch.setattr(NewsEvents, '__init__', capture)
+    data = source(); add(data, 'a')
+    tools = DatabaseTools(data)
+    assert constructions == [tools.news_events]
+    assert tools.news_events is tools._news_discovery
+    assert tools._tools['list_events']['callback'].__self__ is tools.news_events
+    assert tools._tools['get_event_changes']['callback'].__self__ is tools.news_events
+
+
+@pytest.mark.parametrize('ids', ['', [], [''], [' '], ['a', 'a'], [1], [{}]])
+def test_article_identifiers_must_be_unique_nonblank_strings_before_lookup(ids):
+    data = source(); add(data, 'a')
+    with pytest.raises(ToolInputError, match='unique nonempty'):
+        result(DatabaseTools(data), 'get_news_evidence', news_ids=ids, include_body=True)
