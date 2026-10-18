@@ -120,7 +120,7 @@ def source_line(card):
     names = []
     for source in card.get('sources', []):
         # Price rows have no title (None); cards cached before titles existed fall back to the host name.
-        name = source['title'] if 'title' in source else urlsplit(safe_url(source['url'])).hostname
+        name = source['title'] if 'title' in source else (urlsplit(safe_url(source['url'])).hostname or '').removeprefix('www.')
         if name and name not in names:
             names.append(name)
     names = [name if len(name) <= 15 else name[:15].rstrip() + '…' for name in names]

@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 from concurrent.futures import ThreadPoolExecutor
@@ -27,7 +28,7 @@ H_CARD = {'headline': '반도체 보유 이유는 견고해요', 'dek': '새 공
           'verdict': '견고', 'important': True, 'move_reason': '업종 강세에 함께 올랐어요.', 'positives': [NEWS], 'negatives': [],
           'impact': '보유 이유를 바꾸지 않아요.', 'events': [EVENT], 'source_ids': ['outlook']}
 # What the worker stores after illustrate(): ids resolved to urls, domains to icons.
-STORED_NEWS = {k: v for k, v in NEWS.items() if k not in {'domain', 'ticker'}} | {'url': 'https://etforca.com/', 'source_title': 'ETF ORCA 전망', 'icon': None, 'change_pct': None}
+STORED_NEWS = {k: v for k, v in NEWS.items() if k not in {'domain', 'ticker'}} | {'url': 'https://etforca.com/', 'icon': None, 'change_pct': None}
 H_STORED = {**H_CARD, 'positives': [STORED_NEWS],
             'events': [{k: v for k, v in EVENT.items() if k != 'domain'} | {'icon': None}]}
 
@@ -990,7 +991,7 @@ def test_article_title_comes_from_the_fetched_page_not_the_model():
     assert agent.headline(page) == '포스코퓨처엠, 삼성SDI와 LFP 6조원 규모 공급계약 체결'
     assert agent.headline({'id': 'outlook', 'url': 'https://etforca.com/'}) == 'ETF ORCA 전망'
     assert agent.headline({'id': 'price', 'url': 'https://finance.yahoo.com/'}) is None
-    assert agent.headline({'id': 's4', 'url': 'https://www.mt.co.kr/b', 'excerpt': 'no heading'}) == 'www.mt.co.kr'
+    assert agent.headline({'id': 's4', 'url': 'https://www.mt.co.kr/b', 'excerpt': 'no heading'}) == 'mt.co.kr'
 
 
 async def test_company_move_is_fetched_by_code_for_a_valid_ticker_only():
@@ -1008,3 +1009,43 @@ def test_briefing_cards_from_before_the_news_tags_become_notices():
     old = {**letter_card('H', 'US:OLD', 'OLD', headline='예전 브리핑'), 'positives': [old_item]}
     _, html, _ = email.daily(date(2026, 10, 18), [old, letter_card('H', 'US:B', 'B')], 'H')
     assert '예전 브리핑' in html
+
+
+async def test_fixed_evidence_mode_does_not_look_up_company_moves_either(monkeypatch):
+    live = []
+    async def forbidden(*args):
+        live.append(args)  # recorded, not raised: a broad except in the code under test could swallow a raise
+    monkeypatch.setattr(agent, 'published_outlook', forbidden)
+    evidence = SimpleNamespace(sources=[{'id': 'outlook', 'url': 'https://etforca.com/', 'excerpt': '우리 전망'},
+                                        {'id': 'price', 'url': 'https://example.test/p', 'excerpt': json.dumps(QUOTE)}])
+    async def model(payload):
+        card = {**H_CARD, 'positives': [{**NEWS, 'ticker': 'KR:005930'}]}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(card)}}]}
+    result = await agent.write_card({'instrument_id': 'KR:091160', 'name': '반도체'}, date(2026, 10, 18), 'test', model_call=model,
+                                    evidence=evidence, quote_loader=forbidden, research=False)
+    assert live == [] and result['positives'][0]['change_pct'] is None, 'Formats compared on fixed evidence must not differ by a live price'
+
+
+async def test_company_moves_are_looked_up_once_per_ticker_two_at_a_time():
+    running, peak, asked = 0, 0, []
+    async def loader(ticker, edition):
+        nonlocal running, peak
+        asked.append(ticker)
+        running += 1
+        peak = max(peak, running)
+        await asyncio.sleep(0.01)
+        running -= 1
+        return {'excerpt': json.dumps({**QUOTE, 'change_pct': 1.5})}
+    class Client:
+        async def get(self, url, **_):
+            return SimpleNamespace(status_code=404)
+    tickers = ['KR:000001', 'KR:000002', 'KR:000003', 'KR:000001']
+    card = {'positives': [{**NEWS, 'ticker': t} for t in tickers[:2]], 'negatives': [{**NEWS, 'ticker': t} for t in tickers[2:]], 'events': []}
+    value = await agent.illustrate(Client(), card, {'outlook': {'id': 'outlook', 'url': 'https://etforca.com/'}}, date(2026, 10, 18), loader)
+    assert sorted(asked) == ['KR:000001', 'KR:000002', 'KR:000003'] and peak <= 2, 'Each quote is a child process in a 512 MiB worker'
+    assert [i['change_pct'] for i in value['positives'] + value['negatives']] == [1.5, 1.5, 1.5, 1.5]
+
+
+def test_headline_keeps_a_spaced_dash_inside_the_title():
+    assert agent.headline({'id': 's', 'url': 'https://a.example/', 'excerpt': '# 삼성전자 - SK하이닉스 격차 확대'}) == '삼성전자 - SK하이닉스 격차 확대'
+    assert agent.headline({'id': 's', 'url': 'https://a.example/', 'excerpt': '# LG엔솔-엘앤에프, LFP 첫 공급계약 - 머니투데이'}) == 'LG엔솔-엘앤에프, LFP 첫 공급계약'
