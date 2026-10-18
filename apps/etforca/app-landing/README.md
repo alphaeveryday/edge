@@ -5,7 +5,7 @@
 | 파일 | 역할 |
 |---|---|
 | `landing.html` | 랜딩 본문. **Claude Artifact용 조각 문서**다(doctype·`<html>`·`<head>`·`<body>`·viewport 메타가 없다) |
-| `assets/` | 로고, 파비콘(`icon.png`·`apple-touch-icon.png`), 공유 미리보기 그림(`og.png`), 글꼴(Pretendard 서브셋, SIL OFL 1.1 — `assets/fonts/LICENSE`) |
+| `assets/` | 로고, 파비콘(`icon.png`·`apple-touch-icon.png`), 공유 미리보기 그림(`og.png`), 글꼴(Pretendard 서브셋, SIL OFL 1.1 — `assets/fonts/LICENSE`), 뉴스레터 메일 제호 로고(`newsletter-logo.png` — 포트폴리오 워커 메일이 이 URL을 참조하므로 지우거나 이름을 바꾸지 않는다) |
 | `robots.txt`·`sitemap.xml` | 검색엔진이 사이트 최상위에서 읽는 파일 |
 | `build.sh` | 조각 문서에 문서 뼈대(doctype·`<html>`·`<head>`·`<body>`)를 씌워 `dist/index.html` 을 만들고 `assets/`·`robots.txt`·`sitemap.xml` 을 `dist/` 에 복사한다 |
 

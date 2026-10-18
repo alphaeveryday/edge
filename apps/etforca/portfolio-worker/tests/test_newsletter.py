@@ -868,3 +868,11 @@ def test_volatility_baseline_excludes_the_move_being_tested(monkeypatch):
     data = json.loads(agent.daily_quote('US:QQQ', date(2026, 10, 17))['excerpt'])
     assert data['change_pct'] == 20 and data['sigma_pct'] < 2, 'The 20% jump must not inflate its own baseline'
     assert email.alert({'quote': data}) and email.alert({'quote': {'change_pct': 1.0, 'sigma_pct': 0.0}})
+
+
+def test_daily_and_confirmation_mails_carry_the_hosted_logo():
+    assert email.LOGO.startswith('https://etforca.com/'), 'Gmail blocks data URIs; the logo must be a hosted https image'
+    _, daily_html, _ = email.daily(date(2026, 10, 18), [letter_card('H')], 'H')
+    _, confirm_html, _ = email.confirmation('a' * 43)
+    for html in (daily_html, confirm_html):
+        assert html.count(f'src="{email.LOGO}"') == 1 and 'alt="ETF ORCA"' in html
