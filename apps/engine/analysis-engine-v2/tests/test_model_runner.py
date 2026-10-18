@@ -77,7 +77,8 @@ def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_p
     from edge_analysis_v2.analysis.service import TASK_SKILLS, REVISION_SKILLS, MOVEMENT_SKILLS
     selected_skills = REVISION_SKILLS if revision else MOVEMENT_SKILLS if kind == 'movement' else TASK_SKILLS
 
-    prompt = load_prompt(Path(runner.__file__).parents[1] / 'prompts' / f'{kind}.yaml')
+    prompt_name = 'movement_revision' if kind == 'movement' and revision else kind
+    prompt = load_prompt(Path(runner.__file__).parents[1] / 'prompts' / f'{prompt_name}.yaml')
     captured = []
     base = client_for(ResultMessage(structured_output={'summary': 'ok'}))
 
@@ -97,6 +98,10 @@ def test_a_report_task_gets_the_base_rules_and_its_declared_skills_in_full(tmp_p
     assert len(captured) == 1 and captured[0].startswith(base) and '스킬은 특정한 종류의 일을 하는 방법' in captured[0]
     assert (tmp_path / 'system_prompt.txt').read_text(encoding='utf-8') == captured[0]
     task = (tmp_path/'AGENTS.md').read_text(encoding='utf-8')
+    if kind == 'movement' and revision:
+        assert '이번 실행은 가격변동 수정이다.' in task
+        assert '순서는 오늘 가격이 움직인 쪽' not in task
+        assert '새 이슈로 교체하려면 두 항목' not in task
     if kind == 'movement' or revision:
         # A short explanation or update must not inherit the full outlook drafting quota.
         assert '논점은 여섯 개 이상' not in task
