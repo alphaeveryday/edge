@@ -4,7 +4,7 @@ import { useRef, useState } from 'react';
 import { classifyAsset } from './assetClassification';
 import { money, performance, value, type Asset, type Month, type Dividend, type Forecast } from './workbook';
 
-export function DividendChart({ dividends, forecasts, complete, startMonth, selectedMonth, onMonth, monthsCount = 13, actualOnly = false, unavailableMonths = [] }: { dividends: Dividend[]; forecasts: Forecast[]; complete: boolean; startMonth: string; selectedMonth: string; onMonth: (month: string) => void; monthsCount?: number; actualOnly?: boolean; unavailableMonths?: string[] }) {
+export function DividendChart({ dividends, forecasts, complete, startMonth, selectedMonth, onMonth, monthsCount = 13, actualOnly = false, unavailableMonths = [], incompleteMonths = [] }: { dividends: Dividend[]; forecasts: Forecast[]; complete: boolean; startMonth: string; selectedMonth: string; onMonth: (month: string) => void; monthsCount?: number; actualOnly?: boolean; unavailableMonths?: string[]; incompleteMonths?: string[] }) {
   const scroll = useRef<HTMLDivElement>(null);
   const rows = Array.from({ length: monthsCount }, (_, i) => {
     const month = new Date(Date.UTC(Number(startMonth.slice(0, 4)), Number(startMonth.slice(5)) - 1 + i, 1)).toISOString().slice(0, 7);
@@ -18,7 +18,7 @@ export function DividendChart({ dividends, forecasts, complete, startMonth, sele
   function description(r: typeof rows[number]) {
     if (unavailableMonths.includes(r.month)) return `${r.month} ${actualOnly ? '실수령 미기록' : '예상 미확인'}`;
     if (actualOnly) return `${r.month} 실수령 ${money(r.actual)}`;
-    return `${r.month} ${complete ? '예상 ' + money(r.expected) : r.expected ? '확인된 예상 ' + money(r.expected) : '예상 미확인'}`;
+    return `${r.month} ${complete && !incompleteMonths.includes(r.month) ? '예상 ' + money(r.expected) : r.expected ? '확인된 예상 ' + money(r.expected) : '예상 미확인'}`;
   }
   function move(direction: number) { scroll.current?.scrollBy({ left: direction * scroll.current.clientWidth * .75, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }); }
   return <><div className="dividend-navigation"><span>{rows[0].month} ~ {rows.at(-1)!.month}</span><Button aria-label="이전 배당 월 보기" onClick={() => move(-1)}>←</Button><Button aria-label="다음 배당 월 보기" onClick={() => move(1)}>→</Button></div><div className="dividend-plot"><div className="dividend-axis" aria-hidden="true">{[1, .75, .5, .25, 0].map(r => <span key={r}>{new Intl.NumberFormat('ko-KR', { notation: 'compact', maximumFractionDigits: 1 }).format(max * r)}</span>)}</div><div className="dividend-scroll" ref={scroll} tabIndex={0} role="region" aria-label="12개월 배당 그래프, 좌우로 이동"><div className="dividend-bars">{rows.map(r => <Button key={r.month} aria-pressed={r.month === selectedMonth} aria-label={description(r)} title={description(r)} onClick={() => onMonth(r.month)}><span className="dividend-bars-track">{unavailableMonths.includes(r.month) && <span className="dividend-unavailable">—</span>}<i style={{ height: `${r.expected / max * 100}%` }} /><b style={{ height: `${r.actual / max * 100}%` }} /></span><small>{r.month.slice(2).replace('-', '.')}</small></Button>)}</div></div></div><p className="dividend-legend">{actualOnly ? <b>실수령 · 기록된 금액 합계</b> : <span>예상 · 세전 · 재투자 없이 합산{!complete && ' · 일부 자료 미확인'}</span>}</p></>;
