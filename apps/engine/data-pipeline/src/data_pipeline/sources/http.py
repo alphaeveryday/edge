@@ -254,6 +254,8 @@ class PoliteClient:
         """
         if not self.keep_alive or req.data is not None:
             with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                if getattr(req, "response_headers", None) is not None:
+                    req.response_headers.update({k.lower(): v for k, v in resp.headers.items()})
                 return resp.read()
         # 스킴까지 키로 쓴다 — 호스트만 보면 https 요청이 같은 호스트의 평문 연결에 실린다
         pool = vars(self._conns).setdefault("pools", {}).setdefault((req.type, req.host), [])
@@ -292,6 +294,8 @@ class PoliteClient:
             if resp.status >= 500:
                 self._count_keep_alive_5xx()
             raise urllib.error.HTTPError(req.full_url, resp.status, resp.reason, resp.headers, io.BytesIO(body))
+        if getattr(req, "response_headers", None) is not None:
+            req.response_headers.update({k.lower(): v for k, v in resp.headers.items()})
         return body
 
     def _count_keep_alive_5xx(self) -> None:
@@ -321,11 +325,13 @@ class PoliteClient:
         headers: dict[str, str] | None = None,
         data: bytes | None = None,
         decode: bool = True,
+        response_headers: dict[str, str] | None = None,
     ) -> str | bytes:
         """운반 코어. 간격 강제 + 5xx/네트워크 재시도 + 4xx/429 StopFetch.
 
         - method/headers/data 로 GET·POST·커스텀 헤더를 표현한다(data 있으면 POST 본문).
         - decode=True 면 UTF-8 문자열, False 면 원본 bytes 를 돌려준다(바이너리 ZIP 등).
+        - response_headers 는 호출별 출력 사전이다. 성공 응답의 소문자 헤더를 받는다.
         재시도 소진은 SafeFailureError. 4xx/429 는 재시도·격리 대상이 아니라 즉시 StopFetch.
         응답 없이 끊긴 연결은 한도 안에서 1회만 다시 보내고, 한도 밖이면 그 예외를 그대로 올린다.
         """
@@ -348,6 +354,9 @@ class PoliteClient:
             req = urllib.request.Request(
                 url, data=data, headers=headers or {}, method=method
             )
+            if response_headers is not None:
+                response_headers.clear()
+                req.response_headers = response_headers
             if dropped is not None and time.monotonic() > dropped[1]:
                 raise dropped[0]  # 발신 간격·공유 허용 대기가 끊김 재시도 기한을 넘겼다
             dropped = None

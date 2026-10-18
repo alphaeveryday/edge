@@ -43,6 +43,18 @@ def test_get_returns_decoded_string(monkeypatch):
     assert client.get("https://x.example/y") == '{"ok": 1}'
 
 
+def test_response_headers_are_per_call_and_lowercase(monkeypatch):
+    # WHY: continuation headers must not disappear or leak from an earlier page.
+    def handler(req):
+        response = _Resp(b'[]')
+        response.headers = {"TR_CONT": "E"}
+        return response
+    output = {"stale": "value"}
+    client = _client(monkeypatch, handler)
+    assert client.request("GET", "https://x.example/y", response_headers=output) == "[]"
+    assert output == {"tr_cont": "E"}
+
+
 def test_get_sends_accept_header(monkeypatch):
     # WHY: get() 은 Accept 헤더를 실어 왔다 — 하위호환 래퍼가 이 헤더를 유지해야 한다.
     seen = {}

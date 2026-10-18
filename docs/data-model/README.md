@@ -11,6 +11,7 @@
 - [기준정보와 금융상품](domains/reference/)
 - [문서와 공시 사실](domains/documents/)
 - [시장 데이터와 수집 상태](domains/market/)
+- [배당 원천 관측](domains/distributions/)
 - [이벤트와 근거](domains/events/)
 - [설명 생성과 계보](domains/explanation/)
 - [v2 분석 결과와 툴 감사](domains/analysis-v2/)

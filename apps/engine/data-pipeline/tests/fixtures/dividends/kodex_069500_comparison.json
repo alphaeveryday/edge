@@ -1,0 +1,72 @@
+[
+  {
+    "source": "KODEX",
+    "source_id": "20250430",
+    "amount": "429",
+    "ex_date": null,
+    "record_date": "2025-04-30",
+    "pay_date": "2025-05-07",
+    "kind": "regular",
+    "tax_per_share": "429"
+  },
+  {
+    "source": "KODEX",
+    "source_id": "20260430",
+    "amount": "446",
+    "ex_date": null,
+    "record_date": "2026-04-30",
+    "pay_date": "2026-05-06",
+    "kind": "regular",
+    "tax_per_share": "446"
+  },
+  {
+    "source": "KODEX",
+    "source_id": "20250731",
+    "amount": "176",
+    "ex_date": null,
+    "record_date": "2025-07-31",
+    "pay_date": "2025-08-04",
+    "kind": "regular",
+    "tax_per_share": "145"
+  },
+  {
+    "source": "KODEX",
+    "source_id": "20250131",
+    "amount": "110",
+    "ex_date": null,
+    "record_date": "2025-01-31",
+    "pay_date": "2025-02-04",
+    "kind": "regular",
+    "tax_per_share": "110"
+  },
+  {
+    "source": "KODEX",
+    "source_id": "20251031",
+    "amount": "140",
+    "ex_date": null,
+    "record_date": "2025-10-31",
+    "pay_date": "2025-11-04",
+    "kind": "regular",
+    "tax_per_share": "122"
+  },
+  {
+    "source": "KODEX",
+    "source_id": "20260731",
+    "amount": "183",
+    "ex_date": null,
+    "record_date": "2026-07-31",
+    "pay_date": "2026-08-04",
+    "kind": "regular",
+    "tax_per_share": "168"
+  },
+  {
+    "source": "KODEX",
+    "source_id": "20260130",
+    "amount": "80",
+    "ex_date": null,
+    "record_date": "2026-01-30",
+    "pay_date": "2026-02-03",
+    "kind": "regular",
+    "tax_per_share": "80"
+  }
+]

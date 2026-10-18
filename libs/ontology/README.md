@@ -3,8 +3,8 @@
 ```text
 src/edge_ontology/
   metadata/
-    object_types/       # 26 object type definitions: properties, identity and source mapping
-    link_types/         # 40 directed link type definitions; participant roles are not Link Types
+    object_types/       # 27 object type definitions: properties, identity and source mapping
+    link_types/         # 42 directed link type definitions; participant roles are not Link Types
     interface_types/    # Actor, Security, SourceDocument: shared properties and links
     value_types/        # event categories, roles, kinds, stages and labels
       event_types/
