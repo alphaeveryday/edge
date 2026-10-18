@@ -2,7 +2,7 @@
 import base64
 from collections import Counter
 from copy import deepcopy
-from datetime import date
+from datetime import date, timezone
 import hashlib
 import json
 
@@ -134,7 +134,7 @@ class NewsEvents:
                 continue
             changed = [r for r in reports if r.get('novelty') != 'DUPLICATE_REBROADCAST'] or reports
             latest = max(changed, key=lambda r: (instant(r['available_at']), r['event_id']))
-            day = instant(latest['available_at']).date()
+            day = instant(latest['available_at']).astimezone(timezone.utc).date()
             if start and day < start or end and day > end or event_types is not None and latest['event_type'] not in event_types:
                 continue
             ids = latest['news_ids']
@@ -150,7 +150,7 @@ class NewsEvents:
         if scope != 'events':
             for identity in sorted(self.unlinked):
                 article = self.articles[identity]
-                day = instant(article['available_at']).date()
+                day = instant(article['available_at']).astimezone(timezone.utc).date()
                 if matches is not None and identity not in matches or start and day < start or end and day > end:
                     continue
                 rows.append({'kind': 'unlinked_article', 'news_ids': [identity], 'title': article['title'][:180],

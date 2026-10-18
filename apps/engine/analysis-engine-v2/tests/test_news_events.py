@@ -30,6 +30,21 @@ def result(tools, name, **arguments):
     return tools.call(name, arguments)['result']
 
 
+@pytest.mark.parametrize('scope', ['events', 'unlinked_articles'])
+def test_availability_date_filter_uses_utc_even_when_korea_has_entered_the_next_day(scope):
+    data = source()
+    data['context']['analysis_at'] = '2026-10-19T00:00:00Z'
+    when = '2026-10-17T16:00:00Z'
+    add(data, 'late-evening', when=when)
+    if scope == 'unlinked_articles':
+        data['news_events'] = []
+    tools = DatabaseTools(data)
+    same_day = result(tools, 'list_events', scope=scope, start_date='2026-10-17', end_date='2026-10-17')
+    assert same_day['total_count'] == 1
+    next_day = result(tools, 'list_events', scope=scope, start_date='2026-10-18', end_date='2026-10-18')
+    assert next_day['total_count'] == 0
+
+
 def test_rebroadcasts_cannot_displace_a_distinct_event_or_hide_a_correction():
     data = source()
     add(data, 'first', thread='t', novelty='FIRST_IN_THREAD')
