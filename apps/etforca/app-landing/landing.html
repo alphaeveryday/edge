@@ -2152,6 +2152,10 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     if (pfAt !== 2 || document.hidden) return;
     const dt = Math.min(.05, (now - (gLast || now)) / 1000), el = Math.max(0, now - pfT0) / 1000, busy = el < 6.6;
     gLast = now;
+    // 상태 문구·진행률은 그림보다 먼저 바꾼다: 캔버스를 못 쓰는 환경에서도 분석 진행은 보인다. findLast 는 구형 사파리에 없어 filter 로 쓴다
+    pfNow.textContent = NOW.filter(([t]) => el >= t).pop()[1];
+    pfPct.textContent = Math.round(Math.min(1, el / 6.6) * 100) + '%';
+    if (!gx) { gRaf = requestAnimationFrame(graph); return; }
     gHop += dt * (busy ? 9 : 2.5); // 분석하는 동안은 빠르게 건너다니고, 끝나면 느려진다
     if (gHop >= 1) {
       const o = gnb[gAt].slice().sort((a, b) => heat[a] - heat[b]), nx = o[Math.random() < .7 ? 0 : Math.floor(Math.random() * o.length)];
@@ -2171,8 +2175,6 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     const hx = pr[gFrom][0] + (pr[gAt][0] - pr[gFrom][0]) * gHop, hy = pr[gFrom][1] + (pr[gAt][1] - pr[gFrom][1]) * gHop, g = gx.createRadialGradient(hx, hy, 0, hx, hy, 16);
     g.addColorStop(0, 'rgba(200,228,255,.95)'); g.addColorStop(.35, 'rgba(159,208,255,.5)'); g.addColorStop(1, 'rgba(159,208,255,0)');
     gx.fillStyle = g; gx.fillRect(hx - 16, hy - 16, 32, 32);
-    pfNow.textContent = NOW.findLast(([t]) => el >= t)[1];
-    pfPct.textContent = Math.round(Math.min(1, el / 6.6) * 100) + '%';
     gRaf = requestAnimationFrame(graph);
   }
   const gKick = () => { if (pfAt === 2 && !gRaf) gRaf = requestAnimationFrame(graph); };
