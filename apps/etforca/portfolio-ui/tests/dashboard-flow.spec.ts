@@ -40,8 +40,10 @@ test('pending quotes appear promptly and polling slows down after they arrive', 
   await expect(page.locator('.dashboard-stats')).toContainText('1,100,000원');
   await expect(page.getByRole('status').filter({ hasText: '시세' })).toHaveCount(0);
   expect(calls).toBe(2);
-  await page.clock.runFor(10000);
+  await page.clock.runFor(59000);
   expect(calls).toBe(2);
+  await page.clock.runFor(1100);
+  await expect.poll(() => calls).toBe(3);
 });
 
 test('an empty portfolio does not enter fast quote polling', async ({ page }) => {

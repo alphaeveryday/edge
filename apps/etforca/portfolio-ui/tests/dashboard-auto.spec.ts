@@ -4,7 +4,7 @@ import { needsSeed, withSeed, profitSummary, type Asset, type Saved, type Workbo
 const asset: Asset = { id: 'a', instrument_id: 'KR:069500', name: 'KODEX 200', account: 'ISA', category: '주식', currency: 'KRW', quantity: 10, average: 40000, price: null, cost_fx: null, amount: null, weight: null, target: null, fee: 0, price_date: null };
 const workbook: Workbook = { title: '내 포트폴리오', fx: null, assets: [asset], dividends: [], months: [] };
 const catalog = { instruments: [{ id: 'KR:069500', name: 'KODEX 200', ticker: '069500', code: '069500', market: 'KR', kind: 'etf' }] };
-const tracking = { market: { version: 1, payload: { date: '2026-10-18', assets: [{ id: 'a', value: 500000, profit: 100000, price: 50000, price_date: '2026-10-16', quantity: 10 }], fx: null, forecasts: [{ asset_id: 'a', month: '2027-01', amount: 1000 }], missing: [], dividend_missing: [] } }, days: [] };
+const tracking = { market: { version: 1, payload: { date: '2026-10-18', bases: { a: { signature: ['KR:069500', 10, null, null] } }, assets: [{ id: 'a', value: 500000, profit: 100000, price: 50000, price_date: '2026-10-16', quantity: 10 }], fx: null, forecasts: [{ asset_id: 'a', month: '2027-01', amount: 1000 }], missing: [], dividend_missing: [] } }, days: [] };
 
 test('one missing purchase basis cannot hide known gains or dilute their return', () => {
   const q = tracking.market.payload.assets[0];
@@ -108,7 +108,7 @@ test('an older poll cannot replace the fresh valuation returned after saving', a
   await page.goto('/portfolio/?view=dashboard');
   const profit = page.locator('.dashboard-stats article').nth(1).locator('strong');
   await expect(profit).toHaveText('+100,000원 (+25.00%)');
-  await page.clock.fastForward(30000);
+  await page.clock.fastForward(60000);
   await expect.poll(() => calls).toBe(2);
   await page.locator('.holding-edit').first().click();
   await page.getByLabel('보유 수량', { exact: true }).fill('12');
@@ -486,14 +486,72 @@ test('recovering the first workbook read also restores ETF search', async ({ pag
 });
 
 
-test('saving another holding never restores an old import amount as its current value', async ({ page }) => {
+test('saving keeps the last valuation instead of blanking it or restoring the old import amount', async ({ page }) => {
   await mock(page, { version: 1, workbook: { ...workbook, assets: [{ ...asset, quantity: null, amount: 1000000 }] } });
   await page.goto('/portfolio/?view=dashboard');
   await expect(page.locator('.holdings-table tbody tr')).toContainText('500,000원');
   await page.locator('.holding-edit').click();
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
-  await expect(page.locator('.dashboard-stats article').first().locator('strong')).toHaveText('—');
+  await expect(page.locator('.dashboard-stats article').first().locator('strong')).toHaveText('500,000원');
+  await expect(page.locator('.dashboard-stats')).toContainText('갱신 중 · 이전 값');
   await expect(page.locator('.holdings-table tbody tr')).not.toContainText('1,000,000원');
+});
+
+test('new holdings do not clear existing quotes and stale quotes never overwrite edited inputs', async ({ page }) => {
+  await mock(page);
+  await page.goto('/portfolio/?view=dashboard');
+  await page.locator('.holding-edit').click();
+  await page.getByLabel('보유 수량', { exact: true }).fill('12');
+  await page.getByLabel(/평균매수가/).fill('42000');
+  await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
+  await expect(page.locator('.dashboard-stats')).toContainText('500,000원');
+  await expect(page.locator('.dashboard-stats')).toContainText('+100,000원');
+  await expect(page.locator('.allocation-donut')).toBeVisible();
+  await page.locator('.holding-edit').click();
+  await expect(page.getByLabel('보유 수량', { exact: true })).toHaveValue('12');
+  await expect(page.getByLabel(/평균매수가/)).toHaveValue('42000');
+  await page.getByRole('button', { name: '수정 닫기', exact: true }).click();
+  const added = { ...asset, id: 'new', instrument_id: 'US:QLD', name: 'QLD', currency: 'USD' as const };
+  await page.route('**/api/portfolio/workbook', r => r.fulfill({ json: { version: 3, workbook: { ...workbook, assets: [asset, added] } } }));
+  await page.reload();
+  await expect(page.locator('.dashboard-stats article').first()).toContainText('확인된 자산500,000원');
+  await expect(page.locator('.holding-edit')).toHaveCount(2);
+  await expect(page.locator('.holdings-table tbody tr').filter({ hasText: 'KODEX' })).toContainText('500,000원');
+  await page.screenshot({ path: `test-results/quote-refresh-${test.info().project.name}.png`, fullPage: true });
+});
+
+test('a different instrument with the same row id cannot inherit the previous quote', async ({ page }) => {
+  await mock(page, { version: 2, workbook: { ...workbook, assets: [{ ...asset, instrument_id: 'US:QLD', name: 'QLD', currency: 'USD' }] } });
+  await page.goto('/portfolio/?view=dashboard');
+  await expect(page.locator('.holding-edit')).toContainText('QLD');
+  await expect(page.locator('.holdings-table')).not.toContainText('500,000원');
+});
+
+test('cash stays visible when another holding is saved even without a split basis', async ({ page }) => {
+  const cash: Asset = { ...asset, id: 'cash', instrument_id: 'CASH:KRW', name: '현금', category: '현금', quantity: null, amount: 200000 };
+  await mock(page, { version: 2, workbook: { ...workbook, assets: [asset, cash] } });
+  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { ...tracking, market: { ...tracking.market, payload: { ...tracking.market.payload, assets: [...tracking.market.payload.assets, { id: 'cash', value: 200000, profit: null, price: null, quantity: null, price_date: null }] } } } }));
+  await page.goto('/portfolio/?view=dashboard');
+  await expect(page.locator('.dashboard-stats article').first()).toContainText('700,000원');
+});
+
+test('retained USD prices use the exchange rate of their valuation when FX refreshes', async ({ page }) => {
+  await mock(page, { version: 1, workbook: { ...workbook, assets: [{ ...asset, instrument_id: 'US:QLD', name: 'QLD', currency: 'USD', average: 80 }] } });
+  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { ...tracking, market: { version: 1, payload: { ...tracking.market.payload, fx: 1400, missing: ['a'], assets: [{ id: 'a', instrument_id: 'US:QLD', quantity: 10, price: 100, average: 80, value: 1300000, profit: 260000 }] } } } }));
+  await page.goto('/portfolio/?view=dashboard');
+  if (test.info().project.name === 'mobile') await page.getByRole('button', { name: 'QLD 상세 정보 보기' }).click();
+  const row = page.locator('.holdings-table tbody tr');
+  await expect(row.locator('[data-label="현재가"]')).toContainText('130,000원');
+  await expect(row.locator('[data-label="평단가"]')).toContainText('104,000원');
+  await expect(row.locator('[data-label="평가금액"]')).toContainText('1,300,000원');
+});
+
+test('an unknown value is not presented as a previous valuation during refresh', async ({ page }) => {
+  await mock(page, { version: 1, workbook: { ...workbook, assets: [{ ...asset, quantity: null, amount: null }] } });
+  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { ...tracking, market: { ...tracking.market, payload: { ...tracking.market.payload, assets: [{ ...tracking.market.payload.assets[0], value: null, quantity: null, profit: null }], missing: ['a'] } } } }));
+  await page.goto('/portfolio/?view=dashboard');
+  await expect(page.locator('.notice')).toContainText('일부 종목의 시세나 수량');
+  await expect(page.locator('.dashboard-stats')).not.toContainText('갱신 중 · 이전 값');
 });
 
 test('a failed confirmed deletion returns focus to the enabled delete control', async ({ page }) => {

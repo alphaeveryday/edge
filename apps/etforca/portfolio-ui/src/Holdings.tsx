@@ -17,15 +17,17 @@ export function Holdings({ assets, quotes, missing, total, fx, amountOf, disable
     if (bv === null) return -1;
     return (bv - av) * (descending ? 1 : -1);
   });
-  function price(value: number | null | undefined, a: Asset) {
+  function price(value: number | null | undefined, a: Asset, rate: number | null) {
     if (value == null) return '—';
-    return a.currency === 'USD' ? <>{fx === null ? '—' : money(value * fx)}<small>${number(value)}</small></> : money(value);
+    return a.currency === 'USD' ? <>{rate === null ? '—' : money(value * rate)}<small>${number(value)}</small></> : money(value);
   }
   return <div className="holdings-scroll" role="region" aria-label="보유 종목 상세, 좌우로 이동" tabIndex={0}><table className="holdings-table"><thead><tr>
     <th scope="col">종목</th><th scope="col" aria-sort={descending ? 'descending' : 'ascending'}><Button onClick={() => setDescending(!descending)}>비중 {descending ? '↓' : '↑'}</Button></th>
     {['주식수', '평단가', '현재가', '평가금액', '수익률', '평가손익', '배당률', '예상 연배당금', '배당주기', '투자 지역·테마'].map(t => <th scope="col" key={t}>{t}</th>)}
   </tr></thead><tbody>{rows.map(a => {
     const q = quotes.get(a.id), amount = amountOf(a), gain = q?.profit ?? null;
+    // Retained valuations keep their own exchange rate when other quotes refresh.
+    const rate = q?.value != null && q.quantity != null && q.quantity > 0 && q.price != null && q.price > 0 ? q.value / (q.quantity * q.price) : fx;
     const basis = amount !== null && gain !== null ? amount - gain : null;
     const pct = gain !== null && basis !== null && basis > 0 ? gain / basis * 100 : null;
     const cash = a.category === '현금', classification = classifyAsset(a);
@@ -35,8 +37,8 @@ export function Holdings({ assets, quotes, missing, total, fx, amountOf, disable
       <th scope="row"><Button className="holding-edit" disabled={disabled} onClick={() => onEdit(a)}><b>{a.name}</b><small>{a.instrument_id?.split(':')[1]} · {a.account}</small>{q?.estimated_quantity && <small>금액 기준 추적</small>}</Button><Button className="holding-details" aria-label={`${a.name} 상세 정보 ${expanded === a.id ? '접기' : '보기'}`} aria-expanded={expanded === a.id} onClick={() => setExpanded(expanded === a.id ? null : a.id)}>{expanded === a.id ? '접기' : '상세'}</Button></th>
       <td data-label="비중">{amount !== null && total !== null && total > 0 ? (amount / total * 100).toFixed(1) + '%' : '—'}</td>
       <td data-label="주식수">{cash ? '—' : number(q?.quantity)}{q?.estimated_quantity && <small>추정 수량</small>}</td>
-      <td data-label="평단가">{cash ? '—' : price(q?.average, a)}</td>
-      <td data-label="현재가">{cash ? '—' : price(q?.price, a)}{q?.price_date && <small>{q.price_date}</small>}</td>
+      <td data-label="평단가">{cash ? '—' : price(q?.average, a, rate)}</td>
+      <td data-label="현재가">{cash ? '—' : price(q?.price, a, rate)}{q?.price_date && <small>{q.price_date}</small>}</td>
       <td data-label="평가금액">{money(amount)}</td>
       <td data-label="수익률" className={tone}>{pct === null ? !cash && q && a.average === null && q.average == null ? <Button disabled={disabled} onClick={() => onEdit(a)}>평균매수가 입력</Button> : '—' : `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`}</td>
       <td data-label="평가손익" className={tone}>{signed(gain)}</td>

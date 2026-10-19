@@ -93,6 +93,7 @@ async def test_zero_holdings_need_no_quotes_fx_or_dividends_and_cannot_block_dai
     assert result['market']['payload']['missing'] == []
     assert result['market']['payload']['dividend_missing'] == ['a'], 'Only the positive holding with short history needs dividend data'
     assert result['market']['payload']['assets'][1]['value'] == 0
+    assert result['market']['payload']['assets'][1]['instrument_id'] == 'US:VOO'
 
 
 def test_amount_import_tracks_market_moves_instead_of_resetting_value_each_day():
@@ -603,19 +604,105 @@ def test_annual_distribution_this_month_is_preserved_in_the_next_twelve_months()
     assert work.forecast(asset(), r, 10, 1, date(2026, 10, 18)) == [{'asset_id': 'a', 'month': '2027-10', 'amount': 50}]
 
 
-async def test_new_holdings_require_actions_checked_after_save_even_with_same_close(isolated_db, monkeypatch):
+@pytest.mark.parametrize('recovery', ['not_needed', 'partial'])
+async def test_adding_a_holding_reuses_other_quotes_until_the_minute_cache_expires(isolated_db, monkeypatch, recovery):
     from edge_portfolio import market_data
     calls = []
     async def fetch(symbol, day, **kwargs):
         calls.append(symbol)
-        return {**record(), 'pending_splits': [] if len(calls) == 1 else ['2026-10-19']}
+        return {**record(), 'price_recovery': {'status': recovery}}
     monkeypatch.setattr(market_data, 'fetch_prices', fetch)
-    await work.records_for(['KR:069500'], date(2026, 10, 18))
-    saved_at = datetime.now().astimezone()
-    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), required_after=saved_at)
-    assert len(calls) == 2, 'The same completed close must not hide newly announced corporate actions'
+    day = date(2026, 10, 18)
+    since = {'KR:069500': day, 'KR:360750': day}
+    await work.records_for(['KR:069500'], day, valuation_since=since)
+    records, failures = await work.records_for(list(since), day, valuation_since=since)
+    assert calls == ['069500.KS', '360750.KS'], 'Adding one holding must not invalidate another holding or another owner’s shared quote'
     assert failures == []
-    assert records['KR:069500']['pending_splits'] == ['2026-10-19']
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_dashboard_prices SET payload=jsonb_set(payload,'{fetched_at}',to_jsonb((now()-interval '61 seconds')::text)) WHERE instrument='KR:069500'")
+    await work.records_for(list(since), day, valuation_since=since)
+    assert calls == ['069500.KS', '360750.KS', '069500.KS'], 'Only the expired instrument is fetched again'
+
+
+async def test_a_collection_deadline_cannot_reclassify_failed_expired_quotes_as_fresh(isolated_db, monkeypatch):
+    import asyncio
+    from edge_portfolio import market_data
+    day = date(2026, 10, 18)
+    since = {'KR:069500': day, 'KR:360750': day}
+    async def fetch(*args, **kwargs):
+        return record()
+    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    await work.records_for(list(since), day, valuation_since=since)
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_dashboard_prices SET payload=jsonb_set(payload,'{fetched_at}',to_jsonb((now()-interval '61 seconds')::text))")
+    timeout = asyncio.timeout
+    monkeypatch.setattr(work.asyncio, 'timeout', lambda _: timeout(1))
+    async def unavailable(symbol, *args, **kwargs):
+        if symbol == '069500.KS':
+            raise TimeoutError()
+        await asyncio.sleep(10)
+    monkeypatch.setattr(market_data, 'fetch_prices', unavailable)
+    records, failures = await work.records_for(list(since), day, valuation_since=since)
+    assert records == {}
+    assert failures == sorted(since), 'Both the prior failure and interrupted refresh remain failures; UI keeps their last valuations instead'
+
+
+@pytest.mark.parametrize('known', [False, True])
+def test_missing_quantity_never_accumulates_duplicate_quotes_on_minute_refreshes(known):
+    prior = work.valuation({'assets': [asset()]}, {'KR:069500': record()}, None, date(2026, 10, 18)) if known else None
+    unknown = {**asset(), 'quantity': None, 'amount': None, 'weight': 100.}
+    for _ in range(3):
+        prior = work.valuation({'assets': [unknown]}, {'KR:069500': record()}, prior, date(2026, 10, 19))
+        assert len(prior['assets']) == 1
+        assert prior['assets'][0]['value'] == (1100 if known else None)
+        assert prior['missing'] == ['a']
+
+
+@pytest.mark.parametrize('error', [False, True])
+async def test_background_refresh_keeps_last_values_without_writing_a_false_daily_snapshot(isolated_db, monkeypatch, error):
+    dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
+    async def prices(*args, **kwargs):
+        return {'KR:069500': record()}, []
+    monkeypatch.setattr(work, 'records_for', prices)
+    monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
+    assert await work.work_once()
+    first = work.tracking('owner')
+    with store.connect() as db:
+        due = db.execute("SELECT extract(epoch FROM refresh_after-now()) AS seconds FROM portfolio_workbooks WHERE owner='owner'").fetchone()['seconds']
+        assert 0 < due <= 60
+    saved = dashboard.read('owner')
+    saved['workbook']['assets'][0]['quantity'] = 20.
+    dashboard.save('owner', dashboard.Save(**saved))
+    async def unavailable(*args, **kwargs):
+        if error:
+            raise TimeoutError()
+        return {}, ['KR:069500']
+    monkeypatch.setattr(work, 'records_for', unavailable)
+    monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 19))
+    assert await work.work_once()
+    after = work.tracking('owner')
+    assert after['market']['payload']['assets'] == first['market']['payload']['assets']
+    assert after['days'] == first['days'], 'An old displayed quote is not a newly observed daily balance'
+    with store.connect() as db:
+        due = db.execute("SELECT extract(epoch FROM refresh_after-now()) AS seconds FROM portfolio_workbooks WHERE owner='owner'").fetchone()['seconds']
+        assert 0 < due <= 60, 'A failed refresh retries on the minute without clearing customer values'
+
+
+def test_last_values_are_never_reused_for_a_different_instrument_with_the_same_row_id():
+    old = work.valuation({'assets': [asset()]}, {'KR:069500': record()}, None, date(2026, 10, 18))
+    replacement = {**asset(), 'instrument_id': 'KR:360750'}
+    updated = work.valuation({'assets': [replacement]}, {}, old, date(2026, 10, 19))
+    assert updated['assets'] == [] and updated['forecasts'] == []
+
+
+def test_a_failed_refresh_cannot_make_an_old_current_month_dividend_look_fresh():
+    prior = work.valuation({'assets': [asset()]}, {'KR:069500': record()}, None, date(2026, 10, 19))
+    prior['forecasts'] = [{'asset_id': 'a', 'month': month, 'amount': 100} for month in ['2026-10', '2026-11']]
+    result = work.valuation({'assets': [asset()]}, {}, prior, date(2026, 10, 21))
+    assert result['assets'] == prior['assets'], 'Keep last valuation on screen'
+    assert result['forecasts'] == [{'asset_id': 'a', 'month': '2026-11', 'amount': 100}], 'Current-month estimates require today’s observations, even when other values are retained'
+    again = work.valuation({'assets': [asset()]}, {}, result, date(2026, 11, 1))
+    assert again['forecasts'] == [], 'Crossing a month cannot revive an estimate from an earlier observation'
 
 
 async def test_valuation_skips_old_price_repairs_but_backtest_upgrades_its_cache(isolated_db, monkeypatch):
@@ -655,7 +742,7 @@ async def test_failed_earlier_basis_upgrade_cannot_publish_a_missing_held_split(
     assert failures == ['KR:069500']
 
 
-async def test_rejected_held_gap_cache_is_retried_even_when_scope_is_marked_complete(isolated_db, monkeypatch):
+async def test_rejected_held_gap_cache_is_retried_next_minute_even_when_scope_is_marked_complete(isolated_db, monkeypatch):
     from edge_portfolio import market_data
     calls = []
     async def fetch(*args, **kwargs):
@@ -670,6 +757,10 @@ async def test_rejected_held_gap_cache_is_retried_even_when_scope_is_marked_comp
     args = dict(valuation_since={'KR:069500': date(2026, 10, 12)})
     records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), **args)
     assert records == {} and failures == ['KR:069500']
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), **args)
+    assert len(calls) == 1 and records == {} and failures == ['KR:069500'], 'Edits within the same minute do not hammer a provider with the same unresolved gap'
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_dashboard_prices SET payload=jsonb_set(payload,'{fetched_at}',to_jsonb((now()-interval '61 seconds')::text))")
     records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), **args)
     assert len(calls) == 2 and records and not failures, 'A rejected cached gap must recover without manual cache deletion'
 
