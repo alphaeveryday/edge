@@ -15,6 +15,7 @@ on:
     branches: [dev]
     paths:
       - "apps/engine/airflow/dags/**"
+      - "apps/engine/airflow/config/**"
       - "apps/engine/airflow/deploy/entrypoint.sh"
       - "apps/engine/airflow/deploy/wait_rollout.sh"
       - "apps/engine/airflow/Dockerfile"
