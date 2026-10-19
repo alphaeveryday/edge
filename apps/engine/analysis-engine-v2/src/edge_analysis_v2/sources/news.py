@@ -7,16 +7,19 @@ def rows(connection, statement, parameters):
     # statement timeout while sending a broad ETF's results over a slower link.
     # We drain every row: the default cursor plan optimizes only the first 10%.
     connection.execute('SET LOCAL cursor_tuple_fraction = 1.0')
+    timeout = connection.execute('SHOW statement_timeout').fetchone()['statement_timeout']
+    connection.execute("SET LOCAL statement_timeout = '30s'")
     result = []
     with connection.cursor(name='analysis_news_source') as cursor:
         cursor.execute(statement, parameters)
         while batch := cursor.fetchmany(1000):
             result.extend(batch)
+    connection.execute("SELECT set_config('statement_timeout', %s, true)", (timeout,))
     return result
 
 
 def load_news(connection, at, targets, issuers):
-    start = at - timedelta(days=180)
+    start = at - timedelta(days=90)
     # Source events, not article popularity, determine the event universe. Rejected rows
     # remain in the snapshot so a later analysis can observe their changed status.
     # Aggregate matching participants once. Per-event ARRAY subqueries repeat two
@@ -75,7 +78,7 @@ def load_news(connection, at, targets, issuers):
                      'source_uri': row['source_uri'], 'published_at': row['published_at'].isoformat(),
                      'available_at': row['available_at'].isoformat()})
     return {'news': news, 'news_events': events, 'news_links': [], 'news_limit_reached': False,
-            'news_scope': {'version': 1, 'lookback_days': 180, 'start_at': start.isoformat(), 'end_at': at.isoformat(),
+            'news_scope': {'version': 1, 'lookback_days': 90, 'start_at': start.isoformat(), 'end_at': at.isoformat(),
                            'target_ids': sorted(set(targets)), 'issuer_ids': sorted(set(issuers)),
                            'event_time_field': 'available_at', 'historical_relation_state': 'current_rows_filtered_by_evaluated_at; older revisions unavailable',
                            'max_articles': None, 'limit_reached': False,

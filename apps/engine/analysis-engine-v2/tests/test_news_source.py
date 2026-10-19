@@ -11,6 +11,7 @@ class BoundedTransport:
         self.fail_after = fail_after
         self.require_complete_plan = require_complete_plan
         self.complete_plan = False
+        self.timeout = '15s'
         self.data = [{'id': i} for i in range(2501)]
 
     def cursor(self, *, name=None):
@@ -24,6 +25,14 @@ class BoundedTransport:
         self.closed = True
 
     def execute(self, statement, parameters=()):
+        if statement == 'SHOW statement_timeout':
+            return self
+        if statement == "SET LOCAL statement_timeout = '30s'":
+            self.timeout = '30s'
+            return
+        if statement == "SELECT set_config('statement_timeout', %s, true)":
+            self.timeout = parameters[0]
+            return
         if statement == 'SET LOCAL cursor_tuple_fraction = 1.0':
             self.complete_plan = True
             return
@@ -32,7 +41,11 @@ class BoundedTransport:
         if self.require_complete_plan and not self.complete_plan:
             raise TimeoutError('Fast-start plan cannot finish the corpus within the statement budget')
 
+    def fetchone(self):
+        return {'statement_timeout': self.timeout}
+
     def fetchmany(self, size):
+        assert self.timeout == '30s'  # Large news reads get headroom without relaxing subsequent source reads.
         assert size <= 1000  # The simulated transport can carry at most this many rows per FETCH.
         if self.fail_after is not None and self.offset >= self.fail_after:
             raise TimeoutError('Interrupted transfer')
@@ -41,10 +54,13 @@ class BoundedTransport:
         return result
 
 
-def test_bounded_transfer_preserves_all_rows_beyond_first_and_second_batches():
+@pytest.mark.parametrize('timeout', ['15s', '25s'])
+def test_bounded_transfer_preserves_all_rows_beyond_first_and_second_batches(timeout):
     connection = BoundedTransport()
+    connection.timeout = timeout
     assert rows(connection, 'SELECT source corpus', ()) == connection.data
     assert connection.closed
+    assert connection.timeout == timeout
 
 
 def test_interrupted_transfer_fails_instead_of_returning_a_partial_corpus():

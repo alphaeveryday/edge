@@ -31,10 +31,12 @@ def test_news_scope_includes_sixth_constituent_and_uses_publication_and_acquisit
     sql, args = queries[3]
     assert 'actor5' in args[0]
     assert args[4] == args[6] == at
-    assert (at-args[5]).days == 180
+    assert (at-args[5]).days == 90
+    assert result['news_scope']['lookback_days'] == 90
     sql, args = queries[5]
     assert {'id5', 'actor5'} <= set(args[1])
     assert args[3] == args[4] == args[5] == args[6] == at
+    assert (at-args[2]).days == 90
     assert 'd.available_at<=%s' in sql and 'd.published_at<=%s' in sql
     assert result['news_scope']['max_articles'] is None
 
