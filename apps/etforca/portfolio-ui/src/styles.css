@@ -6454,8 +6454,11 @@ to {
 }
 
 .holdings-table tr[data-needs-input=true] { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+@media (min-width: 601px) {
+  .holdings-table tr[data-needs-input=true] th:first-child { box-shadow: inset 2px 0 var(--color-primary), inset 0 2px var(--color-primary), inset 0 -2px var(--color-primary); }
+}
 .holdings-table .holding-input-hint { display: block; color: var(--color-primary); font-size: var(--text-caption); font-weight: 600; margin-top: var(--space-2); }
 .dashboard-newsletter > p { color: var(--color-text-secondary); margin-bottom: var(--space-4); }
-@media (max-width: 767px) {
+@media (max-width: 600px) {
   .holdings-table tr[data-needs-input=true] { border-radius: var(--radius-control); padding: var(--space-4) var(--space-3); }
 }
