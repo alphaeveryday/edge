@@ -6,6 +6,7 @@ import logging
 import os
 import signal
 import time
+from threading import Event
 from pathlib import Path
 from typing import get_args
 
@@ -125,12 +126,22 @@ async def work_once(stopping=None):
     return True
 
 
+async def dashboard_loop(stopping):
+    from .dashboard_work import work_once as dashboard_once
+    while not stopping.is_set():
+        try:
+            await dashboard_once(stopping)
+        except Exception as error:
+            log.warning('dashboard loop failed code=%s; retrying', type(error).__name__)
+        await asyncio.sleep(1)
+
+
 async def main():
     HEARTBEAT.unlink(missing_ok=True)
     if not os.getenv("DEEPSEEK_API_KEY"):
         raise RuntimeError("DEEPSEEK_API_KEY is required")
     store.initialize()
-    stopping = asyncio.Event()
+    stopping = Event()
 
     def request_stop(number, frame):
         stopping.set()
@@ -138,22 +149,19 @@ async def main():
 
     handlers = {number: signal.signal(number, request_stop) for number in (signal.SIGTERM, signal.SIGINT)}
     try:
-        while not stopping.is_set():
-            worked = await work_once(stopping)
-            if not worked and not stopping.is_set():
-                from .newsletter_work import work_once as newsletter_once
-                worked = await newsletter_once(stopping)
-                HEARTBEAT.touch()
-            if not worked and not stopping.is_set():
-                from .dashboard_work import work_once as dashboard_once
-                # Never add a dashboard collection delay in front of queued customer analyses.
-                task = asyncio.create_task(dashboard_once(stopping))
-                while not task.done():
-                    await asyncio.wait({task}, timeout=15)
-                    HEARTBEAT.touch()
-                worked = await task or worked
-            if not worked:
-                await asyncio.sleep(1)
+        # Quotes must progress even while the customer analysis queue stays busy.
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(asyncio.to_thread(lambda: asyncio.run(dashboard_loop(stopping))))
+            try:
+                while not stopping.is_set():
+                    worked = await work_once(stopping)
+                    if not worked and not stopping.is_set():
+                        from .newsletter_work import work_once as newsletter_once
+                        await newsletter_once(stopping)
+                        HEARTBEAT.touch()
+                    await asyncio.sleep(0 if worked else 1)
+            finally:
+                stopping.set()
     finally:
         for number, handler in handlers.items():
             signal.signal(number, handler)

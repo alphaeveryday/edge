@@ -295,13 +295,35 @@ async def test_a_slow_first_provider_cannot_starve_a_healthy_later_holding(isola
     monkeypatch.setattr(work.asyncio, 'wait_for', lambda task, timeout: wait_for(task, min(timeout, .05)))
     async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None):
         if symbol == '069500.KS':
-            await asyncio.sleep(20)
+            await asyncio.wait_for(asyncio.sleep(20), timeout=provider_timeout)
         return record()
     monkeypatch.setattr(market_data, 'fetch_prices', fetch)
     async with asyncio.timeout(5):
         records, failures = await work.records_for(['KR:069500', 'KR:360750'], date(2026, 10, 18))
     assert set(records) == {'KR:360750'}
     assert failures == ['KR:069500']
+
+
+async def test_dashboard_waits_for_capacity_before_starting_provider_deadlines(isolated_db, monkeypatch):
+    import asyncio
+    from edge_portfolio import market_data
+    wait_for = asyncio.wait_for
+    monkeypatch.setattr(work.asyncio, 'wait_for', lambda task, timeout: wait_for(task, min(timeout, .02)))
+    async def fetch(*args, **kwargs):
+        return record()
+    monkeypatch.setattr(market_data, '_fetch_prices', fetch)
+    assert market_data._PRICE_SLOTS.acquire(blocking=False)
+    assert market_data._PRICE_SLOTS.acquire(blocking=False)
+    try:
+        pending = asyncio.create_task(work.records_for(['KR:069500'], date(2026, 10, 18)))
+        await asyncio.sleep(.05)
+        assert not pending.done(), 'A queued quote is not a failed source'
+    finally:
+        market_data._PRICE_SLOTS.release()
+        market_data._PRICE_SLOTS.release()
+    records, failures = await wait_for(pending, 2)
+    assert set(records) == {'KR:069500'}
+    assert failures == []
 
 
 @pytest.mark.parametrize('currency,fx,expected', [('KRW', None, 100.), ('USD', 1300., 130000.)])
@@ -323,8 +345,8 @@ async def test_interrupted_optional_repair_keeps_valid_raw_prices_only(isolated_
     monkeypatch.setattr(work.asyncio, 'wait_for', lambda task, timeout: wait_for(task, .05))
     async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None):
         try:
-            await asyncio.sleep(20)
-        except asyncio.CancelledError:
+            await asyncio.wait_for(asyncio.sleep(20), timeout=provider_timeout)
+        except (asyncio.CancelledError, TimeoutError):
             on_raw(record(currency=currency))
             raise
     monkeypatch.setattr(market_data, 'fetch_prices', fetch)

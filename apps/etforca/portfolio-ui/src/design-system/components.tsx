@@ -22,3 +22,7 @@ export function Notice({ tone = 'info', children }: { tone?: 'info' | 'error' | 
 }
 
 export const chartPalette = Array.from({ length: 6 }, (_, i) => `var(--chart-${i + 1})`);
+
+export function Loading({ children }: { children: ReactNode }) {
+  return <div className="ds-loading" role="status"><span className="ds-spinner" aria-hidden="true" /><span>{children}</span></div>;
+}

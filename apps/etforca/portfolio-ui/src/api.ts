@@ -39,9 +39,20 @@ export function ensureVisitorSession() {
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (preview) return previewRequest<T>(path, init);
-  const response = await fetch('/api/portfolio' + path, { ...init, signal: AbortSignal.timeout(15000), headers: { 'Content-Type': 'application/json', ...init?.headers } });
+  let response: Response;
+  let body: any;
+  try {
+    response = await fetch('/api/portfolio' + path, { ...init, signal: AbortSignal.timeout(15000), headers: { 'Content-Type': 'application/json', ...init?.headers } });
+    body = await response.json().catch(() => {
+      if (response.ok) throw new Error('응답을 읽지 못했어요. 다시 시도해 주세요.');
+      return {};
+    });
+  } catch (error) {
+    if (error instanceof Error && error.name === 'TimeoutError') throw new Error('응답이 늦어지고 있어요. 잠시 후 다시 시도해 주세요.');
+    if (error instanceof TypeError || error instanceof DOMException) throw new Error('연결이 끊겼어요. 인터넷 연결을 확인하고 다시 시도해 주세요.');
+    throw error;
+  }
   if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
     if (path.startsWith('/backtests/') && [401, 404].includes(response.status)) throw Object.assign(new Error('백테스트 연결이 만료됐어요. 다시 조회해 주세요.'), { status: response.status });
     if (body.detail === 'WORKBOOK_CONFLICT') throw new Error('다른 탭에서 수정했어요. 저장된 내용을 다시 불러와 주세요.');
     if (body.detail === 'BACKTEST_BUSY') throw new Error('이전 백테스트를 계산하고 있어요. 완료 후 다시 조회해 주세요.');
@@ -66,5 +77,5 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (response.status === 401) throw new Error('분석을 시작한 브라우저에서 다시 열어 주세요.');
     throw new Error('요청을 처리하지 못했어요. 연결 상태를 확인해 주세요.');
   }
-  return response.json();
+  return body;
 }

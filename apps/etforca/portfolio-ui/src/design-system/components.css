@@ -30,6 +30,8 @@ p { text-wrap: pretty; }
 .ds-notice[data-tone=error] { background: var(--color-danger-soft); color: var(--color-danger); }
 .ds-notice[data-tone=success] { background: var(--color-success-soft); color: var(--color-success); }
 .ds-spinner { width: 18px; height: 18px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: ds-spin .8s linear infinite; }
+.ds-loading { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-6); border-radius: var(--radius-control); background: var(--color-surface-subtle); color: var(--color-text-secondary); font-size: var(--text-label); }
+.ds-loading .ds-spinner { display: inline-block; flex-shrink: 0; color: var(--color-primary); }
 .ds-confirm-dialog { width: calc(100% - 32px); max-width: 440px; padding: var(--space-8); border: 0; border-radius: var(--radius-card); background: var(--color-surface); color: var(--color-text); box-shadow: 0 12px 48px var(--color-shadow); }
 .ds-confirm-dialog::backdrop { background: var(--color-overlay); }
 .ds-confirm-dialog h2 { font-size: var(--text-heading); line-height: 1.65; margin: 0; }

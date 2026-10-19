@@ -1,4 +1,4 @@
-import { Notice, Button } from './design-system/components';
+import { Notice, Button, Loading } from './design-system/components';
 import { useEffect, useRef, useState } from 'react';
 import { request, ensureVisitorSession, type Input, type Job } from './api';
 import { inputDraftKey, readInputDraft } from './inputDraft';
@@ -74,7 +74,7 @@ export function Analysis({ embedded = false, active = true }: { embedded?: boole
   }
   function reset() { try { if (job?.state === 'succeeded' && readInputDraft()?.submittedJobId === jobId) sessionStorage.removeItem(inputDraftKey); } catch { /* Continue to input when browser storage is unavailable. */ } try { localStorage.removeItem(jobKey); } catch { /* Reset still works in this tab. */ } setJobId(null); setJob(null); setError(''); }
   const Container = embedded ? 'div' : 'main';
-  if (restoring) return <section className="dashboard-card">{error ? <><Notice tone="error">{error}</Notice><Button onClick={() => setRestoreAttempt(n => n + 1)}>다시 불러오기</Button></> : <p role="status">최근 분석을 불러오고 있어요.</p>}</section>;
+  if (restoring) return <section className="dashboard-card">{error ? <><Notice tone="error">{error}</Notice><Button onClick={() => setRestoreAttempt(n => n + 1)}>다시 불러오기</Button></> : <Loading>최근 분석을 불러오고 있어요.</Loading>}</section>;
   return <Container className="app">{!embedded && <a className="dashboard-link" href={preview ? '?preview=dashboard' : '?view=dashboard'}>내 포트폴리오 ↗</a>}{embedded && jobId && <div className="card-heading"><h2>최근 AI 포폴 분석</h2><Button onClick={reset}>새로 분석하기</Button></div>}{jobId && <div className="nav"><div className="nav__pill"><span className="nav__logo">ETF Orca</span></div></div>}
     {storageWarning && <Notice>{storageWarning}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}

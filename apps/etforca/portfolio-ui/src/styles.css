@@ -6258,6 +6258,7 @@ to {
 .dashboard-nav nav {
   order: 3;
   flex-basis: 100%;
+  flex-wrap: wrap;
   overflow: auto;
 }
 .dashboard-nav>a:last-child {

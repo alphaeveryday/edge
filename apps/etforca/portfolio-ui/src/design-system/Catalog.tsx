@@ -1,6 +1,6 @@
 import { useConfirmation } from './confirmation';
 import { useState } from 'react';
-import { Button, TextInput, Select, TextArea, Notice, SectionHeading, Icon, chartPalette } from './components';
+import { Button, TextInput, Select, TextArea, Notice, Loading, SectionHeading, Icon, chartPalette } from './components';
 import './catalog.css';
 
 export function DesignCatalog() {
@@ -34,6 +34,7 @@ export function DesignCatalog() {
       <p className="ds-catalog-note">차트에는 범례와 실제 수치가 함께 있어야 해요. 매수·매도는 색상과 문구를 함께 표시해요.</p>
     </section>
     <section id="states"><SectionHeading title="기다림과 실패에도 같은 기준" />
+      <Loading>포트폴리오를 불러오고 있어요.</Loading>
       <Notice>입력한 내용을 확인하고 있어요.</Notice><Notice tone="error">저장하지 못했어요. 입력한 내용은 그대로예요. 다시 시도해 주세요.</Notice><Notice tone="success">포트폴리오를 저장했어요.</Notice>
       <div className="ds-empty"><Icon name="dashboard" size={36} /><h3>아직 보유 종목이 없어요</h3><p>종목을 추가하면 자산과 배당을 볼 수 있어요.</p></div>
       <Button variant="secondary" type="button" onClick={async()=>{await ask('이 내용을 저장할까요?', '확인');restoreFocus();}}>팝업 열어보기</Button>
