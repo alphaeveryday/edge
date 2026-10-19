@@ -10,6 +10,7 @@ function unpackReplay(value: any): any {
   return value;
 }
 test.use({ launchOptions: { args: ['--disable-blink-features=AutomationControlled'] }, userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36' });
+test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'wait' }); });
 
 test('session replay masks customer text and cookies while linking visits and respecting opt out', async ({ page, baseURL }) => {
   test.setTimeout(60000);
