@@ -103,6 +103,15 @@ def quote_of(card):
     return card.get('quote') or {}
 
 
+def portfolio_change(cards, weights):
+    """A complete weighted daily move; unknown quotes never become zero-return holdings."""
+    if not cards or not weights or set(weights) - {'CASH:KRW'} != {c['instrument_id'] for c in cards}:
+        return None
+    if any(quote_of(card).get('change_pct') is None for card in cards):
+        return None
+    return sum(weights[card['instrument_id']] * quote_of(card)['change_pct'] for card in cards)
+
+
 def button(url, text, primary=False):
     colour, fill = (PAPER, INK) if primary else (INK, PAPER)
     return (f'<a href="{escape(safe_url(url), quote=True)}" style="display:inline-block;margin:0 6px 8px 0;padding:{"14px 22px" if primary else "8px 12px"};'
@@ -426,13 +435,14 @@ def holding_block(letter, card):
 
 def dashboard(letter, cards, ready, weights):
     """The one-glance view: portfolio move when weights are known, then every holding's move and verdict."""
-    known = bool(weights) and all(c['instrument_id'] in weights and quote_of(c) for c in cards)
+    total = portfolio_change(cards, weights)
     head, text = '', []
-    if known:
-        total = sum(weights[c['instrument_id']] * quote_of(c)['change_pct'] for c in cards)
+    if total is not None:
         head = (f'<p style="{P};margin:0 0 4px;color:{MUTED};font-size:15px;font-weight:700">오늘 내 포트폴리오</p>'
                 f'<p style="margin:0 0 18px;font-family:{SERIF};font-size:40px;line-height:1.2;font-weight:700">{move(total)[0]}</p>')
         text.append(f'오늘 내 포트폴리오 {move(total)[1]}')
+        head += para('신청 비중 · 각 시장 최근 완료 거래일의 가격 등락률 기준', 12, MUTED, 18)
+        text.append('신청 비중 · 각 시장 최근 완료 거래일의 가격 등락률 기준 (환율·매입가 기준 수익률 제외)')
     rows = ''
     for card in cards:
         change = quote_of(card).get('change_pct')
@@ -505,7 +515,7 @@ def brief_letter(edition, cards, weights, at):
     if names:
         shown = ' · '.join(names[:10]) + (f' 외 {len(names) - 10}건' if len(names) > 10 else '')
         letter.add(row(f'<p style="{P};color:{MUTED};font-size:13px;line-height:1.8">출처 · {e(shown)}</p>', '0 32px 28px'), '출처: ' + ' · '.join(names), '')
-    return finish(letter, edition, headline, dek, 'H')
+    return finish(letter, edition, headline, dek, 'H', portfolio_change(cards, weights))
 
 
 def daily(edition, cards, fmt=DEFAULT_FORMAT, *, weights=None, purpose='long_term', issued_at=None):
@@ -603,14 +613,15 @@ def compose(edition, cards, fmt, weights, purpose, full, at):
 <td style="padding:11px 0;border-top:1px solid {HAIR};font-family:{SANS};font-size:14px;line-height:1.65;color:{BODY};word-break:keep-all">{e(pick(c))}</td></tr>''' for c in order if c in ready)
         letter.add(row(f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{DESK}"><tr><td style="padding:18px 18px 8px">{label(title)}<table role="presentation" width="100%" cellpadding="0" cellspacing="0">{lines}</table></td></tr></table>', '0 32px 36px'),
                    f'{title}:', *[f"  {c['name']}: {pick(c)}" for c in order if c in ready], '')
-    return finish(letter, edition, headline, dek, fmt)
+    return finish(letter, edition, headline, dek, fmt, portfolio_change(cards, weights))
 
 
-def finish(letter, edition, headline, dek, fmt):
+def finish(letter, edition, headline, dek, fmt, change):
     """Closing line, colophon and the header-safety pass shared by every layout."""
     cheer = CHEERS[edition.toordinal() % len(CHEERS)]
     letter.add(row(f'<p style="margin:0;font-family:{SERIF};font-size:18px;line-height:1.7;color:{INK};word-break:keep-all">{e(cheer)}</p>', '4px 32px 34px'), cheer, '')
-    title = f'[ETF Orca] {day(edition)} · {headline}'
+    performance = f'포트폴리오 하루 {change:+.2f}%' if change is not None else '포트폴리오 하루 수익률 미집계'
+    title = f'[ETF Orca] {performance} | {headline} · {day(edition)}'
     certainty = '' if fmt == 'H' else '‘확인’은 자료로 확인한 사실, ‘추정’은 시점과 방향이 맞는 요인 후보예요. '
     footer = colophon(f'''{certainty}AI가 공개 자료를 조사·요약한 정보이며 투자 권유나 매매 지시가 아닙니다. 투자 판단과 그 결과의 책임은 투자자 본인에게 있어요.<br><br>
 <a href="{UNSUBSCRIBE}" style="color:{MUTED}">수신 거부</a>''', button(SITE, '내 포트폴리오 보기', primary=True))

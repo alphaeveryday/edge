@@ -283,6 +283,10 @@ def test_confirmed_subscription_gets_one_complete_daily_email_and_unsubscribe_st
                           get_email_identity=lambda **kw: {'VerifiedForSendingStatus': True},
                           get_contact=get_contact, create_contact=save_contact, update_contact=save_contact, send_email=send_email)
     monkeypatch.setattr(sender.time, 'sleep', lambda _: None)
+    with store.connect() as db:
+        holdings = [{'instrument_id': 'US:QQQ', 'amount_krw': 600}, {'instrument_id': 'US:QQQ', 'amount_krw': 400},
+                    {'instrument_id': 'CASH:KRW', 'amount_krw': 1000}]
+        db.execute("UPDATE portfolio_jobs SET input=jsonb_set(input,'{holdings}',%s::jsonb) WHERE id=%s", (json.dumps(holdings), job))
     now = datetime.now(agent.KST).replace(hour=9)
     sender.tick(ses, now)
     assert len(sends) == 1 and 'ListManagementOptions' not in sends[0]
@@ -292,11 +296,12 @@ def test_confirmed_subscription_gets_one_complete_daily_email_and_unsubscribe_st
     sender.tick(ses, now)
     assert len(sends) == 1, 'A verified address must wait for its actual holdings content'
     claimed = news.claim_content()
-    card = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'format': agent.DEFAULT_FORMAT, **H_STORED, 'headline': '기술주 소식', 'sources': []}
+    card = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'format': agent.DEFAULT_FORMAT, **H_STORED, 'headline': '기술주 소식', 'sources': [], 'quote': {'change_pct': 2}}
     news.finish_content(claimed, value=card)
     sender.tick(ses, now)
     sender.tick(ses, now)
     assert len(sends) == 2, 'Repeated scheduler ticks must not duplicate the daily edition'
+    assert '포트폴리오 하루 +1.00% | 기술주 소식' in sends[-1]['Content']['Simple']['Subject']['Data']
     assert sends[-1]['ListManagementOptions']['TopicName'] == sender.TOPIC
     assert '기술주 소식' in sends[-1]['Content']['Simple']['Body']['Html']['Data']
     contacts['reader@example.test']['UnsubscribeAll'] = True
@@ -1088,3 +1093,32 @@ def test_event_title_that_already_names_the_company_is_not_prefixed_again():
     spaced = {**EVENT, 'title': 'SK 하이닉스 3분기 실적 발표', 'icon': None}
     _, _, text = email.daily(date(2026, 10, 18), [letter_card('H', events=[spaced])], 'H')
     assert '10월 23일 · SK 하이닉스 3분기 실적 발표' in text and 'SK하이닉스 SK 하이닉스' not in text
+
+
+def test_daily_subject_uses_subscribed_weights_cash_and_every_holding():
+    holdings = [
+        {'instrument_id': 'US:A', 'amount_krw': '30'},
+        {'instrument_id': 'US:A', 'amount_krw': '20'},
+        {'instrument_id': 'KR:B', 'amount_krw': '25'},
+        {'instrument_id': 'CASH:KRW', 'amount_krw': '25'},
+    ]
+    weights = sender.portfolio_weights(holdings)
+    assert weights == {'US:A': .5, 'KR:B': .25, 'CASH:KRW': .25}
+    cards = [letter_card('H', 'US:A', quote={**QUOTE, 'change_pct': 2}),
+             letter_card('H', 'KR:B', quote={**QUOTE, 'change_pct': -1})]
+    subject, _, plain = email.daily(date(2026, 10, 19), cards, weights=weights)
+    assert subject.startswith('[ETF Orca] 포트폴리오 하루 +0.75% | ')
+    assert '기술주 소식' in subject
+    assert '▲ 0.75%' in plain
+    missing = [cards[0], {**cards[1], 'quote': None}]
+    assert '수익률 미집계' in email.daily(date(2026, 10, 19), missing, weights=weights)[0]
+    assert '수익률 미집계' in email.daily(date(2026, 10, 19), cards[:1], weights=weights)[0]
+    assert sender.portfolio_weights([{'instrument_id': 'US:A'}]) is None
+
+
+@pytest.mark.parametrize('change, label', [(0, '+0.00%'), (-2.5, '-2.50%'), (3, '+3.00%')])
+def test_subject_always_names_the_daily_return_and_issue_without_header_injection(change, label):
+    card = letter_card('H', headline='반도체 실적 발표\r\nBcc: fake', quote={**QUOTE, 'change_pct': change})
+    subject, _, _ = email.daily(date(2026, 10, 19), [card], weights={'US:QQQ': 1})
+    assert subject.startswith(f'[ETF Orca] 포트폴리오 하루 {label} | 반도체 실적 발표')
+    assert '\r' not in subject and '\n' not in subject
