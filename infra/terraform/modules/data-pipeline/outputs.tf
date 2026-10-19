@@ -3,6 +3,13 @@ output "state_machine_arn" {
   value       = aws_sfn_state_machine.this.arn
 }
 
+output "batch_state_machine_arns" {
+  description = "Scheduled batches checked before the separate dividend maintenance window"
+  value = [aws_sfn_state_machine.this.arn, aws_sfn_state_machine.news.arn,
+    aws_sfn_state_machine.disclosure.arn, aws_sfn_state_machine.premarket.arn,
+  aws_sfn_state_machine.investor_intraday.arn]
+}
+
 output "task_definition_families" {
   description = "data-pipeline ECS task definition families by vendor"
   value       = { for key, task_definition in aws_ecs_task_definition.this : key => task_definition.family }

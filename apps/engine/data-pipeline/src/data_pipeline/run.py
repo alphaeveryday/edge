@@ -440,9 +440,9 @@ def main(argv: list[str] | None = None) -> int:
         # 마나인 상태가 가장 나쁘다(있다고 믿는데 안 걸린다).
         if not math.isfinite(args.deadline_sec) or args.deadline_sec <= 0:
             raise SystemExit(f"--deadline-sec 은 0 보다 큰 유한한 값이어야 한다: {args.deadline_sec}")
-        if not (args.step == "ingest-raw-etf" and args.source == "krx"):
+        if not ((args.step == "ingest-raw-etf" and args.source == "krx") or args.step == "ingest-raw-dividend"):
             raise SystemExit(
-                "--deadline-sec 은 현재 `ingest-raw-etf --source krx` 에서만 쓴다 — "
+                "--deadline-sec 은 `ingest-raw-etf --source krx` 또는 `ingest-raw-dividend` 에서 쓴다 — "
                 f"이 조합(step={args.step}, source={args.source})에서는 무시되므로 거부한다"
             )
 
@@ -750,7 +750,7 @@ def _dispatch_observation(args, settings, storage, run_id) -> int:
                                    kis_http_client(settings, min_interval=0.5, timeout=30,
                                                    caller="dividend", call_class=CLASS_BATCH), source_config.env)
         return source_observations_dividend.collect_dividends(
-            storage, source, run_id, instruments=instruments, start=start, end=end)
+            storage, source, run_id, instruments=instruments, start=start, end=end, deadline_sec=args.deadline_sec)
     if family == "sector":
         if args.from_date or args.to_date:
             # 마스터는 받은 날의 현재값뿐이다 — 과거 날짜를 달면 오늘 분류를 과거로 라벨한다.

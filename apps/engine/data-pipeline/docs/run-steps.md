@@ -7,6 +7,8 @@
 종목 마스터 미등록은 원천 수집을 막지 않는다. 날짜는 기준일 범위이고, 생략하면 오늘 기준
 과거 730일부터 미래 90일까지 조회한다. 적재 전에 배당 마이그레이션이 적용돼 있어야 한다.
 정제·적재에는 날짜나 종목 필터를 넘기지 않는다.
+일일 수집은 `--deadline-sec 600`으로 새 조회 시작을 제한하고 확보한 원본은 보존한다.
+정제 시 종목별 조회 범위·성공 여부도 함께 적재하여 배당 없음과 수집 실패를 구분한다.
 
 ```bash
 uv run --package data-pipeline python -m data_pipeline.run ingest-raw-dividend --series 069500 --from 2025-01-01 --to 2026-10-18 --run-id dividend-check

@@ -87,6 +87,18 @@ def test_dag_run_timeout_is_shorter_than_the_reconciler_lifetime():
 SOURCE_DAG = (DAGS / "edge_source_daily.py").read_text(encoding="utf-8")
 
 
+def test_dividend_lane_is_separate_from_source_batch_and_uses_existing_tasks():
+    source = (DAGS / "edge_dividend_daily.py").read_text(encoding="utf-8")
+    keys = ast.literal_eval(re.search(r"^TASK_KEYS = (\{.*?\})$", source, re.M).group(1))
+    lane = {e.task_key: e for e in catalog.entries("dividend-daily")}
+    assert set(keys.values()) == set(lane)
+    assert not set(lane) & {e.task_key for e in catalog.entries("source-daily")}
+    for stage, cli, taskdef in [("collect", "ingest-raw-dividend", "kis"), ("normalize", "normalize-dividend", "bigkinds"), ("load", "load-dividend", "rds")]:
+        assert lane[keys[stage]].cli_command == (cli,)
+        assert lane[keys[stage]].ecs_task_definition == taskdef
+        assert f'task_id="{stage}", taskdef_key="{taskdef}"' in source
+
+
 def test_source_daily_dag_matches_the_catalog_lane():
     # WHY(ALPHA-1130): DAG 가 복제한 (task_key, 태스크 정의, CLI) 가 카탈로그와 갈리면 원장이 그 실행을 다른
     # 작업으로 기록하거나 기대 작업이 영원히 채워지지 않는다(매 run MISSED).

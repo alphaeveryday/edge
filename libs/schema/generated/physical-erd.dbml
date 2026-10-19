@@ -107,6 +107,30 @@ Table "call_budget_class" {
   }
 }
 
+Table "cash_distribution_coverage" {
+  "market_code" text [not null]
+  "ticker" text [not null]
+  "source_vendor" text [not null]
+  "coverage_from" date [not null]
+  "coverage_to" date [not null]
+  "status" text [not null]
+  "observations_sha256" text [not null]
+  "received_at" timestamptz [not null]
+  "available_at" timestamptz [not null]
+  "availability_basis" text [not null]
+  "raw_run_id" text [not null]
+  "raw_key" text [not null]
+  "raw_sha256" text [not null]
+  "canonical_run_id" text [not null]
+  "artifact_key" text [not null]
+  "artifact_sha256" text [not null]
+  "loaded_at" timestamptz [not null]
+
+  indexes {
+    ("market_code", "ticker", "source_vendor", "raw_run_id") [pk]
+  }
+}
+
 Table "cash_distribution_observation" {
   "market_code" text [not null]
   "ticker" text [not null]

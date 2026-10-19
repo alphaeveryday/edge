@@ -37,10 +37,11 @@ def test_dividend_cli_series_reaches_collection_using_shared_kis_budget(monkeypa
     monkeypatch.setattr(run_mod, 'kis_http_client', client)
     monkeypatch.setattr(run_mod.source_observations_dividend, 'collect_dividends', collect)
     assert main(['ingest-raw-dividend', '--series', '069500', '--from', '2026-01-01',
-                 '--to', '2026-10-18', '--run-id', 'test_dividend']) == 0
+                 '--to', '2026-10-18', '--run-id', 'test_dividend', '--deadline-sec', '600']) == 0
     assert captured['instruments'] == [{'ticker': '069500', 'market_code': 'XKRX'}]
     assert captured['budget']['call_class'] == run_mod.CLASS_BATCH
     assert captured['budget']['caller'] == 'dividend'
+    assert captured['deadline_sec'] == 600
 
 
 def test_window_calendar_tz_is_declared_per_step_and_vendor():

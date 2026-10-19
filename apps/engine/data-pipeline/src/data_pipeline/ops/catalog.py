@@ -629,6 +629,24 @@ _ENTRIES: tuple[CatalogEntry, ...] = (
         depends_on=("NORMALIZE_FINANCIAL_METRIC",), deadline_offset_seconds=1800, stalled_after_seconds=1500,
         empty_allowed=True, pipeline_type="source-daily",
     ),
+    CatalogEntry(
+        task_key="DIVIDEND_COLLECTION_KIS", flow="dividend", stage="raw", dataset="cash_distribution", required=True,
+        cli_command=("ingest-raw-dividend",), sfn_state_name="", ecs_task_definition="kis",
+        source_vendor="kis", deadline_offset_seconds=1200, stalled_after_seconds=1500,
+        instrumented=True, empty_allowed=True, pipeline_type="dividend-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="NORMALIZE_DIVIDEND", flow="dividend", stage="normalize", dataset="cash_distribution", required=True,
+        cli_command=("normalize-dividend",), sfn_state_name="", ecs_task_definition="bigkinds",
+        deadline_offset_seconds=1500, stalled_after_seconds=1500, empty_allowed=True,
+        pipeline_type="dividend-daily", fulfilled_exit_codes=(0, 2),
+    ),
+    CatalogEntry(
+        task_key="LOAD_DIVIDEND", flow="dividend", stage="feature", dataset="cash_distribution_load", required=True,
+        cli_command=("load-dividend",), sfn_state_name="", ecs_task_definition="rds",
+        depends_on=("NORMALIZE_DIVIDEND",), deadline_offset_seconds=1800, stalled_after_seconds=1500,
+        empty_allowed=True, pipeline_type="dividend-daily",
+    ),
 )
 
 CATALOG: dict[str, CatalogEntry] = {e.task_key: e for e in _ENTRIES}
@@ -637,6 +655,7 @@ PIPELINE_TYPE = "etf-daily"        # 시장/EOD 레인(기본)
 NEWS_PIPELINE_TYPE = "news"        # 뉴스 레인(ALPHA-591)
 # 원천 관측 레인(ALPHA-1130) — SFN 이 없는 Airflow 전용 레인이다.
 SOURCE_DAILY_PIPELINE_TYPE = "source-daily"
+DIVIDEND_DAILY_PIPELINE_TYPE = "dividend-daily"
 # 공시 마감 보충 배치. 장중 minute 원장과 별도 정체성을 유지한다(ALPHA-1073).
 # 활성 스케줄은 OPS_DISCLOSURE_SCHED_HHMM에서만 기대하므로 앱 선행 배포가 가능하다.
 DISCLOSURE_PIPELINE_TYPE = "disclosure"
