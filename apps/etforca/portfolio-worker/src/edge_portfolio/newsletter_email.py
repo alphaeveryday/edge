@@ -480,7 +480,7 @@ def calendar(letter, edition, cards):
                '앞으로 예정된 일정:', *text, '')
 
 
-def brief_letter(edition, cards, weights, at):
+def brief_letter(edition, cards, weights, at, full=None):
     """Production letter H: one headline, a one-glance dashboard, a short block only for holdings whose thesis moved
     (or moved twice the usual range), the calendar, and every source on one line."""
     ready = [card for card in cards if fits(card, 'H')]
@@ -503,8 +503,13 @@ def brief_letter(edition, cards, weights, at):
     letter.add(row(f'<h1 class="hl" style="margin:0;font-family:{SERIF};font-size:29px;line-height:1.38;letter-spacing:-.5px;color:{INK};font-weight:700;word-break:keep-all">{e(headline)}</h1>', '32px 32px 30px'),
                headline, '')
     dashboard(letter, cards, ready, weights)
-    for card in shaken:
-        holding_block(letter, card)
+    for index, card in enumerate(shaken):
+        if full is None or index < full:
+            holding_block(letter, card)
+        else:
+            if index == full:
+                letter.add(row(para('메일이 잘리지 않도록 나머지 종목은 제목과 요약만 실었어요.', 13, MUTED)), '나머지 종목은 제목과 요약만 실었어요.')
+            story(letter, index + 1, card, '', [], brief=True)
     for card in legacy:
         # Cached before the current shape (deploy day): show what it has rather than nothing.
         kept = card.get('dek') or card.get('issue', '')
@@ -524,10 +529,8 @@ def daily(edition, cards, fmt=DEFAULT_FORMAT, *, weights=None, purpose='long_ter
 
     Stories print in full in importance order until the letter would pass BUDGET; the rest become briefs
     (headline and dek), the way a magazine runs the remainder as short items."""
-    # H is one line per item and stays far under the budget; only the long experiment layouts shrink.
-    shrink = [None] if fmt == 'H' else range(len(cards), -1, -1)
-    for full in shrink:
-        rendered = (brief_letter(edition, cards, weights, issued_at) if fmt == 'H'
+    for full in range(len(cards), -1, -1):
+        rendered = (brief_letter(edition, cards, weights, issued_at, full) if fmt == 'H'
                     else compose(edition, cards, fmt, weights, purpose, full, issued_at))
         if len(rendered[1].encode()) <= BUDGET:
             return rendered

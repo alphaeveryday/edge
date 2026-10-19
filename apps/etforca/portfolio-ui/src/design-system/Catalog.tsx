@@ -2,11 +2,14 @@ import { useConfirmation } from './confirmation';
 import { useState } from 'react';
 import { Button, TextInput, Select, TextArea, Notice, Loading, SectionHeading, Icon, chartPalette } from './components';
 import './catalog.css';
+import { Holdings } from '../Holdings';
+import { sample } from '../preview';
 
 export function DesignCatalog() {
   const [selected, setSelected] = useState('금액');
   const [email, setEmail] = useState('');
   const [submitted, setSubmitted] = useState(false);
+  const [opened, setOpened] = useState<Set<string>>(() => new Set());
   const { ask, confirmation, restoreFocus } = useConfirmation();
   return <main className="ds-catalog">
     <header><span className="eyebrow">Orca UI · 1.1</span><h1>같은 기준으로 만드는<br />편안한 금융 경험</h1><p>운영 화면에서 사용하는 실제 컴포넌트와 상태입니다. 입력한 내용은 저장하거나 발송하지 않아요.</p></header>
@@ -28,6 +31,7 @@ export function DesignCatalog() {
       </form>
     </section>
     <section id="patterns"><SectionHeading title="숫자와 다음 행동을 먼저" />
+      <h3>보유 정보 입력 안내</h3><Holdings assets={[{ ...sample.assets[0], quantity: null, average: null }]} quotes={new Map()} missing={[]} total={null} fx={null} amountOf={() => null} disabled={false} opened={opened} onEdit={a => setOpened(previous => new Set(previous).add(a.id))} />
       <div className="ds-segment" aria-label="표시 단위">{['금액','비중'].map(v=><Button key={v} type="button" aria-pressed={selected===v} onClick={()=>setSelected(v)}>{v}</Button>)}</div>
       <div className="ds-example-row"><span className="ds-asset-icon"><Icon name="trendChart" size={24} /></span><span><b>미국시장 ETF 예시</b><small>ISA · 주식</small></span><span><b>{selected==='금액'?'6,880,000원':'26.9%'}</b><small className="gain">+877,000원</small></span></div>
       <div className="ds-chart-example" aria-label="예시 자산 구성">{chartPalette.map((color,i)=><span key={color} style={{background:color,flex:6-i}} />)}</div>

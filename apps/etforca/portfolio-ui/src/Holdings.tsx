@@ -5,12 +5,13 @@ import { money, annualDividend, type Asset, type Quote } from './workbook';
 
 const number = (n: number | null | undefined) => n == null ? '—' : n.toLocaleString('ko-KR', { maximumFractionDigits: 4 });
 const signed = (n: number | null | undefined) => n == null ? '—' : `${n > 0 ? '+' : ''}${money(n)}`;
-export function Holdings({ assets, quotes, missing, total, fx, amountOf, disabled, onEdit }: {
+export function Holdings({ assets, quotes, missing, total, fx, amountOf, disabled, opened, onEdit }: {
   assets: Asset[]; quotes: Map<string, Quote>; missing: string[];
-  total: number | null; fx: number | null; amountOf: (a: Asset) => number | null; disabled: boolean; onEdit: (a: Asset) => void;
+  total: number | null; fx: number | null; amountOf: (a: Asset) => number | null; disabled: boolean; opened: Set<string>; onEdit: (a: Asset) => void;
 }) {
   const [descending, setDescending] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
+  function edit(a: Asset) { if (!disabled) onEdit(a); }
   const rows = [...assets].sort((a, b) => {
     const av = amountOf(a), bv = amountOf(b);
     if (av === null) return bv === null ? 0 : 1;
@@ -33,14 +34,15 @@ export function Holdings({ assets, quotes, missing, total, fx, amountOf, disable
     const cash = a.category === '현금', classification = classifyAsset(a);
     const annual = missing.includes(a.id) ? null : annualDividend(a, q);
     const tone = gain === null ? '' : gain >= 0 ? 'gain' : 'loss';
-    return <tr key={a.id} data-expanded={expanded === a.id}>
-      <th scope="row"><Button className="holding-edit" disabled={disabled} onClick={() => onEdit(a)}><b>{a.name}</b><small>{a.instrument_id?.split(':')[1]} · {a.account}</small>{q?.estimated_quantity && <small>금액 기준 추적</small>}</Button><Button className="holding-details" aria-label={`${a.name} 상세 정보 ${expanded === a.id ? '접기' : '보기'}`} aria-expanded={expanded === a.id} onClick={() => setExpanded(expanded === a.id ? null : a.id)}>{expanded === a.id ? '접기' : '상세'}</Button></th>
+    const incomplete = !cash && !disabled && !opened.has(a.id) && (a.quantity ?? a.amount) !== 0 && (a.quantity === null || a.average === null);
+    return <tr key={a.id} data-expanded={expanded === a.id} data-needs-input={incomplete}>
+      <th scope="row"><Button className="holding-edit" disabled={disabled} onClick={() => edit(a)}><b>{a.name}</b><small>{a.instrument_id?.split(':')[1]} · {a.account}</small>{q?.estimated_quantity && <small>금액 기준 추적</small>}{incomplete && <small className="holding-input-hint">{a.quantity === null && a.average === null ? '평단가와 수량을 입력해요!' : a.quantity === null ? '수량을 입력해요!' : '평단가를 입력해요!'}</small>}</Button><Button className="holding-details" aria-label={`${a.name} 상세 정보 ${expanded === a.id ? '접기' : '보기'}`} aria-expanded={expanded === a.id} onClick={() => setExpanded(expanded === a.id ? null : a.id)}>{expanded === a.id ? '접기' : '상세'}</Button></th>
       <td data-label="비중">{amount !== null && total !== null && total > 0 ? (amount / total * 100).toFixed(1) + '%' : '—'}</td>
       <td data-label="주식수">{cash ? '—' : number(q?.quantity)}{q?.estimated_quantity && <small>추정 수량</small>}</td>
       <td data-label="평단가">{cash ? '—' : price(q?.average, a, rate)}</td>
       <td data-label="현재가">{cash ? '—' : price(q?.price, a, rate)}{q?.price_date && <small>{q.price_date}</small>}</td>
       <td data-label="평가금액">{money(amount)}</td>
-      <td data-label="수익률" className={tone}>{pct === null ? !cash && q && a.average === null && q.average == null ? <Button disabled={disabled} onClick={() => onEdit(a)}>평균매수가 입력</Button> : '—' : `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`}</td>
+      <td data-label="수익률" className={tone}>{pct === null ? !cash && q && a.average === null && q.average == null ? <Button disabled={disabled} onClick={() => edit(a)}>평균매수가 입력</Button> : '—' : `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`}</td>
       <td data-label="평가손익" className={tone}>{signed(gain)}</td>
       <td data-label="배당률" className="dividend-number">{cash ? '—' : q?.dividend_yield_pct == null ? '—' : `${q.dividend_yield_pct.toFixed(2)}%`}</td>
       <td data-label="예상 연배당금">{cash ? '—' : money(annual)}</td>

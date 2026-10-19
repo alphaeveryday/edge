@@ -7,6 +7,7 @@ import { preview } from './preview';
 import { AllocationChart, DividendChart, DividendSummary } from './WorkbookCharts';
 import { DividendReport } from './DividendReport';
 import { Holdings } from './Holdings';
+import { DashboardNewsletter } from './DashboardNewsletter';
 import { trackAction, trackScreen, type Screen } from './analytics';
 import { InstrumentSearch } from './InstrumentSearch';
 import { PerformanceChart } from './ReportCharts';
@@ -39,6 +40,7 @@ export function Dashboard() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<Asset | null>(null);
+  const [opened, setOpened] = useState<Set<string>>(() => new Set());
   const [dirty, setDirty] = useState(false);
   const [entryCost, setEntryCost] = useState<number | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
@@ -57,14 +59,14 @@ export function Dashboard() {
   async function load() {
     const sequence = ++loadSequence.current;
     setLoading(true);
-    try { await ensureVisitorSession(); const next = await request<Saved>('/workbook'); if (sequence === loadSequence.current) { setSaved(next); setError(''); return true; } }
+    try { await ensureVisitorSession(); const next = await request<Saved>('/workbook'); if (sequence === loadSequence.current) { setSaved(next); if (next.tracking) { trackingSequence.current++; setTracking(next.tracking); setTrackingLoaded(true); setTrackingError(''); } else void loadTracking(); setError(''); return true; } }
     catch (e) { if (sequence === loadSequence.current) setError((e as Error).message); }
     finally { if (sequence === loadSequence.current) setLoading(false); }
     return false;
   }
-  useEffect(() => { void load().then(ok => { if (ok) { void loadCatalog(); void loadTracking(); } }); return () => { loadSequence.current++; trackingSequence.current++; }; }, []);
+  useEffect(() => { void load().then(ok => { if (ok) void loadCatalog(); }); return () => { loadSequence.current++; trackingSequence.current++; }; }, []);
   useEffect(() => {
-    const waiting = saved?.workbook?.assets.length && !canApplySeed(saved.workbook) && (!tracking.market || tracking.market.version < saved.version);
+    const waiting = saved?.workbook?.assets.length && !canApplySeed(saved.workbook) && (!tracking.market || tracking.market.version < saved.version || !!tracking.market.payload.pending_prices?.length);
     let stopped = false;
     let timer: ReturnType<typeof setTimeout>;
     async function poll() {
@@ -76,7 +78,7 @@ export function Dashboard() {
     }
     timer = setTimeout(poll, waiting ? 3000 : 60000);
     return () => { stopped = true; clearTimeout(timer); };
-  }, [saved?.version, tracking.market?.version]);
+  }, [saved?.version, tracking.market?.version, tracking.market?.payload.pending_prices?.length]);
   useEffect(() => { if (editing && dialog.current && !dialog.current.open) dialog.current.showModal(); }, [editing]);
   useEffect(() => { if (editing) { setEntryCost(editing.quantity !== null && editing.average !== null ? editing.quantity * editing.average : null); dialog.current?.querySelector<HTMLInputElement>(editing.instrument_id ? 'input[name="quantity"], input[name="amount"]' : 'input[role="combobox"]')?.focus(); } }, [editing?.instrument_id, editing?.id]);
   useEffect(() => { if (!editing && !busy && launcher.current) { const target = launcher.current.isConnected ? launcher.current : addButton.current; launcher.current = null; target?.focus(); } }, [editing, busy]);
@@ -88,7 +90,7 @@ export function Dashboard() {
   async function persist(workbook: Workbook) {
     if (!saved || busy || loading) return false;
     setBusy(true); setError(''); setMessage('');
-    try { setSaved(await request<Saved>('/workbook', { method: 'POST', body: JSON.stringify({ version: saved.version, workbook }) })); trackAction('holdings_saved'); setMessage('저장했어요. 시세와 비중을 자동으로 계산해요.'); void loadTracking(); return true; }
+    try { const next = await request<Saved>('/workbook', { method: 'POST', body: JSON.stringify({ version: saved.version, workbook }) }); setSaved(next); if (next.tracking) { trackingSequence.current++; setTracking(next.tracking); setTrackingLoaded(true); setTrackingError(''); } else void loadTracking(); trackAction('holdings_saved'); setMessage('저장했어요.'); return true; }
     catch (e) { trackAction('holdings_save_failed'); setError((e as Error).message); return false; }
     finally { setBusy(false); }
   }
@@ -117,6 +119,7 @@ export function Dashboard() {
   const selected = forecasts.filter(d => d.month === month);
   function edit(a?: Asset) {
     if (busy || loading || seedOnly) return;
+    if (a) setOpened(previous => new Set(previous).add(a.id));
     trackAction(a ? 'holding_edit_opened' : 'holding_add_opened');
     launcher.current = document.activeElement as HTMLElement; setDirty(false); setError('');
     const quote = a && currentMarket && !market?.missing.includes(a.id) ? quotes.get(a.id) : null;
@@ -148,6 +151,7 @@ export function Dashboard() {
   }
   const graphAssets = assets.map(a => ({ ...a, quantity: null, price: null, amount: amountOf(a) }));
   return <div className="dashboard" data-analytics-section="dashboard">
+    {w.assets.some(a => a.category !== '현금' && a.instrument_id && (a.quantity ?? a.amount) !== 0) && <DashboardNewsletter blocked={loading || busy || !!editing || seedOnly || tab === 'AI 포폴 분석'} />}
     <aside className="dashboard-nav"><a href={preview ? '?preview=input' : '?'} className="dashboard-brand"><Icon name="dashboard" size={24} />ETF Orca</a><nav aria-label="대시보드">{tabs.map(t => <Button key={t} aria-current={tab === t ? 'page' : undefined} onClick={() => { setTab(t); if (t === 'AI 포폴 분석') setAnalysisOpened(true); }}>{t}</Button>)}</nav><a href={preview ? '?preview=result' : '?'}>포트폴리오 분석 ↗</a></aside>
     <main className="dashboard-main"><header><div><p className="eyebrow">대시보드</p><h1>{w.title}</h1></div><label>계좌<Select value={account} onChange={e => setAccount(e.target.value)}><option>전체</option>{accounts.map(a => <option key={a}>{a}</option>)}</Select></label></header>
       <span className="dashboard-save-status" role="status">{busy ? '저장 중이에요.' : message}</span>
@@ -164,7 +168,7 @@ export function Dashboard() {
         {tab === '한눈에' && <><div className="dashboard-overview"><AllocationChart assets={graphAssets} fx={market?.fx ?? null} /><section className="dashboard-card dividend-summary" data-analytics-section="dividend_summary"><SectionHeading className="card-heading" title="배당 분석" action={<Button onClick={() => setTab('배당 달력')}>달력 보기 <Icon name="chevronRight" size={16} /></Button>} /><DividendSummary forecasts={forecasts} annualEstimate={annualEstimate} total={total} /><DividendChart dividends={[]} forecasts={forecasts} complete={forecastComplete} unavailableMonths={unavailableMonths} incompleteMonths={uncoveredMonths} startMonth={thisMonth()} selectedMonth={month} onMonth={m => { setMonth(m); setTab('배당 달력'); }} /></section></div>
           <section className="dashboard-card"><SectionHeading className="card-heading" title={`보유 자산 ${assets.length}`} action={<Button variant="primary" className="primary" ref={addButton} disabled={busy || loading || seedOnly || w.assets.length >= 30} onClick={() => edit()}><Icon name="plus" size={18} />종목 추가</Button>} />
             {!assets.length && <p className="empty-state">보유 종목을 검색하고 수량과 평균매수가를 입력해 주세요.</p>}
-            <Holdings assets={assets} quotes={quotes} missing={market && market.date === today() ? market.dividend_missing : assets.map(a => a.id)} total={total} fx={market?.fx ?? null} amountOf={amountOf} disabled={seedOnly} onEdit={edit} />
+            <Holdings assets={assets} quotes={quotes} missing={market && market.date === today() ? market.dividend_missing : assets.map(a => a.id)} total={total} fx={market?.fx ?? null} amountOf={amountOf} disabled={seedOnly} opened={opened} onEdit={edit} />
           </section></>}
         {tab === '배당 달력' && <><section className="dashboard-card"><SectionHeading title="배당 달력" description="앞으로 12개월, 월별 예상 분배금을 확인해요." /><DividendSummary forecasts={forecasts} annualEstimate={annualEstimate} total={total} /><DividendChart dividends={[]} forecasts={forecasts} complete={forecastComplete} unavailableMonths={unavailableMonths} incompleteMonths={uncoveredMonths} startMonth={thisMonth()} selectedMonth={month} onMonth={setMonth} /><h3>{month.replace('-', '년 ')}월 · {selectedComplete ? "예상 " : selected.length ? "확인된 예상 " : "예상 미확인"}{(selectedComplete || selected.length > 0) && money(selected.reduce((s, d) => s + d.amount, 0))}</h3><p className="editor-note">최근 12개월 배당락 이력으로 추정한 세전 금액이에요. 지급월과 금액은 실제 공시에 따라 달라질 수 있어요.</p>
           <ul className="dividend-records">{selected.map((d, i) => <li key={d.asset_id + i}><span>{w.assets.find(a => a.id === d.asset_id)?.name}</span><b>예상 {money(d.amount)}</b></li>)}</ul>{!selected.length && <p className="empty-state">{selectedComplete ? "이 달의 예상 분배 내역이 없어요." : "배당 자료를 확인하지 못한 종목이 있어요. 확인된 내역부터 보여드려요."}</p>}

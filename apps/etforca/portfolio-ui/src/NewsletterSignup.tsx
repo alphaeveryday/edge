@@ -4,7 +4,7 @@ import { request } from './api';
 import { trackAction } from './analytics';
 import newsletterExample from './newsletter-example.png';
 
-export function NewsletterSignup({ jobId, showPreview = false }: { jobId: string; showPreview?: boolean }) {
+export function NewsletterSignup({ jobId, showPreview = false, onSubscribed }: { jobId?: string; showPreview?: boolean; onSubscribed?: () => void }) {
   const inputId = useId();
   const [email, setEmail] = useState('');
   const [sending, setSending] = useState(false);
@@ -15,7 +15,7 @@ export function NewsletterSignup({ jobId, showPreview = false }: { jobId: string
     if (sending) return;
     setSending(true); setError('');
     try {
-      const result = await request<{ status: string; delivery_ready: boolean }>(`/analyses/${jobId}/newsletter`, {
+      const result = await request<{ status: string; delivery_ready: boolean }>(jobId ? `/analyses/${jobId}/newsletter` : '/workbook/newsletter', {
         method: 'POST', body: JSON.stringify({ email: email.trim(), consent: true }),
       });
       if (result.status === 'active' || result.status === 'confirmed') {
@@ -25,7 +25,7 @@ export function NewsletterSignup({ jobId, showPreview = false }: { jobId: string
         setSubscription(result.delivery_ready ? '신청했어요! 확인 메일의 링크를 눌러 구독을 시작해 주세요.'
           : '신청했어요! 발송 준비가 끝나면 이메일 확인 링크를 보내드릴게요.');
       }
-      trackAction('newsletter_requested'); setEmail('');
+      trackAction('newsletter_requested'); setEmail(''); onSubscribed?.();
     } catch (e) { setError((e as Error).message); } finally { setSending(false); }
   }
   return <div className="feedback-newsletter newsletter-signup">

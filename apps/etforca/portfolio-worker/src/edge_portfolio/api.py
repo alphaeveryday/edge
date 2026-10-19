@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import os
 import secrets
 from contextlib import asynccontextmanager
@@ -14,11 +15,18 @@ from .catalog import canonicalize, directory
 from starlette.middleware.gzip import GZipMiddleware
 from .contracts import AnalysisInput, DraftInput, StrictModel
 from pydantic import Field
+from psycopg import Error as DatabaseError
 
 
 @asynccontextmanager
 async def lifespan(app):
     store.initialize()
+    # Build local exchange calendars before accepting the first customer's save.
+    from .market_data import expected_sessions, year_before
+    for key in ('KR:069500', 'US:VOO'):
+        end = dashboard_work.price_end(key, dashboard_work.today())
+        expected_sessions(key, end, end)
+        expected_sessions(key, year_before(end), end)
     yield
 
 
@@ -108,6 +116,17 @@ def newsletter_subscribe(job_id: str, body: NewsletterRequest, request: Request)
         raise HTTPException(404 if code == 'NOT_FOUND' else 429 if code == 'SUBSCRIPTION_LIMIT' else 422, code) from None
 
 
+@app.get('/api/portfolio/workbook/newsletter')
+def dashboard_newsletter_status(request: Request):
+    from . import newsletter_store
+    return newsletter_store.dashboard_status(owner(request))
+
+
+@app.post('/api/portfolio/workbook/newsletter', status_code=202)
+def dashboard_newsletter_subscribe(body: NewsletterRequest, request: Request):
+    return newsletter_subscribe(None, body, request)
+
+
 @app.post('/api/portfolio/newsletter/confirm')
 def newsletter_confirm(body: NewsletterConfirmation):
     from . import newsletter_store
@@ -192,15 +211,25 @@ def health():
 
 @app.get('/api/portfolio/workbook')
 def workbook(request: Request):
-    return dashboard.read(owner(request))
+    saved = dashboard.read(owner(request))
+    try:
+        saved['tracking'] = dashboard_work.tracking(owner(request))
+    except DatabaseError as error:
+        logging.getLogger(__name__).warning('workbook_tracking_unavailable code=%s', type(error).__name__)
+    return saved
 
 
 @app.post('/api/portfolio/workbook')
 def save_workbook(body: dashboard.Save, request: Request):
     try:
-        return dashboard.save(owner(request), body)
+        saved = dashboard.save(owner(request), body)
     except ValueError as error:
         raise HTTPException(409 if str(error) == 'WORKBOOK_CONFLICT' else 422, str(error)) from None
+    try:
+        saved['tracking'] = dashboard_work.tracking(owner(request))
+    except DatabaseError as error:
+        logging.getLogger(__name__).warning('saved_workbook_tracking_unavailable code=%s', type(error).__name__)
+    return saved
 
 
 from . import dashboard_work

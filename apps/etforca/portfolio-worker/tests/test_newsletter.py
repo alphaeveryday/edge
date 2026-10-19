@@ -116,6 +116,86 @@ def test_signup_api_requires_explicit_consent_and_origin_but_confirmation_needs_
         assert client.post('/api/portfolio/newsletter/confirm', headers=headers, json={'token': token}).json() == {'status': 'confirmed', 'delivery_ready': False}
 
 
+def test_dashboard_signup_needs_owned_holdings_and_explicit_consent_without_an_analysis(newsletter_db):
+    from edge_portfolio import dashboard
+    from test_dashboard_work import asset
+    _, owner = newsletter_db
+    dashboard.save(owner, dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
+    with TestClient(api.app, base_url='http://localhost:5180') as client:
+        headers = {'origin': 'http://localhost:5180'}
+        url = '/api/portfolio/workbook/newsletter'
+        client.cookies.set(api.COOKIE, 'b' * 64)
+        assert client.post(url, headers=headers, json={'email': 'reader@example.test', 'consent': True}).status_code == 404
+        client.cookies.set(api.COOKIE, 'a' * 64)
+        assert client.get(url).json() == {'subscribed': False}
+        assert client.post(url, json={'email': 'reader@example.test', 'consent': True}).status_code == 403
+        assert client.post(url, headers=headers, json={'email': 'reader@example.test', 'consent': False}).status_code == 422
+        for _ in range(2):
+            assert client.post(url, headers=headers, json={'email': 'reader@example.test', 'consent': True}).status_code == 202
+        assert client.get(url).json() == {'subscribed': True}
+        client.cookies.set(api.COOKIE, 'b' * 64)
+        assert client.get(url).json() == {'subscribed': False}
+    with store.connect() as db:
+        rows = db.execute('SELECT * FROM portfolio_newsletter_subscriptions').fetchall()
+    assert len(rows) == 1 and rows[0]['job_id'] is None and rows[0]['status'] == 'pending'
+    assert [h['instrument_id'] for h in rows[0]['holdings']] == ['KR:069500']
+
+
+@pytest.mark.parametrize('archive_outage', [False, True])
+def test_dashboard_newsletter_uses_current_holdings_and_skips_an_empty_portfolio(newsletter_db, monkeypatch, archive_outage):
+    from edge_portfolio import dashboard
+    from test_dashboard_work import asset
+    _, owner = newsletter_db
+    dashboard.save(owner, dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
+    news.subscribe(None, owner, 'reader@example.test')
+    replacement = {**asset(), 'instrument_id': 'US:QQQ', 'currency': 'USD', 'name': 'QQQ'}
+    dashboard.save(owner, dashboard.Save(version=1, workbook=dashboard.Workbook(assets=[replacement])))
+    now = datetime.now(agent.KST).replace(hour=15, minute=30)
+    prior_day = str(now.date() - timedelta(days=1))
+    card = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'format': agent.DEFAULT_FORMAT, **H_STORED, 'sources': [],
+            'quote': {'close': 100, 'change_pct': 2, 'trading_date': prior_day}}
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_newsletter_subscriptions SET status='active'")
+        db.execute("INSERT INTO portfolio_newsletter_content(instrument_id,edition,name,state,content) VALUES ('US:QQQ',%s,'QQQ','ready',%s::jsonb)", (now.date(), json.dumps(card)))
+        snapshot = {'assets': [{'id': 'a', 'quantity': 10, 'value': 1000, 'price': 100, 'price_date': prior_day}], 'fx': 1}
+        db.execute('INSERT INTO portfolio_dashboard_days VALUES (%s,%s,2,%s::jsonb)', (owner, prior_day, json.dumps(snapshot)))
+    sends = []
+    def send_email(**kw):
+        sends.append(kw)
+        return {'MessageId': 'dashboard-edition'}
+    ses = SimpleNamespace(get_contact=lambda **kw: {'TopicPreferences': [{'TopicName': sender.TOPIC, 'SubscriptionStatus': 'OPT_IN'}]}, send_email=send_email)
+    monkeypatch.setattr(sender.time, 'sleep', lambda _: None)
+    if archive_outage:
+        from psycopg import OperationalError
+        original = sender.connect
+        class Connection:
+            def __init__(self, db):
+                self.db = db
+            def execute(self, query, *args):
+                if query.startswith('SELECT version,payload FROM portfolio_dashboard_days'):
+                    raise OperationalError('temporary snapshot read outage')
+                return self.db.execute(query, *args)
+        @contextmanager
+        def connect():
+            with original() as db:
+                yield Connection(db)
+        with monkeypatch.context() as patch:
+            patch.setattr(sender, 'connect', connect)
+            sender.process_daily(ses, now)
+        assert not sends
+        with store.connect() as db:
+            assert db.execute('SELECT state FROM portfolio_newsletter_deliveries').fetchone()['state'] == 'waiting_content'
+    sender.process_daily(ses, now)
+    sender.process_daily(ses, now)
+    assert len(sends) == 1
+    html = sends[0]['Content']['Simple']['Body']['Html']['Data']
+    assert '포트폴리오 하루 +2.00%' in sends[0]['Content']['Simple']['Subject']['Data'], 'The matching saved session supplies weights when today’s market snapshot cannot'
+    assert 'QQQ' in html and 'KODEX 200' not in html, 'Dashboard subscriptions follow edits instead of the signup snapshot'
+    dashboard.save(owner, dashboard.Save(version=2, workbook=dashboard.Workbook()))
+    sender.process_daily(ses, now + timedelta(days=1))
+    assert len(sends) == 1
+
+
 def test_readiness_outage_cannot_turn_a_committed_confirmation_into_an_error(newsletter_db, monkeypatch, caplog):
     from psycopg import OperationalError
     job, owner = newsletter_db
@@ -1117,6 +1197,46 @@ def test_daily_subject_uses_subscribed_weights_cash_and_every_holding():
     assert '수익률 미집계' in email.daily(date(2026, 10, 19), missing, weights=weights)[0]
     assert '수익률 미집계' in email.daily(date(2026, 10, 19), cards[:1], weights=weights)[0]
     assert sender.portfolio_weights([{'instrument_id': 'US:A'}]) is None
+
+
+def test_dashboard_daily_return_uses_opening_values_and_rejects_retained_or_unmatched_quotes():
+    row = {'workbook_version': 2, 'market_version': 2,
+           'workbook': {'assets': [{'id': 'a', 'instrument_id': 'US:A', 'quantity': 1}, {'id': 'b', 'instrument_id': 'US:B', 'quantity': 1}]},
+           'market': {'assets': [{'id': 'a', 'value': 200, 'price': 200, 'price_date': '2026-10-19'},
+                                 {'id': 'b', 'value': 100, 'price': 100, 'price_date': '2026-10-19'}], 'missing': [], 'pending_prices': []}}
+    cards = [{'instrument_id': key, 'quote': {'close': close, 'change_pct': change, 'trading_date': '2026-10-19'}}
+             for key, close, change in [('US:A', 200, 100), ('US:B', 100, 0)]]
+    assert email.portfolio_change(cards, sender.dashboard_weights(row, cards)) == 50, 'Closing weights incorrectly report 66.67%'
+    row['market']['missing'] = ['a']
+    assert sender.dashboard_weights(row, cards) is None
+    row['market']['missing'] = []
+    row['market']['assets'][0]['price_date'] = '2026-10-16'
+    assert sender.dashboard_weights(row, cards) is None
+
+
+def test_mixed_market_newsletter_combines_matching_sessions_at_one_fx_rate():
+    row = {'workbook_version': 7, 'market_version': 7,
+           'workbook': {'assets': [{'id': 'k', 'instrument_id': 'KR:A', 'quantity': 1, 'currency': 'KRW'},
+                                 {'id': 'u', 'instrument_id': 'US:B', 'quantity': 1, 'currency': 'USD'}]},
+           'market': {'fx': 2, 'assets': [{'id': 'k', 'value': 110, 'price': 110, 'quantity': 1, 'price_date': '2026-10-20'},
+                                        {'id': 'u', 'value': 200, 'price': 100, 'quantity': 1, 'price_date': '2026-10-19'}]}}
+    snapshots = [{'version': 7, 'payload': {'fx': 1, 'assets': [
+        {'id': 'k', 'value': 100, 'price': 100, 'quantity': 1, 'price_date': '2026-10-19'},
+        {'id': 'u', 'value': 50, 'price': 50, 'quantity': 1, 'price_date': '2026-10-16'}]}}]
+    cards = [{'instrument_id': key, 'quote': {'close': 100, 'change_pct': change, 'trading_date': '2026-10-19'}} for key, change in [('KR:A', 0), ('US:B', 100)]]
+    assert sender.dashboard_weights(row, cards) is None
+    assert sender.dashboard_weights(row, cards, snapshots) == {'KR:A': .5, 'US:B': .5}
+    snapshots[0]['version'] = 6
+    assert sender.dashboard_weights(row, cards, snapshots) is None, 'An old holdings version cannot supply weights after an edit'
+
+
+def test_thirty_dashboard_holdings_keep_every_name_and_unsubscribe_visible():
+    schema = agent.FORMATS['H'][1].model_json_schema()
+    cards = [padded(letter_card('H', f'US:E{i}', f'ETF{i}'), schema, schema.get('$defs', {})) for i in range(30)]
+    _, html, plain = email.daily(date(2026, 10, 18), cards)
+    assert len(html.encode()) <= email.BUDGET
+    assert html.count(email.UNSUBSCRIBE) == 1
+    assert all(f'ETF{i}' in html and f'ETF{i}' in plain for i in range(30))
 
 
 @pytest.mark.parametrize('change, label', [(0, '+0.00%'), (-2.5, '-2.50%'), (3, '+3.00%')])

@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 from datetime import date, datetime, timedelta
+from functools import lru_cache
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -70,6 +71,8 @@ class Backtest(StrictModel):
 
 
 def initialize(db):
+    from . import dashboard_quotes
+    dashboard_quotes.initialize(db)
     db.execute('ALTER TABLE portfolio_workbooks ADD COLUMN IF NOT EXISTS refresh_after timestamptz NOT NULL DEFAULT now()')
     db.execute('''CREATE TABLE IF NOT EXISTS portfolio_dashboard_market (
         owner text PRIMARY KEY, version bigint NOT NULL, payload jsonb NOT NULL)''')
@@ -117,13 +120,18 @@ def read_backtest(owner, key):
         return db.execute('SELECT id,state,result FROM portfolio_backtests WHERE id=%s AND owner=%s', (key, owner)).fetchone()
 
 
+@lru_cache(maxsize=16)
+def price_schedule(korean, day):
+    from .market_data import calendars
+    return calendars.get_calendar('XKRX' if korean else 'XNYS', start=day - timedelta(days=30), end=day + timedelta(days=1)).schedule
+
+
 def price_end(key, day, now=None):
     now = now or datetime.now(ZoneInfo('UTC'))
     if key == 'FX':
         return min(day, now.astimezone(ZoneInfo('UTC')).date())
-    from .market_data import calendars
     korean = key.startswith('KR:')
-    schedule = calendars.get_calendar('XKRX' if korean else 'XNYS', start=day - timedelta(days=30), end=day + timedelta(days=1)).schedule
+    schedule = price_schedule(korean, day)
     completed = schedule[(schedule['close'] <= now) & (schedule.index.date <= day if korean else schedule.index.date < day)]
     return completed.index[-1].date() + timedelta(days=1)
 
@@ -136,12 +144,12 @@ def held_history_missing(key, record, since, end):
     return bool(len(expected_sessions(key, min(since, end), end).difference(frame.index[frame['Close'].map(positive_price)])))
 
 
-async def records_for(ids, day, *, valuation_since=None):
+async def records_for(ids, day, *, valuation_since=None, include_fx=True, collector_lease=None):
     from .market_data import decode_prices, fetch_prices, positive_price, year_before
     from .price_fetch import serialize
     records, failures = {}, []
     keys = set(ids) - {'CASH:KRW', None}
-    if any(k.startswith('US:') for k in keys):
+    if include_fx and any(k.startswith('US:') for k in keys):
         keys.add('FX')
     # One subprocess at a time keeps the existing small worker within its memory limit.
     try:
@@ -171,6 +179,7 @@ async def records_for(ids, day, *, valuation_since=None):
                     if cached:
                         record = decode_prices(json.dumps(cached['payload']))
                     else:
+                        requested_at = datetime.now(ZoneInfo('UTC')).isoformat()
                         symbol = 'KRW=X' if key == 'FX' else key[3:] + ('.KS' if key.startswith('KR:') else '')
                         expected = 'KRW' if key == 'FX' or key.startswith('KR:') else 'USD'
                         captured = None
@@ -178,13 +187,13 @@ async def records_for(ids, day, *, valuation_since=None):
                             nonlocal captured
                             _, stamp = last_close(record)
                             if record['currency'] == expected and 0 <= (end - date.fromisoformat(stamp)).days <= 7:
-                                captured = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat()}
+                                captured = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat(), 'requested_at': requested_at}
                                 records[key] = captured
                         try:
                             budget = 200 / max(1, len(keys))
                             record = await fetch_prices(symbol, end, on_raw=capture, on_primary=capture, provider_timeout=budget * .45,
                                                         repair_since=since)
-                            record = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat()}
+                            record = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat(), 'requested_at': requested_at}
                         except TimeoutError:
                             if key not in records:
                                 raise
@@ -195,9 +204,18 @@ async def records_for(ids, day, *, valuation_since=None):
                             record = {**captured, 'frame': frame, 'return_basis': record['return_basis'], 'return_source_url': record['source_url']}
                         if record['currency'] != expected:
                             raise ValueError('UNSUPPORTED_CURRENCY')
+                        record['observed_on'] = last_close(record)[1]
                         with store.connect() as db:
+                            if collector_lease is not None and not db.execute('SELECT 1 FROM portfolio_quote_refresh WHERE instrument=%s AND lease_until=%s FOR UPDATE', (key, collector_lease)).fetchone():
+                                continue
                             db.execute('''INSERT INTO portfolio_dashboard_prices VALUES (%s,%s,%s)
-                                ON CONFLICT(instrument) DO UPDATE SET day=excluded.day,payload=excluded.payload''', (key, end, Jsonb(json.loads(serialize(record)))))
+                                ON CONFLICT(instrument) DO UPDATE SET day=excluded.day,payload=excluded.payload
+                                WHERE (portfolio_dashboard_prices.day<excluded.day OR
+                                    (portfolio_dashboard_prices.day=excluded.day AND coalesce(portfolio_dashboard_prices.payload->>'requested_at',portfolio_dashboard_prices.payload->>'fetched_at','')<=excluded.payload->>'requested_at'))
+                                    AND excluded.payload->>'observed_on'>=coalesce(portfolio_dashboard_prices.payload->>'observed_on',
+                                        (SELECT max(p->>'date') FROM jsonb_array_elements(portfolio_dashboard_prices.payload->'frame') p WHERE (p->>'Close')::numeric>0),'')
+                                    AND (coalesce(excluded.payload->>'provider','') NOT LIKE 'FinanceDataReader:NAVER:%%'
+                                        OR coalesce(portfolio_dashboard_prices.payload->>'provider','') LIKE 'FinanceDataReader:NAVER:%%')''', (key, end, Jsonb(json.loads(serialize(record)))))
                     records[key] = record
                 except Exception as error:
                     log.warning('dashboard price=%s failure=%s', key, type(error).__name__)
@@ -388,14 +406,14 @@ def run_backtest(body, records, day, failures):
     return {'history': history, 'excluded': excluded, 'return_pct': round((points[-1]['recommended'] / baseline - 1) * 100, 2)}
 
 
-async def work_once(stopping=None):
+async def work_once(stopping=None, *, kind=None):
     if stopping and stopping.is_set():
         return False
     with store.connect() as db:
         job = db.execute("""SELECT * FROM portfolio_backtests WHERE state='queued' OR state='running' AND lease_until<now()
-                ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone()
+                ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone() if kind != 'valuation' else None
         book = db.execute("""SELECT * FROM portfolio_workbooks WHERE refresh_after<=now()
-                ORDER BY refresh_after FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone()
+                ORDER BY refresh_after FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone() if kind != 'backtest' else None
         if book and (not job or book['refresh_after'] <= job['created_at']):
             job = None
             book = db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '10 minutes' WHERE owner=%s RETURNING *", (book['owner'],)).fetchone()
@@ -415,27 +433,14 @@ async def work_once(stopping=None):
                     db.execute("UPDATE portfolio_backtests SET state='succeeded',result=%s WHERE id=%s AND lease_until=%s", (Jsonb(result), job['id'], job['lease_until']))
             else:
                 assets = [identify(a, strict=False, fx=book['payload'].get('fx')) for a in book['payload']['assets']]
-                previous = tracking(book['owner'])['market']
-                bases = previous['payload'].get('bases', {}) if previous else {}
-                # Keep split history from every holding's basis as well as the trailing dividend year.
-                since = {}
-                for a in assets:
-                    key = a.get('instrument_id')
-                    if zero_exposure(a) or key in (None, 'CASH:KRW'):
-                        continue
-                    since[key] = min(since.get(key, day), *(date.fromisoformat(stamp) for stamp in basis_dates(a, bases.get(a['id'], {}), str(day))))
-                records, failures = await records_for([a.get('instrument_id') for a in assets if not zero_exposure(a)], day, valuation_since=since)
-                result = valuation({**book['payload'], 'assets': assets}, {key: record for key, record in records.items() if key not in failures}, previous['payload'] if previous else None, day)
+                from .dashboard_quotes import project
                 with store.connect() as db:
                     current = db.execute('SELECT version,refresh_after FROM portfolio_workbooks WHERE owner=%s FOR UPDATE', (book['owner'],)).fetchone()
                     if current['version'] != book['version'] or current['refresh_after'] != book['refresh_after']:
                         return True
-                    db.execute('''INSERT INTO portfolio_dashboard_market VALUES (%s,%s,%s)
-                        ON CONFLICT(owner) DO UPDATE SET version=excluded.version,payload=excluded.payload''', (book['owner'], book['version'], Jsonb(result)))
-                    if assets and not result['missing'] and all(a['value'] is not None for a in result['assets']):
-                        snapshot = {'value': sum(a['value'] for a in result['assets']), 'assets': result['assets'], 'fx': result['fx']}
-                        db.execute('''INSERT INTO portfolio_dashboard_days VALUES (%s,%s,%s,%s)
-                            ON CONFLICT(owner,day) DO UPDATE SET version=excluded.version,payload=excluded.payload''', (book['owner'], day, book['version'], Jsonb(snapshot)))
+                    if assets != book['payload']['assets']:
+                        db.execute('UPDATE portfolio_workbooks SET payload=%s WHERE owner=%s', (Jsonb({**book['payload'], 'assets': assets}), book['owner']))
+                    project(db, book['owner'], book['version'], {**book['payload'], 'assets': assets}, record_day=True)
                     db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 minute' WHERE owner=%s", (book['owner'],))
     except Exception as error:
         log.warning('dashboard task failed kind=%s code=%s', 'backtest' if job else 'valuation', type(error).__name__)

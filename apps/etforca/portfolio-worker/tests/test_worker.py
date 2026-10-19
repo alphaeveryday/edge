@@ -70,7 +70,10 @@ async def test_shutdown_during_database_claim_returns_unstarted_job(monkeypatch,
 
 def test_worker_only_marks_ready_after_db_initialization_and_cleans_up(monkeypatch, tmp_path):
     from edge_portfolio import newsletter_store
-    from edge_portfolio import dashboard_work
+    from edge_portfolio import dashboard_work, dashboard_quotes
+    async def no_collection(stopping):
+        while not stopping.is_set(): await asyncio.sleep(.01)
+    monkeypatch.setattr(dashboard_quotes, 'collection_loop', no_collection)
     monkeypatch.setattr(newsletter_store, 'claim_content', lambda: None)
     async def dashboard_idle(*args):
         return False
@@ -118,7 +121,11 @@ def test_worker_queue_failure_never_signals_ready(monkeypatch, tmp_path):
 
 
 async def test_dashboard_collection_cannot_delay_already_queued_customer_analyses(monkeypatch, tmp_path):
-    from edge_portfolio import dashboard_work, newsletter_work
+    from edge_portfolio import dashboard_work, dashboard_quotes
+    async def no_collection(stopping):
+        while not stopping.is_set(): await asyncio.sleep(.01)
+    monkeypatch.setattr(dashboard_quotes, 'collection_loop', no_collection)
+    from edge_portfolio import newsletter_work
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
     monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'ready')
     monkeypatch.setattr(worker.store, 'initialize', lambda: None)
@@ -134,7 +141,8 @@ async def test_dashboard_collection_cannot_delay_already_queued_customer_analyse
     async def newsletter(stopping):
         events.append('newsletter')
         return False
-    async def dashboard(stopping):
+    async def dashboard(stopping, *, kind=None):
+        if kind == 'backtest': return False
         events.append('dashboard')
         assert await asyncio.to_thread(analysis_finished.wait, 2)
         stopping.set()
@@ -149,7 +157,10 @@ async def test_dashboard_collection_cannot_delay_already_queued_customer_analyse
 
 
 async def test_saved_holdings_refresh_while_an_analysis_is_still_running(monkeypatch, tmp_path):
-    from edge_portfolio import dashboard_work
+    from edge_portfolio import dashboard_work, dashboard_quotes
+    async def no_collection(stopping):
+        while not stopping.is_set(): await asyncio.sleep(.01)
+    monkeypatch.setattr(dashboard_quotes, 'collection_loop', no_collection)
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
     monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'ready')
     monkeypatch.setattr(worker.store, 'initialize', lambda: None)
@@ -161,7 +172,8 @@ async def test_saved_holdings_refresh_while_an_analysis_is_still_running(monkeyp
         finally:
             stopping.set()
         return True
-    async def dashboard(stopping):
+    async def dashboard(stopping, *, kind=None):
+        if kind == 'backtest': return False
         refreshed.set()
         return True
     monkeypatch.setattr(worker, 'work_once', analysis)
@@ -171,7 +183,10 @@ async def test_saved_holdings_refresh_while_an_analysis_is_still_running(monkeyp
 
 
 async def test_shutdown_drains_both_analysis_and_valuation_without_claiming_more(monkeypatch, tmp_path):
-    from edge_portfolio import dashboard_work
+    from edge_portfolio import dashboard_work, dashboard_quotes
+    async def no_collection(stopping):
+        while not stopping.is_set(): await asyncio.sleep(.01)
+    monkeypatch.setattr(dashboard_quotes, 'collection_loop', no_collection)
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
     monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'ready')
     monkeypatch.setattr(worker.store, 'initialize', lambda: None)
@@ -184,7 +199,8 @@ async def test_shutdown_drains_both_analysis_and_valuation_without_claiming_more
         handlers[signal.SIGTERM](signal.SIGTERM, None)
         completed.append('analysis')
         return True
-    async def dashboard(stopping):
+    async def dashboard(stopping, *, kind=None):
+        if kind == 'backtest': return False
         assert not stopping.is_set()
         started.set()
         await asyncio.sleep(.01)
@@ -198,7 +214,10 @@ async def test_shutdown_drains_both_analysis_and_valuation_without_claiming_more
 
 
 async def test_dashboard_claim_failure_never_cancels_analysis_and_retries(monkeypatch, tmp_path, caplog):
-    from edge_portfolio import dashboard_work
+    from edge_portfolio import dashboard_work, dashboard_quotes
+    async def no_collection(stopping):
+        while not stopping.is_set(): await asyncio.sleep(.01)
+    monkeypatch.setattr(dashboard_quotes, 'collection_loop', no_collection)
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
     monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'ready')
     monkeypatch.setattr(worker.store, 'initialize', lambda: None)
@@ -209,7 +228,8 @@ async def test_dashboard_claim_failure_never_cancels_analysis_and_retries(monkey
         assert await asyncio.to_thread(refreshed.wait, 10)
         stopping.set()
         return True
-    async def dashboard(stopping):
+    async def dashboard(stopping, *, kind=None):
+        if kind == 'backtest': return False
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -225,13 +245,17 @@ async def test_dashboard_claim_failure_never_cancels_analysis_and_retries(monkey
 
 async def test_synchronous_dashboard_database_wait_does_not_block_analysis(monkeypatch, tmp_path):
     import time
-    from edge_portfolio import dashboard_work
+    from edge_portfolio import dashboard_work, dashboard_quotes
+    async def no_collection(stopping):
+        while not stopping.is_set(): await asyncio.sleep(.01)
+    monkeypatch.setattr(dashboard_quotes, 'collection_loop', no_collection)
     monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
     monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'ready')
     monkeypatch.setattr(worker.store, 'initialize', lambda: None)
     monkeypatch.setattr(worker.signal, 'signal', lambda *args: None)
     started, finished = Event(), Event()
-    async def dashboard(stopping):
+    async def dashboard(stopping, *, kind=None):
+        if kind == 'backtest': return False
         started.set()
         time.sleep(.3)  # A synchronous psycopg row-lock wait.
         finished.set()
