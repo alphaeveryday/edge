@@ -13,7 +13,8 @@
 | `dags/edge_source_daily.py` | 원천 관측 DAG(ALPHA-1130, Airflow 전용 레인 `source-daily`): `plan → {매크로·업종·재무} 각각 collect → normalize → load → report → verdict`. 생성 시 pause — 아래 "원천 관측 레인" |
 | `tests/` | DagBag 파싱, terraform(슬롯·명령) 대조, exit code·당일 수집·재처리·보고·활성화 규칙. CI `test-airflow.yml`이 공식 Airflow 이미지(다이제스트 고정) 안에서 실행한다 |
 | `dags/edge_investor_intraday_verify.py` | 격리 검증 DAG — 운영 DAG 와 같은 `build_dag`·EdgeStep, 검증 전용 클러스터·태스크 정의, conf 장애 주입. `EDGE_VERIFY_CLUSTER` 가 있을 때만 등록 |
-| `Dockerfile` · `deploy/entrypoint.sh` | 배포 이미지(공식 이미지 + DAG). entrypoint 가 메타DB 연결·UI 비밀번호 파일을 만든다 |
+| `Dockerfile` · `deploy/entrypoint.sh` | 배포 이미지(공식 이미지 + DAG + `config/`). entrypoint 가 메타DB 연결·UI 비밀번호 파일을 만든다 |
+| `config/airflow_local_settings.py` | 이미지의 `$AIRFLOW_HOME/config` 에 들어가는 Airflow 로컬 설정(모든 프로세스가 `import airflow` 때 읽는다). 태스크 로그 업로드 뒤 워커에 남는 CloudWatch 스트림 큐·스레드를 끝낸다(ALPHA-1363 — 태스크당 0.27 MiB 씩 늘던 워커 메모리의 원인) |
 | `deploy/wait_rollout.sh` | `deploy-airflow` 의 서비스 교체 완료 판정(update-service 가 돌려준 배포 id 가 PRIMARY·COMPLETED 될 때까지 최대 10분, FAILED·롤백·다른 배포면 실패) |
 | `deploy/compose.local.yaml` | 배포 이미지의 로컬 리허설(ECS 태스크와 같은 세 컨테이너·localhost 공유, 마이그레이션 선행) |
 | `verify/` | 실제 AWS 격리 검증 — `shim.py`(검증 태스크 진입점: 재생 입력·계수·장애), `Dockerfile`(배포된 업무 이미지 + shim), `run.py`(설정·trigger·증거 수집) |
@@ -711,7 +712,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 
 ### 배포·롤백
 
-- 평시 배포: `apps/engine/airflow/dags/**`·`Dockerfile`·`deploy/entrypoint.sh` 가 dev 에 머지되면 `deploy-airflow` 가 돈다. 이미지 태그는 커밋 SHA 다. 서비스 desired 가 0(운영자 정지)이면 리비전만 바꾸고 켜지 않는다 — 켜는 것은 `start_service=true` 뿐이다. 마이그레이션이 실패하면 서비스를 바꾸지 않는다. 서비스 교체가 실패하면 ECS circuit breaker 가 이전 리비전으로 되돌리고, 워크플로는 실패로 끝난다.
+- 평시 배포: `apps/engine/airflow/dags/**`·`config/**`·`Dockerfile`·`deploy/entrypoint.sh` 가 dev 에 머지되면 `deploy-airflow` 가 돈다. 이미지 태그는 커밋 SHA 다. 서비스 desired 가 0(운영자 정지)이면 리비전만 바꾸고 켜지 않는다 — 켜는 것은 `start_service=true` 뿐이다. 마이그레이션이 실패하면 서비스를 바꾸지 않는다. 서비스 교체가 실패하면 ECS circuit breaker 가 이전 리비전으로 되돌리고, 워크플로는 실패로 끝난다.
 - 완료 판정(ALPHA-1138, #1049 `c27ee206`, 2026-10-02 머지). 이전에는 services-stable 직후 PRIMARY 를 한 번만 봐서, 정상 배포도 `IN_PROGRESS` 면 실패로 끝났다. 10-01 두 배포(run 36831907974·36833370844)가 그랬고, 실제로는 21·26초 뒤 완료됐다. 지금은 `update-service` 가 돌려준 **이번 배포 id** 를 `deploy/wait_rollout.sh` 가 따라간다.
   - 그 id 가 PRIMARY·COMPLETED 면 성공이다.
   - PRIMARY 가 다른 배포(롤백·같은 리비전의 다른 배포)이거나 FAILED 면 바로 실패다.
@@ -956,7 +957,7 @@ curl -s "$AIRFLOW/api/v2/dags/edge_investor_intraday/dagRuns?state=running&state
 
 | 항목 | 정한 것 |
 |---|---|
-| 배포 시작 | 관측 기간 중 Airflow 배포(`dags/**`·`Dockerfile`·`deploy/entrypoint.sh` 머지의 자동 배포 포함)는 담당자가 직접 시작하거나 지켜볼 수 있을 때만 머지한다. 서비스가 desired 0 이면 자동 배포는 교체를 건너뛴다(켜지 않는다) |
+| 배포 시작 | 관측 기간 중 Airflow 배포(`dags/**`·`config/**`·`Dockerfile`·`deploy/entrypoint.sh` 머지의 자동 배포 포함)는 담당자가 직접 시작하거나 지켜볼 수 있을 때만 머지한다. 서비스가 desired 0 이면 자동 배포는 교체를 건너뛴다(켜지 않는다) |
 | 감시 주체 | 배포를 시작한(머지한) 사람. `deploy-airflow` 가 끝날 때까지(최대 약 10분 + 마이그레이션) 콘솔·CLI 를 본다 |
 | 중단 기준 | 배포 중 `stop-*` 경보가 ALARM 이 됨 · 서비스 이벤트에 OOM·연속 기동 실패 · rollout 이 10분 안에 COMPLETED 가 안 됨 |
 | 직접 중단 | `aws ecs update-service --cluster edge-dev-airflow --service edge-dev-airflow --desired-count 0` (배포 중에도 desired 변경은 된다 — 막히는 것은 오토스케일링의 scale-in 뿐) |
@@ -1055,6 +1056,7 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
 
 - 호스트 표본 한 줄: `HOSTMEM t=<epoch> avail_kb=… free_kb=… task_cg_mib=… cg_oom_kill=… kmsg_oom=… uptime_s=… mem_dag_processor_mib=… mem_api_server_mib=… mem_scheduler_mib=…`(컨테이너별 값은 `docker stats`, ALPHA-1363 — docker 가 20초 안에 답하지 않으면 그 필드만 빠진다). 조회는 `aws ssm list-command-invocations --details`(Comment `edge-dev-airflow-host-mem`).
 - 표본 명령은 5분마다 호스트에서 셸 하나를 잠깐 띄운다(관측에 주는 영향은 이 정도다).
+- 컨테이너별 표본이 가른 메모리 증가의 원인(10-16~19, ALPHA-1363): 증가는 scheduler 컨테이너의 LocalExecutor 워커에서 태스크마다 생긴다 — 원격 로그 핸들러(watchtower)가 스트림(=태스크 시도)마다 만든 큐·스레드를 provider 가 닫지 않아 워커 스레드 수가 재기동 뒤 태스크 수와 같았다(태스크당 0.27 MiB, 평일 ≈11 MiB). `config/airflow_local_settings.py` 가 업로드 시점에 끝낸다. dag-processor 는 토요일 낮 +18 MiB 한 번 뒤 평평, api-server 는 평평. 패치 배포 뒤 확인할 것: 워커 스레드 수가 태스크 수를 따라가지 않고 `mem_scheduler_mib` 가 장중 run 뒤 되돌아오는가.
 
 #### 전환 실행(10-05 예정 → 10-03 앞당겨 실행)
 
