@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useConfirmation } from './design-system/confirmation';
-import { Button, TextInput, Select, SectionHeading, Icon } from './design-system/components';
+import { Button, TextInput, Select, SectionHeading, Icon, Loading } from './design-system/components';
 import { request, ensureVisitorSession, type Catalog, type Instrument } from './api';
-import { accounts, money, needsSeed, withSeed, dividendMonthCovered, annualDividend, type Asset, type Saved, type Tracking, type Workbook } from './workbook';
+import { accounts, money, needsSeed, canApplySeed, withSeed, dividendMonthCovered, annualDividend, type Asset, type Saved, type Tracking, type Workbook } from './workbook';
 import { preview } from './preview';
 import { AllocationChart, DividendChart, DividendSummary } from './WorkbookCharts';
 import { DividendReport } from './DividendReport';
@@ -15,6 +15,8 @@ import { Backtest } from './Backtest';
 import { Analysis } from './Analysis';
 
 const tabs = ['한눈에', '배당 달력', '수익 기록', '백테스트', 'AI 포폴 분석'];
+const tabIds = ['overview', 'dividends', 'returns', 'backtest', 'analysis'];
+const initialTab = () => tabs[Math.max(0, tabIds.indexOf(new URLSearchParams(location.search).get('tab') || ''))];
 const empty: Workbook = { title: '내 포트폴리오', fx: null, assets: [], dividends: [], months: [] };
 const today = () => preview ? '2026-10-18' : new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul' }).format(new Date());
 const thisMonth = () => today().slice(0, 7);
@@ -26,8 +28,9 @@ export function Dashboard() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [catalogError, setCatalogError] = useState('');
   const [trackingError, setTrackingError] = useState('');
-  const [tab, setTab] = useState('한눈에');
-  const [analysisOpened, setAnalysisOpened] = useState(false);
+  const [tab, setTab] = useState(initialTab);
+  const [analysisOpened, setAnalysisOpened] = useState(() => initialTab() === 'AI 포폴 분석');
+  useEffect(() => { const url = new URL(location.href); url.searchParams.set('tab', tabIds[tabs.indexOf(tab)]); history.replaceState(null, '', url); }, [tab]);
   useEffect(() => tab === 'AI 포폴 분석' ? undefined : trackScreen((['dashboard_overview', 'dashboard_dividends', 'dashboard_returns', 'dashboard_backtest'] as Screen[])[tabs.indexOf(tab)]), [tab]);
   const [account, setAccount] = useState('전체');
   const [month, setMonth] = useState(thisMonth);
@@ -75,7 +78,7 @@ export function Dashboard() {
     finally { setBusy(false); }
   }
   const w = saved?.workbook ?? empty;
-  const seedOnly = needsSeed(w) && w.assets.every(a => a.quantity === null && a.amount === null && a.weight !== null) && Math.abs(w.assets.reduce((sum, a) => sum + (a.weight ?? 0), 0) - 100) <= .01;
+  const seedOnly = canApplySeed(w);
   const market = tracking.market && tracking.market.version === saved?.version ? tracking.market.payload : null;
   const assets = w.assets.filter(a => account === '전체' || a.account === account);
   const quotes = new Map(market?.assets.map(a => [a.id, a]) ?? []);
@@ -134,11 +137,13 @@ export function Dashboard() {
     <main className="dashboard-main"><header><div><p className="eyebrow">대시보드</p><h1>{w.title}</h1></div><label>계좌<Select value={account} onChange={e => setAccount(e.target.value)}><option>전체</option>{accounts.map(a => <option key={a}>{a}</option>)}</Select></label></header>
       <span className="dashboard-save-status" role="status">{busy ? '저장 중이에요.' : message}</span>
       {error && <div role="alert" className="dashboard-error">{error} <Button disabled={busy || loading} onClick={() => void reload()}>저장된 내용 다시 불러오기</Button></div>}
-      {!saved ? <p role="status">{loading ? '불러오는 중…' : '저장된 내용을 불러오지 못했어요.'}</p> : <>
+      {!saved ? loading ? <Loading>포트폴리오를 불러오고 있어요.</Loading> : <p>저장된 내용을 불러오지 못했어요.</p> : <>
         {seedOnly && <section className="dashboard-card"><SeedMoney busy={busy} onSubmit={seed => { try { void persist(withSeed(w, seed)); } catch (e) { setError((e as Error).message); } }} /></section>}
         {needsSeed(w) && !seedOnly && <p className="notice">비중만 남아 있는 종목은 눌러서 보유 수량을 입력해 주세요.</p>}
         <section className="dashboard-stats" hidden={tab === 'AI 포폴 분석'}><article><span>총 자산</span><strong>{assets.length ? money(total) : '아직 비어 있어요'}</strong><small>{market ? `${market.date} 확인 · 최근 종가 기준` : assets.length ? '시세를 자동으로 가져오고 있어요' : '보유 종목부터 담아 보세요'}</small></article><article><span>보유 자산 평가손익</span><strong className={`profit-display ${profit === null ? '' : profit >= 0 ? 'gain' : 'loss'}`}><span className="profit-amount">{profit !== null && profit > 0 ? '+' : ''}{money(profit)}</span>{returnPct !== null && <> <span className="profit-percent">({returnPct > 0 ? '+' : ''}{returnPct.toFixed(2)}%)</span></>}</strong>{assets.some(a => a.currency === 'USD') && <small>해외 종목은 현재 환율 기준 · 매입 이후 환차익 제외</small>}</article><article><span>확인된 예상 분배금</span><strong>{(annualEstimate === 0 || forecasts.length > 0) ? money(forecasts.reduce((s, d) => s + d.amount, 0)) : '확인 중'}</strong><small>세전 · 최근 분배 이력 기준</small></article></section>
         {trackingError && <p role="alert">{trackingError} <Button onClick={() => void loadTracking()}>다시 확인</Button></p>}
+        {tab !== 'AI 포폴 분석' && assets.length > 0 && !market && !trackingError && (tracking.market && tracking.market.version > saved.version ? <p className="notice">다른 탭에서 보유 목록이 바뀌었어요. <Button disabled={busy || loading} onClick={() => void reload()}>최신 보유 목록 불러오기</Button></p> : !seedOnly && <Loading>시세를 준비하고 있어요. 보유 종목과 분석 결과는 먼저 볼 수 있어요.</Loading>)}
+        {catalogError && tab === '백테스트' && <p role="alert">{catalogError} <Button onClick={() => void loadCatalog()}>목록 다시 불러오기</Button></p>}
         {market?.missing.some(id => !market.pending_splits?.includes(id) && assets.some(a => a.id === id)) && <p className="notice">일부 종목의 시세나 수량을 확인하지 못했어요. 종목을 눌러 보유 정보를 확인해 주세요.</p>}
         {market?.pending_splits?.some(id => assets.some(a => a.id === id)) && <p className="notice">분할된 종목은 분할 후 첫 종가를 확인하면 평가액을 표시해요.</p>}
         {tab === '한눈에' && <><div className="dashboard-overview"><AllocationChart assets={graphAssets} fx={market?.fx ?? null} /><section className="dashboard-card dividend-summary" data-analytics-section="dividend_summary"><SectionHeading className="card-heading" title="배당 분석" action={<Button onClick={() => setTab('배당 달력')}>달력 보기 <Icon name="chevronRight" size={16} /></Button>} /><DividendSummary forecasts={forecasts} annualEstimate={annualEstimate} total={total} /><DividendChart dividends={[]} forecasts={forecasts} complete={forecastComplete} unavailableMonths={unavailableMonths} incompleteMonths={uncoveredMonths} startMonth={thisMonth()} selectedMonth={month} onMonth={m => { setMonth(m); setTab('배당 달력'); }} /></section></div>
@@ -161,8 +166,8 @@ export function Dashboard() {
           })}</div>
         </section>}
         <div hidden={tab !== '백테스트'}><Backtest assets={graphAssets} catalog={catalog} /></div>
-        {analysisOpened && <div hidden={tab !== 'AI 포폴 분석'}><Analysis embedded active={tab === 'AI 포폴 분석'} /></div>}
       </>}
+      {analysisOpened && <div hidden={tab !== 'AI 포폴 분석'}><Analysis embedded active={tab === 'AI 포폴 분석'} /></div>}
     </main>
     {editing && <dialog ref={dialog} onCancel={e => { e.preventDefault(); void cancelEditor(); }} className="asset-editor" aria-labelledby="asset-editor-title"><form onSubmit={saveAsset} onChange={() => setDirty(true)} onInput={e => { const data = new FormData(e.currentTarget); const q = data.get('quantity'), p = data.get('average'); setEntryCost(q && p && Number.isFinite(Number(q) * Number(p)) ? Number(q) * Number(p) : null); }}><div className="card-heading"><h2 id="asset-editor-title">{w.assets.some(a => a.id === editing.id) ? '보유 자산 수정' : '보유 자산 추가'}</h2><Button type="button" aria-label="수정 닫기" disabled={busy} onClick={() => void cancelEditor()}>×</Button></div><fieldset disabled={busy || loading} className="editor-fields">
       <label>계좌<Select name="account" value={editing.account} onChange={e => setEditing({ ...editing, account: e.target.value })}>{accounts.map(a => <option key={a}>{a}</option>)}</Select></label>

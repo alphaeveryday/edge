@@ -9,6 +9,81 @@ from edge_portfolio.market_data import MarketData, comparison, enrich_report, we
 from report_fixtures import final_payload
 
 
+async def test_price_process_limit_is_shared_across_dashboard_and_analysis_threads(monkeypatch):
+    from threading import Lock
+    from edge_portfolio import market_data
+    active = peak = completed = 0
+    lock = Lock()
+    async def fetch(*args):
+        nonlocal active, peak, completed
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            await asyncio.sleep(.05)
+            return record()
+        finally:
+            with lock:
+                active -= 1
+                completed += 1
+    monkeypatch.setattr(market_data, '_fetch_prices_with_checkpoint', fetch)
+    async def batch():
+        await asyncio.gather(*(market_data.fetch_prices('TEST', date(2026, 10, 12)) for _ in range(3)))
+    await asyncio.gather(batch(), asyncio.to_thread(lambda: asyncio.run(batch())))
+    assert completed == 6
+    assert peak == 2, 'The existing 512 MB worker must not spawn a third price process'
+    assert active == 0
+
+
+async def test_cancelled_price_waiter_never_leaks_a_process_slot(monkeypatch):
+    from edge_portfolio import market_data
+    assert market_data._PRICE_SLOTS.acquire(blocking=False)
+    assert market_data._PRICE_SLOTS.acquire(blocking=False)
+    try:
+        waiter = asyncio.create_task(market_data.fetch_prices('TEST', date(2026, 10, 19)))
+        await asyncio.sleep(.01)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+    finally:
+        market_data._PRICE_SLOTS.release()
+        market_data._PRICE_SLOTS.release()
+    async def cancelled(*args):
+        raise asyncio.CancelledError
+    monkeypatch.setattr(market_data, '_fetch_prices_with_checkpoint', cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        await market_data.fetch_prices('TEST', date(2026, 10, 19))
+    acquired = 0
+    try:
+        for _ in range(2):
+            assert market_data._PRICE_SLOTS.acquire(blocking=False)
+            acquired += 1
+    finally:
+        for _ in range(acquired):
+            market_data._PRICE_SLOTS.release()
+
+
+async def test_capacity_wait_does_not_spend_a_healthy_providers_timeout(monkeypatch):
+    from edge_portfolio import market_data
+    calls = []
+    async def fetch(*args):
+        calls.append(args[-1])
+        return record()
+    monkeypatch.setattr(market_data, '_fetch_prices_with_checkpoint', fetch)
+    assert market_data._PRICE_SLOTS.acquire(blocking=False)
+    assert market_data._PRICE_SLOTS.acquire(blocking=False)
+    try:
+        pending = asyncio.create_task(market_data.fetch_prices('TEST', date(2026, 10, 12), provider_timeout=.01))
+        await asyncio.sleep(.04)
+        assert not pending.done()
+        assert calls == [], 'Capacity contention must not be reported as provider failure'
+    finally:
+        market_data._PRICE_SLOTS.release()
+        market_data._PRICE_SLOTS.release()
+    assert (await asyncio.wait_for(pending, 1))['currency'] == 'KRW'
+    assert calls == ['yahoo']
+
+
 def test_provider_requests_maximum_history_with_the_analysis_cutoff(monkeypatch):
     from edge_portfolio.market_data import load_prices
     calls = []

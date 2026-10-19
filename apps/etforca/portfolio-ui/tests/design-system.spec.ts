@@ -39,7 +39,7 @@ test('tokens stay consistent across input, dashboard and catalog, including text
     }
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), screen).toBe(true);
   }
-  await expect(page.locator('.ds-spinner')).toHaveCSS('animation-name', 'none');
+  for (const spinner of await page.locator('.ds-spinner').all()) await expect(spinner).toHaveCSS('animation-name', 'none');
 });
 
 test('search affordances and dividend data remain visible after token changes', async ({ page }) => {

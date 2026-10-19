@@ -6,6 +6,7 @@ import json
 import sys
 import subprocess
 import tempfile
+from threading import BoundedSemaphore
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -21,6 +22,7 @@ import exchange_calendars as calendars
 from .catalog import directory
 
 log = logging.getLogger(__name__)
+_PRICE_SLOTS = BoundedSemaphore(2)
 # KRX notice (2026 local election / Constitution Day), absent in calendars 4.13.2:
 # https://stock.mk.co.kr/news/disclosure/template/1029043
 KRX_EXTRA_CLOSURES = pd.DatetimeIndex(['2026-06-03', '2026-07-17'])
@@ -134,20 +136,26 @@ def load_prices(symbol, as_of, *, on_raw=None):
 
 
 async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None):
+    # Admission is separate from provider timeouts; a busy worker is not a bad source.
+    while not _PRICE_SLOTS.acquire(blocking=False):
+        await asyncio.sleep(.05)
     try:
-        original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw), timeout=provider_timeout)
-        if on_primary:
-            on_primary(original)
-        columns = [original['frame'][name] for name in ('Adj Close', 'Close')]
-        valid = [column[column.map(positive_price)] for column in columns]
-        if all(not column.empty and (as_of - column.index[-1].date()).days <= 7 for column in valid):
-            return original
-        primary_failure = 'PRICE_INVALID' if any(column.empty for column in valid) else 'PRICE_STALE'
-    except (ValueError, TimeoutError) as error:
-        primary_failure = price_failure(error)
-    record = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback'), timeout=provider_timeout)
-    record['primary_failure'] = primary_failure
-    return record
+        try:
+            original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw), timeout=provider_timeout)
+            if on_primary:
+                on_primary(original)
+            columns = [original['frame'][name] for name in ('Adj Close', 'Close')]
+            valid = [column[column.map(positive_price)] for column in columns]
+            if all(not column.empty and (as_of - column.index[-1].date()).days <= 7 for column in valid):
+                return original
+            primary_failure = 'PRICE_INVALID' if any(column.empty for column in valid) else 'PRICE_STALE'
+        except (ValueError, TimeoutError) as error:
+            primary_failure = price_failure(error)
+        record = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback'), timeout=provider_timeout)
+        record['primary_failure'] = primary_failure
+        return record
+    finally:
+        _PRICE_SLOTS.release()
 
 
 async def _fetch_prices(symbol, as_of, *, on_raw=None, provider='yahoo'):

@@ -19,6 +19,7 @@ export function dividendMonthCovered(asset: Asset, quote: Quote | undefined, mon
 }
 export type Tracking = { market: { version: number; payload: { date: string; assets: Quote[]; fx: number | null; forecasts: Forecast[]; missing: string[]; dividend_missing: string[]; pending_splits?: string[] } } | null; days: { date: string; value: number; assets: Quote[]; fx: number | null }[]; archives?: { version: number; payload: Workbook }[] };
 export function needsSeed(w: Workbook) { return w.assets.some(a => a.amount === null && a.quantity === null && a.weight !== null); }
+export function canApplySeed(w: Workbook) { return needsSeed(w) && w.assets.every(a => a.quantity === null && a.amount === null && a.weight !== null) && Math.abs(w.assets.reduce((sum, a) => sum + (a.weight ?? 0), 0) - 100) <= .01; }
 export function withSeed(w: Workbook, seed: number): Workbook {
   const total = w.assets.reduce((s, a) => s + (a.weight ?? 0), 0);
   if (!Number.isFinite(seed) || seed <= 0 || seed > 1e13 || Math.abs(total - 100) > .01 || w.assets.some(a => a.weight === null)) throw new Error('총 투자금액과 보유 비중을 확인해 주세요.');

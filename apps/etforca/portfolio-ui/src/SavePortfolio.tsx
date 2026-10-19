@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { request } from './api';
 import { preview } from './preview';
 import dashboardPreview from './dashboard-preview.png';
-import { needsSeed, withSeed, type Saved, type Workbook } from './workbook';
+import { canApplySeed, withSeed, type Saved, type Workbook } from './workbook';
 import { SeedMoney } from './SeedMoney';
 import { trackAction } from './analytics';
 
@@ -18,7 +18,7 @@ export function SavePortfolio({ jobId }: { jobId: string }) {
     setBusy(true); setError('');
     try {
       const [saved, source] = pending ? [await request<Saved>('/workbook'), pending] : await Promise.all([request<Saved>('/workbook'), request<Workbook>(`/analyses/${jobId}/workbook`)]);
-      if (needsSeed(source) && seed === undefined) { setPending(source); return; }
+      if (canApplySeed(source) && seed === undefined) { setPending(source); return; }
       const workbook = seed === undefined ? source : withSeed(source, seed);
       await request('/workbook', { method: 'POST', body: JSON.stringify({ version: saved.version, workbook }) });
       trackAction('portfolio_saved');

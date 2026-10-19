@@ -1,5 +1,6 @@
 import asyncio
 import signal
+from threading import Event
 
 import pytest
 
@@ -109,8 +110,10 @@ def test_worker_queue_failure_never_signals_ready(monkeypatch, tmp_path):
         raise RuntimeError('database unavailable')
 
     monkeypatch.setattr(worker.store, 'claim', claim)
-    with pytest.raises(RuntimeError, match='database unavailable'):
+    with pytest.raises(ExceptionGroup, match='TaskGroup') as caught:
         asyncio.run(worker.main())
+    assert isinstance(caught.value.exceptions[0], RuntimeError)
+    assert str(caught.value.exceptions[0]) == 'database unavailable'
     assert not marker.exists()
 
 
@@ -121,18 +124,125 @@ async def test_dashboard_collection_cannot_delay_already_queued_customer_analyse
     monkeypatch.setattr(worker.store, 'initialize', lambda: None)
     monkeypatch.setattr(worker.signal, 'signal', lambda *args: None)
     events = []
+    analysis_finished = Event()
     async def analysis(stopping):
         events.append('analysis')
-        return len(events) < 4
+        if events.count('analysis') == 4:
+            analysis_finished.set()
+        await asyncio.sleep(0)
+        return True
     async def newsletter(stopping):
         events.append('newsletter')
         return False
     async def dashboard(stopping):
         events.append('dashboard')
+        assert await asyncio.to_thread(analysis_finished.wait, 2)
         stopping.set()
         return True
     monkeypatch.setattr(worker, 'work_once', analysis)
     monkeypatch.setattr(newsletter_work, 'work_once', newsletter)
     monkeypatch.setattr(dashboard_work, 'work_once', dashboard)
     await worker.main()
-    assert events == ['analysis'] * 4 + ['newsletter', 'dashboard']
+    assert events.count('analysis') >= 4
+    assert events.count('dashboard') == 1
+    assert 'newsletter' not in events
+
+
+async def test_saved_holdings_refresh_while_an_analysis_is_still_running(monkeypatch, tmp_path):
+    from edge_portfolio import dashboard_work
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
+    monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'ready')
+    monkeypatch.setattr(worker.store, 'initialize', lambda: None)
+    monkeypatch.setattr(worker.signal, 'signal', lambda *args: None)
+    refreshed = Event()
+    async def analysis(stopping):
+        try:
+            assert await asyncio.to_thread(refreshed.wait, 2)
+        finally:
+            stopping.set()
+        return True
+    async def dashboard(stopping):
+        refreshed.set()
+        return True
+    monkeypatch.setattr(worker, 'work_once', analysis)
+    monkeypatch.setattr(dashboard_work, 'work_once', dashboard)
+    await worker.main()
+    assert refreshed.is_set(), 'Saving a portfolio must not wait for the analysis queue to empty'
+
+
+async def test_shutdown_drains_both_analysis_and_valuation_without_claiming_more(monkeypatch, tmp_path):
+    from edge_portfolio import dashboard_work
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
+    monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'ready')
+    monkeypatch.setattr(worker.store, 'initialize', lambda: None)
+    handlers = {}
+    monkeypatch.setattr(worker.signal, 'signal', lambda number, handler: handlers.update({number: handler}))
+    started = Event()
+    completed = []
+    async def analysis(stopping):
+        assert await asyncio.to_thread(started.wait, 2)
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+        completed.append('analysis')
+        return True
+    async def dashboard(stopping):
+        assert not stopping.is_set()
+        started.set()
+        await asyncio.sleep(.01)
+        completed.append('valuation')
+        return True
+    monkeypatch.setattr(worker, 'work_once', analysis)
+    monkeypatch.setattr(dashboard_work, 'work_once', dashboard)
+    await worker.main()
+    assert completed == ['analysis', 'valuation']
+    assert not worker.HEARTBEAT.exists()
+
+
+async def test_dashboard_claim_failure_never_cancels_analysis_and_retries(monkeypatch, tmp_path, caplog):
+    from edge_portfolio import dashboard_work
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
+    monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'ready')
+    monkeypatch.setattr(worker.store, 'initialize', lambda: None)
+    monkeypatch.setattr(worker.signal, 'signal', lambda *args: None)
+    refreshed = Event()
+    calls = 0
+    async def analysis(stopping):
+        assert await asyncio.to_thread(refreshed.wait, 10)
+        stopping.set()
+        return True
+    async def dashboard(stopping):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError('transient claim error')
+        refreshed.set()
+        return True
+    monkeypatch.setattr(worker, 'work_once', analysis)
+    monkeypatch.setattr(dashboard_work, 'work_once', dashboard)
+    await worker.main()
+    assert calls == 2
+    assert 'dashboard loop failed' in caplog.text
+
+
+async def test_synchronous_dashboard_database_wait_does_not_block_analysis(monkeypatch, tmp_path):
+    import time
+    from edge_portfolio import dashboard_work
+    monkeypatch.setenv('DEEPSEEK_API_KEY', 'test-only')
+    monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'ready')
+    monkeypatch.setattr(worker.store, 'initialize', lambda: None)
+    monkeypatch.setattr(worker.signal, 'signal', lambda *args: None)
+    started, finished = Event(), Event()
+    async def dashboard(stopping):
+        started.set()
+        time.sleep(.3)  # A synchronous psycopg row-lock wait.
+        finished.set()
+        return True
+    async def analysis(stopping):
+        assert await asyncio.to_thread(started.wait, 2)
+        await asyncio.sleep(.01)
+        assert not finished.is_set(), 'Analysis must resume during a blocking dashboard DB call'
+        stopping.set()
+        return True
+    monkeypatch.setattr(worker, 'work_once', analysis)
+    monkeypatch.setattr(dashboard_work, 'work_once', dashboard)
+    await worker.main()
+    assert finished.is_set(), 'Shutdown must still drain the background task'

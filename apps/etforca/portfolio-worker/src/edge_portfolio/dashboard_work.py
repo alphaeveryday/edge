@@ -168,7 +168,7 @@ async def records_for(ids, day, *, required_after=None):
                                 records[key] = captured
                         try:
                             budget = 200 / max(1, len(keys))
-                            record = await asyncio.wait_for(fetch_prices(symbol, end, on_raw=capture, on_primary=capture, provider_timeout=budget * .45), timeout=budget)
+                            record = await fetch_prices(symbol, end, on_raw=capture, on_primary=capture, provider_timeout=budget * .45)
                             record = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat()}
                         except TimeoutError:
                             if key not in records:
