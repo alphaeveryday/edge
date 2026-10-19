@@ -521,6 +521,141 @@ a[role="button"]{cursor:pointer}
 .faq__list details[open] summary::after{transform:translateY(-25%) rotate(-135deg)}
 .faq__list details p{padding:0 0 1.5rem;color:var(--t2);max-width:42.5rem}
 
+/* 포트폴리오 점검: 웹 서비스 /portfolio/ 로 가는 길. 모바일은 제목 → 예시 화면 → 단계 → 단추, 데스크톱은 왼쪽 글과 오른쪽 예시 화면 */
+.pf__grid{display:grid;gap:2rem;grid-template-areas:"head" "demo" "steps" "go"}
+.pf__head{grid-area:head;margin-bottom:0}
+.pf__tags{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
+.pf__tags .eyebrow{margin-right:.25rem}
+.pf__web{background:var(--surface);color:var(--t2);letter-spacing:.04em;font-weight:700}
+.pf__demo{grid-area:demo;width:100%;max-width:34rem;justify-self:center;margin:0;border-radius:1.25rem;background:var(--bg-raised);border:1px solid var(--border-strong);box-shadow:0 1.875rem 4.375rem var(--shadow);overflow:hidden}
+.pf__chrome{display:flex;align-items:center;gap:.375rem;padding:.625rem .875rem;border-bottom:1px solid var(--border);background:var(--stage)}
+.pf__chrome i{width:.625rem;height:.625rem;border-radius:50%;background:var(--border-strong)}
+.pf__url{flex:1;margin-left:.5rem;padding:.3125rem .75rem;border-radius:999px;background:var(--surface);color:var(--t2);font-size:max(calc(var(--tk) * 12.8),.8125rem);font-weight:600}
+.pf__screen{display:grid;gap:1rem;padding:1.25rem}
+.pf__label{display:flex;align-items:center;gap:.75rem;font-size:max(calc(var(--tk) * 15.7),1.0625rem);font-weight:700}
+.pf__label small{margin-left:auto;font-size:max(calc(var(--tk) * 12),.75rem);font-weight:600;color:var(--t3)}
+.pf__dot{display:none;flex:none;width:.5rem;height:.5rem;margin-right:-.25rem;border-radius:50%;background:var(--accent);animation:live 1.6s ease-out infinite} /* 분석 중일 때 제목 앞에서 깜빡인다(.live 효과) */
+.pf__stage{display:grid}
+.pf__pane{grid-area:1 / 1;display:grid;gap:.625rem;align-content:start}
+.pf__pane:not([data-pane="3"]){display:none} /* 모션이 없으면 결과 화면만 */
+.pf__form > div{display:grid;gap:.375rem;padding:.625rem .75rem;border-radius:.75rem;background:var(--surface)}
+.pf__form dt{font-size:max(calc(var(--tk) * 12.8),.8125rem);font-weight:600;color:var(--t3)}
+.pf__form dd{display:flex;flex-wrap:wrap;gap:.375rem}
+.pf__form dd span{padding:.25rem .625rem;border-radius:999px;background:var(--point-subtle);color:var(--point-300);font-size:max(calc(var(--tk) * 13.6),.875rem);font-weight:700}
+.pf__graph{position:relative;height:8rem;margin:-.5rem -1.25rem 0;background:radial-gradient(60% 70% at 50% 45%,rgb(91 124 250 / .22),transparent 72%)}
+.pf__graph canvas{display:block;width:100%;height:100%}
+.pf__now{position:absolute;left:0;right:0;bottom:0;display:flex;justify-content:center;align-items:baseline;gap:.5rem;font-size:max(calc(var(--tk) * 13.6),.875rem);font-weight:700;color:var(--accent-300)}
+.pf__now b{font-family:var(--num);font-size:max(calc(var(--tk) * 12.8),.8125rem);font-weight:700;color:var(--t2)}
+.pf__trio{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.5rem}
+.pf__trio .pf__ai{justify-items:center;text-align:center}
+.pf__ai{position:relative;overflow:hidden;display:grid;gap:.125rem;padding:.625rem .75rem .75rem;border-radius:.75rem;background:var(--surface);border:1px solid rgb(91 124 250 / .45)}
+.pf__ai b{font-size:max(calc(var(--tk) * 14.3),.9375rem)}
+.pf__ai svg{width:1.875rem;height:1.875rem;margin-bottom:.25rem;padding:.375rem;border-radius:.625rem;background:var(--accent-subtle);fill:none;stroke:var(--accent-300);stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+.pf__ai::before{content:"";position:absolute;right:.5rem;top:.5rem;width:.875rem;height:.875rem;border-radius:50%;border:2px solid var(--accent);border-left-color:transparent;opacity:0} /* 도는 동안의 고리 */
+.pf__ai small{font-size:max(calc(var(--tk) * 12),.75rem);font-weight:600;color:var(--t3)}
+.pf__st{display:grid;margin-top:.25rem;font-size:max(calc(var(--tk) * 12),.75rem);font-weight:700}
+.pf__st em{grid-area:1 / 1;font-style:normal}
+.pf__st em:first-child{opacity:0;color:var(--point-300)}
+.pf__st em:last-child{color:var(--t2)}
+.pf__st em:last-child::before{content:"✓ "}
+.pf__prog{position:absolute;left:0;right:0;bottom:0;height:2px;background:var(--grad);transform-origin:left}
+.pf__role{grid-template-columns:auto minmax(0,1fr);column-gap:.75rem}
+.pf__role svg{grid-row:1 / 4;align-self:center;margin:0}
+/* 결과를 넘기는 연결선: 세 카드 가운데에서 모여 아래 카드로 내려간다(진행 화면의 '분석 결과 전달') */
+.pf__hand{position:relative;height:1.75rem;margin-block:-.25rem}
+.pf__hand::before{content:"";position:absolute;left:calc((100% - 1rem) / 6);right:calc((100% - 1rem) / 6);top:0;height:.75rem;border:2px solid var(--accent);border-top:0;border-radius:0 0 .5rem .5rem}
+.pf__hand::after{content:"";position:absolute;left:calc(50% - 1px);top:.75rem;bottom:0;width:2px;background:var(--accent)}
+.pf__hand--one::before{display:none}
+.pf__hand--one::after{top:0}
+.pf__hand span{position:absolute;left:calc(50% + .625rem);bottom:0;font-size:max(calc(var(--tk) * 12),.75rem);font-weight:600;color:var(--accent-300)}
+.pf__cap{display:grid;font-size:max(calc(var(--tk) * 12.8),.8125rem);font-weight:600;color:var(--t2)}
+.pf__cap em{grid-area:1 / 1;font-style:normal}
+.pf__cap em:first-child{opacity:0}
+.pf__alloc{display:flex;height:2.75rem;border-radius:.75rem;overflow:hidden;background:var(--surface)}
+.pf__alloc i{flex:0 0 var(--a);min-width:0;background:var(--c);box-shadow:inset -2px 0 var(--bg-raised)}
+.pf .c1{--c:var(--point)} .pf .c2{--c:var(--accent-300)} .pf .c3{--c:var(--t3)} .pf .c4{--c:var(--border-strong)}
+.pf__legend{display:flex;flex-wrap:wrap;gap:.375rem 1rem;font-size:max(calc(var(--tk) * 12.8),.8125rem);font-weight:600;color:var(--t2)}
+.pf__legend li::before{content:"";display:inline-block;width:.5rem;height:.5rem;margin-right:.375rem;border-radius:2px;background:var(--c)}
+.pf__changes{display:grid;gap:.5rem}
+.pf__changes li,.pf__bt{display:flex;align-items:center;gap:.625rem;padding:.625rem .75rem;border-radius:.75rem;background:var(--surface);font-size:max(calc(var(--tk) * 14.3),.9375rem);font-weight:600}
+.pf__bt{background:none;padding:0;font-size:max(calc(var(--tk) * 13.6),.875rem);color:var(--t2)}
+.pf__tag{background:var(--bg-raised);color:var(--t2)} /* 줄이기·늘리기는 방향 표시가 아니라 빨강·하늘색을 쓰지 않는다 */
+.pf__tag--on{background:var(--point-subtle);color:var(--point-300)}
+.pf__rec{display:flex;align-items:center;justify-content:space-between;font-size:max(calc(var(--tk) * 12.8),.8125rem);font-weight:700;color:var(--point-300)}
+.pf__score{display:flex;align-items:baseline;gap:.25rem;font-family:var(--num);font-size:max(calc(var(--tk) * 20),1.375rem);font-weight:800;color:var(--t1)}
+.pf__score i{font-style:normal;font-size:.8em;color:var(--accent-300)}
+.pf__score em{font-style:normal}
+.pf__score small{font-size:max(calc(var(--tk) * 12.8),.8125rem);font-weight:600;color:var(--t3)}
+.pf__kpi{display:grid;grid-template-columns:1fr 1fr;gap:.5rem}
+.pf__kpi > div{display:grid;gap:.125rem;padding:.625rem .75rem;border-radius:.75rem;background:var(--surface)}
+.pf__kpi span{font-size:max(calc(var(--tk) * 12),.75rem);font-weight:600;color:var(--t3)}
+.pf__kpi b{font-family:var(--num);font-size:max(calc(var(--tk) * 18),1.25rem);font-weight:800;color:var(--up-300)}
+.pf__kpi > div + div b{color:var(--t1)}
+.pf__kpi em{font-style:normal}
+.pf__perf{display:grid;gap:.5rem;padding:.625rem .75rem .75rem;border-radius:.75rem;background:var(--surface)}
+.pf__perf-head{display:flex;align-items:center;justify-content:space-between;font-size:max(calc(var(--tk) * 12.8),.8125rem);font-weight:700;color:var(--t2)}
+.pf__perf svg{display:block;width:100%;height:5rem;overflow:visible}
+.pf__line{fill:none;stroke-width:2.25;vector-effect:non-scaling-stroke;stroke-linecap:round;stroke-linejoin:round}
+.pf__line.is-rec{stroke:var(--point-400)}
+.pf__line.is-cur{stroke:var(--t3)}
+.pf__area{fill:url(#pf-area)}
+.pf__perf-key{display:flex;gap:1rem;font-size:max(calc(var(--tk) * 12),.75rem);font-weight:600;color:var(--t2)}
+.pf__perf-key li::before{content:"";display:inline-block;width:.625rem;height:2px;margin-right:.375rem;vertical-align:.25em;border-radius:1px;background:currentColor}
+.pf__perf-key .is-rec{color:var(--point-300)}
+.pf__perf-key b{font-family:var(--num);color:var(--t1)}
+/* 단계 목록: 리포트 섹션의 .steps 와 같은 표시(켜진 줄 = 면 배경 + 밝은 글자 + 채운 번호 원, 꺼진 줄 = 흐린 글자 + 테두리 원) */
+.pf__steps{grid-area:steps;display:grid;gap:.375rem;counter-reset:s}
+.pf__steps li{counter-increment:s;display:grid;grid-template-columns:auto minmax(0,1fr);gap:.125rem .875rem;padding:.75rem 1rem;border-radius:.875rem;color:var(--t1);transition:background-color .4s,color .4s}
+.pf__steps li::before{content:counter(s);grid-row:1 / 3;align-self:center;display:grid;place-items:center;width:calc(28em / 13);height:calc(28em / 13);border-radius:50%;border:1px solid var(--point);background:var(--point);color:var(--on-point);font-family:var(--num);font-size:max(calc(var(--tk) * 12.8),.8125rem);font-weight:700;transition:background-color .4s,border-color .4s,color .4s}
+.pf__steps b{font-size:max(calc(var(--tk) * 15.7),1.0625rem);font-weight:700}
+.pf__steps small{font-size:max(calc(var(--tk) * 13.6),.875rem);font-weight:600;color:inherit;opacity:.8}
+.pf__go{grid-area:go;display:flex;flex-wrap:wrap;align-items:center;gap:.75rem 1rem}
+.pf__go small{font-size:max(calc(var(--tk) * 13.6),.875rem);font-weight:600;color:var(--t3)}
+@media (min-width:1024px){
+  .pf__grid{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:"head demo" "steps demo" "go demo";column-gap:3.5rem;align-items:center}
+  .pf__demo{justify-self:end}
+}
+/* 모션: 단계에 맞춰 화면이 바뀌고 화면 안의 줄은 차례로 놓인다. scrub 은 모션 코드가 붙인다 */
+.pf.scrub .pf__pane{display:grid;opacity:0;visibility:hidden;transition:opacity .35s,visibility 0s .35s}
+.pf.scrub .pf__pane.is-on{opacity:1;visibility:visible;transition:opacity .35s}
+.pf.scrub .pf__in{opacity:0;transform:translateY(.5rem)}
+.pf.scrub .is-on .pf__in{opacity:1;transform:none;transition:opacity .45s var(--ease-out),transform .6s var(--ease-overshoot);transition-delay:calc(var(--i) * .35s + .2s)}
+/* 2단계(AI 분석): 카드가 차례로 놓이고, 훑는 빛과 진행 막대가 1.6초 돈 뒤 완료로 바뀐다. 셋이 끝나면 연결선을 따라 매니저 둘이 이어받는다(--d 놓임, --t 시작, --c 연결선) */
+.pf.scrub .pf__ai{opacity:0;transform:translateY(.5rem);border-color:var(--border)}
+.pf.scrub .pf__ai .pf__prog{transform:scaleX(0)}
+.pf.scrub .pf__ai .pf__st em:last-child{opacity:0}
+.pf.scrub .pf__hand{clip-path:inset(0 0 100% 0)}
+.pf.scrub .pf__team.is-on .pf__ai{opacity:1;transform:none;border-color:rgb(91 124 250 / .45);transition:opacity .45s var(--ease-out) var(--d),transform .6s var(--ease-overshoot) var(--d),border-color .4s calc(var(--t) + 1.6s)}
+.pf.scrub .pf__team.is-on .pf__ai .pf__prog{transform:none;transition:transform 1.6s var(--ease-inout) var(--t)}
+.pf.scrub .pf__team.is-on .pf__ai .pf__st em:first-child{animation:pf-run 1.6s var(--t) both}
+.pf.scrub .pf__team.is-on .pf__ai .pf__st em:last-child{opacity:1;transition:opacity .3s calc(var(--t) + 1.6s)}
+.pf.scrub .pf__team.is-on .pf__ai::after{content:"";position:absolute;inset:0;border-radius:inherit;background:linear-gradient(100deg,transparent 30%,rgb(91 124 250 / .18) 50%,transparent 70%);transform:translateX(-100%);animation:pf-shim .8s linear var(--t) 2}
+.pf.scrub .pf__team.is-on .pf__hand{clip-path:inset(0 -10rem 0 0);transition:clip-path .45s var(--ease-out) var(--c)}
+.pf.scrub .pf__team.is-on .pf__ai::before{animation:pf-spin .8s linear var(--t) 2,pf-ring 1.6s var(--t) both}
+.pf.scrub .pf__team.is-on .pf__ai svg{animation:pf-ico 1.6s var(--t) both}
+.pf.scrub .pf__demo.is-ai .pf__dot{display:block}
+@keyframes pf-run{0%{opacity:0}12%,88%{opacity:1}50%{opacity:.45}100%{opacity:0}}
+@keyframes pf-shim{to{transform:translateX(100%)}}
+@keyframes pf-spin{to{rotate:1turn}}
+@keyframes pf-ring{0%,100%{opacity:0}6%,94%{opacity:1}}
+@keyframes pf-ico{0%,100%{background:var(--accent-subtle);stroke:var(--accent-300)}8%,92%{background:var(--accent);stroke:#fff}}
+/* 3단계: 비중 막대가 지금 구성에서 제안 구성으로 천천히 바뀐다 */
+.pf.scrub .pf__alloc i{flex-basis:var(--b)}
+.pf.scrub .pf__cap em:first-child{opacity:1}
+.pf.scrub .pf__cap em:last-child{opacity:0}
+.pf.scrub .pf__result.is-on .pf__alloc i{flex-basis:var(--a);transition:flex-basis 1.6s var(--ease-inout) .5s}
+.pf.scrub .pf__result.is-on .pf__cap em{transition:opacity .4s 1.2s}
+.pf.scrub .pf__result.is-on .pf__cap em:first-child{opacity:0}
+.pf.scrub .pf__result.is-on .pf__cap em:last-child{opacity:1}
+.pf.scrub .pf__perf svg{clip-path:inset(-.5rem 100% -.5rem 0)} /* 선은 왼쪽부터 드러낸다(굵기 고정 선은 대시 애니메이션이 끝까지 안 그려진다) */
+.pf.scrub .pf__area,.pf.scrub .pf__perf-key{opacity:0}
+.pf.scrub .pf__result.is-on .pf__perf svg{clip-path:inset(-.5rem 0 -.5rem 0);transition:clip-path 1.8s var(--ease-inout) 2s}
+.pf.scrub .pf__result.is-on .pf__area{opacity:1;transition:opacity .8s 3.2s}
+.pf.scrub .pf__result.is-on .pf__perf-key{opacity:1;transition:opacity .5s 3.6s}
+.pf.scrub .pf__steps li{color:var(--t3)}
+.pf.scrub .pf__steps li::before{background:none;border-color:var(--border-strong);color:var(--t3)}
+.pf.scrub .pf__steps li.is-on{background:var(--surface);color:var(--t1)}
+.pf.scrub .pf__steps li.is-on::before{background:var(--point);border-color:var(--point);color:var(--on-point)}
 /* 마지막 CTA */
 .cta{overflow:hidden;text-align:center;background:radial-gradient(50% 50% at 50% 62%,rgb(63 95 224 / .26),transparent 70%),radial-gradient(60% 50% at 50% 28%,rgb(127 180 255 / .1),transparent 70%),var(--bg)}
 .cta__inner{display:flex;flex-direction:column;align-items:center}
@@ -625,8 +760,8 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
   .post--c{--r:1.5deg;grid-column:1;grid-row:2;justify-self:start;align-self:start}
 
   /* full 모드: 공감과 전망 장면은 한 화면에 고정한다 */
-  .motion-full .pain,.motion-full .engine,.motion-full .why,.motion-full .today,.motion-full .talk{min-height:100svh;display:flex;flex-direction:column;justify-content:center;padding-block:5rem 1.5rem}
-  .motion-full .pain > .container,.motion-full .engine > .container,.motion-full .why > .container,.motion-full .today > .container,.motion-full .talk > .container{padding-inline:3.25rem}
+  .motion-full .pain,.motion-full .engine,.motion-full .why,.motion-full .today,.motion-full .talk,.motion-full .pf{min-height:100svh;display:flex;flex-direction:column;justify-content:center;padding-block:5rem 1.5rem}
+  .motion-full .pain > .container,.motion-full .engine > .container,.motion-full .why > .container,.motion-full .today > .container,.motion-full .talk > .container,.motion-full .pf > .container{padding-inline:3.25rem}
   .motion-full .engine .section-head{margin-bottom:1.5rem}
   .motion-full .engine .fcell{padding:.625rem 1rem}
   .motion-full .engine .swarm{padding-block:0}
@@ -944,6 +1079,74 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
         <li class="post post--c"><i class="post__av" aria-hidden="true">삼</i><div class="post__bub"><p class="post__who"><b>삼전존버</b><span>2시간</span></p><p class="post__t">저는 차트에서 아직 못 봤어요.</p></div></li>
       </ul>
     </div>
+  </div>
+</section>
+
+<!-- 포트폴리오 점검: 앱 소개가 끝난 자리에서, 웹에서 바로 되는 다른 길을 연다(앱 없이, 안드로이드에서도).
+     문구는 /portfolio/ 화면(portfolio-ui)의 입력 단계·진행 화면·결과 구성을 옮겼다. 진행 화면은 한 AI가 관점들을 순서대로 검토한다: 멀티에이전트라고 쓰지 않는다 -->
+<section class="section pf" id="portfolio">
+  <div class="container pf__grid">
+    <header class="section-head pf__head">
+      <p class="pf__tags"><span class="eyebrow eyebrow--point">포트폴리오 점검</span><span class="chip chip--launch">BETA</span><span class="chip pf__web">WEB</span></p>
+      <h2 class="h2">가진 ETF를 넣으면<br>고칠 곳을 찾아드려요.</h2>
+      <p class="body muted"><span class="nw">앱 설치 없이 웹에서 바로 써요.</span> <span class="nw">분석은 5분쯤 걸려요.</span></p>
+    </header>
+    <!-- 예시 화면: 아래 세 단계와 같은 순서로 입력 → 분석 → 결과가 바뀐다. 주소창은 웹이라는 표시다. 종목과 비중은 지어낸 값이다. 모션이 없으면 결과 화면만 보인다 -->
+    <figure class="pf__demo" data-pf aria-label="포트폴리오 점검 예시 화면">
+      <div class="pf__chrome" aria-hidden="true"><i></i><i></i><i></i><span class="pf__url">etforca.com/portfolio</span></div>
+      <div class="pf__screen">
+        <p class="pf__label"><i class="pf__dot" aria-hidden="true"></i><span data-pf-title>점검 결과</span><small>예시 화면</small></p>
+        <div class="pf__stage">
+          <dl class="pf__pane pf__form" data-pane="1">
+            <div class="pf__in" style="--i:0"><dt>가진 ETF</dt><dd><span>KODEX 200</span><span>TIGER 미국S&amp;P500</span><span>현금</span></dd></div>
+            <div class="pf__in" style="--i:1"><dt>넣는 방법</dt><dd><span>매달 꾸준히</span></dd></div>
+            <div class="pf__in" style="--i:2"><dt>쓸 시기</dt><dd><span>3~10년 뒤</span></dd></div>
+            <div class="pf__in" style="--i:3"><dt>더 담고 싶은 쪽</dt><dd><span>배당</span></dd></div>
+          </dl>
+          <!-- 2단계: /portfolio/ 진행 화면(ProgressView.tsx)을 줄여 옮겼다. 위는 자료를 훑는 그림, 아래는 관점 카드와 결과를 넘기는 연결선. 아이콘도 그 화면 것이다 -->
+          <div class="pf__pane pf__team" data-pane="2">
+            <div class="pf__graph"><canvas data-pf-graph aria-hidden="true"></canvas><p class="pf__now"><span data-pf-now>자료를 모으는 중</span><b data-pf-pct>0%</b></p></div>
+            <ul class="pf__trio" role="list">
+              <li class="pf__ai" style="--d:.15s;--t:.5s"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M16.5 10.5a6 6 0 1 1-12 0a6 6 0 1 1 12 0M15 15l5 5M8 12v-2M10.5 12V8M13 12v-3"/></svg><b>종목 분석</b><small>ETF 안의 회사</small><span class="pf__st"><em>분석 중</em><em>완료</em></span><i class="pf__prog"></i></li>
+              <li class="pf__ai" style="--d:.35s;--t:.85s"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20V10l6 3.5V10l6 3.5V5h4v15zM3 20h18"/></svg><b>산업 분석</b><small>실려 있는 산업</small><span class="pf__st"><em>분석 중</em><em>완료</em></span><i class="pf__prog"></i></li>
+              <li class="pf__ai" style="--d:.55s;--t:1.2s"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-17 0a8.5 8.5 0 1 1 17 0M3.5 12h17M12 3.5c3 3 3 14 0 17M12 3.5c-3 3-3 14 0 17"/></svg><b>경제 분석</b><small>나라와 통화</small><span class="pf__st"><em>분석 중</em><em>완료</em></span><i class="pf__prog"></i></li>
+            </ul>
+            <p class="pf__hand" style="--c:2.8s"><span>분석 결과 전달</span></p>
+            <p class="pf__role pf__ai" style="--d:2.9s;--t:3.1s"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v8.5h8.5A8.5 8.5 0 1 1 12 3.5zM15 3.9A8.5 8.5 0 0 1 20.1 9H15z"/></svg><b>포트폴리오 매니저</b><small>세 분석을 모아 결론을 내요</small><span class="pf__st"><em>결론 정리 중</em><em>완료</em></span><i class="pf__prog"></i></p>
+            <p class="pf__hand pf__hand--one" style="--c:4.7s"><span>결론 전달</span></p>
+            <p class="pf__role pf__ai" style="--d:4.8s;--t:5s"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.6-3 8-7.5 9.5-4.5-1.5-7.5-4.9-7.5-9.5V6zM8.8 12l2.3 2.3 4.2-4.4"/></svg><b>리스크 매니저</b><small>결론에 반대 의견을 내고 흠을 찾아요</small><span class="pf__st"><em>반대 의견 검토 중</em><em>검토 끝</em></span><i class="pf__prog"></i></p>
+          </div>
+          <!-- 3단계: /portfolio/ 결과 화면(ReportView.tsx)의 앞부분을 줄여 옮겼다. 종합 점수(5점) → 지금·제안 구성 → 예상 1년 수익률·배당률 → 과거 성과(백테스트) → 바꿀 것. 숫자는 예시다 -->
+          <div class="pf__pane pf__result" data-pane="3">
+            <p class="pf__rec pf__in" style="--i:0"><span>추천 포트폴리오</span><b class="pf__score"><i aria-hidden="true">★</i><em data-to="4.3">4.3</em><small>/ 5</small></b></p>
+            <p class="pf__cap"><em>지금 구성</em><em>제안 구성</em></p>
+            <div class="pf__alloc" aria-hidden="true"><i class="c1" style="--b:50%;--a:35%"></i><i class="c2" style="--b:20%;--a:35%"></i><i class="c3" style="--b:0%;--a:15%"></i><i class="c4" style="--b:30%;--a:15%"></i></div>
+            <ul class="pf__legend" role="list"><li class="c1">국내 지수</li><li class="c2">미국 지수</li><li class="c3">채권</li><li class="c4">현금</li></ul>
+            <div class="pf__kpi pf__in" style="--i:3"><div><span>예상 1년 수익률</span><b>+<em data-to="7.8" data-delay="1.3">7.8</em>%</b></div><div><span>1년 배당률</span><b><em data-to="2.9" data-delay="1.3">2.9</em>%</b></div></div>
+            <div class="pf__perf pf__in" style="--i:4">
+              <p class="pf__perf-head"><span>과거 성과</span><span class="chip pf__tag pf__tag--on">백테스트</span></p>
+              <svg viewBox="0 0 300 80" preserveAspectRatio="none" aria-hidden="true">
+                <defs><linearGradient id="pf-area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#5b7cfa" stop-opacity=".32"/><stop offset="1" stop-color="#5b7cfa" stop-opacity="0"/></linearGradient></defs>
+                <path class="pf__area" d="M0 66 L25 62 L50 64 L75 54 L100 56 L125 46 L150 48 L175 38 L200 41 L225 30 L250 26 L275 22 L300 16 L300 80 L0 80 Z"/>
+                <polyline class="pf__line is-cur" points="0,66 25,64 50,67 75,61 100,63 125,58 150,60 175,54 200,57 225,51 250,50 275,47 300,44"/>
+                <polyline class="pf__line is-rec" points="0,66 25,62 50,64 75,54 100,56 125,46 150,48 175,38 200,41 225,30 250,26 275,22 300,16"/>
+              </svg>
+              <ul class="pf__perf-key" role="list"><li class="is-rec">제안 구성 <b>+18.4%</b></li><li class="is-cur">지금 구성 <b>+9.1%</b></li></ul>
+            </div>
+            <ul class="pf__changes" role="list">
+              <li class="pf__in" style="--i:8"><span class="chip pf__tag">줄이기</span>쉬고 있는 현금</li>
+              <li class="pf__in" style="--i:9"><span class="chip pf__tag pf__tag--on">늘리기</span>미국 지수와 채권</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </figure>
+    <ol class="pf__steps" role="list">
+      <li><b>내 정보를 넣어요</b><small>가진 ETF, 넣는 방법, 쓸 시기, 더 담고 싶은 쪽</small></li>
+      <li><b>AI가 다섯 관점으로 따져요</b><small>종목·산업·경제를 보고 매니저 둘이 결론을 다듬어요</small></li>
+      <li><b>백테스트로 확인한 제안을 받아요</b><small>바꿀 것과 계좌별 투자 제안</small></li>
+    </ol>
+    <p class="pf__go" data-cta-zone><a class="btn btn--point btn--lg" href="/portfolio/">내 ETF 전체 점검하기</a><small>베타 서비스 · 웹에서 열려요</small></p>
   </div>
 </section>
 
@@ -1929,6 +2132,74 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     ScrollTrigger.batch(posts, { start: 'top 74%', once: true, onEnter: (b) => b.forEach((el, i) => setTimeout(() => el.classList.add('is-on'), i * 160)) });
   }
 
+  // 포트폴리오 점검: 입력 → 분석 → 결과. 고정 화면에선 스크롤로 단계를 넘기고(분석에 스크롤을 가장 길게 준다), 고정하지 않는 화면에선 들어올 때 한 번 저절로 넘긴다
+  const pfSec = $('.pf'), pfDemo = $('[data-pf]', pfSec), pfPanes = $$('[data-pane]', pfSec), pfSteps = $$('.pf__steps li', pfSec), pfTitle = $('[data-pf-title]', pfSec);
+  const pfTitles = ['내 정보 입력', 'AI 분석 중', '점검 결과'];
+  let pfAt = 0;
+  // 2단계 무대: /portfolio/ 진행 화면의 그림(progressGraph.js, three.js)을 2D로 옮겼다. 구 껍질 위의 점을 가까운 셋끼리 잇고, 빛이 덜 가 본 이웃으로 건너다닌다.
+  // 같은 시계로 아래 카드들(6.6초)에 맞춰 지금 하는 일과 진행률을 바꾼다
+  const gcv = $('[data-pf-graph]', pfSec), gx = gcv.getContext('2d'), pfNow = $('[data-pf-now]', pfSec), pfPct = $('[data-pf-pct]', pfSec);
+  const GP = [], GE = [], gnb = [];
+  { let sd = 11; const r = () => (sd = (sd * 16807) % 2147483647) / 2147483647;
+    for (let i = 0; i < 54; i++) { const y = 1 - (i / 53) * 2, rad = Math.sqrt(1 - y * y), th = i * 2.399963, R = 1 + r() * .44; GP.push([Math.cos(th) * rad * R, y * R * .82, Math.sin(th) * rad * R]); gnb.push([]); }
+    GP.forEach((p, a) => GP.map((q, b) => [Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]), b]).sort((x, z) => x[0] - z[0]).slice(1, 4)
+      .forEach(([, b]) => { if (!gnb[a].includes(b)) { gnb[a].push(b); gnb[b].push(a); GE.push([a, b]); } })); }
+  const heat = new Float32Array(GP.length), eheat = new Float32Array(GE.length);
+  const NOW = [[0, '자료를 모으는 중'], [.5, '종목·산업·경제를 보는 중'], [2.9, '결론을 정리하는 중'], [4.8, '반대 의견을 검토하는 중'], [6.6, '분석 끝']];
+  let gAt = 0, gFrom = 0, gHop = 0, gRot = 0, gRaf = 0, gLast = 0, pfT0 = 0;
+  function graph(now) {
+    gRaf = 0;
+    if (pfAt !== 2 || document.hidden) return;
+    const dt = Math.min(.05, (now - (gLast || now)) / 1000), el = Math.max(0, now - pfT0) / 1000, busy = el < 6.6;
+    gLast = now;
+    // 상태 문구·진행률은 그림보다 먼저 바꾼다: 캔버스를 못 쓰는 환경에서도 분석 진행은 보인다. findLast 는 구형 사파리에 없어 filter 로 쓴다
+    pfNow.textContent = NOW.filter(([t]) => el >= t).pop()[1];
+    pfPct.textContent = Math.round(Math.min(1, el / 6.6) * 100) + '%';
+    if (!gx) { gRaf = requestAnimationFrame(graph); return; }
+    gHop += dt * (busy ? 9 : 2.5); // 분석하는 동안은 빠르게 건너다니고, 끝나면 느려진다
+    if (gHop >= 1) {
+      const o = gnb[gAt].slice().sort((a, b) => heat[a] - heat[b]), nx = o[Math.random() < .7 ? 0 : Math.floor(Math.random() * o.length)];
+      GE.forEach((e, i) => { if (e.includes(gAt) && e.includes(nx)) eheat[i] = 1; });
+      gHop = 0; gFrom = gAt; gAt = nx; heat[nx] = 1;
+    }
+    heat.forEach((v, i) => (heat[i] = v * (1 - dt * .55))); eheat.forEach((v, i) => (eheat[i] = v * (1 - dt * .8)));
+    gRot += dt * (busy ? .55 : .18);
+    const k = Math.min(window.devicePixelRatio || 1, 2) * 1.25, w = gcv.clientWidth, h = gcv.clientHeight;
+    if (gcv.width !== Math.round(w * k)) { gcv.width = Math.round(w * k); gcv.height = Math.round(h * k); }
+    gx.setTransform(k, 0, 0, k, 0, 0); gx.clearRect(0, 0, w, h);
+    const R = h * .4, cx = w / 2, cy = h * .42, c = Math.cos(gRot), s = Math.sin(gRot), tl = Math.sin(now / 3300) * .16, ct = Math.cos(tl), st = Math.sin(tl);
+    const pr = GP.map(([x, y, z]) => { const X = x * c + z * s, Z0 = z * c - x * s, Y = y * ct - Z0 * st, f = 4 / (4 + y * st + Z0 * ct); return [cx + X * R * f, cy + Y * R * f, f]; });
+    gx.lineWidth = 1;
+    GE.forEach(([a, b], i) => { gx.strokeStyle = `rgba(127,180,255,${.14 + eheat[i] * .8})`; gx.beginPath(); gx.moveTo(pr[a][0], pr[a][1]); gx.lineTo(pr[b][0], pr[b][1]); gx.stroke(); });
+    pr.forEach(([x, y, f], i) => { gx.fillStyle = `rgba(${150 + heat[i] * 105 | 0},${190 + heat[i] * 65 | 0},255,${.5 + heat[i] * .5})`; gx.beginPath(); gx.arc(x, y, (1.5 + heat[i] * 2.2) * f, 0, 7); gx.fill(); });
+    const hx = pr[gFrom][0] + (pr[gAt][0] - pr[gFrom][0]) * gHop, hy = pr[gFrom][1] + (pr[gAt][1] - pr[gFrom][1]) * gHop, g = gx.createRadialGradient(hx, hy, 0, hx, hy, 16);
+    g.addColorStop(0, 'rgba(200,228,255,.95)'); g.addColorStop(.35, 'rgba(159,208,255,.5)'); g.addColorStop(1, 'rgba(159,208,255,0)');
+    gx.fillStyle = g; gx.fillRect(hx - 16, hy - 16, 32, 32);
+    gRaf = requestAnimationFrame(graph);
+  }
+  const gKick = () => { if (pfAt === 2 && !gRaf) gRaf = requestAnimationFrame(graph); };
+  document.addEventListener('visibilitychange', gKick);
+  const pfStep = (n) => {
+    if (n === pfAt) return;
+    pfAt = n;
+    pfPanes.forEach((el, i) => el.classList.toggle('is-on', i === n - 1));
+    pfSteps.forEach((el, i) => el.classList.toggle('is-on', i === n - 1));
+    pfTitle.textContent = pfTitles[n - 1];
+    pfDemo.classList.toggle('is-ai', n === 2);
+    if (n === 2) { pfT0 = performance.now(); gLast = 0; gKick(); } // 들어올 때마다 처음부터
+    if (n === 3) $$('[data-to]', pfSec).forEach((el) => { // 결과 숫자는 0부터 굴러서 자리를 잡는다
+      const to = +el.dataset.to, dp = (el.dataset.to.split('.')[1] || '').length, t0 = performance.now() + (+el.dataset.delay || 0) * 1000 + 200;
+      (function tick(now) { const k = ease((now - t0) / 1200); el.textContent = (to * k).toFixed(dp); if (k < 1) requestAnimationFrame(tick); })(performance.now());
+    });
+  };
+  pfSec.classList.add('scrub');
+  if (full && fitScene(pfSec)) {
+    ScrollTrigger.create({ trigger: pfSec, start: 'top 60%', once: true, onEnter: () => pfAt || pfStep(1) }); // 고정되기 전부터 입력 화면이 채워지기 시작한다
+    ScrollTrigger.create({ trigger: pfSec, start: 'top top', end: '+=260%', pin: true, scrub: true, onUpdate: (s) => pfStep(s.progress < .25 ? 1 : s.progress < .7 ? 2 : 3) });
+  } else {
+    // 단계마다 애니메이션이 끝날 만큼 둔다: 입력 1.7초, 분석 6.6초
+    ScrollTrigger.create({ trigger: pfDemo, start: 'top 70%', once: true, onEnter: () => { pfStep(1); setTimeout(() => pfStep(2), 3200); setTimeout(() => pfStep(3), 10400); } });
+  }
 
   // 공통 진입 리빌. 고정 장면을 모두 만든 뒤에 만든다(앞에 두면 핀 간격을 모른다). 리포트 섹션의 제목 묶음은 넣지 않는다: 처음부터 보인다
   const revealSel = [
@@ -1937,6 +2208,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     '.report',
     '.today .section-head > *', '.today .mock',
     '.poll',
+    '.pf__head > *', '.pf__demo', '.pf__steps li', '.pf__go',
     '.facts .section-head > *', '.cover', '.cover__foot',
     '.faq .section-head > *', '.faq__list details',
     '.cta__inner > *',
