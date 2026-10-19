@@ -10,6 +10,7 @@ export function Holdings({ assets, quotes, missing, total, fx, amountOf, disable
   total: number | null; fx: number | null; amountOf: (a: Asset) => number | null; disabled: boolean; onEdit: (a: Asset) => void;
 }) {
   const [descending, setDescending] = useState(true);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const rows = [...assets].sort((a, b) => {
     const av = amountOf(a), bv = amountOf(b);
     if (av === null) return bv === null ? 0 : 1;
@@ -30,8 +31,8 @@ export function Holdings({ assets, quotes, missing, total, fx, amountOf, disable
     const cash = a.category === '현금', classification = classifyAsset(a);
     const annual = missing.includes(a.id) ? null : annualDividend(a, q);
     const tone = gain === null ? '' : gain >= 0 ? 'gain' : 'loss';
-    return <tr key={a.id}>
-      <th scope="row"><Button className="holding-edit" disabled={disabled} onClick={() => onEdit(a)}><b>{a.name}</b><small>{a.instrument_id?.split(':')[1]} · {a.account}</small>{q?.estimated_quantity && <small>금액 기준 추적</small>}</Button></th>
+    return <tr key={a.id} data-expanded={expanded === a.id}>
+      <th scope="row"><Button className="holding-edit" disabled={disabled} onClick={() => onEdit(a)}><b>{a.name}</b><small>{a.instrument_id?.split(':')[1]} · {a.account}</small>{q?.estimated_quantity && <small>금액 기준 추적</small>}</Button><Button className="holding-details" aria-label={`${a.name} 상세 정보 ${expanded === a.id ? '접기' : '보기'}`} aria-expanded={expanded === a.id} onClick={() => setExpanded(expanded === a.id ? null : a.id)}>{expanded === a.id ? '접기' : '상세'}</Button></th>
       <td data-label="비중">{amount !== null && total !== null && total > 0 ? (amount / total * 100).toFixed(1) + '%' : '—'}</td>
       <td data-label="주식수">{cash ? '—' : number(q?.quantity)}{q?.estimated_quantity && <small>추정 수량</small>}</td>
       <td data-label="평단가">{cash ? '—' : price(q?.average, a)}</td>
