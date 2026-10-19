@@ -38,7 +38,7 @@ export function Holdings({ assets, quotes, missing, total, fx, amountOf, disable
       <td data-label="평단가">{cash ? '—' : price(q?.average, a)}</td>
       <td data-label="현재가">{cash ? '—' : price(q?.price, a)}{q?.price_date && <small>{q.price_date}</small>}</td>
       <td data-label="평가금액">{money(amount)}</td>
-      <td data-label="수익률" className={tone}>{pct === null ? '—' : `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`}</td>
+      <td data-label="수익률" className={tone}>{pct === null ? !cash && q && a.average === null && q.average == null ? <Button disabled={disabled} onClick={() => onEdit(a)}>평균매수가 입력</Button> : '—' : `${pct > 0 ? '+' : ''}${pct.toFixed(2)}%`}</td>
       <td data-label="평가손익" className={tone}>{signed(gain)}</td>
       <td data-label="배당률" className="dividend-number">{cash ? '—' : q?.dividend_yield_pct == null ? '—' : `${q.dividend_yield_pct.toFixed(2)}%`}</td>
       <td data-label="예상 연배당금">{cash ? '—' : money(annual)}</td>

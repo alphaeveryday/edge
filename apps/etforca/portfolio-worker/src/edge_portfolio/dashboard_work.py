@@ -128,8 +128,16 @@ def price_end(key, day, now=None):
     return completed.index[-1].date() + timedelta(days=1)
 
 
-async def records_for(ids, day, *, required_after=None):
-    from .market_data import decode_prices, fetch_prices, positive_price
+def held_history_missing(key, record, since, end):
+    if since is None or key == 'FX':
+        return False
+    from .market_data import expected_sessions, positive_price
+    frame = record['frame']
+    return bool(len(expected_sessions(key, min(since, end), end).difference(frame.index[frame['Close'].map(positive_price)])))
+
+
+async def records_for(ids, day, *, required_after=None, valuation_since=None):
+    from .market_data import decode_prices, fetch_prices, positive_price, year_before
     from .price_fetch import serialize
     records, failures = {}, []
     keys = set(ids) - {'CASH:KRW', None}
@@ -139,6 +147,7 @@ async def records_for(ids, day, *, required_after=None):
     try:
         async with asyncio.timeout(210):
             for key in sorted(keys):
+                since = (valuation_since or {}).get(key)
                 end = price_end(key, day)
                 with store.connect() as db:
                     cached = db.execute('SELECT payload FROM portfolio_dashboard_prices WHERE instrument=%s AND day=%s', (key, end)).fetchone()
@@ -147,6 +156,9 @@ async def records_for(ids, day, *, required_after=None):
                         saved = decode_prices(json.dumps(cached['payload']))
                         adjusted = saved['frame']['Adj Close'].map(positive_price)
                         incomplete = saved.get('provider', '').startswith('FinanceDataReader:NAVER:') or saved.get('price_recovery', {}).get('status') in ('unavailable', 'partial')
+                        needed_since = min(since, year_before(end - timedelta(days=1))) if since else year_before(end, 2)
+                        incomplete |= date.fromisoformat(saved.get('repair_since', year_before(end, 2).isoformat())) > needed_since
+                        incomplete |= held_history_missing(key, saved, since, end - timedelta(days=1))
                         incomplete |= key != 'FX' and (saved.get('return_basis') == 'price' or adjusted.sum() < 2)
                         incomplete |= last_close(saved)[1] != str(end - timedelta(days=1))
                         incomplete |= saved.get('actions_checked_on') != str(day)
@@ -168,7 +180,8 @@ async def records_for(ids, day, *, required_after=None):
                                 records[key] = captured
                         try:
                             budget = 200 / max(1, len(keys))
-                            record = await fetch_prices(symbol, end, on_raw=capture, on_primary=capture, provider_timeout=budget * .45)
+                            record = await fetch_prices(symbol, end, on_raw=capture, on_primary=capture, provider_timeout=budget * .45,
+                                                        repair_since=since)
                             record = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat()}
                         except TimeoutError:
                             if key not in records:
@@ -190,12 +203,16 @@ async def records_for(ids, day, *, required_after=None):
     except TimeoutError:
         log.warning('dashboard price collection deadline; retaining completed records')
         failures = sorted(keys - records.keys())
-    if required_after is not None:
-        for key, record in list(records.items()):
-            if key != 'FX' and (not record.get('fetched_at') or datetime.fromisoformat(record['fetched_at']) < required_after):
-                del records[key]
-                if key not in failures:
-                    failures.append(key)
+    for key, record in list(records.items()):
+        if key == 'FX':
+            continue
+        incomplete = required_after is not None and (not record.get('fetched_at') or datetime.fromisoformat(record['fetched_at']) < required_after)
+        # A missing held session may contain a split; a failed cache upgrade cannot assume none.
+        incomplete |= held_history_missing(key, record, (valuation_since or {}).get(key), price_end(key, day) - timedelta(days=1))
+        if incomplete:
+            del records[key]
+            if key not in failures:
+                failures.append(key)
     return records, failures
 
 
@@ -256,6 +273,13 @@ def dividend_details(record, instrument_id):
     return {'dividend_yield_pct': observation['trailing_yield_pct'], 'annual_dividend_per_share': sum(event['amount'] for event in observation['events']), 'dividend_cycle': cycle + (' · 최근 1년' if count else '')}
 
 
+def basis_dates(asset, previous, price_date):
+    unchanged = previous.get('signature') == [asset.get('instrument_id'), asset.get('quantity'), asset.get('amount'), asset.get('quantity_revision')]
+    baseline = previous.get('as_of', price_date) if unchanged else (asset.get('quantity_as_of') or asset.get('price_date') or price_date) if asset.get('quantity') is not None else price_date
+    average_day = previous.get('average_day', baseline) if unchanged and previous.get('average') == asset.get('average') and previous.get('average_revision') == asset.get('average_revision') else asset.get('average_as_of') or asset.get('price_date') or price_date
+    return baseline, average_day if asset.get('average') is not None else baseline
+
+
 def valuation(workbook, records, prior, day):
     fx = last_close(records['FX'])[0] if 'FX' in records else None
     assets, forecasts, missing, dividend_missing = [], [], [], []
@@ -292,8 +316,7 @@ def valuation(workbook, records, prior, day):
         estimated = quantity is None
         if estimated:
             quantity = previous.get('quantity') if unchanged else a['amount'] / (price * rate) if a.get('amount') is not None else None
-        baseline = previous.get('as_of', price_date) if unchanged else (a.get('quantity_as_of') or a.get('price_date') or price_date) if not estimated else price_date
-        average_day = previous.get('average_day', baseline) if unchanged and previous.get('average') == a.get('average') and previous.get('average_revision') == a.get('average_revision') else a.get('average_as_of') or a.get('price_date') or price_date
+        baseline, average_day = basis_dates(a, previous, price_date)
         next_bases[a['id']] = {'signature': signature, 'quantity': quantity, 'as_of': baseline, 'average': a.get('average'), 'average_revision': a.get('average_revision'), 'average_day': average_day}
         splits = record['frame'].get('Stock Splits')
         factor = 1.
@@ -384,8 +407,16 @@ async def work_once(stopping=None):
                     db.execute("UPDATE portfolio_backtests SET state='succeeded',result=%s WHERE id=%s AND lease_until=%s", (Jsonb(result), job['id'], job['lease_until']))
             else:
                 assets = [identify(a, strict=False, fx=book['payload'].get('fx')) for a in book['payload']['assets']]
-                records, failures = await records_for([a.get('instrument_id') for a in assets if not zero_exposure(a)], day, required_after=book['updated_at'])
                 previous = tracking(book['owner'])['market']
+                bases = previous['payload'].get('bases', {}) if previous else {}
+                # Keep split history from every holding's basis as well as the trailing dividend year.
+                since = {}
+                for a in assets:
+                    key = a.get('instrument_id')
+                    if zero_exposure(a) or key in (None, 'CASH:KRW'):
+                        continue
+                    since[key] = min(since.get(key, day), *(date.fromisoformat(stamp) for stamp in basis_dates(a, bases.get(a['id'], {}), str(day))))
+                records, failures = await records_for([a.get('instrument_id') for a in assets if not zero_exposure(a)], day, required_after=book['updated_at'], valuation_since=since)
                 result = valuation({**book['payload'], 'assets': assets}, records, previous['payload'] if previous else None, day)
                 with store.connect() as db:
                     current = db.execute('SELECT version,refresh_after FROM portfolio_workbooks WHERE owner=%s FOR UPDATE', (book['owner'],)).fetchone()

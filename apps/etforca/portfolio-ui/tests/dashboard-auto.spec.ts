@@ -1,10 +1,39 @@
 import { test, expect, type Page } from '@playwright/test';
-import { needsSeed, withSeed, type Asset, type Saved, type Workbook } from '../src/workbook';
+import { needsSeed, withSeed, profitSummary, type Asset, type Saved, type Workbook } from '../src/workbook';
 
 const asset: Asset = { id: 'a', instrument_id: 'KR:069500', name: 'KODEX 200', account: 'ISA', category: '주식', currency: 'KRW', quantity: 10, average: 40000, price: null, cost_fx: null, amount: null, weight: null, target: null, fee: 0, price_date: null };
 const workbook: Workbook = { title: '내 포트폴리오', fx: null, assets: [asset], dividends: [], months: [] };
 const catalog = { instruments: [{ id: 'KR:069500', name: 'KODEX 200', ticker: '069500', code: '069500', market: 'KR', kind: 'etf' }] };
 const tracking = { market: { version: 1, payload: { date: '2026-10-18', assets: [{ id: 'a', value: 500000, profit: 100000, price: 50000, price_date: '2026-10-16', quantity: 10 }], fx: null, forecasts: [{ asset_id: 'a', month: '2027-01', amount: 1000 }], missing: [], dividend_missing: [] } }, days: [] };
+
+test('one missing purchase basis cannot hide known gains or dilute their return', () => {
+  const q = tracking.market.payload.assets[0];
+  expect(profitSummary([q, { ...q, id: 'missing', profit: null, value: 5000000 }])).toEqual({ profit: 100000, returnPct: 25, missing: 1 });
+  expect(profitSummary([{ ...q, profit: null }])).toEqual({ profit: null, returnPct: null, missing: 1 });
+});
+
+test('partial daily profit stays visible and an imported QLD average survives saving without quantity', async ({ page }) => {
+  const qld: Asset = { ...asset, id: 'qld', instrument_id: 'US:QLD', name: 'QLD', currency: 'USD', quantity: null, average: null, amount: 5000000 };
+  await mock(page, { version: 1, workbook: { ...workbook, assets: [asset, qld] } });
+  const quotes = [...tracking.market.payload.assets, { id: 'qld', value: 5000000, profit: null, price: 87.72, average: null, quantity: 42.5, price_date: '2026-10-16' }];
+  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { market: { version: 1, payload: { ...tracking.market.payload, assets: quotes } }, days: [{ date: '2026-10-19', value: 5500000, assets: quotes, fx: 1340 }] } }));
+  await page.goto('/portfolio/?view=dashboard');
+  await expect(page.locator('.dashboard-stats')).toContainText('확인된 평가손익');
+  await expect(page.locator('.dashboard-stats')).toContainText('+100,000원');
+  await page.getByRole('button', { name: '수익 기록', exact: true }).click();
+  await expect(page.locator('.return-records')).toContainText('확인된 평가손익 +100,000원 (+25.00%)');
+  await expect(page.locator('.return-records')).toContainText('손익 미확인 1종목 제외');
+  await page.screenshot({ path: `test-results/confirmed-profit-${test.info().project.name}.png`, fullPage: true });
+  await page.getByRole('button', { name: '한눈에', exact: true }).click();
+  await page.getByRole('button', { name: '평균매수가 입력', exact: true }).click();
+  await page.getByLabel(/평균매수가/).fill('80');
+  const saved = page.waitForRequest(r => r.url().endsWith('/workbook') && r.method() === 'POST');
+  await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
+  expect((await saved).postDataJSON().workbook.assets.find((a: Asset) => a.id === 'qld')).toMatchObject({ average: 80, quantity: null, amount: 5000000 });
+  await page.reload();
+  await page.locator('.holding-edit').filter({ hasText: 'QLD' }).click();
+  await expect(page.getByLabel(/평균매수가/)).toHaveValue('80');
+});
 
 for (const amount of [500000, 0]) test(`copying holdings excludes zero balances instead of producing invalid allocations: ${amount}`, async ({ page }) => {
   const cash: Asset = { ...asset, id: 'cash', instrument_id: 'CASH:KRW', name: '현금', category: '현금', quantity: null, amount: 0 };

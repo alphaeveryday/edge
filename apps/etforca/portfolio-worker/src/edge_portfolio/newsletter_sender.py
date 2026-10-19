@@ -55,6 +55,7 @@ def send(ses, email, rendered, *, daily=False):
 
 
 def tick(ses, now):
+    now = now.astimezone(ZoneInfo('Asia/Seoul'))
     started = time.monotonic()
     account = ses.get_account()
     time.sleep(1)
@@ -166,6 +167,7 @@ def portfolio_weights(holdings):
 
 
 def process_daily(ses, now, *, deadline=float('inf')):
+    now = now.astimezone(ZoneInfo('Asia/Seoul'))
     edition = now.date()
     with connect() as db:
         subscriptions = db.execute("""SELECT s.*,j.input AS analysis_input FROM portfolio_newsletter_subscriptions s
@@ -212,6 +214,9 @@ def process_daily(ses, now, *, deadline=float('inf')):
         if len(cards) != len(row['holdings']):
             # Keep the complete watchlist; do not silently omit an ETF or send stale content as today's news.
             log.info('subscription=%s edition=%s newsletter=waiting_content ready=%s total=%s', row['id'], edition, len(cards), len(row['holdings']))
+            continue
+        # Prepare the edition in advance, but never send daily mail before 15:30 KST.
+        if (now.hour, now.minute) < (15, 30):
             continue
         try:
             rendered = newsletter_email.daily(edition, cards, newsletter_email.DEFAULT_FORMAT, issued_at=now,

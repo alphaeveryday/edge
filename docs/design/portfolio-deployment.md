@@ -67,7 +67,7 @@ ETF 목록은 KRX·Nasdaq Trader의 2026-10-12 수집 스냅샷이다. 국내 1,
 
 ### 뉴스레터 예약 발송
 
-기존 호스트에 `portfolio-newsletter.timer`를 설치해 5분마다 SES 발송 준비 상태·이메일 확인 대기·일일 콘텐츠 준비를 확인한다. 매일 KST 08:00 이후 발행일별 종목 작업을 등록하고 결과가 준비되면 보낸다. 별도 EC2·DB·Lambda·AWS 스케줄러는 추가하지 않는다. 분석은 기존 워커, 발송은 `newsletter` Compose profile의 128MiB 일회성 프로세스가 맡는다.
+기존 호스트에 `portfolio-newsletter.timer`를 설치해 Asia/Seoul 기준 매시 00·05·10분 등 5분 경계마다 SES 발송 준비 상태·이메일 확인 대기·일일 콘텐츠 준비를 확인한다. 매일 KST 08:00 이후 발행일별 종목 작업을 준비하고, 오후 15:30부터 준비된 일일 메일을 발송한다. 콘텐츠 준비나 SES 재시도가 늦어지면 후속 주기에 보낸다. 이메일 확인 메일에는 이 시간 제한을 적용하지 않는다. 별도 EC2·DB·Lambda·AWS 스케줄러는 추가하지 않는다. 분석은 기존 워커, 발송은 `newsletter` Compose profile의 128MiB 일회성 프로세스가 맡는다.
 
 발송 프로세스만 host network로 인스턴스 역할을 사용한다. 분석 워커의 `AWS_EC2_METADATA_DISABLED=true`와 IMDSv2 hop limit 1은 유지한다. PostgreSQL은 추가로 호스트 루프백 `127.0.0.1:15432`에만 바인딩하며 `runtime_env.py`가 비밀번호를 인코딩해 `PORTFOLIO_NEWSLETTER_DATABASE_URL`을 만든다. 외부 DB 포트는 열지 않는다. 메일러에는 DeepSeek·Exa 키를 환경변수로 전달하지 않는다. 이는 IAM 격리를 뜻하지 않는다. 메일러는 모델·외부 도구를 실행하지 않는 신뢰된 코드이며 기존 호스트 역할을 공유하므로, 그 역할의 배포용 런타임 시크릿 읽기 권한도 갖는다.
 

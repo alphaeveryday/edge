@@ -446,7 +446,8 @@ async def test_dashboard_primary_capture_does_not_change_analysis_raw_callback_s
     assert captured == []
 
 
-def test_weekend_price_cutoff_still_checks_monday_actions(monkeypatch):
+@pytest.mark.parametrize('repair_since', [None, date(2026, 10, 19)])
+def test_weekend_price_cutoff_still_checks_monday_actions(monkeypatch, repair_since):
     from datetime import datetime
     from edge_portfolio import market_data
     class Monday(datetime):
@@ -460,6 +461,63 @@ def test_weekend_price_cutoff_still_checks_monday_actions(monkeypatch):
             return pd.DataFrame({'Close': [100., 50.], 'Adj Close': [50., 50.], 'Stock Splits': [0., 2.]}, index=pd.to_datetime(['2026-10-16', '2026-10-19']))
     monkeypatch.setattr(market_data, 'datetime', Monday)
     monkeypatch.setattr(market_data.yf, 'Ticker', lambda _: Ticker())
-    result = market_data.load_prices('069500.KS', date(2026, 10, 17))
+    result = market_data.load_prices('069500.KS', date(2026, 10, 17), repair_since=repair_since)
     assert result['pending_splits'] == ['2026-10-19']
     assert result['frame'].index[-1].date() == date(2026, 10, 16)
+
+
+@pytest.mark.parametrize('baseline,missing,expected_calls', [
+    (date(2026, 10, 19), '2024-11-05', 1),
+    (date(2026, 10, 19), '2026-05-04', 2),
+    (date(2024, 10, 19), '2024-11-05', 2),
+])
+def test_valuation_repairs_dividend_and_held_split_history_only(monkeypatch, baseline, missing, expected_calls):
+    from edge_portfolio import market_data
+    complete = pd.DataFrame({'Close': 100., 'Adj Close': 100., 'Dividends': 0., 'Stock Splits': 0.}, index=pd.bdate_range('2024-10-01', '2026-10-16'))
+    complete.loc[missing, 'Stock Splits'] = 2.
+    calls = []
+    class Ticker:
+        history_metadata = {'currency': 'KRW'}
+        def history(self, **kwargs):
+            calls.append(kwargs)
+            return complete.copy() if kwargs.get('repair') else complete.drop(pd.Timestamp(missing))
+    monkeypatch.setattr(market_data.yf, 'Ticker', lambda _: Ticker())
+    monkeypatch.setattr(market_data, 'expected_sessions', lambda key, start, end: pd.bdate_range(start, end))
+    result = market_data.load_prices('069500.KS', date(2026, 10, 17), repair_since=baseline)
+    assert len(calls) == expected_calls
+    assert market_data.dividend_observation(result, 'KR:069500') is not None
+    if expected_calls == 2:
+        assert result['frame'].loc[missing, 'Stock Splits'] == 2., 'A held split must still adjust quantity and cost basis'
+
+
+@pytest.mark.parametrize('missing', ['2026-10-12', '2026-10-16'])
+def test_held_history_recovery_includes_missing_prefix_and_latest_session(monkeypatch, missing):
+    from edge_portfolio import market_data
+    complete = pd.DataFrame({'Close': 100., 'Adj Close': 100., 'Dividends': 0., 'Stock Splits': 0.}, index=pd.bdate_range('2026-10-12', '2026-10-16'))
+    complete.loc[missing, 'Stock Splits'] = 2.
+    calls = []
+    class Ticker:
+        history_metadata = {'currency': 'KRW'}
+        def history(self, **kwargs):
+            calls.append(kwargs)
+            return complete.copy() if kwargs.get('repair') else complete.drop(pd.Timestamp(missing))
+    monkeypatch.setattr(market_data.yf, 'Ticker', lambda _: Ticker())
+    result = market_data.load_prices('069500.KS', date(2026, 10, 17), repair_since=date(2026, 10, 12))
+    assert len(calls) == 2
+    assert calls[1]['start'] == '2026-10-12', 'Explicit held history must be fetched even when period=max is truncated'
+    assert result['frame'].loc[missing, 'Stock Splits'] == 2.
+
+
+def test_default_repair_keeps_two_year_bound_despite_an_older_gap(monkeypatch):
+    from edge_portfolio import market_data
+    complete = pd.DataFrame({'Close': 100., 'Adj Close': 100.}, index=pd.bdate_range('2020-01-01', '2026-10-16'))
+    calls = []
+    class Ticker:
+        history_metadata = {'currency': 'KRW'}
+        def history(self, **kwargs):
+            calls.append(kwargs)
+            return complete.drop(pd.Timestamp('2021-03-02'))
+    monkeypatch.setattr(market_data.yf, 'Ticker', lambda _: Ticker())
+    result = market_data.load_prices('069500.KS', date(2026, 10, 17))
+    assert len(calls) == 1, 'An unrelated old gap must not start full-history repair for analyses or FX'
+    assert result['repair_since'] == '2024-10-17'

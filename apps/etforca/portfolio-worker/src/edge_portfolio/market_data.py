@@ -65,11 +65,11 @@ def positive_price(value):
     return isinstance(value, Real) and not isinstance(value, bool) and math.isfinite(value) and value > 0
 
 
-def repair_prices(ticker, frame, symbol, as_of, currency):
+def repair_prices(ticker, frame, symbol, as_of, currency, *, since=None):
     columns = ['Adj Close', 'Close']
     instrument = ('KR:' if symbol.endswith('.KS') else 'US:') + symbol
-    start = max(frame.index[0], pd.Timestamp(year_before(as_of, 2)))
-    expected = expected_sessions(instrument, start, frame.index[-1])
+    start = pd.Timestamp(since) if since is not None else max(frame.index[0], pd.Timestamp(year_before(as_of, 2)))
+    expected = expected_sessions(instrument, start, as_of - timedelta(days=1))
     valid = frame[columns].map(positive_price).all(axis=1)
     missing = expected.difference(frame.index[valid])
     if missing.empty:
@@ -108,7 +108,7 @@ def repair_prices(ticker, frame, symbol, as_of, currency):
         return frame, {'status': 'unavailable', 'reason': price_failure(error), 'dates': []}
 
 
-def load_prices(symbol, as_of, *, on_raw=None):
+def load_prices(symbol, as_of, *, on_raw=None, repair_since=None):
     yf.set_tz_cache_location(str(Path(tempfile.gettempdir()) / 'portfolio-yfinance'))
     ticker = yf.Ticker(symbol)
     actions_day = datetime.now(ZoneInfo('Asia/Seoul')).date()
@@ -125,23 +125,28 @@ def load_prices(symbol, as_of, *, on_raw=None):
     frame = frame.loc[frame.index < pd.Timestamp(as_of)]
     if frame.empty or (as_of - frame.index[-1].date()).days > 7:
         raise ValueError('PRICE_STALE')
-    original = {'frame': frame, 'currency': metadata.get('currency'), 'symbol': symbol,
+    held_since = repair_since
+    repair_since = min(repair_since, year_before(frame.index[-1].date())) if repair_since is not None else year_before(as_of, 2)
+    repair_start = max(frame.index[0].date(), repair_since)
+    if held_since is not None:
+        repair_start = min(held_since, repair_start)
+    original = {'frame': frame, 'currency': metadata.get('currency'), 'symbol': symbol, 'repair_since': repair_since.isoformat(),
                 'pending_splits': pending_splits,
                 'source_url': f'https://finance.yahoo.com/quote/{quote(symbol, safe="")}/history/'}
     if on_raw:
         on_raw(original)
-    frame, recovery = repair_prices(ticker, frame, symbol, as_of, metadata.get('currency'))
+    frame, recovery = repair_prices(ticker, frame, symbol, as_of, metadata.get('currency'), since=repair_start)
     # Validate values inside the chosen comparison window, not unrelated older history.
     return {**original, 'frame': frame, 'price_recovery': recovery}
 
 
-async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None):
+async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None):
     # Admission is separate from provider timeouts; a busy worker is not a bad source.
     while not _PRICE_SLOTS.acquire(blocking=False):
         await asyncio.sleep(.05)
     try:
         try:
-            original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw), timeout=provider_timeout)
+            original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, **({'repair_since': repair_since} if repair_since else {})), timeout=provider_timeout)
             if on_primary:
                 on_primary(original)
             columns = [original['frame'][name] for name in ('Adj Close', 'Close')]
@@ -158,14 +163,14 @@ async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_
         _PRICE_SLOTS.release()
 
 
-async def _fetch_prices(symbol, as_of, *, on_raw=None, provider='yahoo'):
+async def _fetch_prices(symbol, as_of, *, on_raw=None, provider='yahoo', repair_since=None):
     with tempfile.TemporaryDirectory(prefix='portfolio-prices-') as directory:
-        return await _fetch_prices_with_checkpoint(symbol, as_of, Path(directory) / 'original.json', on_raw, provider)
+        return await _fetch_prices_with_checkpoint(symbol, as_of, Path(directory) / 'original.json', on_raw, provider, **({'repair_since': repair_since} if repair_since else {}))
 
 
-async def _fetch_prices_with_checkpoint(symbol, as_of, checkpoint, on_raw=None, provider='yahoo'):
+async def _fetch_prices_with_checkpoint(symbol, as_of, checkpoint, on_raw=None, provider='yahoo', *, repair_since=None):
     """A cancellable process bounds library calls that can block beyond HTTP timeout."""
-    process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', symbol, as_of.isoformat(), str(checkpoint), provider,
+    process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', symbol, as_of.isoformat(), str(checkpoint), provider, *([repair_since.isoformat()] if repair_since else []),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
     try:
