@@ -7,6 +7,7 @@
 FROM apache/airflow@sha256:9df9c8be4096b9cc626bd7cb1f2b8c712eef66c59c615f8c7e6200871ca10bd1
 
 COPY dags /opt/edge/dags
+COPY config /opt/airflow/config
 COPY deploy/entrypoint.sh /opt/edge/entrypoint.sh
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--", "/opt/edge/entrypoint.sh"]
