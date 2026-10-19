@@ -136,7 +136,7 @@ def held_history_missing(key, record, since, end):
     return bool(len(expected_sessions(key, min(since, end), end).difference(frame.index[frame['Close'].map(positive_price)])))
 
 
-async def records_for(ids, day, *, required_after=None, valuation_since=None):
+async def records_for(ids, day, *, valuation_since=None):
     from .market_data import decode_prices, fetch_prices, positive_price, year_before
     from .price_fetch import serialize
     records, failures = {}, []
@@ -154,17 +154,19 @@ async def records_for(ids, day, *, required_after=None, valuation_since=None):
                 try:
                     if cached:
                         saved = decode_prices(json.dumps(cached['payload']))
-                        adjusted = saved['frame']['Adj Close'].map(positive_price)
-                        incomplete = saved.get('provider', '').startswith('FinanceDataReader:NAVER:') or saved.get('price_recovery', {}).get('status') in ('unavailable', 'partial')
                         needed_since = min(since, year_before(end - timedelta(days=1))) if since else year_before(end, 2)
-                        incomplete |= date.fromisoformat(saved.get('repair_since', year_before(end, 2).isoformat())) > needed_since
-                        incomplete |= held_history_missing(key, saved, since, end - timedelta(days=1))
-                        incomplete |= key != 'FX' and (saved.get('return_basis') == 'price' or adjusted.sum() < 2)
-                        incomplete |= last_close(saved)[1] != str(end - timedelta(days=1))
-                        incomplete |= saved.get('actions_checked_on') != str(day)
-                        incomplete |= key != 'FX' and required_after is not None and (not saved.get('fetched_at') or datetime.fromisoformat(saved['fetched_at']) < required_after)
+                        incomplete = date.fromisoformat(saved.get('repair_since', year_before(end, 2).isoformat())) > needed_since
+                        if valuation_since is not None:
+                            incomplete |= not saved.get('fetched_at') or datetime.fromisoformat(saved['fetched_at']) < datetime.now(ZoneInfo('UTC')) - timedelta(minutes=1)
+                        else:
+                            adjusted = saved['frame']['Adj Close'].map(positive_price)
+                            incomplete |= saved.get('provider', '').startswith('FinanceDataReader:NAVER:') or saved.get('price_recovery', {}).get('status') in ('unavailable', 'partial')
+                            incomplete |= key != 'FX' and (saved.get('return_basis') == 'price' or adjusted.sum() < 2)
+                            incomplete |= last_close(saved)[1] != str(end - timedelta(days=1))
+                            incomplete |= saved.get('actions_checked_on') != str(day)
                         if incomplete:
-                            records[key] = saved
+                            if valuation_since is None:
+                                records[key] = saved
                             cached = None  # Retain usable observations while retrying missing data.
                     if cached:
                         record = decode_prices(json.dumps(cached['payload']))
@@ -202,14 +204,12 @@ async def records_for(ids, day, *, required_after=None, valuation_since=None):
                     failures.append(key)
     except TimeoutError:
         log.warning('dashboard price collection deadline; retaining completed records')
-        failures = sorted(keys - records.keys())
+        failures = sorted(set(failures) | (keys - records.keys()))
     for key, record in list(records.items()):
         if key == 'FX':
             continue
-        incomplete = required_after is not None and (not record.get('fetched_at') or datetime.fromisoformat(record['fetched_at']) < required_after)
         # A missing held session may contain a split; a failed cache upgrade cannot assume none.
-        incomplete |= held_history_missing(key, record, (valuation_since or {}).get(key), price_end(key, day) - timedelta(days=1))
-        if incomplete:
+        if held_history_missing(key, record, (valuation_since or {}).get(key), price_end(key, day) - timedelta(days=1)):
             del records[key]
             if key not in failures:
                 failures.append(key)
@@ -290,10 +290,10 @@ def valuation(workbook, records, prior, day):
         a = identify(original, strict=False, fx=workbook.get('fx'))
         key = a.get('instrument_id')
         if key == 'CASH:KRW':
-            assets.append({'id': a['id'], 'value': a.get('amount'), 'profit': None, 'price': None, 'price_date': None, 'quantity': None})
+            assets.append({'id': a['id'], 'instrument_id': key, 'value': a.get('amount'), 'profit': None, 'price': None, 'price_date': None, 'quantity': None})
             continue
         if zero_exposure(a):
-            assets.append({'id': a['id'], 'value': 0, 'profit': -a.get('fee', 0), 'price': None, 'price_date': None,
+            assets.append({'id': a['id'], 'instrument_id': key, 'value': 0, 'profit': -a.get('fee', 0), 'price': None, 'price_date': None,
                            'quantity': 0, 'average': a.get('average'), 'estimated_quantity': a.get('quantity') is None})
             next_bases.pop(a['id'], None)
             continue
@@ -330,7 +330,7 @@ def valuation(workbook, records, prior, day):
         average = a['average'] / average_factor if a.get('average') is not None else None
         amount = quantity * price * rate if quantity is not None else None
         profit = quantity * (price - average) * rate - a.get('fee', 0) if quantity is not None and average is not None else None
-        assets.append({'id': a['id'], 'value': amount, 'profit': profit, 'price': price, 'price_date': price_date, 'quantity': quantity, 'average': average, 'estimated_quantity': estimated,
+        assets.append({'id': a['id'], 'instrument_id': key, 'value': amount, 'profit': profit, 'price': price, 'price_date': price_date, 'quantity': quantity, 'average': average, 'estimated_quantity': estimated,
                        **dividend_details(record, key)})
         if amount is None:
             missing.append(a['id'])
@@ -339,6 +339,14 @@ def valuation(workbook, records, prior, day):
             forecasts.extend(projected)
         else:
             dividend_missing.append(a['id'])
+    identities = {a['id']: a.get('instrument_id') for a in workbook['assets']}
+    retained = {q['id']: q for q in (prior or {}).get('assets', []) if q['id'] in missing and q.get('value') is not None and identities.get(q['id'])
+                and (q.get('instrument_id') or bases.get(q['id'], {}).get('signature', [None])[0]) == identities[q['id']]}
+    assets = [q for q in assets if q['id'] not in retained] + list(retained.values())
+    forecasts = [f for f in forecasts if f['asset_id'] not in retained] + [f for f in (prior or {}).get('forecasts', [])
+        if f['asset_id'] in retained and (f['month'] > str(day)[:7] or prior.get('date') == str(day))]
+    if fx is None and retained:
+        fx = (prior or {}).get('fx')
     return {'date': str(day), 'assets': assets, 'fx': fx, 'forecasts': forecasts, 'missing': missing, 'bases': next_bases,
             'dividend_missing': dividend_missing, 'pending_splits': pending_splits}
 
@@ -416,8 +424,8 @@ async def work_once(stopping=None):
                     if zero_exposure(a) or key in (None, 'CASH:KRW'):
                         continue
                     since[key] = min(since.get(key, day), *(date.fromisoformat(stamp) for stamp in basis_dates(a, bases.get(a['id'], {}), str(day))))
-                records, failures = await records_for([a.get('instrument_id') for a in assets if not zero_exposure(a)], day, required_after=book['updated_at'], valuation_since=since)
-                result = valuation({**book['payload'], 'assets': assets}, records, previous['payload'] if previous else None, day)
+                records, failures = await records_for([a.get('instrument_id') for a in assets if not zero_exposure(a)], day, valuation_since=since)
+                result = valuation({**book['payload'], 'assets': assets}, {key: record for key, record in records.items() if key not in failures}, previous['payload'] if previous else None, day)
                 with store.connect() as db:
                     current = db.execute('SELECT version,refresh_after FROM portfolio_workbooks WHERE owner=%s FOR UPDATE', (book['owner'],)).fetchone()
                     if current['version'] != book['version'] or current['refresh_after'] != book['refresh_after']:
@@ -428,12 +436,12 @@ async def work_once(stopping=None):
                         snapshot = {'value': sum(a['value'] for a in result['assets']), 'assets': result['assets'], 'fx': result['fx']}
                         db.execute('''INSERT INTO portfolio_dashboard_days VALUES (%s,%s,%s,%s)
                             ON CONFLICT(owner,day) DO UPDATE SET version=excluded.version,payload=excluded.payload''', (book['owner'], day, book['version'], Jsonb(snapshot)))
-                    db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+%s::interval WHERE owner=%s", ('1 hour' if failures or result['missing'] else '12 hours', book['owner']))
+                    db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 minute' WHERE owner=%s", (book['owner'],))
     except Exception as error:
         log.warning('dashboard task failed kind=%s code=%s', 'backtest' if job else 'valuation', type(error).__name__)
         with store.connect() as db:
             if job:
                 db.execute("UPDATE portfolio_backtests SET state='failed',result=%s WHERE id=%s AND lease_until=%s", (Jsonb({'message': '가격 자료를 가져오지 못했어요. 잠시 후 다시 조회해 주세요.'}), job['id'], job['lease_until']))
             else:
-                db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 hour' WHERE owner=%s AND version=%s AND refresh_after=%s", (book['owner'], book['version'], book['refresh_after']))
+                db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 minute' WHERE owner=%s AND version=%s AND refresh_after=%s", (book['owner'], book['version'], book['refresh_after']))
     return True

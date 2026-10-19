@@ -72,9 +72,9 @@ export function Dashboard() {
         trackingPoll.current = true;
         try { await loadTracking(); } finally { trackingPoll.current = false; }
       }
-      if (!stopped) timer = setTimeout(poll, waiting ? 3000 : 30000);
+      if (!stopped) timer = setTimeout(poll, waiting ? 3000 : 60000);
     }
-    timer = setTimeout(poll, waiting ? 3000 : 30000);
+    timer = setTimeout(poll, waiting ? 3000 : 60000);
     return () => { stopped = true; clearTimeout(timer); };
   }, [saved?.version, tracking.market?.version]);
   useEffect(() => { if (editing && dialog.current && !dialog.current.open) dialog.current.showModal(); }, [editing]);
@@ -94,16 +94,18 @@ export function Dashboard() {
   }
   const w = saved?.workbook ?? empty;
   const seedOnly = canApplySeed(w);
-  const market = tracking.market && tracking.market.version === saved?.version ? tracking.market.payload : null;
+  const currentMarket = tracking.market?.version === saved?.version;
+  const market = tracking.market && saved && tracking.market.version <= saved.version ? tracking.market.payload : null;
   const assets = w.assets.filter(a => account === '전체' || a.account === account);
-  const quotes = new Map(market?.assets.map(a => [a.id, a]) ?? []);
+  const quotes = new Map(market?.assets.filter(q => w.assets.some(a => a.id === q.id && (currentMarket || (q.instrument_id ?? market.bases?.[q.id]?.signature[0] ?? (q.price === null && q.quantity === null ? 'CASH:KRW' : null)) === a.instrument_id))).map(a => [a.id, a]) ?? []);
+  const refreshing = !!market && assets.some(a => quotes.get(a.id)?.value != null && (!currentMarket || market.missing.includes(a.id)));
   const amountOf = (a: Asset) => quotes.get(a.id)?.value ?? (trackingLoaded && !trackingError && !tracking.market && a.quantity === null ? a.amount : null);
   const values = assets.map(amountOf);
-  const total = values.every(v => v !== null) ? values.reduce<number>((sum, v) => sum + v!, 0) : null;
+  const total = values.some(v => v !== null) ? values.reduce<number>((sum, v) => sum + (v ?? 0), 0) : null;
   const invested = assets.filter(a => a.category !== '현금');
   const { profit, returnPct, missing: profitMissing } = profitSummary(invested.map(a => quotes.get(a.id)));
-  const forecasts = (market?.forecasts ?? []).filter(d => (d.month > thisMonth() || d.month === thisMonth() && market?.date === today()) && assets.some(a => a.id === d.asset_id));
-  const forecastComplete = !!market && market.date === today() && !market.dividend_missing.some(id => assets.some(a => a.id === id));
+  const forecasts = (market?.forecasts ?? []).filter(d => (d.month > thisMonth() || d.month === thisMonth() && market?.date === today()) && quotes.has(d.asset_id) && assets.some(a => a.id === d.asset_id));
+  const forecastComplete = !!market && currentMarket && market.date === today() && !market.dividend_missing.some(id => assets.some(a => a.id === id));
   // Annual estimates use the complete trailing-year cash yield, not a clipped calendar window.
   const annualCash = assets.map(a => annualDividend(a, quotes.get(a.id)));
   const annualEstimate = forecastComplete && annualCash.every(n => n !== null) ? annualCash.reduce<number>((sum, n) => sum + n!, 0) : null;
@@ -117,7 +119,7 @@ export function Dashboard() {
     if (busy || loading || seedOnly) return;
     trackAction(a ? 'holding_edit_opened' : 'holding_add_opened');
     launcher.current = document.activeElement as HTMLElement; setDirty(false); setError('');
-    const quote = a ? quotes.get(a.id) : null;
+    const quote = a && currentMarket && !market?.missing.includes(a.id) ? quotes.get(a.id) : null;
     setEditing(a ? { ...a, quantity: a.quantity !== null ? quote?.quantity ?? a.quantity : null, average: quote?.average ?? a.average } : { id: crypto.randomUUID(), instrument_id: null, name: '', account: account === '전체' ? accounts[0] : account, category: '기타', currency: 'KRW', quantity: null, average: null, price: null, cost_fx: null, amount: null, weight: null, target: null, fee: 0, price_date: null });
   }
   function selectInstrument(item: Instrument) {
@@ -153,11 +155,11 @@ export function Dashboard() {
       {!saved ? loading ? <Loading>포트폴리오를 불러오고 있어요.</Loading> : <p>저장된 내용을 불러오지 못했어요.</p> : <>
         {seedOnly && <section className="dashboard-card"><SeedMoney busy={busy} onSubmit={seed => { try { void persist(withSeed(w, seed)); } catch (e) { setError((e as Error).message); } }} /></section>}
         {needsSeed(w) && !seedOnly && <p className="notice">비중만 남아 있는 종목은 눌러서 보유 수량을 입력해 주세요.</p>}
-        <section className="dashboard-stats" hidden={tab === 'AI 포폴 분석'}><article><span>총 자산</span><strong>{assets.length ? money(total) : '아직 비어 있어요'}</strong><small>{market ? `${market.date} 확인 · 최근 종가 기준` : assets.length ? '시세를 자동으로 가져오고 있어요' : '보유 종목부터 담아 보세요'}</small></article><article><span>{profitMissing && profit !== null ? '확인된 평가손익' : '보유 자산 평가손익'}</span><strong className={`profit-display ${profit === null ? '' : profit >= 0 ? 'gain' : 'loss'}`}><span className="profit-amount">{profit !== null && profit > 0 ? '+' : ''}{money(profit)}</span>{returnPct !== null && <> <span className="profit-percent">({returnPct > 0 ? '+' : ''}{returnPct.toFixed(2)}%)</span></>}</strong>{market && profitMissing > 0 && <small>손익 미확인 {profitMissing}종목 제외</small>}{assets.some(a => a.currency === 'USD') && <small>해외 종목은 현재 환율 기준 · 매입 이후 환차익 제외</small>}</article><article><span>확인된 예상 분배금</span><strong>{(annualEstimate === 0 || forecasts.length > 0) ? money(forecasts.reduce((s, d) => s + d.amount, 0)) : '확인 중'}</strong><small>세전 · 최근 분배 이력 기준</small></article></section>
+        <section className="dashboard-stats" hidden={tab === 'AI 포폴 분석'}><article><span>{values.some(v => v === null) ? '확인된 자산' : '총 자산'}</span><strong>{assets.length ? money(total) : '아직 비어 있어요'}</strong><small>{refreshing ? '갱신 중 · 이전 값' : market ? `${market.date} 확인 · 최근 종가 기준` : assets.length ? '시세를 자동으로 가져오고 있어요' : '보유 종목부터 담아 보세요'}</small></article><article><span>{profitMissing && profit !== null ? '확인된 평가손익' : '보유 자산 평가손익'}</span><strong className={`profit-display ${profit === null ? '' : profit >= 0 ? 'gain' : 'loss'}`}><span className="profit-amount">{profit !== null && profit > 0 ? '+' : ''}{money(profit)}</span>{returnPct !== null && <> <span className="profit-percent">({returnPct > 0 ? '+' : ''}{returnPct.toFixed(2)}%)</span></>}</strong>{market && profitMissing > 0 && <small>손익 미확인 {profitMissing}종목 제외</small>}{assets.some(a => a.currency === 'USD') && <small>해외 종목은 현재 환율 기준 · 매입 이후 환차익 제외</small>}</article><article><span>확인된 예상 분배금</span><strong>{(annualEstimate === 0 || forecasts.length > 0) ? money(forecasts.reduce((s, d) => s + d.amount, 0)) : '확인 중'}</strong><small>세전 · 최근 분배 이력 기준</small></article></section>
         {trackingError && <p role="alert">{trackingError} <Button onClick={() => void loadTracking()}>다시 확인</Button></p>}
         {tab !== 'AI 포폴 분석' && assets.length > 0 && !market && !trackingError && (tracking.market && tracking.market.version > saved.version ? <p className="notice">다른 탭에서 보유 목록이 바뀌었어요. <Button disabled={busy || loading} onClick={() => void reload()}>최신 보유 목록 불러오기</Button></p> : !seedOnly && <Loading>시세를 준비하고 있어요. 보유 종목과 분석 결과는 먼저 볼 수 있어요.</Loading>)}
         {catalogError && tab === '백테스트' && <p role="alert">{catalogError} <Button onClick={() => void loadCatalog()}>목록 다시 불러오기</Button></p>}
-        {market?.missing.some(id => !market.pending_splits?.includes(id) && assets.some(a => a.id === id)) && <p className="notice">일부 종목의 시세나 수량을 확인하지 못했어요. 종목을 눌러 보유 정보를 확인해 주세요.</p>}
+        {market?.missing.some(id => quotes.get(id)?.value == null && !market.pending_splits?.includes(id) && assets.some(a => a.id === id)) && <p className="notice">일부 종목의 시세나 수량을 확인하지 못했어요. 종목을 눌러 보유 정보를 확인해 주세요.</p>}
         {market?.pending_splits?.some(id => assets.some(a => a.id === id)) && <p className="notice">분할된 종목은 분할 후 첫 종가를 확인하면 평가액을 표시해요.</p>}
         {tab === '한눈에' && <><div className="dashboard-overview"><AllocationChart assets={graphAssets} fx={market?.fx ?? null} /><section className="dashboard-card dividend-summary" data-analytics-section="dividend_summary"><SectionHeading className="card-heading" title="배당 분석" action={<Button onClick={() => setTab('배당 달력')}>달력 보기 <Icon name="chevronRight" size={16} /></Button>} /><DividendSummary forecasts={forecasts} annualEstimate={annualEstimate} total={total} /><DividendChart dividends={[]} forecasts={forecasts} complete={forecastComplete} unavailableMonths={unavailableMonths} incompleteMonths={uncoveredMonths} startMonth={thisMonth()} selectedMonth={month} onMonth={m => { setMonth(m); setTab('배당 달력'); }} /></section></div>
           <section className="dashboard-card"><SectionHeading className="card-heading" title={`보유 자산 ${assets.length}`} action={<Button variant="primary" className="primary" ref={addButton} disabled={busy || loading || seedOnly || w.assets.length >= 30} onClick={() => edit()}><Icon name="plus" size={18} />종목 추가</Button>} />
