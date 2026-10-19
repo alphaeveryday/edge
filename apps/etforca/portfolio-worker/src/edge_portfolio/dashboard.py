@@ -123,6 +123,8 @@ def save(owner, body):
             ON CONFLICT(owner) DO UPDATE SET version=excluded.version,payload=excluded.payload,updated_at=now()''',
                    (owner, version, Jsonb(payload)))
         db.execute('UPDATE portfolio_workbooks SET refresh_after=now() WHERE owner=%s', (owner,))
+        from .dashboard_quotes import project
+        project(db, owner, version, payload)
         return {'version': version, 'workbook': payload}
 
 

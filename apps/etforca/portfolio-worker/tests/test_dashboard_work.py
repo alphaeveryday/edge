@@ -2,7 +2,7 @@ from datetime import date, datetime
 import pandas as pd
 import pytest
 from pydantic import ValidationError
-from edge_portfolio import dashboard, dashboard_work as work, store
+from edge_portfolio import dashboard, dashboard_work as work, dashboard_quotes as quotes, store
 from test_store import isolated_db  # noqa: F401
 
 
@@ -80,11 +80,11 @@ async def test_zero_holdings_need_no_quotes_fx_or_dividends_and_cannot_block_dai
     zero = {**asset(), 'id': 'zero', 'instrument_id': 'US:VOO', 'currency': 'USD', 'quantity': quantity, 'amount': amount, 'average': None, 'price_date': '2024-01-01'}
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset(), zero])))
     calls = []
-    async def prices(ids, day, **kwargs):
-        assert kwargs['valuation_since']['KR:069500'] > date(2024, 1, 1), 'A zero balance must not extend active holdings repair history'
-        calls.append(ids)
-        return {'KR:069500': record()}, []
-    monkeypatch.setattr(work, 'records_for', prices)
+    def prices(db, since, day):
+        assert since['KR:069500'] > date(2024, 1, 1), 'A zero balance must not extend active holdings repair history'
+        calls.append(list(since))
+        return {'KR:069500': record()}
+    monkeypatch.setattr(quotes, 'cached', prices)
     monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
     await work.work_once()
     result = work.tracking('owner')
@@ -192,7 +192,7 @@ async def test_daily_worker_records_without_browser_and_keeps_history_on_edit(is
     monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
     async def prices(*args, **kwargs):
         return {'KR:069500': record()}, []
-    monkeypatch.setattr(work, 'records_for', prices)
+    monkeypatch.setattr(quotes, 'cached', lambda *args: {'KR:069500': record()})
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
     assert await work.work_once()
     result = work.tracking('owner')
@@ -209,8 +209,9 @@ async def test_edit_during_price_collection_cannot_publish_stale_holdings(isolat
         dashboard.save('owner', dashboard.Save(version=1, workbook=dashboard.Workbook(assets=[])))
         return {'KR:069500': record()}, []
     monkeypatch.setattr(work, 'records_for', prices)
-    assert await work.work_once()
-    assert work.tracking('owner') == {'market': None, 'days': [], 'archives': []}
+    assert await quotes.collect_once()
+    assert work.tracking('owner')['market']['version'] == 2
+    assert work.tracking('owner')['market']['payload']['assets'] == []
     assert dashboard.read('owner')['version'] == 2
     assert dashboard.read('owner')['workbook']['assets'] == []
 
@@ -276,6 +277,7 @@ async def test_due_valuation_runs_even_when_backtests_are_queued(isolated_db, mo
     async def prices(*args, **kwargs):
         return {'KR:069500': record()}, []
     monkeypatch.setattr(work, 'records_for', prices)
+    monkeypatch.setattr(quotes, 'cached', lambda *args: {'KR:069500': record()})
     monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
     assert await work.work_once()
     assert work.tracking('owner')['days']
@@ -658,26 +660,19 @@ def test_missing_quantity_never_accumulates_duplicate_quotes_on_minute_refreshes
         assert prior['missing'] == ['a']
 
 
-@pytest.mark.parametrize('error', [False, True])
-async def test_background_refresh_keeps_last_values_without_writing_a_false_daily_snapshot(isolated_db, monkeypatch, error):
+async def test_background_refresh_keeps_last_values_without_writing_a_false_daily_snapshot(isolated_db, monkeypatch):
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
-    async def prices(*args, **kwargs):
-        return {'KR:069500': record()}, []
-    monkeypatch.setattr(work, 'records_for', prices)
+    monkeypatch.setattr(quotes, 'cached', lambda *args: {'KR:069500': record()})
     monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
     assert await work.work_once()
     first = work.tracking('owner')
     with store.connect() as db:
         due = db.execute("SELECT extract(epoch FROM refresh_after-now()) AS seconds FROM portfolio_workbooks WHERE owner='owner'").fetchone()['seconds']
         assert 0 < due <= 60
+    monkeypatch.setattr(quotes, 'cached', lambda *args: {})
     saved = dashboard.read('owner')
     saved['workbook']['assets'][0]['quantity'] = 20.
     dashboard.save('owner', dashboard.Save(**saved))
-    async def unavailable(*args, **kwargs):
-        if error:
-            raise TimeoutError()
-        return {}, ['KR:069500']
-    monkeypatch.setattr(work, 'records_for', unavailable)
     monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 19))
     assert await work.work_once()
     after = work.tracking('owner')
@@ -795,13 +790,13 @@ async def test_each_instrument_repairs_only_its_own_holding_basis(isolated_db, m
         saved['assets'] = [old, new]
         db.execute("UPDATE portfolio_workbooks SET payload=%s WHERE owner='owner'", (Jsonb(saved),))
     calls = []
-    async def prices(ids, day, **kwargs):
-        calls.append(kwargs['valuation_since'])
-        return {}, ids
-    monkeypatch.setattr(work, 'records_for', prices)
+    def prices(db, since, day):
+        calls.append(since)
+        return {}
+    monkeypatch.setattr(quotes, 'cached', prices)
     monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
     assert await work.work_once()
-    assert calls == [{'KR:069500': date(2024, 1, 1), 'US:QLD': date(2026, 10, 18)}]
+    assert calls == [{'KR:069500': date(2024, 1, 1), 'US:QLD': date(2026, 10, 18), 'FX': date(2026, 10, 18)}]
 
 
 def test_backtests_and_analyses_share_existing_global_admission_limit(isolated_db):
@@ -815,18 +810,3 @@ def test_backtests_and_analyses_share_existing_global_admission_limit(isolated_d
     with store.connect() as db:
         db.execute("UPDATE portfolio_backtests SET state='failed'")
     assert work.submit('extra', body)['id']
-
-
-async def test_expired_valuation_cannot_publish_over_a_newer_worker_lease(isolated_db, monkeypatch):
-    dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
-    leases = []
-    async def prices(*args, **kwargs):
-        with store.connect() as db:
-            leases.append(db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '20 minutes' WHERE owner='owner' RETURNING refresh_after").fetchone()['refresh_after'])
-        return {'KR:069500': record()}, []
-    monkeypatch.setattr(work, 'records_for', prices)
-    assert await work.work_once()
-    assert len(leases) == 1
-    assert work.tracking('owner') == {'market': None, 'days': [], 'archives': []}
-    with store.connect() as db:
-        assert db.execute("SELECT refresh_after FROM portfolio_workbooks WHERE owner='owner'").fetchone()['refresh_after'] == leases[0]

@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
+from psycopg import Error as DatabaseError
 
 from . import newsletter_email
 from .store import connect
@@ -166,21 +167,61 @@ def portfolio_weights(holdings):
     return weights
 
 
+def dashboard_weights(row, cards, snapshots=()):
+    """Use beginning-of-period values at the dashboard FX rate, never closing weights."""
+    candidates = [{'version': row['market_version'], 'payload': row['market'] or {}}, *snapshots]
+    markets = [s['payload'] for s in candidates if s['version'] == row['workbook_version'] and not s['payload'].get('missing') and not s['payload'].get('pending_prices')]
+    fx = next((m['fx'] for m in markets if m.get('fx')), None)
+    moves = {c['instrument_id']: newsletter_email.quote_of(c) for c in cards}
+    holdings = []
+    for asset in (row['workbook'] or {}).get('assets', []):
+        if (asset.get('quantity') if asset.get('quantity') is not None else asset.get('amount')) == 0:
+            continue
+        key = asset.get('instrument_id')
+        move = moves.get(key, {})
+        quote = next((q for m in markets for q in m.get('assets', []) if q['id'] == asset['id'] and
+                      (key == 'CASH:KRW' or q.get('price_date') == move.get('trading_date') and q.get('price') and move.get('close') and math.isclose(q['price'], move['close'], rel_tol=1e-6))), {})
+        value = quote.get('value')
+        if value is None:
+            return None
+        if key != 'CASH:KRW':
+            change = move.get('change_pct')
+            if change is None or not math.isfinite(change) or change <= -100 or quote.get('price_date') != move.get('trading_date'):
+                return None
+            if not quote.get('price') or not move.get('close') or not math.isclose(quote['price'], move['close'], rel_tol=1e-6):
+                return None
+            if asset.get('currency') == 'USD':
+                if fx is None or quote.get('quantity') is None:
+                    return None
+                value = quote['quantity'] * quote['price'] * fx
+            value /= 1 + change / 100
+        holdings.append({'instrument_id': key, 'amount_krw': value})
+    return portfolio_weights(holdings)
+
+
 def process_daily(ses, now, *, deadline=float('inf')):
     now = now.astimezone(ZoneInfo('Asia/Seoul'))
     edition = now.date()
     with connect() as db:
-        subscriptions = db.execute("""SELECT s.*,j.input AS analysis_input FROM portfolio_newsletter_subscriptions s
-            JOIN portfolio_jobs j ON j.id=s.job_id AND j.owner=s.owner WHERE s.status='active'
+        subscriptions = db.execute("""SELECT s.*,j.input AS analysis_input,w.payload AS workbook,m.payload AS market,m.version AS market_version,w.version AS workbook_version FROM portfolio_newsletter_subscriptions s
+            LEFT JOIN portfolio_jobs j ON j.id=s.job_id AND j.owner=s.owner
+            LEFT JOIN portfolio_workbooks w ON w.owner=s.owner
+            LEFT JOIN portfolio_dashboard_market m ON m.owner=s.owner WHERE s.status='active'
             AND NOT EXISTS (SELECT 1 FROM portfolio_newsletter_deliveries d
                 WHERE d.email=s.email AND d.edition=%s AND d.state NOT IN ('queued','waiting_content'))
             ORDER BY s.checked_at,s.created_at LIMIT 50""", (edition,)).fetchall()
     for row in subscriptions:
         if time.monotonic() >= deadline:
             break
-        # Advance before remote calls: a slow or interrupted recipient cannot starve the next batch.
+        # Advance before skipping an empty workbook or making remote calls.
         with connect() as db:
             db.execute('UPDATE portfolio_newsletter_subscriptions SET checked_at=now() WHERE id=%s', (row['id'],))
+        if row['job_id'] is None:
+            assets = (row['workbook'] or {}).get('assets', [])
+            row['holdings'] = list({a['instrument_id']: {'instrument_id': a['instrument_id'], 'name': a['name']} for a in assets
+                if a.get('instrument_id') and not a['instrument_id'].startswith('CASH:') and (a.get('quantity') if a.get('quantity') is not None else a.get('amount')) != 0}.values())
+            if not row['holdings']:
+                continue
         try:
             contact = contact_for(ses, row['email'])
         except (ClientError, BotoCoreError) as error:
@@ -219,8 +260,18 @@ def process_daily(ses, now, *, deadline=float('inf')):
         if (now.hour, now.minute) < (15, 30):
             continue
         try:
+            weights = dashboard_weights(row, cards) if row['job_id'] is None else None if row['analysis_input'].get('input_mode') == 'names' else portfolio_weights(row['analysis_input'].get('holdings', []))
+            if row['job_id'] is None and weights is None:
+                # Prepared news can describe the prior session after today's Korean close is available.
+                try:
+                    with connect() as db:
+                        snapshots = db.execute("SELECT version,payload FROM portfolio_dashboard_days WHERE owner=%s AND day BETWEEN %s-7 AND %s ORDER BY day DESC", (row['owner'], edition, edition)).fetchall()
+                except DatabaseError as error:
+                    log.warning('newsletter_snapshot_unavailable code=%s', type(error).__name__)
+                    continue
+                weights = dashboard_weights(row, cards, snapshots)
             rendered = newsletter_email.daily(edition, cards, newsletter_email.DEFAULT_FORMAT, issued_at=now,
-                                               weights=None if row['analysis_input'].get('input_mode') == 'names' else portfolio_weights(row['analysis_input'].get('holdings', [])))
+                                               weights=weights)
         except Exception as error:
             # One unrenderable edition must not stop the tick for every later recipient. Rendering is deterministic on
             # the cached cards, so record the failure instead of retrying it every tick until midnight.

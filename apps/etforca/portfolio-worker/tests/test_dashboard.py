@@ -3,6 +3,7 @@ from pydantic import ValidationError
 from edge_portfolio.dashboard import Workbook, Save, from_analysis, read, save
 from test_store import isolated_db  # noqa: F401
 from fastapi.testclient import TestClient
+from psycopg import OperationalError
 from edge_portfolio import api
 
 
@@ -85,3 +86,17 @@ def test_active_visitor_keeps_same_owner_with_renewed_cookie(monkeypatch):
     response = client.get('/api/portfolio/session')
     assert f'{api.COOKIE}=' + 'a' * 64 in response.headers['set-cookie']
     assert 'Max-Age=2592000' in response.headers['set-cookie']
+def test_successful_save_remains_successful_if_optional_tracking_read_fails(monkeypatch, caplog):
+    from edge_portfolio import api
+    monkeypatch.setattr(api.dashboard, 'save', lambda *args: {'version': 2, 'workbook': {'assets': []}})
+    def fail(*args):
+        raise OperationalError('temporary read outage')
+    monkeypatch.setattr(api.dashboard_work, 'tracking', fail)
+    monkeypatch.setattr(api.dashboard, 'read', lambda *args: {'version': 2, 'workbook': {'assets': []}})
+    client = TestClient(api.app)
+    client.cookies.set(api.COOKIE, 'a' * 64)
+    loaded = client.get('/api/portfolio/workbook')
+    assert loaded.status_code == 200 and loaded.json() == {'version': 2, 'workbook': {'assets': []}}
+    response = client.post('/api/portfolio/workbook', headers={'origin': 'http://localhost:5180'}, json={'version': 1, 'workbook': {'assets': []}})
+    assert response.status_code == 200 and response.json() == {'version': 2, 'workbook': {'assets': []}}
+    assert 'saved_workbook_tracking_unavailable' in caplog.text

@@ -22,6 +22,7 @@ def initialize(db):
         created_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL DEFAULT now()+interval '2 days',
         confirmed_at timestamptz, updated_at timestamptz NOT NULL DEFAULT now())""")
     db.execute("ALTER TABLE portfolio_newsletter_subscriptions ADD COLUMN IF NOT EXISTS checked_at timestamptz NOT NULL DEFAULT 'epoch'")
+    db.execute('ALTER TABLE portfolio_newsletter_subscriptions ALTER COLUMN job_id DROP NOT NULL')
     db.execute("CREATE INDEX IF NOT EXISTS portfolio_newsletter_email ON portfolio_newsletter_subscriptions(email,status)")
     db.execute("""CREATE TABLE IF NOT EXISTS portfolio_newsletter_content (
         instrument_id text NOT NULL, edition date NOT NULL, name text NOT NULL,
@@ -42,16 +43,18 @@ def subscribe(job_id, owner, email):
         db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 1395))', (owner,))
         db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 1396))', (email,))
         job = db.execute("SELECT input FROM portfolio_jobs WHERE id=%s AND owner=%s AND kind='analysis' AND state='succeeded'",
-                         (job_id, owner)).fetchone()
+                         (job_id, owner)).fetchone() if job_id else db.execute(
+                             "SELECT jsonb_build_object('holdings',payload->'assets') AS input FROM portfolio_workbooks WHERE owner=%s", (owner,)).fetchone()
         if not job:
             raise ValueError('NOT_FOUND')
         holdings = {h['instrument_id']: {'instrument_id': h['instrument_id'], 'name': h['name']}
                     for h in job['input'].get('holdings', [])
-                    if h.get('instrument_id') and h.get('kind') != 'cash' and not h['instrument_id'].startswith('CASH:')}
+                    if h.get('instrument_id') and h.get('kind') != 'cash' and not h['instrument_id'].startswith('CASH:')
+                    and (job_id or (h.get('quantity') if h.get('quantity') is not None else h.get('amount')) != 0)}
         if not holdings:
             raise ValueError('NO_HOLDINGS')
         existing = db.execute("""SELECT status FROM portfolio_newsletter_subscriptions
-            WHERE owner=%s AND email=%s AND job_id=%s AND
+            WHERE owner=%s AND email=%s AND job_id IS NOT DISTINCT FROM %s AND
             (status='confirmed' OR (status='pending' AND
                 (confirmation_state IN ('queued','sending') OR (confirmation_state='sent' AND expires_at>now())))) ORDER BY created_at DESC LIMIT 1""",
             (owner, email, job_id)).fetchone()
@@ -66,6 +69,13 @@ def subscribe(job_id, owner, email):
             (id,owner,email,job_id,holdings,token_hash,confirmation_token) VALUES (%s,%s,%s,%s,%s,%s,%s)""",
             (uuid4().hex, owner, email, job_id, Jsonb(list(holdings.values())), hashlib.sha256(token.encode()).hexdigest(), token))
         return 'pending'
+
+
+def dashboard_status(owner):
+    with connect() as db:
+        subscribed = db.execute("""SELECT 1 FROM portfolio_newsletter_subscriptions WHERE owner=%s AND
+            (status IN ('active','confirmed') OR (status='pending' AND expires_at>now())) LIMIT 1""", (owner,)).fetchone()
+    return {'subscribed': bool(subscribed)}
 
 
 def confirm(token):

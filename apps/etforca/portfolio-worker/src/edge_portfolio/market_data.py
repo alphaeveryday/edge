@@ -49,9 +49,14 @@ def expected_sessions(instrument_id, start, end):
 
 @lru_cache(maxsize=128)
 def _market_sessions(is_kr, start, end):
-    calendar = calendars.get_calendar('XKRX' if is_kr else 'XNYS', start=start - pd.Timedelta(days=30), end=end + pd.Timedelta(days=30))
+    calendar = _session_calendar(is_kr, start.year, end.year)
     sessions = calendar.sessions_in_range(start, end).tz_localize(None)
     return sessions.difference(KRX_EXTRA_CLOSURES) if is_kr else sessions
+
+
+@lru_cache(maxsize=16)
+def _session_calendar(is_kr, first_year, last_year):
+    return calendars.get_calendar('XKRX' if is_kr else 'XNYS', start=f'{first_year - 1}-12-01', end=f'{last_year + 1}-02-01')
 
 
 def year_before(day, years=1):
