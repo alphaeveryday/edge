@@ -60,3 +60,61 @@ def test_versions_null_cash_and_existing_identity_are_verified_in_postgresql():
             assert conn.execute("SELECT etf_instrument_id FROM cash_distribution WHERE ticker='360750'").fetchone() == ('existing-tiger',)
         finally:
             conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
+
+
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_empty_history_and_cash_are_loaded_with_coverage_atomically(tmp_path, monkeypatch, conflicting):
+    import json
+    from datetime import date, datetime, timezone
+    import psycopg
+    from psycopg import sql
+    from data_pipeline import db as database
+    from data_pipeline.lake import LocalStorage
+    from data_pipeline.steps import source_observations as so, source_observations_dividend as dividends
+
+    schema = "dividend_test_" + uuid4().hex
+    dsn = os.environ["DIVIDEND_TEST_DSN"]
+    with psycopg.connect(dsn, autocommit=True) as conn:
+        conn.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(schema)))
+        try:
+            conn.execute(sql.SQL("SET search_path TO {}").format(sql.Identifier(schema)))
+            for filename in ["V202610181200__add_cash_distribution_observations.sql", "V202610181300__add_cash_distribution_coverage.sql"]:
+                # Role grants are validated by the full migration suite. This fixture
+                # owns only its random schema and cannot alter shared database roles.
+                ddl = (ROOT / "libs/schema/migrations-cloud" / filename).read_text(encoding="utf-8").split("GRANT SELECT")[0]
+                with conn.transaction(): conn.execute(ddl)
+            monkeypatch.setattr(database, "connect", lambda _: psycopg.connect(dsn, options=f"-c search_path={schema}"))
+            class Source:
+                def fetch(self, instrument, start, end):
+                    items = [] if instrument["ticker"] == "360750" else [{"sht_cd": "069500", "record_date": "20260731", "divi_pay_dt": "20260804", "per_sto_divi_amt": "183"}]
+                    if conflicting and items:
+                        items += [{**items[0], "per_sto_divi_amt": "184"}, {"sht_cd": "069500", "record_date": "invalid"}]
+                    return [so.RawObject("kis", "market", "KR", instrument["ticker"], "json",
+                        json.dumps({"rt_cd": "0", "output1": items}).encode(),
+                        {**instrument, "from": start.isoformat(), "to": end.isoformat()},
+                        "ok" if items else "empty", None, datetime.now(timezone.utc).isoformat())]
+            storage = LocalStorage(tmp_path)
+            assert dividends.collect_dividends(storage, Source(), "raw", instruments=[
+                {"market_code": "XKRX", "ticker": s} for s in ("069500", "360750")],
+                start=date(2026, 1, 1), end=date(2026, 12, 31)) == 0
+            assert so.normalize(storage, dividends.DIVIDEND, "norm", "raw", producer="normalize_dividend") == (2 if conflicting else 0)
+            for attempt in ("load1", "load2"):
+                assert so.load(storage, dividends.DIVIDEND, None, attempt, input_run_id="norm", pending=False, producer="load_dividend") == 0
+            assert conn.execute("SELECT count(*) FROM cash_distribution_observation").fetchone()[0] == (0 if conflicting else 1)
+            assert conn.execute("SELECT ticker,status FROM cash_distribution_coverage ORDER BY ticker").fetchall() == [("069500", "partial" if conflicting else "complete"), ("360750", "complete")]
+            # WHY: valid empty history is persisted even though there is no event row.
+            assert conn.execute("SELECT count(*) FROM cash_distribution_coverage WHERE ticker='360750'").fetchone()[0] == 1
+            if conflicting:
+                original = dividends._normalize
+                def revised(objects, manifest):
+                    rows, rejects = original(objects, manifest)
+                    return rows[:1], rejects
+                monkeypatch.setattr(dividends, "_normalize", revised)
+                assert so.normalize(storage, dividends.DIVIDEND, "revised", "raw", producer="normalize_dividend") == 2
+                # WHY: resolving a conflict cannot mix a new event set into an already
+                # loaded raw revision, even when both attempts have partial coverage.
+                assert so.load(storage, dividends.DIVIDEND, None, "reload", input_run_id="revised", pending=False, producer="load_dividend") == 1
+                assert conn.execute("SELECT count(*) FROM cash_distribution_observation").fetchone()[0] == 0
+                assert conn.execute("SELECT DISTINCT canonical_run_id FROM cash_distribution_coverage").fetchall() == [("norm",)]
+        finally:
+            conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))

@@ -370,7 +370,7 @@ _LANE_STATE_MACHINE_ARN_ENV = {
     catalog.INVESTOR_INTRADAY_PIPELINE_TYPE: "OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN",
 }
 # SFN 이 없는 레인 — Airflow 만 계획·실행한다(ALPHA-1130). 위 표와 겹치지 않는다.
-_AIRFLOW_ONLY_LANES = frozenset({catalog.SOURCE_DAILY_PIPELINE_TYPE})
+_AIRFLOW_ONLY_LANES = frozenset({catalog.SOURCE_DAILY_PIPELINE_TYPE, catalog.DIVIDEND_DAILY_PIPELINE_TYPE})
 
 
 # ── CLI 핸들러 ────────────────────────────────────────────
@@ -492,6 +492,8 @@ def _due_slots(now_kst: datetime) -> list[tuple[str, bool]]:
         # 원천 관측(ALPHA-1130). DAG 를 켤 때 ops 태스크 정의에 이 두 env 를 함께 주입해야 결측 판정이 켜진다.
         (catalog.SOURCE_DAILY_PIPELINE_TYPE, _lane_sched_hhmms("OPS_SOURCE_DAILY_SCHED_HHMM"),
          _lane_sched_weekend("OPS_SOURCE_DAILY_SCHED_WEEKEND")),
+        (catalog.DIVIDEND_DAILY_PIPELINE_TYPE, _lane_sched_hhmms("OPS_DIVIDEND_DAILY_SCHED_HHMM"),
+         _lane_sched_weekend("OPS_DIVIDEND_DAILY_SCHED_WEEKEND")),
     ]
     slots: list[tuple[str, bool]] = []
     for lane, hhmms, weekend in lanes:

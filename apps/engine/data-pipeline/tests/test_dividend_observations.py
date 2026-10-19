@@ -211,3 +211,78 @@ def test_live_kodex_amount_and_payment_dates_match_issuer_comparison():
         expected = by_record[dividend.exact_date(item["record_date"], required=True)]
         assert Decimal(item["per_sto_divi_amt"]) == Decimal(expected["amount"])
         assert dividend.exact_date(item["divi_pay_dt"]) == expected["pay_date"]
+
+
+@pytest.mark.parametrize("items,rt_cd,expected", [
+    ([], "0", "complete"), ([ITEM], "0", "complete"),
+    ([ITEM, None], "0", "partial"), ([], "1", "failed"),
+    ([ITEM, {**ITEM, "per_sto_divi_amt": "999"}], "0", "partial"),
+])
+def test_coverage_distinguishes_empty_from_failed_or_conflicting_cash(tmp_path, items, rt_cd, expected):
+    client = Client(lambda p: ({"rt_cd": rt_cd, "output1": items}, "E"))
+    storage = LocalStorage(tmp_path)
+    dividend.collect_dividends(storage, source(client), "raw", instruments=[INSTRUMENT],
+                               start=date(2026, 1, 1), end=date(2026, 12, 31))
+    so.normalize(storage, dividend.DIVIDEND, "norm", "raw", producer="normalize_dividend")
+    manifest = json.loads(storage.get_bytes(so.canonical_run_manifest_key("cash_distribution", "norm")))
+    coverage = so.read_rows(dividend.DIVIDEND_COVERAGE, storage.get_bytes(manifest["companion"]["key"]))
+    assert len(coverage) == 1
+    assert coverage[0]["status"] == expected
+    assert coverage[0]["coverage_from"] == "2026-01-01"
+    assert coverage[0]["coverage_to"] == "2026-12-31"
+    assert coverage[0]["raw_sha256"] == so.sha256(storage.get_bytes(coverage[0]["raw_key"]))
+    # Empty event sets must still bind their digest to a persisted coverage row.
+    assert coverage[0]["observations_sha256"] == manifest["artifact"]["sha256"]
+
+
+def test_incomplete_split_leaf_does_not_certify_the_parent_window(tmp_path):
+    client = Client(lambda p: ({"rt_cd": "0", "output1": []},
+        "M" if p["F_DT"] != p["T_DT"] or p["F_DT"] == ["20260731"] else "E"))
+    storage = LocalStorage(tmp_path)
+    dividend.collect_dividends(storage, source(client), "raw", instruments=[INSTRUMENT],
+                               start=date(2026, 7, 30), end=date(2026, 7, 31))
+    assert so.normalize(storage, dividend.DIVIDEND, "norm", "raw", producer="normalize_dividend") != 0
+    manifest = json.loads(storage.get_bytes(so.canonical_run_manifest_key("cash_distribution", "norm")))
+    coverage = so.read_rows(dividend.DIVIDEND_COVERAGE, storage.get_bytes(manifest["companion"]["key"]))
+    assert coverage[0]["status"] == "partial"
+
+
+def test_collection_deadline_stops_new_requests_and_preserves_previous_response(tmp_path, monkeypatch):
+    clock = [100.0]
+    monkeypatch.setattr(dividend.time, "monotonic", lambda: clock[0])
+    def response(params):
+        clock[0] = 110.0
+        return {"rt_cd": "0", "output1": []}, "E"
+    client = Client(response)
+    storage = LocalStorage(tmp_path)
+    assert dividend.collect_dividends(storage, source(client), 'deadline', deadline_sec=5,
+        instruments=[INSTRUMENT, {**INSTRUMENT, 'ticker': '360750'}],
+        start=date(2026, 1, 1), end=date(2026, 12, 31)) == 2
+    assert client.calls == 1
+    manifest = so.existing_raw_manifest(storage, dividend.DIVIDEND.dataset, 'deadline')
+    assert manifest['counts'] == {'ok': 0, 'empty': 1, 'error': 1}
+
+
+def test_deadline_is_also_checked_between_recursive_windows(monkeypatch):
+    from data_pipeline.sources.kis_dividend import DividendSourceStopped
+    clock = [100.0]
+    monkeypatch.setattr(dividend.time, "monotonic", lambda: clock[0])
+    def response(params):
+        clock[0] = 110.0
+        return {"rt_cd": "0", "output1": []}, "M"
+    client = Client(response)
+    with pytest.raises(DividendSourceStopped) as stopped:
+        source(client).fetch(INSTRUMENT, date(2026, 7, 30), date(2026, 7, 31), deadline=105)
+    assert client.calls == 1
+    assert len(stopped.value.objects) == 2
+
+
+def test_empty_history_requires_intact_raw_response_when_replayed(tmp_path):
+    storage = LocalStorage(tmp_path)
+    dividend.collect_dividends(storage, source(Client(lambda p: ({'rt_cd': '0', 'output1': []}, 'E'))),
+        'empty', instruments=[INSTRUMENT], start=date(2026, 1, 1), end=date(2026, 12, 31))
+    manifest = so.existing_raw_manifest(storage, dividend.DIVIDEND.dataset, 'empty')
+    storage.put_bytes(manifest['objects'][0]['key'], b'corrupted response')
+    assert so.normalize(storage, dividend.DIVIDEND, 'norm', 'empty', producer='normalize_dividend') == 1
+    result = json.loads(storage.get_bytes(so.canonical_run_manifest_key(dividend.DIVIDEND.dataset, 'norm')))
+    assert result['canonical_written'] is False

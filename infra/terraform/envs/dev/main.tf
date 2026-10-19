@@ -707,6 +707,11 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_data_pipeline" {
 module "airflow" {
   source = "../../modules/airflow"
 
+  blocking_batch_state_machine_arns = concat(module.data_pipeline.batch_state_machine_arns,
+  [module.analysis_v2.outlook_batch_state_machine_arn, module.analysis_v2.state_machine_arn])
+  blocking_batch_task_families = concat(values(module.data_pipeline.task_definition_families),
+  [module.data_pipeline.ops_task_definition_family])
+
   name       = "${local.prefix}-airflow"
   region     = var.region
   vpc_id     = module.network.vpc_id

@@ -9,8 +9,10 @@ always-on service is required.
 
 The first implementation unit provides domestic KIS collection, immutable source
 observations, a latest-revision database view and a CashDistribution object/view.
-It is callable through the pipeline CLI. Scheduled collection, US issuer ingestion,
-portfolio read integration and customer-report deployment are subsequent units.
+It is callable through the pipeline CLI. The next unit adds coverage records,
+a private portfolio read route and a separate daily DAG. Deployment and schedule
+activation must be verified before calling this automatic. US issuer ingestion,
+portfolio cash calculation and customer-report deployment remain subsequent units.
 The earlier portfolio-worker-only ingestion code is an unreviewed, undeployed
 prototype and is not the public-data target architecture.
 
@@ -93,3 +95,40 @@ payments bank-confirmed receipts.
 Display: trailing 12-month cash yield, next-year forecasts, and disclosed portfolio
 cash are separate calculations. Annual forecasts sum cash without reinvestment.
 The mobile holdings list/currency toggle is a separate UI work unit.
+
+## Daily refresh and read boundary
+
+- `edge_dividend_daily` is a separate `dividend-daily` ops lane, scheduled at
+  03:00 Asia/Seoul. Existing news is 00:10, source-daily is 05:20, outlook is 06:00.
+  Production schedule and recent execution history were read on 2026-10-18.
+- Before planning, a rescheduling sensor checks configured Step Functions and
+  configured batch task families, including containers still stopping after a
+  stop request. Resident services and unrelated long-running pilots are excluded.
+  The inventory includes all pipeline task families independently of Airflow's
+  narrower launch permissions, so direct KRX batch launches also block collection.
+  Busy work waits up to ten minutes; missing configuration
+  or inaccessible execution state fails closed. Starts outside 03:00–03:30 fail.
+  Fresh collector submissions recheck the window and running batches, including
+  manually cleared tasks. Reattachment to an existing ECS task remains unchanged.
+- Collection uses a 600-second cooperative deadline, checked before each symbol
+  and split window. In-flight HTTP/auth calls finish under their own timeouts;
+  this is not a hard process kill. The DAG timeout is 25 minutes. The margin to
+  the next scheduled source batch is over an hour even after the start window.
+  An independently triggered manual batch after this check is not globally locked;
+  all KIS callers still share the existing call budget.
+- Source coverage, including valid empty responses, uses a companion artifact and
+  transaction. Referenced empty-response bytes are checksum-verified on replay too.
+  Old canonical manifests without coverage must be normalized into a
+  new canonical run before loading; no old artifact is rewritten.
+- The daily DAG rejects `reprocess_slot`; historical normalization/loading uses
+  explicit CLI run IDs, so today's provider data cannot be labeled as an old slot.
+  A rejected planning step cannot launch reconciliation; later collection or load
+  failures still reconcile the successfully planned run.
+- The private `/dividends` route reads one XKRX ticker and bounded record-date
+  interval, using the existing read-only gateway. The model worker gets no RDS
+  password. It returns current event revisions, collection outcome, query bounds
+  and receipt time. A caller must evaluate freshness and pending records before
+  treating data as a full-year forecast.
+- Activation order: schema, pipeline image, Airflow IAM/environment, DAG image,
+  first verified run, then missed-slot monitoring. No additional AWS service or
+  paid data subscription is introduced.

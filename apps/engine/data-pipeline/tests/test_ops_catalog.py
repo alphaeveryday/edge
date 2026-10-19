@@ -55,6 +55,7 @@ def test_only_committed_scope_steps_fulfill_on_partial_exit():
         # 뺀 artifact·canonical manifest 확정. 둘 다 확정한 범위만 하류가 읽는다.
         "MACRO_COLLECTION", "NORMALIZE_MACRO", "SECTOR_COLLECTION_KIS", "NORMALIZE_SECTOR",
         "FINANCIAL_METRIC_COLLECTION_DART", "NORMALIZE_FINANCIAL_METRIC",
+        "DIVIDEND_COLLECTION_KIS", "NORMALIZE_DIVIDEND",
     }
     assert all(catalog.get(task).fulfilled_exit_codes == (0, 2) for task in partial)
     assert all(
@@ -213,7 +214,7 @@ def test_catalog_and_asl_task_states_match_both_ways():
 
     # Airflow 전용 레인(ALPHA-1130)은 SFN state 가 없다 — 빈 이름은 그 레인만 쓸 수 있다.
     airflow_only = {e.task_key for e in catalog.entries() if not e.sfn_state_name}
-    assert airflow_only == {e.task_key for e in catalog.entries("source-daily")}
+    assert airflow_only == {e.task_key for lane in ("source-daily", "dividend-daily") for e in catalog.entries(lane)}
     registered = {e.sfn_state_name for e in catalog.entries() if e.sfn_state_name}
     assert registered <= asl_states, f"ASL 에 없는 state 등록: {registered - asl_states}"
     uncovered = asl_states - registered - set(_NOT_INSTRUMENTED)
@@ -233,6 +234,7 @@ def test_catalog_and_asl_task_states_match_both_ways():
     # 32 → 33(ALPHA-1260): 지수 일봉 적재 신설. 시장 19 → 20.
     assert len(registered) == 33
     assert len(catalog.entries("source-daily")) == 9
+    assert len(catalog.entries("dividend-daily")) == 3
     assert len(catalog.entries("etf-daily")) == 20
     assert len(catalog.entries("news")) == 6
     assert len(catalog.entries("disclosure")) == 4

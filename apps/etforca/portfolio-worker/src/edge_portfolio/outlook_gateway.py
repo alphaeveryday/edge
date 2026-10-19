@@ -5,8 +5,17 @@ import psycopg
 from fastapi import FastAPI, HTTPException
 
 from .outlook import OutlookQuery, read_one
+from .dividend_reader import DividendQuery, read_distributions
 
 app = FastAPI()
+
+
+@app.post('/dividends')
+def dividends(body: DividendQuery):
+    try:
+        return read_distributions(body)
+    except psycopg.Error:
+        return {'status': 'unavailable'}
 
 
 class ReadRequest(OutlookQuery):

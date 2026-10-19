@@ -300,12 +300,17 @@ def _load_raw_objects(storage: Storage, dataset: str, input_run_id: str) -> tupl
         raise ValueError(f"완료된 {dataset} raw manifest 가 아니다: run_id={input_run_id}")
     objects = []
     for entry in manifest["objects"]:
-        if entry.get("status") != "ok":
+        if entry.get("status") not in ("ok", "empty"):
+            continue
+        # Empty responses can certify queried coverage. Verify their bytes too;
+        # sources with no response body still have no raw object to verify.
+        if entry.get("status") == "empty" and not entry.get("key"):
             continue
         body = storage.get_bytes(entry["key"])
         if sha256(body) != entry["sha256"]:
             raise ValueError(f"raw 바이트가 manifest 와 다르다: {entry['key']}")
-        objects.append({**entry, "body": body})
+        if entry.get("status") == "ok":
+            objects.append({**entry, "body": body})
     manifest["manifest_sha256"] = sha256(manifest_bytes)
     return manifest, objects
 

@@ -7,6 +7,16 @@ variable "region" {
   type = string
 }
 
+variable "blocking_batch_state_machine_arns" {
+  description = "State machines that must be idle before dividend collection"
+  type        = list(string)
+}
+
+variable "blocking_batch_task_families" {
+  description = "All batch families checked for overlap, independent of Airflow launch permissions"
+  type        = list(string)
+}
+
 variable "vpc_id" {
   type = string
 }

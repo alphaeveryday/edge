@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urlencode
 
@@ -36,7 +37,7 @@ class KisDividendSource:
         self.headers = {"appkey": app_key, "appsecret": app_secret,
                         "tr_id": TR_ID, "custtype": "P"}
 
-    def fetch(self, instrument: dict, start: date, end: date) -> list[RawObject]:
+    def fetch(self, instrument: dict, start: date, end: date, *, deadline=None) -> list[RawObject]:
         """Preserve response bytes and split incomplete record-date windows."""
         symbol = instrument["ticker"]
         if not re.fullmatch(r"[0-9A-Z]{6}", symbol) or start > end:
@@ -52,6 +53,8 @@ class KisDividendSource:
                           T_DT=last.strftime("%Y%m%d"), SHT_CD=symbol, HIGH_GB="")
             body, status, detail, stopped = None, "error", None, False
             try:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise StopFetch("collection_deadline")
                 headers = {**self.headers, "authorization": f"Bearer {self.auth.token()}"}
                 response_headers = {}
                 body = self.client.request("GET", self.base + PATH + "?" + urlencode(params),

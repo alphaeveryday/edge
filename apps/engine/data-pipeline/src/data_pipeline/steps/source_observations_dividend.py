@@ -3,13 +3,15 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 from .source_observations import (
-    Column, DatasetSpec, RawObject, _PROVENANCE, ensure_same_request, existing_raw_manifest,
-    record_already_collected, write_raw_run,
+    Column, DatasetSpec, RawObject, _PROVENANCE, _collapse, ensure_same_request, existing_raw_manifest,
+    record_already_collected, sha256, write_raw_run, write_rows,
 )
+from ..lake import raw_run_manifest_key
 from ..sources.http import StopFetch
 
 
@@ -28,6 +30,9 @@ def _normalize(objects, manifest):
     rejects = [{"raw_key": entry.get("key"), "reasons": ["source_fetch_failed"],
                 "detail": entry.get("detail")}
                for entry in manifest.get("objects", []) if entry.get("status") == "error"]
+    rejects.extend({"raw_key": None, "reasons": ["missing_empty_response"]}
+                   for entry in manifest.get("objects", [])
+                   if entry.get("status") == "empty" and not entry.get("key"))
     for obj in objects:
         request = obj["request"]
         if request.get("superseded_by_split"):
@@ -74,6 +79,53 @@ def _normalize(objects, manifest):
     return rows, rejects
 
 
+def _with_coverage(objects, manifest):
+    rows, rejects = _normalize(objects, manifest)
+    canonical_rows, conflicts, _ = _collapse(DIVIDEND, rows)
+    observations_sha = sha256(write_rows(DIVIDEND, canonical_rows))
+    bad_keys = {r.get("raw_key") for r in rejects}
+    bad_tickers = {(r["key"]["market_code"], r["key"]["ticker"]) for r in conflicts}
+    requested = manifest["request_scope"]["requested"]
+    coverage = []
+    for instrument in requested["instruments"]:
+        entries = [e for e in manifest["objects"]
+                   if all(e["request"].get(k) == instrument[k] for k in ("market_code", "ticker"))
+                   and not e["request"].get("superseded_by_split")]
+        # A complete root interval requires every disjoint leaf, including empty leaves.
+        windows = sorted((e["request"]["from"], e["request"]["to"]) for e in entries)
+        from datetime import timedelta
+        cursor = date.fromisoformat(requested["from"])
+        contiguous = bool(windows)
+        for first, last in windows:
+            contiguous &= date.fromisoformat(first) == cursor and first <= last
+            cursor = date.fromisoformat(last) + timedelta(days=1)
+        contiguous &= cursor == date.fromisoformat(requested["to"]) + timedelta(days=1)
+        valid = [e for e in entries if e["status"] in ("ok", "empty") and e.get("key") not in bad_keys]
+        complete = contiguous and len(valid) == len(entries) and (
+            instrument["market_code"], instrument["ticker"]) not in bad_tickers
+        has_rows = any(all(row[k] == instrument[k] for k in ("market_code", "ticker")) for row in rows)
+        received = max((e["fetched_at"] for e in entries), default=manifest["started_at"])
+        coverage.append({**instrument, "source_vendor": "kis",
+            "coverage_from": requested["from"], "coverage_to": requested["to"],
+            "status": "complete" if complete else "partial" if valid or has_rows else "failed",
+            "observations_sha256": observations_sha,
+            "received_at": received, "available_at": received, "availability_basis": "received",
+            "raw_run_id": manifest["run_id"],
+            "raw_key": raw_run_manifest_key(DIVIDEND.dataset, manifest["run_id"]),
+            "raw_sha256": manifest["manifest_sha256"]})
+    return rows, rejects, coverage
+
+
+DIVIDEND_COVERAGE = DatasetSpec(
+    dataset="cash_distribution_coverage", table="cash_distribution_coverage", collection_vendor="kis",
+    columns=(Column("market_code", "str"), Column("ticker", "str"), Column("source_vendor", "str"),
+        Column("coverage_from", "date"), Column("coverage_to", "date"), Column("status", "str"),
+        Column("observations_sha256", "str"), *_PROVENANCE),
+    key=("market_code", "ticker", "source_vendor"),
+    partition=lambda row: "", normalize=lambda objects, manifest: ([], []),
+)
+
+
 DIVIDEND = DatasetSpec(
     dataset="cash_distribution", table="cash_distribution_observation", collection_vendor="kis",
     columns=(Column("market_code", "str"), Column("ticker", "str"), Column("source_vendor", "str"),
@@ -83,11 +135,11 @@ DIVIDEND = DatasetSpec(
         Column("distribution_kind", "str"), Column("confirmation", "str"), *_PROVENANCE),
     key=("market_code", "ticker", "source_vendor", "source_event_key"),
     partition=lambda row: f"canonical/market_data/cash_distribution/record_date={row['record_date']}",
-    normalize=_normalize,
+    normalize=_with_coverage, companion=DIVIDEND_COVERAGE,
 )
 
 
-def collect_dividends(storage, source, run_id, *, instruments, start: date, end: date):
+def collect_dividends(storage, source, run_id, *, instruments, start: date, end: date, deadline_sec=None):
     """Write a replay-checked raw run for the requested instruments and dates."""
     if not instruments or start > end or any(
         row.get("market_code") != "XKRX" or not isinstance(row.get("ticker"), str)
@@ -102,11 +154,14 @@ def collect_dividends(storage, source, run_id, *, instruments, start: date, end:
         ensure_same_request(DIVIDEND.dataset, run_id, done, scope)
         return record_already_collected(storage, DIVIDEND, run_id, producer, done)
     started = datetime.now(timezone.utc)
+    deadline = time.monotonic() + deadline_sec if deadline_sec is not None else None
     objects, stopped = [], False
     for instrument in scope["instruments"]:
+        if deadline is not None and time.monotonic() >= deadline:
+            stopped = True
         if not stopped:
             try:
-                objects.extend(source.fetch(instrument, start, end))
+                objects.extend(source.fetch(instrument, start, end, **({"deadline": deadline} if deadline is not None else {})))
                 continue
             except StopFetch as error:
                 partial = getattr(error, "objects", [])
@@ -117,6 +172,7 @@ def collect_dividends(storage, source, run_id, *, instruments, start: date, end:
         # Preserve completed instruments and make every unattempted symbol visible.
         objects.append(RawObject("kis", "market", "KR", instrument["ticker"], "json", None,
             {**instrument, "from": start.isoformat(), "to": end.isoformat()},
-            "error", "source_stopped", datetime.now(timezone.utc).isoformat()))
+            "error", "collection_deadline" if deadline is not None and time.monotonic() >= deadline else "source_stopped",
+            datetime.now(timezone.utc).isoformat()))
     return write_raw_run(storage, DIVIDEND, run_id, producer=producer, objects=objects,
                          started_at=started, request_scope={"requested": scope})
