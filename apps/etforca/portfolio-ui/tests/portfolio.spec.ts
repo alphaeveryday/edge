@@ -52,7 +52,11 @@ test('default account, real stages, result restoration, chat gate and email rece
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/catalog')) return route.fulfill({ json: catalog });
     if (path.endsWith('/chat')) return route.fulfill({ status: 409, json: { detail: 'CHAT_LIMIT' } });
-    if (path.endsWith('/report-request')) return route.fulfill({ status: 201, json: { status: 'received' } });
+    if (path.endsWith('/newsletter')) {
+      expect(route.request().postDataJSON()).toEqual({ email: 'test@example.com', consent: true });
+      return route.fulfill({ status: 201, json: { status: 'pending', delivery_ready: true } });
+    }
+    expect(path).not.toContain('/report-request');
     if (path.endsWith('/session')) return route.fulfill({ json: {} });
     const result = { sections: { question: section, portfolio: section, outlook: section, opinion: section }, sources: [], as_of: '2026-10-12T00:00:00Z', metrics: { total_krw: '1000000', holdings: [{ name: 'VOO', account: '일반 계좌', weight_pct: 100 }], unavailable_reason: '시계열 미연결' } };
     return route.fulfill({ json: { id: 'test-job', state: ready ? 'succeeded' : 'running', stage: 'portfolio', started_at: new Date().toISOString(), result: ready ? result : null } });
@@ -80,10 +84,10 @@ test('default account, real stages, result restoration, chat gate and email rece
   await page.getByRole('button', { name: '포트폴리오로 돌아가기' }).click();
   await expect(page.getByRole('textbox', { name: '추가 질문', exact: true })).toBeDisabled();
   await page.locator('.premium').click();
-  await page.getByLabel('이메일 주소').fill('test@example.com');
-  await page.getByRole('button', { name: '리포트 신청하기' }).click();
-  await expect(page.getByRole('dialog', { name: '프리미엄 투자 전략 리포트' })).toContainText('신청을 접수했어요');
-  await expect(page.getByRole('dialog', { name: '프리미엄 투자 전략 리포트' })).toContainText('1일 이내');
+  await page.getByRole('dialog', { name: '내 ETF 핵심 소식 이메일로 받기' }).getByLabel('뉴스레터 이메일').fill('test@example.com');
+  await page.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
+  await expect(page.getByRole('dialog', { name: '내 ETF 핵심 소식 이메일로 받기' })).toContainText('확인 메일의 링크');
+  await expect(page.getByRole('dialog', { name: '내 ETF 핵심 소식 이메일로 받기' })).not.toContainText('1일 이내');
   await page.getByRole('button', { name: '닫기', exact: true }).click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `test-results/report-${test.info().project.name}.png`, fullPage: true });

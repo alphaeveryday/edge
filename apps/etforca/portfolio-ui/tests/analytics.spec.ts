@@ -297,12 +297,12 @@ test('closing the premium modal does not dismiss unanswered feedback', async ({ 
   await feedbackReport(page);
   await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
   await expect(page.locator('.report-feedback')).toBeVisible();
-  const premium = page.getByRole('button', { name: '프리미엄 투자 전략 설계 리포트 받기' });
+  const premium = page.locator('.report-premium');
   await premium.focus();
   await premium.press('Enter');
-  await expect(page.getByRole('dialog', { name: '프리미엄 투자 전략 리포트' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: '내 ETF 핵심 소식 이메일로 받기' })).toBeVisible();
   await page.keyboard.press('Escape');
-  await expect(page.getByRole('dialog', { name: '프리미엄 투자 전략 리포트' })).not.toBeVisible();
+  await expect(page.getByRole('dialog', { name: '내 ETF 핵심 소식 이메일로 받기' })).not.toBeVisible();
   await expect(page.locator('.report-feedback')).toBeVisible();
   await page.getByRole('button', { name: '좋아요', exact: true }).click();
   await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(['shown', 'submitted']);
@@ -413,7 +413,7 @@ test('dismissed feedback keeps a newsletter retry without asking for another rat
   await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
   await page.getByRole('button', { name: '평가 팝업 닫기' }).click();
   await page.reload();
-  const launcher = page.getByRole('button', { name: '보유 종목 뉴스레터 받기' });
+  const launcher = page.locator('.feedback-anchor > button');
   const launcherBox = await launcher.boundingBox();
   const evaluationBox = await page.locator('.evaluation').boundingBox();
   expect(launcherBox!.y + launcherBox!.height).toBeLessThanOrEqual(evaluationBox!.y);
@@ -448,7 +448,7 @@ test('an already open newsletter launcher preserves feedback mode and Escape acc
   await feedbackReport(page);
   await page.locator('.evaluation').evaluate(el => el.scrollIntoView());
   await expect(page.locator('.feedback-choices')).toBeVisible();
-  const launcher = page.getByRole('button', { name: '보유 종목 뉴스레터 받기' });
+  const launcher = page.locator('.feedback-anchor > button');
   await launcher.focus();
   await launcher.press('Enter');
   await expect(page.locator('.feedback-choices')).toBeVisible();

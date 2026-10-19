@@ -1,5 +1,6 @@
 """Scheduled SES delivery on the existing host; no LLM, search or recipient data in logs."""
 import logging
+import math
 import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -149,10 +150,26 @@ def activate_confirmed(ses, *, deadline=float('inf')):
 
 
 
+def portfolio_weights(holdings):
+    """Reuse the subscribed analysis amounts, including cash and duplicate account positions."""
+    if not holdings or any(not h.get('instrument_id') or h.get('amount_krw') is None for h in holdings):
+        return None
+    amounts = [float(h['amount_krw']) for h in holdings]
+    if any(not math.isfinite(amount) or amount <= 0 for amount in amounts):
+        return None
+    total = sum(amounts)
+    weights = {}
+    for holding, amount in zip(holdings, amounts):
+        key = holding['instrument_id']
+        weights[key] = weights.get(key, 0) + amount / total
+    return weights
+
+
 def process_daily(ses, now, *, deadline=float('inf')):
     edition = now.date()
     with connect() as db:
-        subscriptions = db.execute("""SELECT s.* FROM portfolio_newsletter_subscriptions s WHERE s.status='active'
+        subscriptions = db.execute("""SELECT s.*,j.input AS analysis_input FROM portfolio_newsletter_subscriptions s
+            JOIN portfolio_jobs j ON j.id=s.job_id AND j.owner=s.owner WHERE s.status='active'
             AND NOT EXISTS (SELECT 1 FROM portfolio_newsletter_deliveries d
                 WHERE d.email=s.email AND d.edition=%s AND d.state NOT IN ('queued','waiting_content'))
             ORDER BY s.checked_at,s.created_at LIMIT 50""", (edition,)).fetchall()
@@ -197,7 +214,8 @@ def process_daily(ses, now, *, deadline=float('inf')):
             log.info('subscription=%s edition=%s newsletter=waiting_content ready=%s total=%s', row['id'], edition, len(cards), len(row['holdings']))
             continue
         try:
-            rendered = newsletter_email.daily(edition, cards, newsletter_email.DEFAULT_FORMAT, issued_at=now)
+            rendered = newsletter_email.daily(edition, cards, newsletter_email.DEFAULT_FORMAT, issued_at=now,
+                                               weights=None if row['analysis_input'].get('input_mode') == 'names' else portfolio_weights(row['analysis_input'].get('holdings', [])))
         except Exception as error:
             # One unrenderable edition must not stop the tick for every later recipient. Rendering is deterministic on
             # the cached cards, so record the failure instead of retrying it every tick until midnight.
