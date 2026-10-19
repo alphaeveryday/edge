@@ -31,6 +31,7 @@ test('tokens stay consistent across input, dashboard and catalog, including text
   for (const screen of ['input', 'dashboard', 'design-system']) {
     await page.goto('/portfolio/?preview=' + screen);
     await expect.poll(() => page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--color-primary').trim())).toBe('#1b64da');
+    if (screen === 'dashboard') await expect(page.locator('.dashboard-stats strong')).toHaveCount(3);
     const amounts = screen === 'dashboard' ? await page.locator('.dashboard-stats strong').evaluateAll(nodes => nodes.map(node => parseFloat(getComputedStyle(node).fontSize))) : [];
     await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
     if (screen === 'dashboard') {
