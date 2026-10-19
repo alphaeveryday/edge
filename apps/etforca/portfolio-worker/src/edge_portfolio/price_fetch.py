@@ -27,7 +27,8 @@ if __name__ == '__main__':
             from .data_providers import load_fallback_prices
             record = load_fallback_prices(sys.argv[1], date.fromisoformat(sys.argv[2]))
         else:
-            record = load_prices(sys.argv[1], date.fromisoformat(sys.argv[2]), on_raw=checkpoint)
+            record = load_prices(sys.argv[1], date.fromisoformat(sys.argv[2]), on_raw=checkpoint,
+                                 repair_since=date.fromisoformat(sys.argv[5]) if len(sys.argv) > 5 else None)
     except Exception as error:
         print(json.dumps({'error': price_failure(error)}))
         raise SystemExit(1)

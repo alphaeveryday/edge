@@ -60,6 +60,15 @@ def test_us_profit_uses_current_fx_without_inventing_purchase_fx():
     assert result['assets'][0]['profit'] == 420000
 
 
+def test_amount_import_with_an_average_has_profit_even_without_entered_quantity():
+    a = {**asset(), 'instrument_id': 'US:QLD', 'currency': 'USD', 'quantity': None, 'amount': 140000., 'average': 80.}
+    result = work.valuation({'assets': [a]}, {'US:QLD': record((90., 100.), currency='USD'), 'FX': record((1300., 1400.))}, None, date(2026, 10, 18))
+    q = result['assets'][0]
+    assert q['quantity'] == 1
+    assert q['profit'] == 28000
+    assert q['profit'] / (q['value'] - q['profit']) == .25
+
+
 def test_missing_fx_is_not_zero_or_customer_supplied_stale_fx():
     a = {**asset(), 'instrument_id': 'US:VOO', 'currency': 'USD'}
     result = work.valuation({'assets': [a], 'fx': 1}, {'US:VOO': record(currency='USD')}, None, date(2026, 10, 18))
@@ -68,10 +77,11 @@ def test_missing_fx_is_not_zero_or_customer_supplied_stale_fx():
 
 @pytest.mark.parametrize('quantity,amount', [(0., None), (None, 0.)])
 async def test_zero_holdings_need_no_quotes_fx_or_dividends_and_cannot_block_daily_records(isolated_db, monkeypatch, quantity, amount):
-    zero = {**asset(), 'id': 'zero', 'instrument_id': 'US:VOO', 'currency': 'USD', 'quantity': quantity, 'amount': amount, 'average': None}
+    zero = {**asset(), 'id': 'zero', 'instrument_id': 'US:VOO', 'currency': 'USD', 'quantity': quantity, 'amount': amount, 'average': None, 'price_date': '2024-01-01'}
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset(), zero])))
     calls = []
     async def prices(ids, day, **kwargs):
+        assert kwargs['valuation_since']['KR:069500'] > date(2024, 1, 1), 'A zero balance must not extend active holdings repair history'
         calls.append(ids)
         return {'KR:069500': record()}, []
     monkeypatch.setattr(work, 'records_for', prices)
@@ -278,7 +288,7 @@ async def test_collection_deadline_keeps_completed_prices(isolated_db, monkeypat
     from edge_portfolio import market_data
     original_timeout = asyncio.timeout
     monkeypatch.setattr(work.asyncio, 'timeout', lambda _: original_timeout(1))
-    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None):
+    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None):
         if symbol == '360750.KS':
             await asyncio.sleep(10)
         return record()
@@ -293,7 +303,7 @@ async def test_a_slow_first_provider_cannot_starve_a_healthy_later_holding(isola
     from edge_portfolio import market_data
     wait_for = asyncio.wait_for
     monkeypatch.setattr(work.asyncio, 'wait_for', lambda task, timeout: wait_for(task, min(timeout, .05)))
-    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None):
+    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None):
         if symbol == '069500.KS':
             await asyncio.wait_for(asyncio.sleep(20), timeout=provider_timeout)
         return record()
@@ -343,7 +353,7 @@ async def test_interrupted_optional_repair_keeps_valid_raw_prices_only(isolated_
     from edge_portfolio import market_data
     wait_for = asyncio.wait_for
     monkeypatch.setattr(work.asyncio, 'wait_for', lambda task, timeout: wait_for(task, .05))
-    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None):
+    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None):
         try:
             await asyncio.wait_for(asyncio.sleep(20), timeout=provider_timeout)
         except (asyncio.CancelledError, TimeoutError):
@@ -444,7 +454,7 @@ def test_first_automatic_quote_uses_a_known_legacy_snapshot_date_for_splits():
 async def test_adjusted_only_cached_prices_do_not_block_actual_close_recovery(isolated_db, monkeypatch):
     from edge_portfolio import market_data
     calls = []
-    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None):
+    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None):
         calls.append(symbol)
         return {**record(), **({'provider': 'FinanceDataReader:NAVER:069500'} if len(calls) == 1 else {})}
     monkeypatch.setattr(market_data, 'fetch_prices', fetch)
@@ -606,6 +616,101 @@ async def test_new_holdings_require_actions_checked_after_save_even_with_same_cl
     assert len(calls) == 2, 'The same completed close must not hide newly announced corporate actions'
     assert failures == []
     assert records['KR:069500']['pending_splits'] == ['2026-10-19']
+
+
+async def test_valuation_skips_old_price_repairs_but_backtest_upgrades_its_cache(isolated_db, monkeypatch):
+    from edge_portfolio import market_data
+    repairs = []
+    async def fetch(symbol, day, **kwargs):
+        repair = kwargs['repair_since']
+        repairs.append(repair)
+        return {**record(), **({'repair_since': min(repair, date(2025, 10, 16)).isoformat()} if repair else {})}
+    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    day = date(2026, 10, 18)
+    await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': day})
+    await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': day})
+    assert repairs == [day], 'A current dashboard quote is reusable without repairing historical gaps'
+    await work.records_for(['KR:069500'], day)
+    assert repairs == [day, None], 'A later backtest must still request the historical repair pass'
+    await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': date(2023, 10, 1)})
+    assert repairs == [day, None, date(2023, 10, 1)], 'An unmarked old backtest cache only covers two years, not a longer-held split basis'
+
+
+async def test_failed_earlier_basis_upgrade_cannot_publish_a_missing_held_split(isolated_db, monkeypatch):
+    from edge_portfolio import market_data
+    r = record()
+    r['frame'] = pd.DataFrame({'Close': 100., 'Adj Close': 100.}, index=pd.bdate_range('2024-10-01', '2026-10-16')).drop(pd.Timestamp('2024-11-05'))
+    r['repair_since'] = '2025-10-16'
+    async def fetch(*args, **kwargs):
+        return r
+    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    day = date(2026, 10, 18)
+    fresh, _ = await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': day})
+    assert fresh
+    async def unavailable(*args, **kwargs):
+        raise TimeoutError()
+    monkeypatch.setattr(market_data, 'fetch_prices', unavailable)
+    records, failures = await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': date(2024, 10, 1)})
+    assert records == {}
+    assert failures == ['KR:069500']
+
+
+async def test_rejected_held_gap_cache_is_retried_even_when_scope_is_marked_complete(isolated_db, monkeypatch):
+    from edge_portfolio import market_data
+    calls = []
+    async def fetch(*args, **kwargs):
+        calls.append(kwargs['repair_since'])
+        r = record()
+        r['frame'] = pd.DataFrame({'Close': 100., 'Adj Close': 100.}, index=pd.bdate_range('2026-10-12', '2026-10-16'))
+        r['repair_since'] = '2025-10-16'
+        if len(calls) == 1:
+            r['frame'] = r['frame'].drop(pd.Timestamp('2026-10-14'))
+        return r
+    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    args = dict(valuation_since={'KR:069500': date(2026, 10, 12)})
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), **args)
+    assert records == {} and failures == ['KR:069500']
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), **args)
+    assert len(calls) == 2 and records and not failures, 'A rejected cached gap must recover without manual cache deletion'
+
+
+def test_replaced_quantity_and_average_do_not_reuse_obsolete_split_bases():
+    old = asset(quantity_revision='old', average_revision='old')
+    previous = work.valuation({'assets': [old]}, {'KR:069500': record()}, None, date(2026, 10, 18))['bases']['a']
+    previous.update(as_of='2024-01-01', average_day='2024-01-01')
+    current = {**old, 'quantity_revision': 'new', 'average_revision': 'new', 'quantity_as_of': '2026-10-18', 'average_as_of': '2026-10-18'}
+    assert work.basis_dates(current, previous, '2026-10-19') == ('2026-10-18', '2026-10-18')
+    assert work.basis_dates(old, previous, '2026-10-19') == ('2024-01-01', '2024-01-01')
+    cleared = {**current, 'average': None, 'average_as_of': '2024-01-01'}
+    assert work.basis_dates(cleared, previous, '2026-10-19') == ('2026-10-18', '2026-10-18')
+
+
+def test_truncated_provider_history_cannot_hide_a_held_split():
+    assert work.held_history_missing('KR:069500', record(), date(2024, 1, 1), date(2026, 10, 16))
+    assert not work.held_history_missing('KR:069500', record(), date(2026, 10, 15), date(2026, 10, 16))
+    assert work.held_history_missing('KR:069500', record(), date(2026, 10, 19), date(2026, 10, 19)), 'A missing latest session must not pair post-split quantity with pre-split price'
+    stale = record()
+    stale['frame'] = stale['frame'].iloc[:-1]
+    assert work.held_history_missing('KR:069500', stale, date(2026, 10, 18), date(2026, 10, 16)), 'A weekend entry still needs the most recent completed session'
+
+
+async def test_each_instrument_repairs_only_its_own_holding_basis(isolated_db, monkeypatch):
+    old = asset(quantity_as_of='2024-01-01', average_as_of='2024-01-01')
+    new = {**asset(), 'id': 'new', 'instrument_id': 'US:QLD', 'currency': 'USD', 'quantity_as_of': '2026-10-18', 'average_as_of': '2026-10-18'}
+    dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[old, new])))
+    from psycopg.types.json import Jsonb
+    with store.connect() as db:
+        saved = dashboard.read('owner')['workbook']
+        saved['assets'] = [old, new]
+        db.execute("UPDATE portfolio_workbooks SET payload=%s WHERE owner='owner'", (Jsonb(saved),))
+    calls = []
+    async def prices(ids, day, **kwargs):
+        calls.append(kwargs['valuation_since'])
+        return {}, ids
+    monkeypatch.setattr(work, 'records_for', prices)
+    monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
+    assert await work.work_once()
+    assert calls == [{'KR:069500': date(2024, 1, 1), 'US:QLD': date(2026, 10, 18)}]
 
 
 def test_backtests_and_analyses_share_existing_global_admission_limit(isolated_db):

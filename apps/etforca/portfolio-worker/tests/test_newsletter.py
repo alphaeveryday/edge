@@ -287,7 +287,7 @@ def test_confirmed_subscription_gets_one_complete_daily_email_and_unsubscribe_st
         holdings = [{'instrument_id': 'US:QQQ', 'amount_krw': 600}, {'instrument_id': 'US:QQQ', 'amount_krw': 400},
                     {'instrument_id': 'CASH:KRW', 'amount_krw': 1000}]
         db.execute("UPDATE portfolio_jobs SET input=jsonb_set(input,'{holdings}',%s::jsonb) WHERE id=%s", (json.dumps(holdings), job))
-    now = datetime.now(agent.KST).replace(hour=9)
+    now = datetime.now(agent.KST).replace(hour=15, minute=29, second=0, microsecond=0)
     sender.tick(ses, now)
     assert len(sends) == 1 and 'ListManagementOptions' not in sends[0]
     with store.connect() as db:
@@ -299,6 +299,9 @@ def test_confirmed_subscription_gets_one_complete_daily_email_and_unsubscribe_st
     card = {'instrument_id': 'US:QQQ', 'name': 'QQQ', 'format': agent.DEFAULT_FORMAT, **H_STORED, 'headline': '기술주 소식', 'sources': [], 'quote': {'change_pct': 2}}
     news.finish_content(claimed, value=card)
     sender.tick(ses, now)
+    assert len(sends) == 1, 'Even a fully prepared edition must wait until 15:30 KST'
+    now = now.replace(minute=30)
+    sender.tick(ses, now.astimezone(timezone.utc))
     sender.tick(ses, now)
     assert len(sends) == 2, 'Repeated scheduler ticks must not duplicate the daily edition'
     assert '포트폴리오 하루 +1.00% | 기술주 소식' in sends[-1]['Content']['Simple']['Subject']['Data']
@@ -314,7 +317,7 @@ def test_confirmed_subscription_gets_one_complete_daily_email_and_unsubscribe_st
 def test_failed_holding_does_not_suppress_all_other_daily_news(newsletter_db, monkeypatch):
     job, owner = newsletter_db
     news.subscribe(job, owner, 'reader@example.test')
-    now = datetime.now(agent.KST).replace(hour=10)
+    now = datetime.now(agent.KST).replace(hour=15, minute=30)
     with store.connect() as db:
         db.execute("UPDATE portfolio_newsletter_subscriptions SET status='active'")
         db.execute("INSERT INTO portfolio_newsletter_content(instrument_id,edition,name,state,attempts) VALUES ('US:QQQ',%s,'QQQ','failed',3)", (now.date(),))

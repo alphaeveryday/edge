@@ -26,6 +26,36 @@ async function setup(page: Page, initial: Saved = { version: 0, workbook: null }
 }
 const saveButton = (page: Page) => page.locator('.feedback-anchor > .save-portfolio').getByRole('button', { name: '입력한 내 포트폴리오 저장하기' });
 
+test('pending quotes appear promptly and polling slows down after they arrive', async ({ page }) => {
+  await setup(page, { version: 1, workbook });
+  let calls = 0;
+  await page.route('**/api/portfolio/workbook/tracking', r => {
+    calls++;
+    return r.fulfill({ json: { market: calls === 1 ? null : { version: 1, payload: { date: '2026-10-19', assets: [{ id: 'holding', value: 1100000, profit: null, price: 11000, quantity: 100, price_date: '2026-10-19' }], missing: [], dividend_missing: ['holding'], forecasts: [], fx: null } }, days: [] } });
+  });
+  await page.clock.install();
+  await page.goto('/portfolio/?view=dashboard');
+  await expect(page.getByRole('status').filter({ hasText: '시세' })).toBeVisible();
+  await page.clock.runFor(3100);
+  await expect(page.locator('.dashboard-stats')).toContainText('1,100,000원');
+  await expect(page.getByRole('status').filter({ hasText: '시세' })).toHaveCount(0);
+  expect(calls).toBe(2);
+  await page.clock.runFor(10000);
+  expect(calls).toBe(2);
+});
+
+test('an empty portfolio does not enter fast quote polling', async ({ page }) => {
+  await setup(page);
+  let calls = 0;
+  await page.route('**/api/portfolio/workbook/tracking', r => { calls++; return r.fulfill({ json: { market: null, days: [] } }); });
+  await page.clock.install();
+  await page.goto('/portfolio/?view=dashboard');
+  await expect(page.getByRole('button', { name: '종목 추가', exact: true })).toBeVisible();
+  await expect.poll(() => calls).toBe(1);
+  await page.clock.runFor(10000);
+  expect(calls).toBe(1);
+});
+
 test('saving input opens usable holdings while the first quote is pending', async ({ page }) => {
   const writes = await setup(page);
   await page.goto('/portfolio/');
