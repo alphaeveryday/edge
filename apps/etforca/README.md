@@ -10,7 +10,7 @@
 
 ETF ORCA는 이 질문을 포트폴리오 추천, ETF 전망, 가격변동 설명으로 다룹니다. 개인의 입력을 해석하는 포트폴리오 서비스와 공통 시장 분석을 읽는 모바일 앱을 함께 개발합니다.
 
-[서비스](https://etforca.com/) · [포트폴리오 분석](https://etforca.com/portfolio/)
+[서비스](https://etforca.com/) · [포트폴리오 분석](https://etforca.com/portfolio/) · [투자정보 기만 검증](https://etforca.com/truth/)
 
 ## 사용자가 만나는 기능
 
@@ -45,6 +45,8 @@ ETF ORCA는 이 질문을 포트폴리오 추천, ETF 전망, 가격변동 설�
 **포트폴리오 서비스**는 독립 API·워커와 전용 PostgreSQL을 사용합니다. API와 워커는 별도 프로세스이며 작업·초안·결과를 공유합니다. 저장된 ETF 전망은 내부 조회 서비스를 통해 **ETF 한 종목과 명시적인 목적**으로 조회합니다. 포트폴리오 워커가 공통 엔진을 실행하거나 온톨로지에 직접 접근하는 구조는 아닙니다.
 
 조회한 전망은 기존 분석자의 의견으로 구분하고 외부 공식 자료와 대조합니다. 없거나 오래된 자료, 연결 장애를 같은 상태로 처리하지 않습니다. [실행 경계](../../docs/design/portfolio-worker.md) · [배포 경계](../../docs/design/portfolio-deployment.md) · [앱 API 인프라 결정](../../docs/adr/0056-etforca-app-api-infra.md)
+
+**투자정보 기만 검증**은 투자자를 오인하게 한 주장과 후속 해명을 원문과 시간순 기록으로 대조해 공개합니다. 판정(밝혀짐·해소)은 공식 판단이나 법정공시가 있을 때만 바꾸고, 수사기관·당사자 주장은 주체를 밝혀 적습니다. [설계](../../docs/design/truth-service.md) · [조사 방법론](../../docs/design/truth-investigation-methodology.md)
 
 ## 사용자 접점과 검증
 
@@ -168,6 +170,7 @@ SLO는 응답 1초 이내입니다.
 | 앱 API | Java·Spring Boot, PostgreSQL, Flyway, Redis, Lettuce, Resilience4j — [app-api](app-api/README.md) |
 | 랜딩 | 정적 HTML — [app-landing](app-landing/README.md) |
 | 포트폴리오 | React 화면, 독립 Python·FastAPI API/워커 — [실행·검증](portfolio-worker/README.md) |
+| 투자정보 기만 검증 | 정적 HTML 화면 — [truth-web](truth-web/README.md), Python 사건 계약 검사·공개 데이터 생성 — [설계](../../docs/design/truth-service.md) |
 
 모듈별 실행 명령과 환경 설정은 위 문서를 따릅니다. 실제 모델을 호출하는 포트폴리오 검증은 외부 호출 비용이 발생하며, DB 통합 테스트에는 전용 테스트 환경이 필요합니다.
 
