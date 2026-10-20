@@ -1,17 +1,36 @@
-"""명령줄: 사건 검사와 공개 데이터 생성.
+"""명령줄.
 
     python -m edge_truth_agent validate <사건 폴더>
     python -m edge_truth_agent build-site --cases <사건 폴더> --out <출력 폴더>
+    python -m edge_truth_agent run hourly|discover          # 환경변수 설정은 config.py
+    python -m edge_truth_agent tool <이름>                  # pi 확장이 부른다: 표준입력 JSON → 표준출력 글
+    python -m edge_truth_agent tool-specs --mode update --web 1
 """
 from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
+import json
+import logging
+import os
 from pathlib import Path
 import sys
 
-from . import site
-from .cases import CaseError, load_dir
+
+def _tool(name: str) -> int:
+    """도구 하나. 도구 오류는 종료 코드 2, 내부 오류는 3 — 확장이 그 글을 모델에게 오류로 보여준다."""
+    from .tools import ToolError, run
+    sys.stdout.reconfigure(encoding="utf-8")
+    try:
+        args = json.loads(sys.stdin.buffer.read().decode("utf-8") or "{}")
+        print(run(name, args, Path(os.environ.get("TRUTH_SESSION_DIR", "."))))
+        return 0
+    except ToolError as error:
+        print(str(error))
+        return 2
+    except Exception as error:  # noqa: BLE001 - 모델이 읽을 수 있게 그대로 알린다(조용히 삼키지 않는다)
+        print(f"도구 내부 오류({type(error).__name__}): {error}")
+        return 3
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -23,8 +42,36 @@ def main(argv: list[str] | None = None) -> int:
     build = sub.add_parser("build-site", help="사이트 공개 데이터 생성")
     build.add_argument("--cases", type=Path, required=True)
     build.add_argument("--out", type=Path, required=True)
+    once = sub.add_parser("run", help="사건 갱신 실행")
+    once.add_argument("mode", choices=["hourly", "discover"])
+    tool = sub.add_parser("tool", help="에이전트 도구 하나 실행 (pi 확장용)")
+    tool.add_argument("name")
+    spec = sub.add_parser("tool-specs", help="도구 목록 JSON (pi 확장용)")
+    spec.add_argument("--mode", choices=["update", "discover"], required=True)
+    spec.add_argument("--web", choices=["0", "1"], default="0")
     args = parser.parse_args(argv)
 
+    if args.command == "tool":
+        return _tool(args.name)
+    if args.command == "tool-specs":
+        from .toolspec import specs
+        sys.stdout.reconfigure(encoding="utf-8")
+        print(json.dumps(specs(args.mode, web=args.web == "1"), ensure_ascii=False))
+        return 0
+    if args.command == "run":
+        from .config import Config
+        from .runner import RunBusy, run
+        logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
+        try:
+            report = run(Config.from_env(), args.mode)
+        except RunBusy as busy:
+            logging.info(json.dumps({"event": "run_skipped", "reason": str(busy)}, ensure_ascii=False))
+            return 0
+        # 반영되지 못한 사건이 있으면 실패로 끝내 운영 알림(ECS 실패 규칙)이 울리게 한다. 저장·게시된 것은 그대로 둔다.
+        return 1 if report["failed"] or report["dropped"] else 0
+
+    from . import site
+    from .cases import CaseError, load_dir
     try:
         cases = load_dir(args.cases)
     except CaseError as error:

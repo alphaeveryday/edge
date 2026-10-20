@@ -72,11 +72,17 @@ jobs:
         env:
           PACKAGE: ${{ matrix.package }}
         run: uv sync --locked --python 3.12 --package "$PACKAGE"
+      # truth-agent 는 게시 전 렌더 검사를 실제 Chromium 으로 한다. 없으면 렌더·실행 시험이 건너뛰어져
+      # 초록으로 보이므로, 설치하고 TRUTH_REQUIRE_CHROMIUM 으로 건너뛰기를 실패로 바꾼다.
+      - name: Install Chromium for render tests
+        if: matrix.package == 'edge-truth-agent'
+        run: uv run --locked --package edge-truth-agent playwright install --with-deps --only-shell chromium
       - name: Test selected package offline
         working-directory: .
         env:
           PACKAGE: ${{ matrix.package }}
           PACKAGE_PATH: ${{ matrix.path }}
+          TRUTH_REQUIRE_CHROMIUM: ${{ matrix.package == 'edge-truth-agent' && '1' || '' }}
         run: uv run --locked --package "$PACKAGE" pytest -c "$PACKAGE_PATH/pyproject.toml" "$PACKAGE_PATH/tests" -q
 
   # ── 단위 테스트 (앱별 분리 실행) ─────────────────────────────
