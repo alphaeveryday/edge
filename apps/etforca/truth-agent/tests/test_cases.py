@@ -210,11 +210,12 @@ def test_future_timestamps_are_rejected(field):
     assert any("미래 시각" in line for line in problems(case, today=TODAY))
 
 
-def test_update_cannot_precede_the_case_record():
-    # '기록 10-20 · 갱신 2020-01-01' 같은 불가능한 순서가 공개되면 안 된다.
-    case = seed("hybe-ipo-2019")
-    case["updatedAt"] = "2020-01-01T09:00:00+09:00"
-    assert any(line.startswith("updatedAt") and "기록일" in line for line in problems(case, today=TODAY))
+@pytest.mark.parametrize("name", ["hybe-ipo-2019", "geumyang-monlaa"])
+def test_update_cannot_precede_any_date_in_the_record(name):
+    # '기록 10-20 · 갱신 2020-01-01'·확인일보다 이른 갱신 같은 불가능한 순서가 공개되면 안 된다.
+    case = seed(name)
+    case["updatedAt"] = "2026-10-01T09:00:00+09:00"
+    assert any(line.startswith("updatedAt") and "가장 늦은 날짜" in line for line in problems(case, today=TODAY))
 
 
 def test_source_cannot_be_accessed_before_it_was_published():
