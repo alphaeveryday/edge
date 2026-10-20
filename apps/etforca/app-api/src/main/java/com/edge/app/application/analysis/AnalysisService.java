@@ -1,5 +1,6 @@
 package com.edge.app.application.analysis;
 
+import com.edge.app.application.analysis.provided.AnalysisFinder;
 import com.edge.app.application.analysis.provided.DailyAnalysisResponse;
 import com.edge.app.application.analysis.provided.FactorPageResponse;
 import com.edge.app.application.analysis.provided.MetricPageResponse;
@@ -34,7 +35,7 @@ import java.util.Set;
  */
 @Service
 @RequiredArgsConstructor
-public class AnalysisService {
+public class AnalysisService implements AnalysisFinder {
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
     private static final DateTimeFormatter DATELINE = DateTimeFormatter.ofPattern("'ETF Orca AI · 'M월 d일 EEEE HH:mm", Locale.KOREAN);
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("M월 d일", Locale.KOREAN);
@@ -44,6 +45,7 @@ public class AnalysisService {
     private final EtfAnalysisRepository analysisRepository;
     private final EtfAnalysisAxisRepository axisRepository;
 
+    @Override
     @Transactional(readOnly = true)
     public DailyAnalysisResponse daily(String code, LocalDate date, LocalDate week) {
         requireEtf(code);
@@ -99,6 +101,7 @@ public class AnalysisService {
     }
 
     /** 이슈 축 payload 의 원문 매핑 */
+    @Override
     @Transactional(readOnly = true)
     public FactorPageResponse factor(String code, Axis axis) {
         EtfAnalysisAxis row = axisRow(code, axis);
@@ -109,6 +112,7 @@ public class AnalysisService {
     }
 
     /** 수치 축 payload 의 원문 매핑 */
+    @Override
     @Transactional(readOnly = true)
     public MetricPageResponse metric(String code, Axis axis) {
         EtfAnalysisAxis row = axisRow(code, axis);

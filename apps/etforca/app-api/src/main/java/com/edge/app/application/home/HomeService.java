@@ -3,6 +3,7 @@ package com.edge.app.application.home;
 import com.edge.app.application.etf.provided.EtfSummaryResponse;
 import com.edge.app.application.etf.required.EtfRepository;
 import com.edge.app.application.home.provided.HomeBriefResponse;
+import com.edge.app.application.home.provided.HomeFinder;
 import com.edge.app.application.home.provided.MarketIndexResponse;
 import com.edge.app.application.home.required.MarketIndexRepository;
 import com.edge.app.application.member.provided.AppPrincipal;
@@ -33,7 +34,7 @@ import java.util.stream.Collectors;
  */
 @Service
 @RequiredArgsConstructor
-public class HomeService {
+public class HomeService implements HomeFinder {
     private final PrincipalRepository principalRepository;
     private final WatchGroupRepository groupRepository;
     private final WatchItemRepository itemRepository;
@@ -41,6 +42,7 @@ public class HomeService {
     private final MarketIndexRepository indexRepository;
 
     // principal 해소 upsert 때문에 readOnly 미적용
+    @Override
     @Transactional
     public HomeBriefResponse brief(AppPrincipal principal, String group) {
         long principalId = principalRepository.resolve(principal);
@@ -78,6 +80,7 @@ public class HomeService {
         return Math.round(mean * 100) / 100.0;
     }
 
+    @Override
     @Transactional(readOnly = true)
     public List<MarketIndexResponse> indices() {
         return indexRepository.findAllByOrderByCode().stream().map(MarketIndexResponse::from).toList();

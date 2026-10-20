@@ -2,6 +2,7 @@ package com.edge.app.application.explore;
 
 import com.edge.app.application.etf.provided.EtfSummaryResponse;
 import com.edge.app.application.etf.required.EtfRepository;
+import com.edge.app.application.explore.provided.EtfRankFinder;
 import com.edge.app.application.explore.provided.RankRowResponse;
 import com.edge.app.application.explore.required.EtfRankRepository;
 import com.edge.app.domain.explore.EtfRank;
@@ -22,10 +23,11 @@ import java.util.stream.Collectors;
  */
 @Service
 @RequiredArgsConstructor
-public class ExploreService {
+public class ExploreService implements EtfRankFinder {
     private final EtfRankRepository rankRepository;
     private final EtfRepository etfRepository;
 
+    @Override
     @Transactional(readOnly = true)
     public List<RankRowResponse> rank() {
         LocalDate asOf = rankRepository.latestAsOf();

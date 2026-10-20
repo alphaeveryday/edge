@@ -1,8 +1,8 @@
 package com.edge.app.adapter.webapi.etf;
 
-import com.edge.app.application.etf.EtfService;
 import com.edge.app.application.etf.provided.ChartResponse;
 import com.edge.app.application.etf.provided.EtfDetailResponse;
+import com.edge.app.application.etf.provided.EtfFinder;
 import com.edge.app.application.etf.provided.EtfSummaryResponse;
 import com.edge.app.application.etf.provided.MoveResponse;
 import com.edge.app.application.member.provided.AppPrincipal;
@@ -21,31 +21,31 @@ import java.util.List;
 @RequestMapping("/api/v1/etfs")
 @RequiredArgsConstructor
 public class EtfController {
-    private final EtfService etfService;
+    private final EtfFinder etfFinder;
 
     @GetMapping
     public ApiResponse<List<EtfSummaryResponse>> etfList(@RequestParam(required = false) String q) {
-        return ApiResponse.onSuccess(etfService.list(q));
+        return ApiResponse.onSuccess(etfFinder.list(q));
     }
 
     @GetMapping("/{code}")
     public ApiResponse<EtfSummaryResponse> etfGet(@PathVariable String code, AppPrincipal principal) {
-        return ApiResponse.onSuccess(etfService.get(code));
+        return ApiResponse.onSuccess(etfFinder.get(code));
     }
 
     @GetMapping("/{code}/chart")
     public ApiResponse<ChartResponse> etfChart(@PathVariable String code, AppPrincipal principal,
             @RequestParam(defaultValue = "1M") ChartRange range) {
-        return ApiResponse.onSuccess(etfService.chart(code, range));
+        return ApiResponse.onSuccess(etfFinder.chart(code, range));
     }
 
     @GetMapping("/{code}/move")
     public ApiResponse<MoveResponse> etfMove(@PathVariable String code, AppPrincipal principal) {
-        return ApiResponse.onSuccess(etfService.move(code));
+        return ApiResponse.onSuccess(etfFinder.move(code));
     }
 
     @GetMapping("/{code}/detail")
     public ApiResponse<EtfDetailResponse> etfDetail(@PathVariable String code, AppPrincipal principal) {
-        return ApiResponse.onSuccess(etfService.detail(code));
+        return ApiResponse.onSuccess(etfFinder.detail(code));
     }
 }

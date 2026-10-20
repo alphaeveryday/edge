@@ -1,5 +1,6 @@
 package com.edge.app.application.theme;
 
+import com.edge.app.application.theme.provided.ThemeFinder;
 import com.edge.app.application.theme.provided.ThemeResponse;
 import com.edge.app.application.theme.required.ThemeRepository;
 import lombok.RequiredArgsConstructor;
@@ -10,9 +11,10 @@ import java.util.List;
 
 @Service
 @RequiredArgsConstructor
-public class ThemeService {
+public class ThemeService implements ThemeFinder {
     private final ThemeRepository themeRepository;
 
+    @Override
     @Transactional(readOnly = true)
     public List<ThemeResponse> list() {
         return themeRepository.findAllByOrderByPosition().stream()

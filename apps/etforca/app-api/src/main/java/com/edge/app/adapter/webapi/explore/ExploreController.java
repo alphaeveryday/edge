@@ -1,6 +1,6 @@
 package com.edge.app.adapter.webapi.explore;
 
-import com.edge.app.application.explore.ExploreService;
+import com.edge.app.application.explore.provided.EtfRankFinder;
 import com.edge.app.application.explore.provided.RankRowResponse;
 import com.edge.common.apipayload.ApiResponse;
 import lombok.RequiredArgsConstructor;
@@ -14,10 +14,10 @@ import java.util.List;
 @RequestMapping("/api/v1/explore")
 @RequiredArgsConstructor
 public class ExploreController {
-    private final ExploreService exploreService;
+    private final EtfRankFinder etfRankFinder;
 
     @GetMapping("/rank")
     public ApiResponse<List<RankRowResponse>> exploreRank() {
-        return ApiResponse.onSuccess(exploreService.rank());
+        return ApiResponse.onSuccess(etfRankFinder.rank());
     }
 }

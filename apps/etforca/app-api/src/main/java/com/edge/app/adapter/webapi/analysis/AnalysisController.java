@@ -1,6 +1,6 @@
 package com.edge.app.adapter.webapi.analysis;
 
-import com.edge.app.application.analysis.AnalysisService;
+import com.edge.app.application.analysis.provided.AnalysisFinder;
 import com.edge.app.application.analysis.provided.DailyAnalysisResponse;
 import com.edge.app.application.analysis.provided.FactorPageResponse;
 import com.edge.app.application.analysis.provided.MetricPageResponse;
@@ -19,21 +19,21 @@ import java.time.LocalDate;
 @RequestMapping("/api/v1/etfs/{code}/analysis")
 @RequiredArgsConstructor
 public class AnalysisController {
-    private final AnalysisService analysisService;
+    private final AnalysisFinder analysisFinder;
 
     @GetMapping
     public ApiResponse<DailyAnalysisResponse> analysisDaily(@PathVariable String code,
             @RequestParam(required = false) LocalDate date, @RequestParam(required = false) LocalDate week) {
-        return ApiResponse.onSuccess(analysisService.daily(code, date, week));
+        return ApiResponse.onSuccess(analysisFinder.daily(code, date, week));
     }
 
     @GetMapping("/factors/{axis}")
     public ApiResponse<FactorPageResponse> analysisFactor(@PathVariable String code, @PathVariable Axis axis) {
-        return ApiResponse.onSuccess(analysisService.factor(code, axis));
+        return ApiResponse.onSuccess(analysisFinder.factor(code, axis));
     }
 
     @GetMapping("/metrics/{axis}")
     public ApiResponse<MetricPageResponse> analysisMetric(@PathVariable String code, @PathVariable Axis axis) {
-        return ApiResponse.onSuccess(analysisService.metric(code, axis));
+        return ApiResponse.onSuccess(analysisFinder.metric(code, axis));
     }
 }
