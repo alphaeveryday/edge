@@ -16,7 +16,7 @@ import org.springframework.stereotype.Component;
 @Component
 @RequiredArgsConstructor
 public class CommentListener {
-    private final NotificationService notificationService;
+    private final NotificationModifyService notificationModifyService;
     private final MemberBlockRepository blockRepository;
 
     @EventListener
@@ -25,11 +25,11 @@ public class CommentListener {
                 || blockRepository.existsByBlockerIdAndBlockedId(event.postAuthorId(), event.commentAuthorId())) {
             return;
         }
-        notificationService.notifyComment(event.postAuthorId(), event.postId(), event.commentId(), event.body());
+        notificationModifyService.notifyComment(event.postAuthorId(), event.postId(), event.commentId(), event.body());
     }
 
     @EventListener
     public void on(CommentDeleted event) {
-        notificationService.removeComment(event.commentId());
+        notificationModifyService.removeComment(event.commentId());
     }
 }
