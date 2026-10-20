@@ -6470,6 +6470,44 @@ to {
 .newsletter-signup[data-compact] small { display: block; font-size: var(--text-caption); color: var(--color-text-muted); line-height: 1.5; }
 .newsletter-signup[data-compact] > small { margin-top: var(--space-2); }
 .dashboard-newsletter .newsletter-later { width: 100%; margin-top: var(--space-3); color: var(--color-text-secondary); }
+
+.app-download-sheet {
+  position: fixed; inset: auto 0 0; margin: 0 auto; padding: 0; border: 0;
+  width: min(100%, 720px); max-width: 100%; max-height: calc(100dvh - var(--space-6));
+  border-radius: var(--radius-card) var(--radius-card) 0 0; overflow: hidden;
+  background: var(--color-surface); color: var(--color-text);
+  box-shadow: 0 0 48px var(--color-shadow); overscroll-behavior: contain;
+}
+.app-download-sheet[open] { display: flex; flex-direction: column; animation: app-download-enter var(--motion-enter) var(--ease); }
+.app-download-sheet::backdrop { background: var(--color-overlay); }
+.app-download-header { flex: none; position: relative; padding: var(--space-6) var(--space-6) var(--space-4); border-bottom: 1px solid var(--color-border); }
+.app-download-grabber { position: absolute; top: var(--space-2); left: calc(50% - 18px); width: 36px; height: 4px; border-radius: var(--radius-pill); background: var(--color-border-strong); }
+.app-download-identity { display: flex; align-items: center; gap: var(--space-3); padding-right: var(--space-10); }
+.app-download-identity img { flex: none; border-radius: var(--radius-control); box-shadow: 0 2px 8px var(--color-shadow); }
+.app-download-identity strong { display: block; font-size: var(--text-body); letter-spacing: -.02em; }
+.app-download-identity span { display: block; margin-top: var(--space-1); color: var(--color-text-secondary); font-size: var(--text-caption); }
+.app-download-sheet .app-download-close { position: absolute; top: var(--space-6); right: var(--space-4); width: 44px; height: 44px; padding: 0; border: 0; border-radius: var(--radius-pill); background: var(--color-canvas); color: var(--color-text-secondary); font-size: var(--text-heading); cursor: pointer; }
+.app-download-content { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.app-download-copy { padding: var(--space-6) var(--space-6) var(--space-5); }
+.app-download-copy .app-download-eyebrow { margin: 0 0 var(--space-2); color: var(--color-primary); font-size: var(--text-label); font-weight: 700; }
+.app-download-copy h2 { margin: 0; font-size: var(--text-title); line-height: 1.28; letter-spacing: -.04em; word-break: keep-all; }
+.app-download-copy > p:last-of-type { margin: var(--space-3) 0 0; font-size: var(--text-label); line-height: 1.6; color: var(--color-text-secondary); word-break: keep-all; }
+.app-download-tags { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-4); }
+.app-download-tags span { padding: var(--space-1) var(--space-3); background: var(--color-surface-subtle); border: 1px solid var(--color-border); border-radius: var(--radius-pill); font-size: var(--text-caption); color: var(--color-text-secondary); }
+.app-download-gallery { display: flex; gap: var(--space-3); padding: 0 var(--space-6) var(--space-5); overflow-x: auto; scroll-snap-type: x mandatory; scroll-padding: var(--space-6); overscroll-behavior-x: contain; }
+.app-download-gallery img { flex: none; width: auto; height: clamp(260px, 42dvh, 370px); max-width: none; border-radius: var(--radius-control); scroll-snap-align: start; }
+.app-download-gallery:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+.app-download-footer { flex: none; padding: var(--space-4) var(--space-6) max(var(--space-3), env(safe-area-inset-bottom)); border-top: 1px solid var(--color-border); background: var(--color-surface); }
+.app-download-sheet .app-download-footer .app-download-cta { width: 100%; min-height: 52px; display: flex; align-items: center; justify-content: center; gap: var(--space-2); border-radius: var(--radius-pill); text-decoration: none; font-size: var(--text-body); font-weight: 700; }
+.app-download-footer > div { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0 var(--space-2); margin-top: var(--space-1); }
+.app-download-footer > div > span { color: var(--color-text-muted); font-size: var(--text-caption); }
+.app-download-footer > div > button { min-height: 44px; padding: var(--space-2) 0; border: 0; background: transparent; font-size: var(--text-caption); color: var(--color-text-secondary); cursor: pointer; }
+@keyframes app-download-enter { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@media (max-width: 360px) {
+  .app-download-header, .app-download-copy, .app-download-footer { padding-left: var(--space-4); padding-right: var(--space-4); }
+  .app-download-copy h2 { font-size: var(--text-heading); }
+}
+@media (prefers-reduced-motion: reduce) { .app-download-sheet[open] { animation: none; } }
 @media (max-width: 600px) {
   .holdings-table tr[data-needs-input=true] { border-radius: var(--radius-control); padding: var(--space-4) var(--space-3); }
 }
