@@ -17,6 +17,8 @@ FMP 수집(CollectFmpNews)은 `us_fmp_enabled` 일 때만 SFN 에 들어간다 �
 - 시간 상한: SFN 2400초 → dagrun_timeout 1700초. Reconciler 수명(1800초)보다 짧아야 해서 SFN 값을 못 쓴다.
   실측(SFN 최근 40회, 병렬 실행) p50 477초·최대 1099초. 직렬로 늘어난 뒤의 값은 전환 전에 잰다(README).
 - 통보: 부분 실패 즉시 통보 대신 run 실패 때 SNS 한 통(dagrun_timeout 포함).
+- 재처리 run(conf `reprocess_slot`)은 오늘 슬롯만 받는다(SFN 엔 재처리 경로가 없었다) — 조립 창이 실행 시각 기준이라
+  지난 날 슬롯은 그 기사를 안 읽고 성공한다(`_planned_slot`).
 
 일정·날짜:
 - 수집 창은 실행 시각 기준 [어제, 오늘]이다 — 과거 슬롯 run 이 오늘 기사를 옛 run_id 로 라벨하지 않게 당일 슬롯만
@@ -38,8 +40,8 @@ from airflow.sdk import DAG, Param, TriggerRule, task
 from airflow.sdk.exceptions import AirflowFailException
 from airflow.timetables.trigger import MultipleCronTriggerTimetable
 
-from edge_batch import (CLUSTER, HOLD_ECS_STATE_UNKNOWN, HOLD_RESULT_UNKNOWN, EdgeStep, lane_arg, pipeline_run_id,
-                        reprocess_slot, run_key, run_status, settlement, slot_time)
+from edge_batch import (CLUSTER, HOLD_ECS_STATE_UNKNOWN, HOLD_RESULT_UNKNOWN, KST, EdgeStep, lane_arg,
+                        pipeline_run_id, reprocess_slot, run_key, run_status, settlement, slot_time, today_kst)
 
 LANE = "news"
 # variables.tf `news_schedule_expressions` 와 같은 슬롯(드리프트는 tests 가 대조).
@@ -50,6 +52,16 @@ STEPS = ("collect", "normalize", *FEATURE_STEPS, "load_assertions", "assemble")
 TASK_KEYS = {"collect": "NEWS_COLLECTION_BIGKINDS", "normalize": "NORMALIZE_NEWS", "tag": "TAG_NEWS",
              "load_documents": "LOAD_DOCUMENTS", "load_assertions": "LOAD_ASSERTIONS",
              "assemble": "ASSEMBLE_EVENTS"}
+
+
+def _planned_slot(logical_date, dag_run):
+    """plan 이 원장에 넘길 슬롯. 재처리는 **오늘(KST) 슬롯만** 받는다 — 이벤트 조립 창은 실행 시각 기준(오늘−N일)이라
+    지난 날 슬롯을 재처리하면 그 슬롯 기사를 읽지 않고도 exit 0 으로 성공 보고한다. plan 에서 막으면 report 는
+    판정을 넘기지 않아(plan 실패 → 빈 값) 그 슬롯의 기존 판정을 덮지 않는다."""
+    slot = slot_time({"logical_date": logical_date, "dag_run": dag_run})
+    if reprocess_slot({"dag_run": dag_run}) and slot.astimezone(KST).date() != today_kst():
+        raise AirflowFailException(f"뉴스 재처리는 오늘 슬롯만 — {slot.isoformat()} 은 조립 창(오늘−N일) 밖일 수 있다")
+    return slot
 
 
 def _judged_steps(dag_run) -> tuple[str, ...]:
@@ -105,11 +117,10 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
         # Reconciler 수명(1800초)보다 짧아야 죽은 run 을 놓치지 않는다 — 그 안에서 가장 긴 값(SFN 은 2400초).
         dagrun_timeout=timedelta(seconds=int(os.environ.get("EDGE_LAB_DAGRUN_TIMEOUT_SECONDS", "1700"))),
         params={"reprocess_slot": Param("", type="string", description=(
-            "비우면 일반 run. 기존 슬롯 ISO 시각(예 2026-10-20T08:10:00+09:00)을 주면 그 슬롯의 raw 를 "
-            "다시 정제·태깅·적재·조립한다(수집 안 함, 성공 스텝 가드 해제)."))},
+            "비우면 일반 run. 오늘(KST)의 기존 슬롯 ISO 시각(예 2026-10-20T08:10:00+09:00)을 주면 그 슬롯의 raw 를 "
+            "다시 정제·태깅·적재·조립한다(수집 안 함, 성공 스텝 가드 해제). 지난 날 슬롯은 plan 이 거부한다."))},
         user_defined_macros={
-            "edge_slot": lambda logical_date, dag_run: slot_time(
-                {"logical_date": logical_date, "dag_run": dag_run}),
+            "edge_slot": _planned_slot,
             "edge_run_id": lambda logical_date, dag_run: pipeline_run_id(
                 LANE, slot_time({"logical_date": logical_date, "dag_run": dag_run})),
             "edge_run_key": lambda logical_date, dag_run: run_key(

@@ -9,7 +9,8 @@ import importlib
 import re
 import socket
 import sys
-from datetime import timedelta
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -88,3 +89,20 @@ def test_scheduling_guards(dag_module):
     assert {t for t in dag_module.STEPS if dag.get_task(t).skip_if_succeeded} == {"collect", "tag"}
     env = {e["name"]: e["value"] for e in dag.get_task("plan").overrides["containerOverrides"][0]["environment"]}
     assert env["OPS_PIPELINE_TYPE"] == "news" and env["OPS_ORCHESTRATOR"] == "AIRFLOW"
+
+
+def test_reprocess_of_a_past_day_is_refused_at_plan(dag_module, monkeypatch):
+    # 조립 창은 실행 시각 기준(오늘−N일)이다 — 지난 날 슬롯을 재처리하면 그 슬롯 기사를 안 읽고 exit 0 으로 성공 보고한다.
+    # plan(OPS_SCHEDULED_TIME 렌더링)에서 막아야 report 가 그 슬롯의 기존 판정을 덮지 않는다(plan 실패 → 판정 빈 값).
+    from airflow.sdk.exceptions import AirflowFailException
+    import edge_batch
+    monkeypatch.setattr(dag_module, "today_kst", lambda: datetime(2026, 10, 20).date())
+    slot = dag_module._planned_slot
+    run = lambda iso: SimpleNamespace(conf={"reprocess_slot": iso}, run_after=None)
+    with pytest.raises(AirflowFailException, match="오늘 슬롯만"):
+        slot(None, run("2026-10-19T08:10:00+09:00"))
+    assert slot(None, run("2026-10-20T00:10:00+09:00")).isoformat() == "2026-10-20T00:10:00+09:00"
+    scheduled = datetime(2026, 10, 18, 8, 10, tzinfo=edge_batch.KST)          # 일정 run 은 plan 의 당일 검사가 맡는다
+    assert slot(scheduled, SimpleNamespace(conf={}, run_after=scheduled)) == scheduled
+    env = {e["name"]: e["value"] for e in dag_module.dag.get_task("plan").overrides["containerOverrides"][0]["environment"]}
+    assert "edge_slot(logical_date, dag_run)" in env["OPS_SCHEDULED_TIME"]
