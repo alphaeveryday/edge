@@ -17,7 +17,7 @@ _SUMMARY_KEYS = ("id", "subject", "instruments", "aliases", "headline", "status"
 
 
 def _dump(value) -> bytes:
-    return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")  # NaN 은 브라우저 JSON 이 못 읽는다
 
 
 def public_case(case: dict) -> dict:

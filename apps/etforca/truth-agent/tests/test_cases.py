@@ -80,6 +80,60 @@ def test_file_name_must_match_id(tmp_path):
         load_dir(tmp_path)
 
 
+def test_resolution_date_cannot_be_later_than_its_source():
+    # 확인일을 근거 발행일보다 늦게 적으면 '먼저 기록한 사건'처럼 보여 적중률이 부풀려진다.
+    case = seed("geumyang-monlaa")
+    case["resolution"]["at"] = case["resolvedAt"] = "2026-10-20"
+    assert any("근거 출처 발행일" in line for line in problems(case, today=TODAY))
+
+
+def test_party_rebuttal_disclosure_cannot_refute_a_case():
+    # 당사자 해명공시는 반론이다. 그것만으로 '해소'를 붙이면 당사자 주장을 사실로 바꾸게 된다(방법론 §5·§8).
+    case = seed("hybe-ipo-2019")
+    case.update(status="refuted", resolvedAt="2024-11-29",
+                resolution={"sourceId": "disclosure-spn-295677", "at": "2024-11-29", "note": "회사 해명공시"})
+    case["behaviors"][0]["verdict"] = case["levels"]["behavior"] = "refuted"
+    found = problems(case, today=TODAY)
+    assert any("해소(refuted)는 공식 판단(official)" in line for line in found)
+
+
+def test_resolution_source_cited_as_rebuttal_is_rejected():
+    case = seed("hybe-ipo-2019")
+    case["sources"][2] |= {"kind": "official", "url": "https://www.fsc.go.kr/no010101/1"}
+    case.update(status="confirmed", resolvedAt="2024-11-29",
+                resolution={"sourceId": "disclosure-spn-295677", "at": "2024-11-29", "note": "근거 메모"})
+    case["behaviors"][0]["verdict"] = case["levels"]["behavior"] = "confirmed"
+    assert any("당사자 반론으로 인용된 출처" in line for line in problems(case, today=TODAY))
+
+
+def test_self_declared_official_kind_needs_an_official_address():
+    # 출처 종류는 파일이 스스로 적는 값이라, 판정 근거만큼은 기관 주소로 다시 확인한다.
+    case = seed("geumyang-monlaa")
+    case["sources"][0]["url"] = "https://blog.example.com/fsc-copy"
+    assert any("공식 기관·공시 도메인이 아닙니다" in line for line in problems(case, today=TODAY))
+
+
+@pytest.mark.parametrize("value", ["20261007", "2026-W41-3", "2026-02-31"])
+def test_dates_must_be_exact_calendar_iso_days(value):
+    # 화면은 날짜를 문자열로 비교한다. 형식이 섞이면 순서와 적중 판정이 틀어진다.
+    case = seed("hybe-ipo-2019")
+    case["flaggedAt"] = value
+    assert any("날짜가 아닙니다" in line for line in problems(case, today=TODAY))
+
+
+def test_non_finite_impact_is_rejected():
+    # NaN 이 공개 JSON 에 실리면 브라우저가 파일 전체를 못 읽어 사이트가 빈다.
+    case = seed("hybe-ipo-2019")
+    case["impact"] = float("nan")
+    assert any(line.startswith("impact") for line in problems(case, today=TODAY))
+
+
+def test_behavior_verdict_needs_a_cited_source():
+    case = seed("hybe-ipo-2019")
+    case["behaviors"][0]["sourceIds"] = []
+    assert any(line.startswith("behaviors[0].sourceIds") for line in problems(case, today=TODAY))
+
+
 def test_broken_json_file_is_reported_by_name(tmp_path):
     # 한 파일이 깨져도 어느 파일인지 알려야 고칠 수 있다(스택트레이스로 끝나지 않게).
     (tmp_path / "broken.json").write_text("{", encoding="utf-8")

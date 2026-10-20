@@ -29,6 +29,15 @@ def test_index_has_one_summary_per_case_with_types():
     assert set(files) == {"index.json"} | {f"cases/{c['id']}.json" for c in index["cases"]}
 
 
+def test_build_refuses_nan_instead_of_publishing_unreadable_json():
+    import math
+    import pytest
+    cases = load_dir(SEED)
+    cases[0]["impact"] = math.nan
+    with pytest.raises(ValueError):
+        site.build(cases, NOW)
+
+
 def test_build_is_deterministic():
     # 매시 실행에서 내용이 같으면 같은 바이트여야 바뀐 파일만 다시 올릴 수 있다.
     cases = load_dir(SEED)

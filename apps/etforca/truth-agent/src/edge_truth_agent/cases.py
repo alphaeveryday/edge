@@ -8,15 +8,25 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from importlib import resources
 import json
+import math
 from pathlib import Path
+import re
+from urllib.parse import urlsplit
 
 from jsonschema import Draft202012Validator
 
 SCHEMA = json.loads(resources.files(__package__).joinpath("case.schema.json").read_text(encoding="utf-8"))
 _VALIDATOR = Draft202012Validator(SCHEMA)
 
-# 판정(밝혀짐·해소)은 공식 판단이나 법정공시가 있을 때만 바꾼다 (방법론 §8 확인 수준).
+# 판정은 공식 출처로만 바꾼다 (방법론 §8 확인 수준).
+# - 밝혀짐(confirmed): 공식 판단 또는 법정공시(예: 정정공시로 회사가 인정)
+# - 해소(refuted): 공식 판단만. 당사자 해명공시는 반론이지 반증의 입증이 아니다(방법론 §5 '반론의 존재와 입증을 구별').
 RESOLUTION_KINDS = frozenset({"official", "disclosure"})
+REFUTATION_KINDS = frozenset({"official"})
+# 출처 종류를 사건 파일이 스스로 주장하므로, 판정 근거 출처만큼은 주소로 다시 확인한다.
+OFFICIAL_HOSTS = ("fsc.go.kr", "fss.or.kr", "spo.go.kr", "police.go.kr", "scourt.go.kr", "ftc.go.kr", "moj.go.kr", "krx.co.kr")
+DISCLOSURE_HOSTS = ("dart.fss.or.kr", "opendart.fss.or.kr", "kind.krx.co.kr")
+_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # 공개 문장에서 확인 수준을 넘어서는 단정어. 행위를 구체적으로 쓰게 한다 (방법론 §8 작성 원칙).
 BANNED_HEADLINE_WORDS = ("거짓말", "사기꾼")
 
@@ -33,13 +43,42 @@ def _path(error) -> str:
     return out or "(사건 전체)"
 
 
+def host_kind(url: str) -> str | None:
+    """주소가 공식 판단(official)·법정공시(disclosure) 기관 도메인이면 그 종류. 공시 도메인을 먼저 본다."""
+    host = (urlsplit(url).hostname or "").lower()
+
+    def under(domains: tuple[str, ...]) -> bool:
+        return any(host == d or host.endswith("." + d) for d in domains)
+
+    if under(DISCLOSURE_HOSTS):
+        return "disclosure"
+    if under(OFFICIAL_HOSTS):
+        return "official"
+    return None
+
+
 def _day(value: str, where: str, problems: list[str]) -> date | None:
-    """YYYY-MM-DD 를 읽고, 틀리면 문제 목록에 적는다."""
+    """정확히 YYYY-MM-DD 인 날짜를 읽고, 틀리면 문제 목록에 적는다.
+
+    date.fromisoformat 은 '20261007'·'2026-W41-3' 도 받는다. 화면은 날짜를 문자열로 비교하므로
+    형식이 하나가 아니면 순서·적중 판정이 틀어진다.
+    """
     try:
+        if not _DATE.fullmatch(value):
+            raise ValueError(value)
         return date.fromisoformat(value)
     except ValueError:
         problems.append(f"{where}: '{value}' 는 날짜가 아닙니다. YYYY-MM-DD 로 쓰세요.")
         return None
+
+
+def _moment(value: str, where: str, problems: list[str]) -> None:
+    """시간대가 붙은 날짜·시각인지 본다."""
+    try:
+        if datetime.fromisoformat(value).tzinfo is None or not _DATE.match(value):
+            problems.append(f"{where}: 시간대를 붙인 날짜·시각으로 쓰세요 (예: 2026-10-20T09:00:00+09:00).")
+    except ValueError:
+        problems.append(f"{where}: '{value}' 는 날짜·시각이 아닙니다.")
 
 
 def problems(case: dict, *, file_id: str | None = None, today: date | None = None) -> list[str]:
@@ -96,13 +135,25 @@ def problems(case: dict, *, file_id: str | None = None, today: date | None = Non
             found.append(f"status: '{status}' 로 바꾸려면 resolution 과 resolvedAt 이 필요합니다.")
         else:
             src = need(resolution["sourceId"], "resolution.sourceId")
-            if src and src["kind"] not in RESOLUTION_KINDS:
+            allowed = REFUTATION_KINDS if status == "refuted" else RESOLUTION_KINDS
+            if src and src["kind"] not in allowed:
                 found.append(
-                    f"resolution.sourceId: '{src['id']}' 는 {src['kind']} 출처입니다. 판정은 공식 판단(official)이나 "
-                    "법정공시(disclosure) 출처로만 바꿀 수 있습니다. 그런 출처가 없으면 status 를 pending 으로 두세요."
+                    f"resolution.sourceId: '{src['id']}' 는 {src['kind']} 출처입니다. "
+                    + ("해소(refuted)는 공식 판단(official) 출처로만 정합니다. 당사자 해명은 반론에 적으세요."
+                       if status == "refuted" else
+                       "밝혀짐(confirmed)은 공식 판단(official)이나 법정공시(disclosure) 출처로만 정합니다.")
+                    + " 그런 출처가 없으면 status 를 pending 으로 두세요."
                 )
+            elif src and host_kind(src["url"]) not in allowed:
+                found.append(f"resolution.sourceId: '{src['id']}' 주소({urlsplit(src['url']).hostname})가 공식 기관·공시 도메인이 아닙니다. "
+                             "판정 근거는 기관 원문 주소여야 합니다.")
+            if src and any(r["sourceId"] == src["id"] for r in case["rebuttal"]):
+                found.append(f"resolution.sourceId: '{src['id']}' 는 당사자 반론으로 인용된 출처입니다. 반론을 판정 근거로 쓸 수 없습니다.")
             if resolution["at"] != case["resolvedAt"]:
                 found.append("resolvedAt: resolution.at 과 같은 날짜여야 합니다.")
+            elif src and _DATE.fullmatch(resolution["at"]) and _DATE.fullmatch(src["publishedAt"]) and resolution["at"] > src["publishedAt"]:
+                found.append(f"resolution.at: {resolution['at']} 는 근거 출처 발행일({src['publishedAt']})보다 늦습니다. "
+                             "확인일은 그 판단·공시가 나온 날입니다(찾은 날이 아닙니다).")
         wanted = "confirmed" if status == "confirmed" else "refuted"
         if case["levels"]["behavior"] != wanted:
             found.append(f"levels.behavior: status 가 '{status}' 이면 행동 확인 수준도 '{wanted}' 여야 합니다.")
@@ -117,11 +168,11 @@ def problems(case: dict, *, file_id: str | None = None, today: date | None = Non
         for key in ("publishedAt", "accessedAt"):
             if (day := _day(s[key], f"sources[{i}].{key}", found)) and day > latest:
                 found.append(f"sources[{i}].{key}: {s[key]} 는 미래 날짜입니다.")
-    try:
-        if datetime.fromisoformat(case["updatedAt"]).tzinfo is None:
-            found.append("updatedAt: 시간대를 붙이세요 (예: 2026-10-20T09:00:00+09:00).")
-    except ValueError:
-        found.append(f"updatedAt: '{case['updatedAt']}' 는 날짜·시각이 아닙니다.")
+    _moment(case["updatedAt"], "updatedAt", found)
+    for i, r in enumerate(case["related"]):
+        _moment(r["addedAt"], f"related[{i}].addedAt", found)
+    if not math.isfinite(case["impact"]):
+        found.append("impact: 0~100 사이 숫자여야 합니다.")
 
     for i, sentence in enumerate(case["headline"]):
         for word in BANNED_HEADLINE_WORDS:
