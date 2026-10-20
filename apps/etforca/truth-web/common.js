@@ -13,7 +13,7 @@ const TYPES = {
   deflected: '불리하면 말 돌림', disowned: '모른 척 발 뺌',
   excused: '억지로 갖다 붙임', blamed: '속은 사람 탓함',
 };
-const VERDICTS = {confirmed: '확인', suspected: '의심·추가 검증', refuted: '반증·해소', insufficient: '자료 부족', not_applicable: '해당 없음'};
+const VERDICTS = {confirmed: '확인됨', suspected: '의심', refuted: '아님', insufficient: '자료 부족', not_applicable: '해당 없음'};
 const typeNames = c => (c.types || []).map(t => TYPES[t] || t).join(' · ');
 
 /* 파급력 가치: impact(단위 억원, 0~100). 조사 우선순위이며 증거가 아니다 */
@@ -48,6 +48,8 @@ function scoreOf(cases){
   };
 }
 const rateText = s => s.rate === null ? '적중률 집계 전' : `적중률 ${s.rate}%`;
+/* 홈 아래 표는 위 화면에 다 보이지 않을 때만 보여 준다(같은 사건을 두 번 보여 주지 않는다) */
+const ABOVE_PENDING = 4, ABOVE_RESOLVED = 5;
 
 /* 목록 표: 홈 아래 목록과 list.html 이 같은 행을 쓴다 */
 const ti = c => `<div class="ti"><div class="ph-img">${img(c.cover)}</div><div><b>${esc(c.headline[0])}</b><small>${esc(c.subject)}</small></div></div>`;
@@ -90,5 +92,5 @@ const loadCase = id => getJson(`data/cases/${encodeURIComponent(id)}.json`);
 
 function renderScore(cases){
   const s = scoreOf(cases);
-  $('score').innerHTML = `확인된 거짓 이슈 <b>${s.confirmed}개</b> · <em>${rateText(s)}</em>`;
+  $('score').innerHTML = `밝혀진 거짓 <b>${s.confirmed}건</b> · ${s.rate === null ? rateText(s) : `<em>${rateText(s)}</em>`}`;
 }

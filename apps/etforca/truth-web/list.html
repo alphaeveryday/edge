@@ -65,10 +65,10 @@ function set(k, v){
   render();
 }
 
-function head(cover, kicker, title, meta){
+function head(cover, title, meta){
   $('bg').innerHTML = img(cover);
   $('head').innerHTML = `<div class="ph-img">${img(cover)}</div>
-    <div><small>${kicker}</small><h1>${title}</h1><p>${meta}</p></div>`;
+    <div><h1>${title}</h1><p>${meta}</p></div>`;
 }
 
 function render(){
@@ -77,7 +77,7 @@ function render(){
   if (kind === 'pending') {
     const list = pendingOf(CASES);
     document.title = '판단 중 전체 순위 · 투자정보 기만 검증';
-    head(list[0]?.cover, '목록', '판단 중 전체 순위', `<b>${list.length}건</b> · 파급력 가치 순`);
+    head(list[0]?.cover, '판단 중 전체 순위', `<b>${list.length}건</b> · 파급력 가치 순`);
     $('rows').className = 'top3';
     $('rows').innerHTML = list.length ? PENDING_HEAD + list.map(pendingRow).join('') : '<div class="empty">지금 판단 중인 사건이 없습니다.</div>';
     return;
@@ -89,7 +89,7 @@ function render(){
   const list = all.filter(c => (!year || yearOf(c) === year) && (result === 'all' || c.status === result));
 
   document.title = '밝혀진 거짓 · 투자정보 기만 검증';
-  head(all[0]?.cover, '목록', '밝혀진 거짓', `밝혀짐 <b>${s.confirmed}</b> · 해소 <b>${s.refuted}</b> · ${rateText(s)} · 확인일 순`);
+  head(all[0]?.cover, '밝혀진 거짓', `밝혀짐 <b>${s.confirmed}</b> · 해소 <b>${s.refuted}</b> · ${rateText(s)} · 확인일 순`);
   $('filters').innerHTML =
     [null, ...years].map(y => `<button class="${y === year ? 'on' : ''}" data-year="${y ?? ''}">${y ?? '전체 연도'}</button>`).join('') +
     '<i></i>' +
