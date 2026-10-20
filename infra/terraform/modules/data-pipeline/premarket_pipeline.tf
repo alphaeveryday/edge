@@ -242,8 +242,9 @@ resource "aws_cloudwatch_metric_alarm" "premarket_execution_failed" {
 # ⚠️ 공휴일에도 뜬다(평일 cron). 그날은 KRX 가 직전 거래일 PDF 를 주고 유니버스 구성은
 # 안 바뀌므로 `build-minute-universe` 가 no-op 으로 끝난다 — 조용한 정상이다.
 resource "aws_scheduler_schedule" "premarket" {
-  name                         = "${var.name}-premarket"
-  state                        = var.premarket_schedule_state
+  name = "${var.name}-premarket"
+  # 실행 주체가 Airflow 면 SFN 을 띄우는 이 스케줄은 꺼진다(ALPHA-1408). 전환·롤백은 apps/engine/airflow/README.md.
+  state                        = var.premarket_orchestrator == "AIRFLOW" ? "DISABLED" : var.premarket_schedule_state
   schedule_expression          = var.premarket_schedule_expression
   schedule_expression_timezone = var.schedule_timezone
 

@@ -123,6 +123,11 @@ variable "batch_task_definition_families" {
   type        = list(string)
 }
 
+variable "lane_command_args" {
+  description = "DAG 명령 인자 중 terraform 값(data-pipeline 출력 airflow_lane_args) — env EDGE_LANE_ARGS(JSON)"
+  type        = map(string)
+}
+
 variable "batch_task_definition_prefix" {
   description = "EdgeStep 의 EDGE_ECS_TASKDEF_PREFIX(= data-pipeline 모듈 name)"
   type        = string

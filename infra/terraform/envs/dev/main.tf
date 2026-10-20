@@ -751,7 +751,11 @@ module "airflow" {
     # 없으면 financial_collect·macro_collect 가 AccessDeniedException 으로 시작도 못 한다.
     module.data_pipeline.task_definition_families["dart"],
     module.data_pipeline.task_definition_families["macro"],
+    # 장전 유니버스 레인 edge_premarket(ALPHA-1408): KRX 수집은 krx task-def.
+    module.data_pipeline.task_definition_families["krx"],
   ]
+  # DAG 명령 인자 중 terraform 값 — SFN 잡 목록과 같은 변수(ALPHA-1408).
+  lane_command_args            = module.data_pipeline.airflow_lane_args
   batch_task_definition_prefix = "${local.prefix}-data-pipeline"
   batch_pass_role_arns         = module.data_pipeline.batch_pass_role_arns
   batch_security_group_id      = module.data_pipeline.security_group_id

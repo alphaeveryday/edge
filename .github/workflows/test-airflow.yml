@@ -17,6 +17,8 @@ on:
       - "infra/terraform/modules/data-pipeline/**"
       # 공시 DAG 슬롯은 dev 값(모듈 기본이 아니라 envs/dev/main.tf)과 대조한다(ALPHA-1407).
       - "infra/terraform/envs/dev/main.tf"
+      # terraform 값 인자가 airflow 모듈 env(EDGE_LANE_ARGS)로 가는 배선도 대조한다(ALPHA-1408).
+      - "infra/terraform/modules/airflow/**"
       - ".github/workflows/test-airflow.yml"
 
 permissions:
