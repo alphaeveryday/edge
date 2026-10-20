@@ -39,9 +39,9 @@ test('missing inputs are highlighted until opening the editor and email never in
   await expect(row).toHaveAttribute('data-needs-input', 'false');
   await expect(page.getByLabel('보유 수량', { exact: true })).toHaveValue('');
   await page.clock.fastForward(12000);
-  await expect(page.getByRole('dialog', { name: '내 ETF 핵심 소식 이메일로 받기' })).not.toBeVisible();
+  await expect(page.getByRole('dialog', { name: '내 ETF 소식, 매일 짧게' })).not.toBeVisible();
   await page.getByRole('button', { name: '수정 닫기' }).click();
-  await expect(page.getByRole('dialog', { name: '내 ETF 핵심 소식 이메일로 받기' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: '내 ETF 소식, 매일 짧게' })).toBeVisible();
   await page.getByRole('button', { name: '나중에 할게요' }).click();
   await expect(page.locator('.holding-edit')).toBeFocused();
   await expect(row).toHaveAttribute('data-needs-input', 'false');
@@ -57,8 +57,13 @@ test('email appears after ten seconds and never subscribes before explicit submi
   await page.clock.fastForward(1000);
   await expect(page.locator('.dashboard-newsletter')).toBeVisible();
   expect(state.subscriptions()).toBe(0);
+  const preview = page.locator('.dashboard-newsletter .newsletter-example img');
+  await expect(preview).toBeVisible();
+  await expect.poll(() => preview.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
+  await expect(page.locator('.dashboard-newsletter blockquote')).toHaveCount(0);
+  await page.screenshot({ path: `test-results/newsletter-popup-${test.info().project.name}.png`, fullPage: true });
   await page.getByLabel('뉴스레터 이메일').fill('reader@example.test');
-  await page.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
+  await page.getByRole('button', { name: '이메일로 받아보기' }).click();
   await expect(page.locator('.dashboard-newsletter')).toContainText('확인 메일의 링크');
   expect(state.subscriptions()).toBe(1);
   await page.screenshot({ path: `test-results/dashboard-email-${test.info().project.name}.png`, fullPage: true });
