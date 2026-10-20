@@ -8,7 +8,6 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
-import hashlib
 import json
 import logging
 import os
@@ -104,25 +103,19 @@ def save_case(store, case: dict, etag: str | None) -> str:
 
 
 # ── 게시 ──
-def publish(public, cases: list[dict], state: dict, now: datetime) -> dict:
-    """공개 위치를 이번 사건 묶음과 맞춘다: 바뀌었거나 공개 위치에 없는 파일은 올리고, 없어진 사건 파일은 지운다.
+def publish(public, cases: list[dict], now: datetime) -> dict:
+    """공개 위치를 이번 사건 묶음과 똑같이 맞춘다: 모든 파일을 올리고, 묶음에 없는 사건 파일은 지운다.
 
-    공개 위치를 직접 나열해 대조한다 — 수동 재게시(deploy-truth-web reseed)가 파일을 지우거나 바꿔도 다음 실행이 되돌린다.
+    바뀐 것만 고르지 않는다 — 수동 재게시(deploy-truth-web reseed)가 파일을 지우거나 바꿔도 다음 실행이 되돌려야 하고,
+    공개 파일은 사건 수만큼뿐이라 매번 올려도 싸다.
     """
     files = site.build(cases, now)
-    previous: dict[str, str] = state.get("published", {})
-    existing = set(public.list(""))
-    current = {path: hashlib.sha256(body).hexdigest() for path, body in files.items() if path != "index.json"}
-    uploaded = []
     for path, body in files.items():
-        if path == "index.json" or path not in existing or previous.get(path) != current[path]:
-            public.put(path, body, cache_control="no-cache")
-            uploaded.append(path)
-    removed = sorted(path for path in (set(previous) | {k for k in existing if k.startswith("cases/")}) if path not in current)
+        public.put(path, body, cache_control="no-cache")
+    removed = sorted(k for k in public.list("cases/") if k not in files)
     for path in removed:
         public.delete(path)
-    state["published"] = current
-    return {"uploaded": uploaded, "removed": removed}
+    return {"uploaded": sorted(files), "removed": removed}
 
 
 def summaries(cases: list[dict]) -> list[dict]:
@@ -228,9 +221,10 @@ def run(cfg, mode: str, *, lake=None, session_runner=session.run, now: datetime 
             (cases_dir / f"{c['id']}.json").write_bytes(_json(c))
 
         # 3. 세션 (모델)
-        jobs = []
+        jobs, capped = [], set()
         if mode == "hourly":
-            targets = [cid for cid, arts in routed.items() if routing.needs_session(arts)][:cfg.max_sessions]
+            wanted = [cid for cid, arts in routed.items() if routing.needs_session(arts)]
+            targets, capped = wanted[:cfg.max_sessions], set(wanted[cfg.max_sessions:])
             for cid in targets:
                 jobs.append(dict(key=cid, mode="update", case=cases[cid], inbox=routed[cid], prompt=_prompt_update(cases[cid], routed[cid])))
         else:
@@ -297,7 +291,10 @@ def run(cfg, mode: str, *, lake=None, session_runner=session.run, now: datetime 
         next_pending = {}
         for cid, articles in routed.items():
             if cid in undone or (routing.needs_session(articles) and cid not in landed):
-                tries = pending.get(cid, {}).get("tries", 0) + 1
+                old = pending.get(cid, {})
+                fresh_ids = {a.id for a in articles} - set(old.get("ids", []))
+                tries = 0 if fresh_ids else old.get("tries", 0)
+                tries += 0 if cid in capped else 1  # 상한에 밀린 사건은 시도한 적이 없다
                 if tries > PENDING_TRIES:
                     report["dropped"].append(cid)
                 else:
@@ -306,7 +303,7 @@ def run(cfg, mode: str, *, lake=None, session_runner=session.run, now: datetime 
             state["pending"] = next_pending
         report["failed"] += sorted(undone - set(report["conflicts"]))
         corpus.save(store, texts)
-        report["published"] = publish(public, [c for c in cases.values()], state, now)
+        report["published"] = publish(public, list(cases.values()), now)
         store.put(STATE_KEY, _json(state), if_match=state_etag or ABSENT)
     store.put(f"runs/{today.isoformat()}/{run_id}.json", _json(report))
     log.info(json.dumps({"event": "run_end", **{k: report[k] for k in ("runId", "mode", "changed", "reverted", "conflicts", "failed", "dropped")},

@@ -78,6 +78,7 @@ def test_official_source_changes_verdict_only_when_read_and_dated_correctly(ws):
                             "url": "https://www.spo.go.kr/x", "publishedAt": "2026-10-19", "accessedAt": TODAY,
                             "snapshot": "snapshots/web-official1.json"})
     ws.save_case(case)
+    _official_snapshot(ws, "web-official1", "2026-10-19T01:00:00Z")  # 원문 메타데이터의 발행일(한국 날짜 10-19)
     tools.view_case(ws, {})
     args = {"status": "confirmed", "source_id": "web-official1", "note": "검찰 기소. 판결과는 별개"}
     with pytest.raises(ToolError, match="읽지 않았습니다"):
@@ -124,19 +125,32 @@ def test_firm_behavior_verdict_needs_the_verdict_tool(ws):
     assert any(line.startswith("levels.behavior") for line in found)
 
 
+def test_extra_behavior_of_an_already_confirmed_type_is_still_caught(tmp_path):
+    # 이미 '확인'인 유형이 있어도, 같은 유형을 하나 더 붙여 '확인'을 늘릴 수 없어야 한다.
+    case = seed("geumyang-monlaa")
+    ws = Workspace.prepare(tmp_path / "s", mode="update", case=case, inbox=[], index=[], today=TODAY, now=NOW)
+    tools.view_case(ws, {})
+    tools.set_value(ws, {"path": "behaviors[+]", "value": dict(case["behaviors"][0])})
+    assert any(line.startswith(f"behaviors[{len(case['behaviors'])}].verdict") for line in tools.session_problems(ws))
+
+
 def _official_snapshot(ws, sid: str, published):
     ws.save_snapshot(sid, {"id": sid, "url": "https://www.spo.go.kr/x", "title": "기소 보도자료", "publishedDate": published,
                            "kind": "official", "text": "서울남부지검은 방시혁 의장을 기소했다.", "full": True})
 
 
-def test_model_supplied_date_cannot_set_the_resolution_date(ws):
+def test_model_supplied_date_cannot_set_the_resolution_date(ws, tmp_path):
     # 원문에 날짜가 없어 모델이 적은 날짜는 확인일이 되면 안 된다 — 적중률이 그 날짜로 정해진다.
+    # 출처를 등록한 세션이 끝난 뒤 다음 세션에서 판정해도 막혀야 한다.
     _official_snapshot(ws, "web-official2", None)
     tools.view_news(ws, {"id": "web-official2"})
     tools.add_source(ws, {"ref": "web-official2", "published_at": "2026-10-19"})
-    tools.view_case(ws, {})
-    with pytest.raises(ToolError, match="날짜를 직접"):
-        tools.propose_verdict(ws, {"status": "confirmed", "source_id": "web-official2", "note": "검찰 기소. 판결과는 별개"})
+    later = Workspace.prepare(tmp_path / "next", mode="update", case=ws.case(), inbox=[], index=[], today=TODAY, now=NOW)
+    _official_snapshot(later, "web-official2", None)
+    tools.view_news(later, {"id": "web-official2"})
+    tools.view_case(later, {})
+    with pytest.raises(ToolError, match="직접 넣은 날짜"):
+        tools.propose_verdict(later, {"status": "confirmed", "source_id": "web-official2", "note": "검찰 기소. 판결과는 별개"})
 
 
 def test_metadata_date_wins_over_model_and_is_korean_date(ws):
@@ -154,6 +168,7 @@ def test_removed_rebuttal_source_still_cannot_resolve(tmp_path):
                             "url": "https://www.fsc.go.kr/x", "publishedAt": "2026-10-19", "accessedAt": TODAY})
     case["rebuttal"].append({"label": "당사자 해명", "text": "회사는 위법이 없다고 밝혔습니다.", "sourceId": "web-official4"})
     ws = Workspace.prepare(tmp_path / "s", mode="update", case=case, inbox=[], index=[], today=TODAY, now=NOW)
+    _official_snapshot(ws, "web-official4", "2026-10-19T01:00:00Z")
     tools.view_case(ws, {})
     tools.remove(ws, {"path": f"rebuttal[{len(case['rebuttal']) - 1}]"})
     state = ws.state

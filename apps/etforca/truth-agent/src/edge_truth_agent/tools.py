@@ -221,7 +221,6 @@ def add_source(ws: Workspace, args: dict) -> str:
                 published = str(args.get("published_at") or "")[:10]
                 if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", published):
                     raise ToolError("원문의 발행일을 알 수 없습니다. 원문에서 날짜를 확인해 published_at(YYYY-MM-DD)으로 넘기세요.")
-                state.setdefault("modelDated", []).append(ref)
             source = {"id": ref, "kind": snap["kind"], "publisher": str(args.get("publisher") or host_of(snap["url"]) or snap["url"]),
                       "title": snap.get("title") or snap["url"], "url": snap["url"], "publishedAt": published,
                       "accessedAt": today, "snapshot": f"snapshots/{ref}.json"}
@@ -336,8 +335,8 @@ def propose_verdict(ws: Workspace, args: dict) -> str:
             what = "해소는 공식 판단(official) 기관 원문" if status == "refuted" else "밝혀짐은 공식 판단·법정공시 기관 원문"
             raise ToolError(f"'{sid}' 로는 판정을 바꿀 수 없습니다. {what}만 근거가 됩니다. "
                             "보도·당사자 해명뿐이면 판단 중으로 두고 legalStatus 와 본문을 갱신하세요.")
-        if sid in state.get("modelDated", []):
-            raise ToolError(f"'{sid}' 는 원문 메타데이터에 발행일이 없어 날짜를 직접 넣은 출처입니다. 확인일이 그 날짜가 되므로 판정 근거로 쓸 수 없습니다.")
+        if sid.startswith("web-") and _kst_day((ws.snapshot(sid) or {}).get("publishedDate")) != source["publishedAt"]:
+            raise ToolError(f"'{sid}' 의 발행일이 원문 메타데이터로 확인되지 않습니다(직접 넣은 날짜). 확인일이 그 날짜가 되므로 판정 근거로 쓸 수 없습니다.")
         base_rebuttal = {r["sourceId"] for r in (ws.base() or {}).get("rebuttal", [])}
         if any(r["sourceId"] == sid for r in case["rebuttal"]) or sid in base_rebuttal:
             raise ToolError(f"'{sid}' 는 당사자 반론으로 인용된 출처라 판정 근거가 될 수 없습니다.")
@@ -399,9 +398,10 @@ def _new_firm_verdicts(case: dict, base: dict | None) -> list[str]:
     old = base or {}
     if case.get("levels", {}).get("behavior") in FIRM and case["levels"]["behavior"] != old.get("levels", {}).get("behavior"):
         found.append("levels.behavior: 확인·반증은 propose_verdict 로 판정을 바꾼 세션에서만 적습니다.")
-    before = {(b.get("type"), b.get("verdict")) for b in old.get("behaviors", [])}
+    before = old.get("behaviors", [])
     for i, b in enumerate(case.get("behaviors", [])):
-        if b.get("verdict") in FIRM and (b.get("type"), b.get("verdict")) not in before:
+        prev = before[i] if i < len(before) else {}
+        if b.get("verdict") in FIRM and (b.get("type"), b.get("verdict")) != (prev.get("type"), prev.get("verdict")):
             found.append(f"behaviors[{i}].verdict: 확인·반증은 propose_verdict 로 판정을 바꾼 세션에서만 적습니다. 의심(suspected)으로 두세요.")
     return found
 

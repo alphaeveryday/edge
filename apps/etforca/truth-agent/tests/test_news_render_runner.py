@@ -208,15 +208,19 @@ def test_discover_does_not_consume_new_articles(tmp_path, monkeypatch):
     assert report["newArticles"] == 0 and lake.reads == []
 
 
-def test_publish_restores_missing_files_and_removes_strays(tmp_path):
-    # 수동 재게시가 공개 위치를 바꿔도 다음 실행이 사건 묶음과 다시 맞춰야 한다.
-    public, cases, state = LocalStore(tmp_path / "public"), [seed("hybe-ipo-2019"), seed("geumyang-monlaa")], {}
-    runner.publish(public, cases, state, NOW)
+def test_publish_restores_missing_changed_files_and_removes_strays(tmp_path):
+    # 수동 재게시가 공개 위치를 지우거나 다른 내용으로 덮어도 다음 실행이 사건 묶음과 다시 맞춰야 한다
+    # (목록은 에이전트 판, 상세는 seed 판으로 갈라지면 안 된다).
+    public, cases = LocalStore(tmp_path / "public"), [seed("hybe-ipo-2019"), seed("geumyang-monlaa")]
+    runner.publish(public, cases, NOW)
+    expected, _ = public.get("cases/geumyang-monlaa.json")
     public.delete("cases/hybe-ipo-2019.json")
+    public.put("cases/geumyang-monlaa.json", b'{"stale": true}')
     public.put("cases/stray.json", b"{}")
-    result = runner.publish(public, cases, state, NOW)
-    assert "cases/hybe-ipo-2019.json" in result["uploaded"] and result["removed"] == ["cases/stray.json"]
+    result = runner.publish(public, cases, NOW)
+    assert result["removed"] == ["cases/stray.json"]
     assert sorted(public.list("cases/")) == ["cases/geumyang-monlaa.json", "cases/hybe-ipo-2019.json"]
+    assert public.get("cases/geumyang-monlaa.json")[0] == expected
 
 
 def test_model_error_in_json_mode_is_reported():
@@ -240,3 +244,15 @@ def test_image_installs_exactly_the_workspace_lock_versions():
         assert locked.get(name) == number.split(";")[0], pin
     dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
     assert "--require-hashes -r ./apps/etforca/truth-agent/requirements.lock" in dockerfile and "--no-deps" in dockerfile
+
+
+def test_cases_beyond_the_session_cap_are_not_dropped_untried(tmp_path, monkeypatch):
+    # 세션 상한에 밀려 한 번도 돌지 못한 사건을 '실패'로 세어 버리면 기사가 시도 없이 사라진다.
+    monkeypatch.setattr(runner, "SEED_DIR", SEED)
+    cfg = replace(_cfg(tmp_path), max_sessions=0)
+    lake = _lake_with_indictment()
+    for hour in range(runner.PENDING_TRIES + 2):
+        report = runner.run(cfg, "hourly", lake=lake, session_runner=_failing_session, now=NOW + timedelta(hours=hour))
+        assert report["dropped"] == []
+    state = json.loads((tmp_path / "store" / "state" / "state.json").read_text(encoding="utf-8"))
+    assert state["pending"]["hybe-ipo-2019"]["tries"] == 0
