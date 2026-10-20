@@ -192,6 +192,8 @@ def problems(case: dict, *, file_id: str | None = None, today: date | None = Non
             found.append(f"sources[{i}].accessedAt: {s['accessedAt']} 는 발행일({s['publishedAt']})보다 이릅니다. "
                          "나오기 전의 출처를 볼 수는 없습니다(기록일 소급 방지).")
     _moment(case["updatedAt"], "updatedAt", found, latest)
+    if _DATE.fullmatch(case["flaggedAt"]) and case["updatedAt"][:10] < case["flaggedAt"]:
+        found.append(f"updatedAt: {case['updatedAt']} 는 기록일({case['flaggedAt']})보다 이릅니다.")
     for i, r in enumerate(case["related"]):
         _moment(r["addedAt"], f"related[{i}].addedAt", found, latest)
     if not math.isfinite(case["impact"]):

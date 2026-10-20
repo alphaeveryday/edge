@@ -210,6 +210,13 @@ def test_future_timestamps_are_rejected(field):
     assert any("미래 시각" in line for line in problems(case, today=TODAY))
 
 
+def test_update_cannot_precede_the_case_record():
+    # '기록 10-20 · 갱신 2020-01-01' 같은 불가능한 순서가 공개되면 안 된다.
+    case = seed("hybe-ipo-2019")
+    case["updatedAt"] = "2020-01-01T09:00:00+09:00"
+    assert any(line.startswith("updatedAt") and "기록일" in line for line in problems(case, today=TODAY))
+
+
 def test_source_cannot_be_accessed_before_it_was_published():
     # 접근일을 발행일 앞으로 당기면 기록일도 함께 당겨져 '먼저 기록한 사건'으로 집계된다.
     case = seed("geumyang-monlaa")
