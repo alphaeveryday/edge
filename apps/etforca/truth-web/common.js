@@ -20,7 +20,8 @@ const typeNames = c => (c.types || []).map(t => TYPES[t] || t).join(' · ');
 const MAX_VALUE = 100;
 const won = v => v >= 1 ? `${+v.toFixed(1)}억원` : v > 0 ? `${Math.round(v * 10000).toLocaleString()}만원` : '0원';
 const vbar = v => `<div class="vbar" role="img" aria-label="파급력 가치 ${won(v)} (최대 100억원)"><i style="width:${Math.min(100, v / MAX_VALUE * 100)}%"></i></div>`;
-const months = (a, b) => Math.max(1, Math.round((Date.parse(b) - Date.parse(a)) / 2.63e9));
+/* 기록일→확인일 걸린 기간. 한 달 미만은 일 단위로 적는다(반올림해 '1개월'로 부풀리지 않는다) */
+const elapsed = (a, b) => { const d = Math.round((Date.parse(b) - Date.parse(a)) / 864e5); return d < 30 ? `${d}일` : `${Math.round(d / 30.44)}개월`; };
 
 /* 결과 표시. prior = 이 서비스가 확인일보다 먼저 사건으로 기록했는가.
    먼저 기록한 사건만 '적중·빗나감'이고, 확인 뒤에 정리한 사건은 '밝혀짐·해소'다. */
@@ -66,7 +67,7 @@ const resolvedRow = (c, i) => `
     <span class="res">${sticker(c)}</span>
     <span class="type">${esc(typeNames(c))}</span>
     <span class="date">${esc(c.flaggedAt)} → ${esc(c.resolvedAt)}</span>
-    <span class="span">${prior(c) ? `${months(c.flaggedAt, c.resolvedAt)}개월` : '사후 정리'}</span>
+    <span class="span">${prior(c) ? elapsed(c.flaggedAt, c.resolvedAt) : '사후 정리'}</span>
   </a>`;
 
 /* 최상단 바: 로고·슬로건 | 다른 서비스 버튼. 세 페이지 공용 */

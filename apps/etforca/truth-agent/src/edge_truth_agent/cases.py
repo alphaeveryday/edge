@@ -43,11 +43,19 @@ def _path(error) -> str:
     return out or "(사건 전체)"
 
 
+def host_of(url: str) -> str:
+    """주소의 호스트(소문자). 해석할 수 없는 주소('https://[x/')는 빈 문자열 — 검사가 예외로 멈추지 않게."""
+    try:
+        return (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
 def host_kind(url: str) -> str | None:
     """주소가 공식 판단(official)·법정공시(disclosure) 기관 도메인이면 그 종류. 공시 도메인을 먼저 본다."""
     if "\\" in url or any(ch.isspace() for ch in url):
         return None  # Python 과 브라우저가 호스트를 다르게 읽는 주소는 공식 출처로 인정하지 않는다
-    host = (urlsplit(url).hostname or "").lower()
+    host = host_of(url)
 
     def under(domains: tuple[str, ...]) -> bool:
         return any(host == d or host.endswith("." + d) for d in domains)
@@ -147,7 +155,7 @@ def problems(case: dict, *, file_id: str | None = None, today: date | None = Non
                     + " 그런 출처가 없으면 status 를 pending 으로 두세요."
                 )
             elif src and host_kind(src["url"]) not in allowed:
-                found.append(f"resolution.sourceId: '{src['id']}' 주소({urlsplit(src['url']).hostname})가 공식 기관·공시 도메인이 아닙니다. "
+                found.append(f"resolution.sourceId: '{src['id']}' 주소({src['url']})가 공식 기관·공시 도메인이 아닙니다. "
                              "판정 근거는 기관 원문 주소여야 합니다.")
             if src and any(r["sourceId"] == src["id"] for r in case["rebuttal"]):
                 found.append(f"resolution.sourceId: '{src['id']}' 는 당사자 반론으로 인용된 출처입니다. 반론을 판정 근거로 쓸 수 없습니다.")

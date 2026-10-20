@@ -167,15 +167,27 @@ def test_timestamps_need_a_timezone(field):
     ("https://fsc.go.kr.evil.com/x", None),
     ("https://data.krx.co.kr/x", None),  # 시장 데이터 사이트는 공식 판단이 아니다
     ("https://evil.com\\@fsc.go.kr/x", None),  # 브라우저는 evil.com 으로 읽는다
+    ("https://[fsc.go.kr/x", None),  # 해석 불가한 주소는 오류로 멈추지 않고 공식 출처가 아니다
 ])
 def test_host_kind_matches_only_real_official_hosts(url, kind):
     from edge_truth_agent.cases import host_kind
     assert host_kind(url) == kind
 
 
+def test_malformed_resolution_url_is_reported_not_crashed():
+    # 사건 하나의 깨진 주소가 예외로 검사 전체를 멈추면 다른 사건 갱신까지 게시되지 못한다.
+    case = seed("geumyang-monlaa")
+    src = next(s for s in case["sources"] if s["id"] == case["resolution"]["sourceId"])
+    src["url"] = "https://[fsc.go.kr/x"
+    assert any("공식 기관·공시 도메인이 아닙니다" in line for line in problems(case, today=TODAY))
+
+
 def test_backslash_url_is_rejected_by_contract():
     case = seed("geumyang-monlaa")
     case["sources"][0]["url"] = "https://evil.com\\@fsc.go.kr/no010101/87894"
+    assert any(line.startswith("sources[0].url") for line in problems(case, today=TODAY))
+    # 정규식 '$' 는 끝 줄바꿈 하나를 통과시킨다 — 화면에 그대로 링크되는 주소라 막아야 한다.
+    case["sources"][0]["url"] = "https://www.fsc.go.kr/no010101/87894\n"
     assert any(line.startswith("sources[0].url") for line in problems(case, today=TODAY))
 
 
