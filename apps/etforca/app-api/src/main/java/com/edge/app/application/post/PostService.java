@@ -5,9 +5,11 @@ import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.application.member.required.MemberRepository;
 import com.edge.app.application.member.required.PrincipalRepository;
 import com.edge.app.application.post.provided.CommentCreateRequest;
-import com.edge.app.application.post.provided.CommentResponse;
+import com.edge.app.application.post.provided.CommentView;
 import com.edge.app.application.post.provided.PostCreateRequest;
-import com.edge.app.application.post.provided.PostResponse;
+import com.edge.app.application.post.provided.PostFinder;
+import com.edge.app.application.post.provided.PostModifier;
+import com.edge.app.application.post.provided.PostView;
 import com.edge.app.application.post.required.CommentRepository;
 import com.edge.app.application.post.required.PostLikeRepository;
 import com.edge.app.application.post.required.PostRepository;
@@ -50,7 +52,7 @@ import java.util.stream.Collectors;
  */
 @Service
 @RequiredArgsConstructor
-public class PostService {
+public class PostService implements PostFinder, PostModifier {
     private static final int TAG_MAX = 3;
     private static final String DELETED_MEMBER_NAME = "탈퇴한 사용자";
     // 피드는 상한, 댓글은 하한인 첫 페이지 sentinel
@@ -69,8 +71,9 @@ public class PostService {
     private final MemberRepository memberRepository;
     private final ApplicationEventPublisher eventPublisher;
 
+    @Override
     @Transactional
-    public PageResponse<PostResponse> feed(AppPrincipal principal, PostScope scope, String code, Cursor cursor, int size) {
+    public PageResponse<PostView> feed(AppPrincipal principal, PostScope scope, String code, Cursor cursor, int size) {
         Long requester = principal.memberId();
         long viewer = requester == null ? NO_VIEWER : requester;
         if (scope == PostScope.HOT) {
@@ -91,8 +94,9 @@ public class PostService {
         return page(posts, size, p -> new Cursor(p.getCreatedAt(), p.getId()), list -> responses(list, requester));
     }
 
+    @Override
     @Transactional
-    public PostResponse create(long memberId, PostCreateRequest request) {
+    public PostView create(long memberId, PostCreateRequest request) {
         List<String> tags = new ArrayList<>(new LinkedHashSet<>(request.tags()));
         if (tags.isEmpty()) {
             throw new GeneralException(ErrorStatus._BAD_REQUEST);
@@ -116,15 +120,17 @@ public class PostService {
 
     // 조회수 증가와 요청자 기준 liked·mine 채움
     // 차단한 작성자 글의 blocked 표시
+    @Override
     @Transactional
-    public PostResponse get(String id, AppPrincipal principal) {
+    public PostView get(String id, AppPrincipal principal) {
         Post post = existing(id);
         postRepository.addView(post.getId());
         Long requester = principal == null ? null : principal.memberId();
-        PostResponse response = responses(List.of(postRepository.findById(post.getId()).orElseThrow()), requester).get(0);
+        PostView response = responses(List.of(postRepository.findById(post.getId()).orElseThrow()), requester).get(0);
         return requester != null && postRepository.blocked(requester, post.getAuthorId()) ? response.asBlocked() : response;
     }
 
+    @Override
     @Transactional
     public void remove(long memberId, String id) {
         Post post = existing(id);
@@ -136,8 +142,9 @@ public class PostService {
         likeRepository.deleteByPostId(post.getId());
     }
 
+    @Override
     @Transactional(readOnly = true)
-    public PageResponse<CommentResponse> comments(String id, AppPrincipal principal, Cursor cursor, int size) {
+    public PageResponse<CommentView> comments(String id, AppPrincipal principal, Cursor cursor, int size) {
         Post post = existing(id);
         Cursor from = cursor == null ? COMMENT_START : cursor;
         long viewer = principal == null || principal.memberId() == null ? NO_VIEWER : principal.memberId();
@@ -145,8 +152,9 @@ public class PostService {
         return page(comments, size, r -> new Cursor(r.getCreatedAt(), r.getId()), this::commentResponses);
     }
 
+    @Override
     @Transactional
-    public CommentResponse comment(long memberId, String id, CommentCreateRequest request) {
+    public CommentView comment(long memberId, String id, CommentCreateRequest request) {
         Post post = existing(id);
         Comment comment = commentRepository.save(Comment.create(post.getId(), memberId, request.body().trim(), Instant.now()));
         postRepository.addComment(post.getId());
@@ -156,6 +164,7 @@ public class PostService {
 
     // 자리 표시 없는 삭제와 댓글 수 감소
     // 그 댓글로 생긴 알림의 삭제
+    @Override
     @Transactional
     public void removeComment(long memberId, String id, String commentId) {
         Post post = existing(id);
@@ -169,8 +178,9 @@ public class PostService {
         }
     }
 
+    @Override
     @Transactional
-    public PostResponse like(long memberId, String id) {
+    public PostView like(long memberId, String id) {
         Post post = existing(id);
         int inserted = likeRepository.insertIfAbsent(post.getId(), memberId);
         if (inserted > 0) {
@@ -179,8 +189,9 @@ public class PostService {
         return responses(List.of(postRepository.findById(post.getId()).orElseThrow()), memberId).get(0);
     }
 
+    @Override
     @Transactional
-    public PostResponse unlike(long memberId, String id) {
+    public PostView unlike(long memberId, String id) {
         Post post = existing(id);
         if (likeRepository.deleteIfPresent(post.getId(), memberId) > 0) {
             postRepository.addLikes(post.getId(), -1);
@@ -216,34 +227,34 @@ public class PostService {
         return new PageResponse<>(toResponses.apply(visible), next);
     }
 
-    private List<PostResponse> responses(List<Post> posts, Long requester) {
+    private List<PostView> responses(List<Post> posts, Long requester) {
         if (posts.isEmpty()) {
             return List.of();
         }
         Map<String, Etf> etfs = etfRepository.findAllById(posts.stream().map(Post::getEtfCode).collect(Collectors.toSet()))
                 .stream().collect(Collectors.toMap(Etf::getCode, Function.identity()));
-        Map<Long, PostResponse.Author> authors = authors(posts.stream().map(Post::getAuthorId).collect(Collectors.toSet()));
+        Map<Long, PostView.Author> authors = authors(posts.stream().map(Post::getAuthorId).collect(Collectors.toSet()));
         Set<Long> liked = requester == null ? Set.of()
                 : new HashSet<>(likeRepository.likedAmong(requester, posts.stream().map(Post::getId).toList()));
         return posts.stream().map(p -> {
             Etf etf = etfs.get(p.getEtfCode());
-            return new PostResponse(Long.toString(p.getId()),
-                    new PostResponse.Etf(p.getEtfCode(), etf == null ? "" : etf.getThemeKey(), etf == null ? p.getEtfCode() : etf.getName()),
+            return new PostView(Long.toString(p.getId()),
+                    new PostView.Etf(p.getEtfCode(), etf == null ? "" : etf.getThemeKey(), etf == null ? p.getEtfCode() : etf.getName()),
                     authors.get(p.getAuthorId()), p.getCreatedAt(), p.getTitle(), p.getBody(), p.getQuoteTag(),
                     p.getLikeCount(), p.getCommentCount(), liked.contains(p.getId()), p.getViewCount(),
-                    requester != null && requester.equals(p.getAuthorId()), null);
+                    requester != null && requester.equals(p.getAuthorId()), false);
         }).toList();
     }
 
-    private List<CommentResponse> commentResponses(List<Comment> comments) {
-        Map<Long, PostResponse.Author> authors = authors(comments.stream().map(Comment::getAuthorId).collect(Collectors.toSet()));
-        return comments.stream().map(r -> new CommentResponse(Long.toString(r.getId()), authors.get(r.getAuthorId()),
+    private List<CommentView> commentResponses(List<Comment> comments) {
+        Map<Long, PostView.Author> authors = authors(comments.stream().map(Comment::getAuthorId).collect(Collectors.toSet()));
+        return comments.stream().map(r -> new CommentView(Long.toString(r.getId()), authors.get(r.getAuthorId()),
                 r.getCreatedAt(), r.getBody())).toList();
     }
 
     // 탈퇴 회원 이름 가림
-    private Map<Long, PostResponse.Author> authors(Set<Long> memberIds) {
+    private Map<Long, PostView.Author> authors(Set<Long> memberIds) {
         return memberRepository.findAllById(memberIds).stream().collect(Collectors.toMap(Member::getId,
-                m -> new PostResponse.Author(m.getDeletedAt() == null ? m.getNick() : DELETED_MEMBER_NAME, m.getHandle())));
+                m -> new PostView.Author(m.getDeletedAt() == null ? m.getNick() : DELETED_MEMBER_NAME, m.getHandle())));
     }
 }
