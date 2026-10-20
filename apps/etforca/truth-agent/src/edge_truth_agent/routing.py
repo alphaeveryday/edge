@@ -11,7 +11,8 @@ TRIGGERS = ("송치", "기소", "불기소", "무혐의", "판결", "선고", "�
             "수사", "정정", "해명", "반박", "부인", "사과", "배상", "소송", "합의", "상장폐지", "거래정지", "감리", "철회")
 RELATED_LIMIT = 30
 _HANGUL = re.compile(r"[가-힣]")
-_JOSA = set("은는이가을를의에와과도만로측")  # 이름 바로 뒤에 붙어도 같은 이름으로 보는 조사 첫 글자
+# 이름 바로 뒤에 붙어도 같은 이름으로 보는 조사 첫 글자 (은·는·이·가·을·를·의·에·와·과·도·만·로·측·까지·부터·처럼·보다·랑·께·조차·마저·엔·서·야·여)
+_JOSA = set("은는이가을를의에와과도만로측까부처보랑께조마엔서야여")
 
 
 def terms(case: dict) -> list[str]:
@@ -56,7 +57,8 @@ def route(articles: list[Article], cases: list[dict]) -> dict[str, list[Article]
 def newest(articles: list[Article]) -> list[Article]:
     """관련 보도 후보 중 최신 RELATED_LIMIT 건(발행 시각·id 순으로 정해진 집합).
     한도보다 많을 때 전부 넘기면, 매 실행 밀려난 기사가 다시 들어와 관련 보도가 실행마다 바뀐다."""
-    return sorted(articles, key=lambda a: (a.published, a.id))[-RELATED_LIMIT:]
+    usable = [a for a in articles if a.url.startswith(("http://", "https://"))]  # 링크 없는 기사가 자리를 차지하지 않게
+    return sorted(usable, key=lambda a: (a.published, a.id))[-RELATED_LIMIT:]
 
 
 def needs_session(articles: list[Article]) -> bool:

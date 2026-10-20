@@ -43,6 +43,7 @@ def test_two_letter_name_needs_a_non_hangul_left_boundary():
     # 이름 뒤에 한글이 이어지면 조사일 때만 같은 이름이다 — 실제로 '하이브리드' 자동차 기사가 하이브 사건에 붙었다.
     assert routing.mentions("하이브는 상장 전", "하이브")
     assert not routing.mentions("렉서스 ES 하이브리드 상장", "하이브")
+    assert routing.mentions("하이브까지 수사 확대", "하이브") and routing.mentions("금양부터 상장폐지 심사", "금양")
 
 
 def test_related_needs_a_case_topic_not_just_the_company_name():
