@@ -80,11 +80,20 @@ def test_file_name_must_match_id(tmp_path):
         load_dir(tmp_path)
 
 
-def test_resolution_date_cannot_be_later_than_its_source():
-    # 확인일을 근거 발행일보다 늦게 적으면 '먼저 기록한 사건'처럼 보여 적중률이 부풀려진다.
+@pytest.mark.parametrize("at", ["2026-10-20", "2020-01-01"])
+def test_resolution_date_must_be_its_source_date(at):
+    # 늦게 적으면 '먼저 기록한 사건'처럼 보여 적중률이 부풀고, 이르게 적으면 근거가 나오기 전에
+    # 확인됐다는 불가능한 날짜가 공개된다.
     case = seed("geumyang-monlaa")
-    case["resolution"]["at"] = case["resolvedAt"] = "2026-10-20"
+    case["resolution"]["at"] = case["resolvedAt"] = at
     assert any("근거 출처 발행일" in line for line in problems(case, today=TODAY))
+
+
+@pytest.mark.parametrize("make", [lambda d: d / "missing", lambda d: d])
+def test_missing_or_empty_case_folder_fails(tmp_path, make):
+    # '0건 통과'로 빈 공개 데이터를 만들면 게시 단계의 동기화가 기존 사건을 모두 지운다.
+    with pytest.raises(CaseError, match="사건 파일이 없습니다"):
+        load_dir(make(tmp_path))
 
 
 def test_party_rebuttal_disclosure_cannot_refute_a_case():

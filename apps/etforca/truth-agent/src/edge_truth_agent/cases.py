@@ -153,9 +153,9 @@ def problems(case: dict, *, file_id: str | None = None, today: date | None = Non
                 found.append(f"resolution.sourceId: '{src['id']}' 는 당사자 반론으로 인용된 출처입니다. 반론을 판정 근거로 쓸 수 없습니다.")
             if resolution["at"] != case["resolvedAt"]:
                 found.append("resolvedAt: resolution.at 과 같은 날짜여야 합니다.")
-            elif src and _DATE.fullmatch(resolution["at"]) and _DATE.fullmatch(src["publishedAt"]) and resolution["at"] > src["publishedAt"]:
-                found.append(f"resolution.at: {resolution['at']} 는 근거 출처 발행일({src['publishedAt']})보다 늦습니다. "
-                             "확인일은 그 판단·공시가 나온 날입니다(찾은 날이 아닙니다).")
+            elif src and _DATE.fullmatch(resolution["at"]) and _DATE.fullmatch(src["publishedAt"]) and resolution["at"] != src["publishedAt"]:
+                found.append(f"resolution.at: {resolution['at']} 가 근거 출처 발행일({src['publishedAt']})과 다릅니다. "
+                             "확인일은 그 판단·공시가 나온 날입니다(찾은 날도, 근거 없는 더 이른 날도 아닙니다).")
         wanted = "confirmed" if status == "confirmed" else "refuted"
         if case["levels"]["behavior"] != wanted:
             found.append(f"levels.behavior: status 가 '{status}' 이면 행동 확인 수준도 '{wanted}' 여야 합니다.")
@@ -196,8 +196,11 @@ def validate(case: dict, **kwargs) -> dict:
 
 def load_dir(directory: Path) -> list[dict]:
     """폴더의 사건 파일을 모두 읽고 검사한다. 하나라도 틀리면 파일별 위반을 모아 CaseError 를 낸다."""
+    paths = sorted(Path(directory).glob("*.json"))
+    if not paths:  # 경로 오타·빈 마운트를 '0건 통과'로 넘기면 빈 목록이 게시돼 기존 사건이 지워진다
+        raise CaseError(f"{directory} 에 사건 파일이 없습니다. 경로를 확인하세요.")
     cases, errors = [], []
-    for path in sorted(Path(directory).glob("*.json")):
+    for path in paths:
         try:
             case = json.loads(path.read_text(encoding="utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
