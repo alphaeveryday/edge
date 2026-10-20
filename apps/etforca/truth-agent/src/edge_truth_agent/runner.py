@@ -220,7 +220,7 @@ def run(cfg, mode: str, *, lake=None, session_runner=session.run, now: datetime 
                     routed.setdefault(cid, []).extend(again)
         # 관련 보도는 새 기사만이 아니라 보관 중인 말뭉치 전체에서 같은 규칙으로 고른다 — 규칙이 바뀌거나
         # 잡음이 걸러져도 다음 실행이 스스로 채운다. 모델 세션은 위의 새 기사(routed)로만 연다.
-        corpus_related = routing.route(list(texts.values()), list(cases.values())) if mode == "hourly" else {}
+        corpus_related = routing.route(list(texts.values()), list(cases.values()), public=True) if mode == "hourly" else {}
         for cid, case in cases.items():
             if not case.get("locked") and routing.add_related(case, routing.newest(corpus_related.get(cid, [])), today, now.isoformat()):
                 case["updatedAt"] = now.isoformat()

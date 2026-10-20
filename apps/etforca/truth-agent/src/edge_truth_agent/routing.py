@@ -11,8 +11,9 @@ TRIGGERS = ("송치", "기소", "불기소", "무혐의", "판결", "선고", "�
             "수사", "정정", "해명", "반박", "부인", "사과", "배상", "소송", "합의", "상장폐지", "거래정지", "감리", "철회")
 RELATED_LIMIT = 30
 _HANGUL = re.compile(r"[가-힣]")
-# 이름 바로 뒤에 붙어도 같은 이름으로 보는 조사 첫 글자 (은·는·이·가·을·를·의·에·와·과·도·만·로·측·까지·부터·처럼·보다·랑·께·조차·마저·엔·서·야·여)
-_JOSA = set("은는이가을를의에와과도만로측까부처보랑께조마엔서야여")
+# 이름 바로 뒤에 붙어도 같은 이름으로 보는 조사. 조사 뒤에서 낱말이 끝나야 한다('하이브이엠'의 '이' 는 조사가 아니다)
+_JOSA = sorted(("은", "는", "이", "가", "을", "를", "의", "에", "에서", "에게", "와", "과", "도", "만", "로", "으로", "측",
+                "까지", "부터", "처럼", "보다", "랑", "이랑", "께", "께서", "조차", "마저", "엔", "서", "이나", "나"), key=len, reverse=True)
 
 
 def terms(case: dict) -> list[str]:
@@ -26,9 +27,10 @@ def mentions(text: str, term: str) -> bool:
     두 글자 이름은 앞이 한글이면 아니다('지금양'의 '금양'), 뒤가 한글이면 조사일 때만 같은 이름이다('하이브리드'의 '하이브' 제외)."""
     start = text.find(term)
     while start != -1:
-        before, after = text[start - 1:start], text[start + len(term):start + len(term) + 1]
+        before, rest = text[start - 1:start], text[start + len(term):]
         left_ok = len(term) > 2 or not before or not _HANGUL.match(before)
-        right_ok = not after or not _HANGUL.match(after) or after in _JOSA
+        right_ok = not rest or not _HANGUL.match(rest[0]) or any(
+            rest.startswith(j) and (len(rest) == len(j) or not _HANGUL.match(rest[len(j)])) for j in _JOSA)
         if left_ok and right_ok:
             return True
         start = text.find(term, start + 1)
@@ -42,13 +44,19 @@ def related(title: str, case: dict) -> bool:
     return any(mentions(title, n) for n in terms(case)) and any(t in title for t in topics)
 
 
-def route(articles: list[Article], cases: list[dict]) -> dict[str, list[Article]]:
-    """사건 id → 그 사건을 언급한 새 기사. 잠긴 사건은 건드리지 않는다."""
+def route(articles: list[Article], cases: list[dict], *, public: bool = False) -> dict[str, list[Article]]:
+    """사건 id → 그 사건의 기사. 잠긴 사건은 건드리지 않는다.
+
+    public=False: 모델 세션 받은편지함 — 제목·요약에 사건 이름이 나오면 넓게 받는다(제목에 이름이 없는 절차 기사도 놓치지 않게).
+    public=True: 공개 관련 보도 — 제목에 이름과 주제어가 함께 있어야 한다(related).
+    """
     out: dict[str, list[Article]] = {}
     for case in cases:
         if case.get("locked"):
             continue
-        hits = [a for a in articles if related(a.title, case)]
+        names = terms(case)
+        hits = [a for a in articles
+                if (related(a.title, case) if public else any(mentions(f"{a.title} {a.lead}", n) for n in names))]
         if hits:
             out[case["id"]] = hits
     return out

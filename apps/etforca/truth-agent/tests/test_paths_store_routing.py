@@ -44,6 +44,7 @@ def test_two_letter_name_needs_a_non_hangul_left_boundary():
     assert routing.mentions("하이브는 상장 전", "하이브")
     assert not routing.mentions("렉서스 ES 하이브리드 상장", "하이브")
     assert routing.mentions("하이브까지 수사 확대", "하이브") and routing.mentions("금양부터 상장폐지 심사", "금양")
+    assert not routing.mentions("하이브이엠 코스닥 상장", "하이브")  # 조사 첫 글자만 맞는 다른 회사 이름
 
 
 def test_related_needs_a_case_topic_not_just_the_company_name():
@@ -85,6 +86,14 @@ def test_route_skips_locked_cases_and_matches_aliases():
     geumyang["locked"] = True
     found = routing.route([article("방시혁 검찰 기소"), article("금양 정리매매", aid="b" * 64)], [hybe, geumyang])
     assert list(found) == ["hybe-ipo-2019"]
+
+
+def test_session_inbox_keeps_lead_only_mentions_but_public_list_does_not():
+    # 제목에 회사 이름이 없는 절차 기사도 세션에는 가야 한다. 공개 관련 보도는 제목 기준으로 엄격하게.
+    zinc = seed("koreazinc-offering-2024")
+    a = article("검찰, 최윤범 회장 송치", "고려아연 유상증자 사건 관련 수사 결과", aid="c" * 64)
+    assert list(routing.route([a], [zinc])) == ["koreazinc-offering-2024"]
+    assert routing.route([a], [zinc], public=True) == {}
 
 
 def test_session_only_when_procedural_cue_present():
