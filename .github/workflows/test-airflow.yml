@@ -15,6 +15,8 @@ on:
       - "apps/engine/airflow/**"
       # DAG 테스트가 슬롯·명령을 terraform 원본과 대조한다 — tf 가 바뀌면 드리프트를 여기서 잡는다.
       - "infra/terraform/modules/data-pipeline/**"
+      # 공시 DAG 슬롯은 dev 값(모듈 기본이 아니라 envs/dev/main.tf)과 대조한다(ALPHA-1407).
+      - "infra/terraform/envs/dev/main.tf"
       - ".github/workflows/test-airflow.yml"
 
 permissions:
