@@ -6,6 +6,8 @@ const safeUrl = u => /^https?:\/\//i.test(u || '') ? esc(u) : '#';
 const img = u => u ? `<img src="${safeUrl(u)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : '';
 const ext = u => `href="${safeUrl(u)}" target="_blank" rel="noopener noreferrer"`;
 const issueHref = c => `issue.html?id=${encodeURIComponent(c.id)}`;
+/* 훑어 읽는 자리(목록·카드·히어로)의 이름: 짧은 제목, 없으면 공개 첫 문장 */
+const titleOf = c => c.title || c.headline[0];
 
 /* 방법론(docs/design/truth-investigation-methodology.md)의 용어를 그대로 쓴다 */
 const TYPES = {
@@ -52,7 +54,7 @@ const rateText = s => s.rate === null ? '적중률 집계 전' : `적중률 ${s.
 const ABOVE_PENDING = 4, ABOVE_RESOLVED = 5;
 
 /* 목록 표: 홈 아래 목록과 list.html 이 같은 행을 쓴다 */
-const ti = c => `<div class="ti"><div class="ph-img">${img(c.cover)}</div><div><b>${esc(c.headline[0])}</b><small>${esc(c.subject)}</small></div></div>`;
+const ti = c => `<div class="ti"><div class="ph-img">${img(c.cover)}</div><div><b>${esc(titleOf(c))}</b><small>${esc(c.subject)}</small></div></div>`;
 const no = i => `<span class="no"><span>${i + 1}</span>${ARROW}</span>`;
 
 const PENDING_HEAD = '<div class="trow thead"><span class="no">#</span><span>사건</span><span>유형</span><span>파급력 가치 <small>(최대 100억원)</small></span><span class="date">기록일</span></div>';

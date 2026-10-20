@@ -74,7 +74,8 @@ body{overflow-y:auto}
 .hero-body>span{align-self:flex-start;padding:8px 14px;font-size:12px;font-weight:600}
 .hero-main{max-width:640px}
 .subject{font-size:14px;font-weight:700;color:var(--red-text);margin-bottom:10px}
-.hero h1{font-size:clamp(22px,2.4vw,34px);line-height:1.25;letter-spacing:-.02em;font-weight:700}
+.hero h1{font-size:clamp(24px,2.8vw,40px);line-height:1.2;letter-spacing:-.025em;font-weight:800}
+.hero-sub{margin-top:12px;font-size:15px;line-height:1.55;color:rgba(245,245,247,.82);max-width:560px}
 .val{display:flex;align-items:baseline;gap:10px;margin-top:22px}
 .val small{font-size:13px;color:var(--muted)}
 .val b{font-size:26px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
@@ -231,7 +232,7 @@ const seeAll = (total, href) =>
 const row = c => `
   <a class="row${c.status === 'refuted' ? ' miss' : ''}" href="${issueHref(c)}" title="${esc(c.headline[0])}">
     <div class="ph-img">${img(c.cover)}</div>
-    <div><b>${esc(c.headline[0])}</b><small>${sticker(c)} ${esc(c.subject)} · ${short(c.resolvedAt || c.flaggedAt)}</small></div>
+    <div><b>${esc(titleOf(c))}</b><small>${sticker(c)} ${esc(c.subject)} · ${short(c.resolvedAt || c.flaggedAt)}</small></div>
   </a>`;
 
 /* ── 성적 · 그래프 ── */
@@ -295,8 +296,9 @@ function renderHome(){
       <div class="hero-body">
         <span class="pill glass">판단 중 · 파급력 1위</span>
         <div class="hero-main">
-          <div class="subject">${esc(top.subject)}</div>
-          <h1>${esc(top.headline[0])}</h1>
+          ${top.title ? '' : `<div class="subject">${esc(top.subject)}</div>`}
+          <h1>${esc(titleOf(top))}</h1>
+          ${top.title ? `<p class="hero-sub">${esc(top.headline[0])}</p>` : ''}
           <div class="val"><small>파급력 가치</small><b>${won(top.impact)}</b></div>
           ${vbar(top.impact)}
           <span class="btn pill">자세히 보기 ${ARROW}</span>
@@ -311,8 +313,8 @@ function renderHome(){
     <a class="card ph-img" href="${issueHref(c)}">${img(c.cover)}
       <span class="rank">${String(i + 2).padStart(2, '0')}</span>
       <div class="meta">
-        <div class="subject">${esc(c.subject)}</div>
-        <h4>${esc(c.headline[0])}</h4>
+        ${c.title ? '' : `<div class="subject">${esc(c.subject)}</div>`}
+        <h4>${esc(titleOf(c))}</h4>
         <div class="cval"><span>파급력 가치</span><b>${won(c.impact)}</b></div>
         ${vbar(c.impact)}
       </div>
@@ -366,7 +368,7 @@ function renderSearch(){
         <h2>상위 결과</h2>
         <a class="topcard" href="${issueHref(top)}">
           <div class="ph-img">${img(top.cover)}</div>
-          <h3>${esc(top.headline[0])}</h3>
+          <h3>${esc(titleOf(top))}</h3>
           <div class="meta">${sticker(top)}${esc(top.subject)} · ${esc(typeNames(top))}</div>
           <span class="play">${ARROW}</span>
         </a>

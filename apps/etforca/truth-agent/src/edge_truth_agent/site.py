@@ -12,7 +12,7 @@ import json
 from pathlib import Path
 
 _INTERNAL_KEYS = ("locked",)
-_SUMMARY_KEYS = ("id", "subject", "instruments", "aliases", "headline", "status", "impact",
+_SUMMARY_KEYS = ("id", "subject", "title", "instruments", "aliases", "headline", "status", "impact",
                  "cover", "flaggedAt", "resolvedAt", "updatedAt", "origin")
 
 

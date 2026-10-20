@@ -250,3 +250,15 @@ def test_broken_json_file_is_reported_by_name(tmp_path):
 def test_validate_returns_case_when_clean():
     case = seed("koreazinc-offering-2024")
     assert validate(deepcopy(case), today=TODAY) == case
+
+
+@pytest.mark.parametrize("title, expect", [
+    ("상장 계획 두고 투자자별로 다른 설명", "주체 이름"),       # 누구 사건인지 모른다
+    ("하이브, 상장 계획 거짓 설명", "'거짓'"),                  # 판정 전 단정
+    ("하이브 상장 의혹", "'의혹'"),                              # 뭉뚱그린 말
+    ("하이브, 상장 계획 두고 다른 설명.", "마침표"),             # 제목이 아니라 문장
+])
+def test_short_title_rules(title, expect):
+    # 훑어 읽는 자리의 제목은 주체가 보이고, 판정·감정 없이 무슨 일인지를 말해야 한다(에이전트가 매번 같은 형식으로 쓰도록 코드가 검사).
+    case = seed("hybe-ipo-2019") | {"title": title}
+    assert any(line.startswith("title") and expect.strip("'") in line for line in problems(case, today=TODAY))

@@ -189,3 +189,12 @@ def test_new_case_needs_two_outlets_by_address_not_by_name(tmp_path):
     ]
     ws.save_case(case)
     assert any("2곳" in line for line in tools.session_problems(ws))
+
+
+def test_new_case_needs_a_short_title(tmp_path):
+    # 목록·홈은 짧은 제목으로 훑어 읽는다 — 새 사건이 제목 없이 등록되면 긴 문장이 잘려 보인다.
+    ws = Workspace.prepare(tmp_path / "s", mode="discover", case=None, inbox=[], index=[], today=TODAY, now=NOW)
+    case = seed("hybe-ipo-2019") | {"origin": "agent", "flaggedAt": TODAY}
+    case.pop("title", None)
+    ws.save_case(case)
+    assert any(line.startswith("title") for line in tools.session_problems(ws))

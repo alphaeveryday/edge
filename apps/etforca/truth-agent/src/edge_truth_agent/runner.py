@@ -27,6 +27,8 @@ KST = timezone(timedelta(hours=9))
 STATE_KEY = "state/state.json"
 LEASE_KEY = "state/lease.json"
 LEASE_MINUTES = 55
+SEED_OWNED = ("topics",)  # seed 사건에서는 사람이 정한 배정 설정이 항상 이긴다(주제어를 좁히면 저장본도 따라간다)
+BACKFILL = ("title",)     # 나중에 생긴 칸: 저장본이 비어 있을 때만 seed 값으로 채운다(에이전트가 고친 제목은 두다)
 PENDING_TRIES = 3  # 반영되지 못한 배정 기사를 다시 시도하는 실행 수. 넘기면 버리고 보고에 남긴다
 SEED_DIR = Path(os.environ.get("TRUTH_SEED_DIR", Path(__file__).resolve().parents[2] / "seed"))
 
@@ -88,8 +90,10 @@ def sync_seed(store, loaded: dict, seed_dir: Path, today: date) -> list[str]:
         seed = json.loads(path.read_text(encoding="utf-8"))
         current = loaded.get(seed["id"])
         if current is not None and not (seed.get("locked") and seed != current[0]):
-            if seed.get("topics") and not current[0].get("topics"):  # 주제어가 생기기 전 저장본에 채운다
-                stored = current[0] | {"topics": seed["topics"]}
+            added = {k: seed[k] for k in SEED_OWNED if seed.get(k) and current[0].get(k) != seed[k]}
+            added |= {k: seed[k] for k in BACKFILL if seed.get(k) and not current[0].get(k)}
+            if added:
+                stored = current[0] | added
                 loaded[seed["id"]] = (stored, store.put(f"cases/{seed['id']}.json", _json(stored), if_match=current[1]))
                 applied.append(seed["id"])
             continue

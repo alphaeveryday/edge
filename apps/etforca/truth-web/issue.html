@@ -21,10 +21,10 @@
 /* 기사 머리 */
 .head{margin:36px 0 28px}
 .tags{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
-.subject{font-size:15px;font-weight:700;color:var(--red-text);margin-bottom:8px}
-.subject small{font-weight:500;color:var(--faint);margin-left:6px}
+.codes{margin-top:8px;font-size:13px;color:var(--faint);font-variant-numeric:tabular-nums}
 h1{font-size:clamp(24px,3vw,34px);line-height:1.35;letter-spacing:-.02em}
 .lead{font-size:18px;line-height:1.7;color:rgba(255,255,255,.82);margin-top:14px}
+.lead b{color:var(--text);font-weight:600}
 .byline{font-size:13px;color:var(--faint);margin-top:16px}
 .track{margin-top:24px;max-width:520px}
 .track-label{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:var(--muted);margin-bottom:10px}
@@ -147,9 +147,9 @@ function render(c, cases){
         ${sticker(c)}
         ${c.origin === 'agent' ? '<span class="tag pill glass">AI 감시 중</span>' : ''}
       </div>
-      <div class="subject">${esc(c.subject)}<small>${c.instruments.map(i => `${i.name === c.subject ? '' : esc(i.name) + ' '}${esc(i.code)}`).join(' · ')}</small></div>
-      <h1>${esc(c.headline[0])}</h1>
-      <p class="lead">${esc(c.headline[1])}</p>
+      <h1>${esc(titleOf(c))}</h1>
+      <div class="codes">관련 종목 ${c.instruments.map(i => `${esc(i.name)} ${esc(i.code)}`).join(' · ')}</div>
+      <p class="lead">${c.title ? `<b>${esc(c.headline[0])}</b> ` : ''}${esc(c.headline[1])}</p>
       <div class="byline">기록 ${esc(c.flaggedAt)}${c.resolvedAt ? ` · 확인 ${esc(c.resolvedAt)}` : ''} · 갱신 ${esc(c.updatedAt.slice(0, 10))}</div>
       <div class="track">
         <div class="track-label"><span>파급력 가치</span><b>${won(c.impact)}</b></div>

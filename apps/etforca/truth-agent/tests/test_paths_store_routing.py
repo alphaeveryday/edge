@@ -59,7 +59,7 @@ def test_related_needs_a_case_topic_not_just_the_company_name():
 def test_related_news_stays_put_when_more_matches_than_the_limit():
     # 매 실행 말뭉치 전체로 관련 보도를 다시 고른다 — 새 기사가 없으면 공개 목록이 바뀌면 안 된다.
     case = seed("hybe-ipo-2019")
-    many = [article(f"하이브 상장 기사 {i}", aid=f"{i:04d}" + "b" * 60, url=f"https://www.yna.co.kr/view/b{i}",
+    many = [article(f"하이브 상장 전 기사 {i}", aid=f"{i:04d}" + "b" * 60, url=f"https://www.yna.co.kr/view/b{i}",
                     published=f"2026-10-{1 + i % 19:02d} 10:00:00") for i in range(routing.RELATED_LIMIT + 10)]
     routing.add_related(case, routing.newest(many), date(2026, 10, 20), "2026-10-20T10:00:00+09:00")
     before = [r["sourceId"] for r in case["related"]]
@@ -107,7 +107,7 @@ def test_add_related_caps_list_and_keeps_cited_sources():
     cited = case["contrast"]["before"]["sourceId"]
     case["related"].append({"sourceId": cited, "addedAt": "2026-10-20T00:00:00+09:00"})
     # 실제 id 는 sha256 이라 앞 16자리(출처 id)가 겹치지 않는다. 시험 id 도 앞자리부터 달라야 한다.
-    many = [article(f"하이브 상장 기사 {i}", aid=f"{i:04d}" + "a" * 60, url=f"https://www.yna.co.kr/view/{i}") for i in range(routing.RELATED_LIMIT + 5)]
+    many = [article(f"하이브 상장 전 기사 {i}", aid=f"{i:04d}" + "a" * 60, url=f"https://www.yna.co.kr/view/{i}") for i in range(routing.RELATED_LIMIT + 5)]
     assert routing.add_related(case, many, date(2026, 10, 20), "2026-10-20T10:00:00+09:00")
     assert len(case["related"]) == routing.RELATED_LIMIT
     ids = {s["id"] for s in case["sources"]}
