@@ -119,7 +119,7 @@ variable "batch_cluster_arn" {
 }
 
 variable "batch_task_definition_families" {
-  description = "Airflow 가 띄울 수 있는 업무 태스크 정의 family(장중 수급: kis·bigkinds·rds·ops)"
+  description = "Airflow 가 띄울 수 있는 업무 태스크 정의 family(레인 DAG 들이 쓰는 것 — envs/dev 주석)"
   type        = list(string)
 }
 

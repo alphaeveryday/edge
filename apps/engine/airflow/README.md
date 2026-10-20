@@ -13,6 +13,7 @@
 | `dags/edge_source_daily.py` | 원천 관측 DAG(ALPHA-1130, Airflow 전용 레인 `source-daily`): `plan → {매크로·업종·재무} 각각 collect → normalize → load → report → verdict`. 생성 시 pause — 아래 "원천 관측 레인" |
 | `dags/edge_disclosure.py` | 공시 보충 배치 DAG(ALPHA-1407, 평일 19:30): `plan → collect → {정제 2개} → load → report → verdict`. 생성 시 pause. 아직 SFN 이 실행한다 — 아래 "공시 보충 배치 레인" |
 | `dags/edge_premarket.py` | 장전 유니버스 DAG(ALPHA-1408, 평일 07:00, 원장 밖): `collect → normalize → universe → verdict`. 생성 시 pause. 아직 SFN 이 실행한다 — 아래 "장전 유니버스 레인" |
+| `dags/edge_news.py` | 뉴스 DAG(ALPHA-1409, 매일 00:10·08:10): `plan → collect → normalize → {tag, load_documents} → load_assertions → assemble → report → verdict`. 생성 시 pause. 아직 SFN 이 실행한다 — 아래 "뉴스 레인" |
 | `dags/edge_dividend_daily.py` | 배당 갱신 전용 DAG: 03:00 KST, 기존 배치 종료 확인 → plan → collect → normalize → load → report. 생성 시 pause. 수집·조회 범위 계약과 활성화 순서는 `docs/design/portfolio-dividend-ledger.md` |
 | `tests/` | DagBag 파싱, terraform(슬롯·명령) 대조, exit code·당일 수집·재처리·보고·활성화 규칙. CI `test-airflow.yml`이 공식 Airflow 이미지(다이제스트 고정) 안에서 실행한다 |
 | `dags/edge_investor_intraday_verify.py` | 격리 검증 DAG — 운영 DAG 와 같은 `build_dag`·EdgeStep, 검증 전용 클러스터·태스크 정의, conf 장애 주입. `EDGE_VERIFY_CLUSTER` 가 있을 때만 등록 |
@@ -1268,6 +1269,25 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
   - 서비스는 살아 있는데 run 이 안 생기면(DAG import 오류·pause) 아무것도 울지 않는다. 원장 밖이라 PLANNER_MISSING 도 없다.
   - 전환 전에 받아들일지, 레인별 실행 누락 감시를 둘지 정한다.
 - 07:30 교체 마감이 있다(`build-minute-universe` 가 스스로 거부). dagrun_timeout 은 SFN 과 같은 1500초다. 실측(SFN 최근 40회): p50 217초, 최대 376초, FAILED 8회.
+
+## 뉴스 레인(news, ALPHA-1409)
+
+**현재 상태(2026-10-20): 실행 경로만 있다. 운영 전환 전이다.** dev 의 매일 00:10·08:10 슬롯은 SFN `edge-dev-data-pipeline-news` 가 돈다. `edge_news` 는 pause 상태로 배포되고, `news_orchestrator` 는 기본값 `"SFN"` 이다. SFN 과 같은 것·달라진 것은 DAG 도크스트링에 있다.
+
+- terraform 값 인자 `--limit`(`tag_news_limit`)·`--window-days`(`assemble_window_days`)는 장전 레인과 같은 `EDGE_LANE_ARGS` 경로로 받는다. 위 "장전 유니버스 레인"의 배포 순서 주의가 같이 적용된다.
+- FMP 뉴스 수집은 `us_fmp_enabled` 일 때만 SFN 에 들어간다. dev 는 꺼져 있어 DAG 에 없다. 켜려면 DAG 도 함께 고친다(tests 가 막는다).
+- **전환 전 조건 — 소요 실측.** SFN 은 태깅과 문서 적재를 병렬로 돌렸다. Airflow 는 PARALLELISM=1 이라 직렬이다.
+  - dagrun_timeout 은 Reconciler 수명(1800초)보다 짧아야 해서 1700초다. SFN 은 2400초였다.
+  - SFN 최근 40회: p50 477초, 최대 1099초. 과거에는 25분 상한에 40%가 잘린 기록도 있다(variables.tf `news_state_machine_timeout_seconds`).
+  - 그래서 전환 전에 원장 `ops_task_attempt` 로 스텝별 소요(특히 태깅·문서 적재·조립)를 재고, 합이 1700초 안에 드는지 확인한다.
+  - 08:10 run 은 09:00 뉴스 분 격자 전에 끝나야 한다.
+- **전환·롤백.** 위 "운영 전환·롤백 절차(장중 수급)"를 따르되, 아래만 바꿔 읽는다.
+  - ①·⑥: `pipeline_type = 'news'`.
+  - ②: 작업 키 6개 `NEWS_COLLECTION_BIGKINDS`·`NORMALIZE_NEWS`·`TAG_NEWS`·`LOAD_DOCUMENTS`·`LOAD_ASSERTIONS`·`ASSEMBLE_EVENTS`.
+  - ③: `check3` 의 family 목록을 `bigkinds deepseek rds events ops` 로, grep 패턴을 `ingest-raw --source bigkinds|normalize-news|tag-news|load-documents|load-assertions|assemble-events` 로 바꾼다.
+  - ④: SFN `edge-dev-data-pipeline-news`.
+  - 전환 변수: `envs/dev/main.tf` 의 `news_orchestrator`. `"AIRFLOW"` 면 스케줄 2개가 DISABLED 가 된다. 슬롯 대조(`OPS_NEWS_SCHED_HHMM`)는 원래 스케줄 상태와 무관하게 주입된다.
+  - 경계: 08:10 run 이 끝난 뒤, 그날 00:10 전에 바꾼다.
 
 ## 원천 관측 레인(source-daily, ALPHA-1130)
 

@@ -251,8 +251,9 @@ resource "aws_cloudwatch_metric_alarm" "news_execution_timed_out" {
 resource "aws_scheduler_schedule" "news" {
   for_each = var.news_schedule_expressions
 
-  name                         = "${var.name}-news-${each.key}"
-  state                        = var.news_schedule_state
+  name = "${var.name}-news-${each.key}"
+  # 실행 주체가 Airflow 면 SFN 을 띄우는 이 스케줄은 꺼진다(ALPHA-1409). 전환·롤백은 apps/engine/airflow/README.md.
+  state                        = var.news_orchestrator == "AIRFLOW" ? "DISABLED" : var.news_schedule_state
   schedule_expression          = each.value
   schedule_expression_timezone = var.schedule_timezone
 

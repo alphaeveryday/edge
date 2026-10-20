@@ -231,6 +231,19 @@ variable "news_schedule_expressions" {
   }
 }
 
+variable "news_orchestrator" {
+  # 레인별 SFN→Airflow 이관(ALPHA-1409, investor_intraday_orchestrator 와 같은 장치). AIRFLOW 면 이 레인의 EventBridge
+  # 스케줄이 꺼진다(SFN 미시작). 뉴스 슬롯 대조(OPS_NEWS_SCHED_HHMM)는 원래 스케줄 상태와 무관하게 주입된다.
+  # 이미 뜬 ECS 태스크는 멈추지 않는다 — 바꾸기 전에 README 의 종료 확인 절차를 따른다.
+  description = "뉴스 레인의 실행 주체(SFN|AIRFLOW). AIRFLOW 면 SFN 스케줄 DISABLED, 슬롯 대조는 유지."
+  type        = string
+  default     = "SFN"
+  validation {
+    condition     = contains(["SFN", "AIRFLOW"], var.news_orchestrator)
+    error_message = "news_orchestrator 는 SFN 또는 AIRFLOW."
+  }
+}
+
 variable "news_schedule_state" {
   description = "뉴스 SFN 스케줄 상태. 검증 동안 DISABLED, 컷오버 시 ENABLED."
   type        = string
