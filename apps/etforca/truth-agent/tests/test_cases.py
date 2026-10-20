@@ -80,6 +80,13 @@ def test_file_name_must_match_id(tmp_path):
         load_dir(tmp_path)
 
 
+def test_broken_json_file_is_reported_by_name(tmp_path):
+    # 한 파일이 깨져도 어느 파일인지 알려야 고칠 수 있다(스택트레이스로 끝나지 않게).
+    (tmp_path / "broken.json").write_text("{", encoding="utf-8")
+    with pytest.raises(CaseError, match="broken.json 읽을 수 없는 JSON"):
+        load_dir(tmp_path)
+
+
 def test_validate_returns_case_when_clean():
     case = seed("koreazinc-offering-2024")
     assert validate(deepcopy(case), today=TODAY) == case

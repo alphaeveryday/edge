@@ -141,7 +141,11 @@ def load_dir(directory: Path) -> list[dict]:
     """폴더의 사건 파일을 모두 읽고 검사한다. 하나라도 틀리면 파일별 위반을 모아 CaseError 를 낸다."""
     cases, errors = [], []
     for path in sorted(Path(directory).glob("*.json")):
-        case = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            case = json.loads(path.read_text(encoding="utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            errors.append(f"{path.name} 읽을 수 없는 JSON 입니다 ({error}). 문법을 고치세요.")
+            continue
         if found := problems(case, file_id=path.stem):
             errors.extend(f"{path.name} {line}" for line in found)
         cases.append(case)
