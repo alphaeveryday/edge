@@ -97,7 +97,7 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
           kind: asset.category === '현금' ? 'cash' : 'etf', amount_krw: amount == null ? '' : String(Number((Math.round(amount) / 10000).toFixed(4))) };
       });
       if (!await ask('현재 입력을 저장된 보유 종목으로 바꿀까요?', '불러오기')) return;
-      sessionStorage.removeItem(pendingKey);
+      try { sessionStorage.removeItem(pendingKey); } catch { /* Import remains available in memory without browser storage. */ }
       setHoldings(rows); setSelected([...new Set(rows.map(row => row.account))]); setAlternate([]); setMode('amount'); setFresh(false);
     } catch (error) { setInputError((error as Error).message); }
     finally { setSaving(false); restoreFocus(); }

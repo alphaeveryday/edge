@@ -100,7 +100,7 @@ for (const state of ['missing', 'pending', 'old-version', 'no-market']) test(`re
   await expect(page.getByRole('button', { name: '다음', exact: true })).toBeDisabled();
 });
 
-test('reuse preserves small cash balances and whole-won market values', async ({ page }) => {
+for (const blockedStorage of [false, true]) test(`reuse preserves whole-won balances (blocked storage: ${blockedStorage})`, async ({ page }) => {
   await page.route('**/api/portfolio/**', route => {
     if (route.request().url().endsWith('/catalog')) return route.fulfill({ json: catalog });
     if (route.request().url().endsWith('/workbook')) return route.fulfill({ json: {
@@ -112,6 +112,7 @@ test('reuse preserves small cash balances and whole-won market values', async ({
     return route.fulfill({ json: {} });
   });
   await page.goto('/portfolio/');
+  if (blockedStorage) await page.evaluate(() => Object.defineProperty(window, 'sessionStorage', { get() { throw new DOMException('blocked', 'SecurityError'); } }));
   await page.getByRole('button', { name: '저장된 보유 종목 불러오기' }).click();
   await page.locator('.ds-confirm-dialog').getByRole('button', { name: '불러오기', exact: true }).click();
   await expect(page.getByRole('spinbutton', { name: '현금 금액' })).toHaveValue('0.0049');
