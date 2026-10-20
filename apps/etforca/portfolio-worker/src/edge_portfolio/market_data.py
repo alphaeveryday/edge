@@ -113,11 +113,12 @@ def repair_prices(ticker, frame, symbol, as_of, currency, *, since=None):
         return frame, {'status': 'unavailable', 'reason': price_failure(error), 'dates': []}
 
 
-def load_prices(symbol, as_of, *, on_raw=None, repair_since=None):
+def load_prices(symbol, as_of, *, on_raw=None, repair_since=None, history_start=None):
     yf.set_tz_cache_location(str(Path(tempfile.gettempdir()) / 'portfolio-yfinance'))
     ticker = yf.Ticker(symbol)
     actions_day = datetime.now(ZoneInfo('Asia/Seoul')).date()
-    frame = ticker.history(period='max', end=(max(as_of, actions_day) + timedelta(days=1)).isoformat(),
+    window = {'start': history_start.isoformat()} if history_start else {'period': 'max'}
+    frame = ticker.history(**window, end=(max(as_of, actions_day) + timedelta(days=1)).isoformat(),
                            interval='1d', auto_adjust=False, actions=True, timeout=12)
     metadata = ticker.history_metadata
     if frame.empty or not {'Adj Close', 'Close'} <= set(frame.columns):
@@ -135,7 +136,10 @@ def load_prices(symbol, as_of, *, on_raw=None, repair_since=None):
     repair_start = max(frame.index[0].date(), repair_since)
     if held_since is not None:
         repair_start = min(held_since, repair_start)
+    if history_start:
+        repair_since = repair_start = max(history_start, repair_start)
     original = {'frame': frame, 'currency': metadata.get('currency'), 'symbol': symbol, 'repair_since': repair_since.isoformat(),
+                'history_complete': history_start is None,
                 'pending_splits': pending_splits,
                 'source_url': f'https://finance.yahoo.com/quote/{quote(symbol, safe="")}/history/'}
     if on_raw:
@@ -145,13 +149,14 @@ def load_prices(symbol, as_of, *, on_raw=None, repair_since=None):
     return {**original, 'frame': frame, 'price_recovery': recovery}
 
 
-async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None):
+async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None, history_start=None):
     # Admission is separate from provider timeouts; a busy worker is not a bad source.
     while not _PRICE_SLOTS.acquire(blocking=False):
         await asyncio.sleep(.05)
     try:
         try:
-            original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, **({'repair_since': repair_since} if repair_since else {})), timeout=provider_timeout)
+            options = {k: v for k, v in {'repair_since': repair_since, 'history_start': history_start}.items() if v is not None}
+            original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, **options), timeout=provider_timeout)
             if on_primary:
                 on_primary(original)
             columns = [original['frame'][name] for name in ('Adj Close', 'Close')]
@@ -168,14 +173,16 @@ async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_
         _PRICE_SLOTS.release()
 
 
-async def _fetch_prices(symbol, as_of, *, on_raw=None, provider='yahoo', repair_since=None):
+async def _fetch_prices(symbol, as_of, *, on_raw=None, provider='yahoo', repair_since=None, history_start=None):
     with tempfile.TemporaryDirectory(prefix='portfolio-prices-') as directory:
-        return await _fetch_prices_with_checkpoint(symbol, as_of, Path(directory) / 'original.json', on_raw, provider, **({'repair_since': repair_since} if repair_since else {}))
+        options = {k: v for k, v in {'repair_since': repair_since, 'history_start': history_start}.items() if v is not None}
+        return await _fetch_prices_with_checkpoint(symbol, as_of, Path(directory) / 'original.json', on_raw, provider, **options)
 
 
-async def _fetch_prices_with_checkpoint(symbol, as_of, checkpoint, on_raw=None, provider='yahoo', *, repair_since=None):
+async def _fetch_prices_with_checkpoint(symbol, as_of, checkpoint, on_raw=None, provider='yahoo', *, repair_since=None, history_start=None):
     """A cancellable process bounds library calls that can block beyond HTTP timeout."""
-    process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', symbol, as_of.isoformat(), str(checkpoint), provider, *([repair_since.isoformat()] if repair_since else []),
+    options = [repair_since.isoformat() if repair_since else '-', history_start.isoformat()] if history_start else ([repair_since.isoformat()] if repair_since else [])
+    process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', symbol, as_of.isoformat(), str(checkpoint), provider, *options,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
     try:

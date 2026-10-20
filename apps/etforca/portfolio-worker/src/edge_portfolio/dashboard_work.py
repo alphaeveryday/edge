@@ -2,11 +2,13 @@
 import asyncio
 import json
 import logging
+import math
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
+import pandas as pd
 from pydantic import Field, model_validator
 from psycopg.types.json import Jsonb
 
@@ -144,9 +146,79 @@ def held_history_missing(key, record, since, end):
     return bool(len(expected_sessions(key, min(since, end), end).difference(frame.index[frame['Close'].map(positive_price)])))
 
 
+def publish_prices(db, key, end, record, *, collector_lease=None):
+    from .market_data import decode_prices, positive_price
+    from .price_fetch import serialize
+    observed_on = last_close(record)[1]
+    if collector_lease is not None and not db.execute('SELECT 1 FROM portfolio_quote_refresh WHERE instrument=%s AND lease_until=%s FOR UPDATE', (key, collector_lease)).fetchone():
+        return False
+    # Serialize read/merge/write; a partial daily update must retain the archive.
+    db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', ('portfolio-price:' + key,))
+    old = db.execute('SELECT payload FROM portfolio_dashboard_prices WHERE instrument=%s', (key,)).fetchone()
+    if old and record.get('history_complete') is False:
+        saved = decode_prices(json.dumps(old['payload']))
+        overlap = saved['frame'].index.intersection(record['frame'].index)
+        # Changed adjustment/split basis needs a fresh archive, never a mixed-basis chart.
+        compatible = (saved['currency'] == record['currency'] and len(overlap) >= 2
+            and saved.get('return_basis') != 'price' and not saved.get('provider', '').startswith('FinanceDataReader:NAVER:'))
+        if compatible:
+            pairs = [(a, b) for a, b in zip(saved['frame'].loc[overlap, 'Close'], record['frame'].loc[overlap, 'Close'])
+                     if positive_price(a) and positive_price(b)]
+            if not pairs:
+                raise ValueError('PRICE_OVERLAP_UNAVAILABLE')
+            compatible = all(math.isclose(a, b, rel_tol=1e-6) for a, b in pairs)
+        if compatible:
+            ratios = [b / a for a, b in zip(saved['frame'].loc[overlap, 'Adj Close'], record['frame'].loc[overlap, 'Adj Close'])
+                      if positive_price(a) and positive_price(b)]
+            anchored = len(ratios) == len(overlap)
+            compatible = not anchored or all(math.isclose(ratio, ratios[0], rel_tol=1e-6) for ratio in ratios)
+            if compatible and anchored:
+                # A new cash distribution rebases earlier adjusted closes by one factor.
+                saved['frame']['Adj Close'] *= ratios[0]
+            elif compatible:
+                # Keep actual prices/actions usable, but never invent an adjustment basis.
+                saved['frame']['Adj Close'] = float('nan')
+                record = {**record, 'frame': record['frame'].copy()}
+                record['frame']['Adj Close'] = float('nan')
+                saved['history_complete'] = False
+        if compatible:
+            record = {**record, 'frame': record['frame'].copy()}
+            if not record['frame'].loc[record['frame']['Close'].map(positive_price), 'Adj Close'].map(positive_price).all():
+                saved['history_complete'] = False
+            record['pending_splits'] = sorted(set(record.get('pending_splits', [])) |
+                {day for day in saved.get('pending_splits', []) if day >= str(end)})
+            for column in ('Close', 'Adj Close'):
+                missing = overlap[~record['frame'].loc[overlap, column].map(positive_price)]
+                record['frame'].loc[missing, column] = saved['frame'].loc[missing, column]
+            for column in ('Dividends', 'Stock Splits'):
+                if column in saved['frame']:
+                    if column not in record['frame']:
+                        record['frame'][column] = saved['frame'][column].reindex(record['frame'].index)
+                    else:
+                        record['frame'][column] = record['frame'][column].fillna(saved['frame'][column])
+            record = {**record, 'frame': pd.concat([saved['frame'].drop(record['frame'].index, errors='ignore'), record['frame']]).sort_index(),
+                      'history_complete': saved.get('history_complete', True),
+                      'repair_since': min(saved.get('repair_since', str(end)), record.get('repair_since', str(end)))}
+            for metadata in ('return_basis', 'return_source_url'):
+                if metadata in saved:
+                    record[metadata] = saved[metadata]
+            if saved.get('price_recovery', {}).get('status') in ('partial', 'unavailable', 'rejected'):
+                record['price_recovery'] = saved['price_recovery']
+    record = {**record, 'observed_on': observed_on}
+    updated = db.execute('''INSERT INTO portfolio_dashboard_prices VALUES (%s,%s,%s)
+        ON CONFLICT(instrument) DO UPDATE SET day=excluded.day,payload=excluded.payload
+        WHERE (portfolio_dashboard_prices.day<excluded.day OR
+            (portfolio_dashboard_prices.day=excluded.day AND coalesce(portfolio_dashboard_prices.payload->>'requested_at',portfolio_dashboard_prices.payload->>'fetched_at','')<=excluded.payload->>'requested_at'))
+            AND excluded.payload->>'observed_on'>=coalesce(portfolio_dashboard_prices.payload->>'observed_on',
+                (SELECT max(p->>'date') FROM jsonb_array_elements(portfolio_dashboard_prices.payload->'frame') p WHERE (p->>'Close')::numeric>0),'')
+            AND (coalesce(excluded.payload->>'provider','') NOT LIKE 'FinanceDataReader:NAVER:%%'
+                OR coalesce(portfolio_dashboard_prices.payload->>'provider','') LIKE 'FinanceDataReader:NAVER:%%')
+        RETURNING instrument''', (key, end, Jsonb(json.loads(serialize(record))))).fetchone()
+    return bool(updated)
+
+
 async def records_for(ids, day, *, valuation_since=None, include_fx=True, collector_lease=None):
     from .market_data import decode_prices, fetch_prices, positive_price, year_before
-    from .price_fetch import serialize
     records, failures = {}, []
     keys = set(ids) - {'CASH:KRW', None}
     if include_fx and any(k.startswith('US:') for k in keys):
@@ -162,18 +234,21 @@ async def records_for(ids, day, *, valuation_since=None, include_fx=True, collec
                 try:
                     if cached:
                         saved = decode_prices(json.dumps(cached['payload']))
-                        needed_since = min(since, year_before(end - timedelta(days=1))) if since else year_before(end, 2)
+                        needed_since = since or (end - timedelta(days=35) if valuation_since is not None else year_before(end, 2))
                         incomplete = date.fromisoformat(saved.get('repair_since', year_before(end, 2).isoformat())) > needed_since
                         if valuation_since is not None:
-                            incomplete |= not saved.get('fetched_at') or datetime.fromisoformat(saved['fetched_at']) < datetime.now(ZoneInfo('UTC')) - timedelta(minutes=1)
+                            incomplete |= saved.get('actions_checked_on') != str(day)
+                            expired = not saved.get('fetched_at') or datetime.fromisoformat(saved['fetched_at']) < datetime.now(ZoneInfo('UTC')) - timedelta(minutes=1)
+                            incomplete |= expired
                         else:
+                            incomplete |= saved.get('history_complete') is False
                             adjusted = saved['frame']['Adj Close'].map(positive_price)
                             incomplete |= saved.get('provider', '').startswith('FinanceDataReader:NAVER:') or saved.get('price_recovery', {}).get('status') in ('unavailable', 'partial')
                             incomplete |= key != 'FX' and (saved.get('return_basis') == 'price' or adjusted.sum() < 2)
                             incomplete |= last_close(saved)[1] != str(end - timedelta(days=1))
                             incomplete |= saved.get('actions_checked_on') != str(day)
                         if incomplete:
-                            if valuation_since is None:
+                            if valuation_since is None and saved.get('history_complete') is not False:
                                 records[key] = saved
                             cached = None  # Retain usable observations while retrying missing data.
                     if cached:
@@ -192,7 +267,7 @@ async def records_for(ids, day, *, valuation_since=None, include_fx=True, collec
                         try:
                             budget = 200 / max(1, len(keys))
                             record = await fetch_prices(symbol, end, on_raw=capture, on_primary=capture, provider_timeout=budget * .45,
-                                                        repair_since=since)
+                                                        repair_since=since, **({'history_start': min(since or end, end - timedelta(days=35))} if valuation_since is not None else {}))
                             record = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat(), 'requested_at': requested_at}
                         except TimeoutError:
                             if key not in records:
@@ -206,16 +281,8 @@ async def records_for(ids, day, *, valuation_since=None, include_fx=True, collec
                             raise ValueError('UNSUPPORTED_CURRENCY')
                         record['observed_on'] = last_close(record)[1]
                         with store.connect() as db:
-                            if collector_lease is not None and not db.execute('SELECT 1 FROM portfolio_quote_refresh WHERE instrument=%s AND lease_until=%s FOR UPDATE', (key, collector_lease)).fetchone():
+                            if not publish_prices(db, key, end, record, collector_lease=collector_lease) and collector_lease is not None:
                                 continue
-                            db.execute('''INSERT INTO portfolio_dashboard_prices VALUES (%s,%s,%s)
-                                ON CONFLICT(instrument) DO UPDATE SET day=excluded.day,payload=excluded.payload
-                                WHERE (portfolio_dashboard_prices.day<excluded.day OR
-                                    (portfolio_dashboard_prices.day=excluded.day AND coalesce(portfolio_dashboard_prices.payload->>'requested_at',portfolio_dashboard_prices.payload->>'fetched_at','')<=excluded.payload->>'requested_at'))
-                                    AND excluded.payload->>'observed_on'>=coalesce(portfolio_dashboard_prices.payload->>'observed_on',
-                                        (SELECT max(p->>'date') FROM jsonb_array_elements(portfolio_dashboard_prices.payload->'frame') p WHERE (p->>'Close')::numeric>0),'')
-                                    AND (coalesce(excluded.payload->>'provider','') NOT LIKE 'FinanceDataReader:NAVER:%%'
-                                        OR coalesce(portfolio_dashboard_prices.payload->>'provider','') LIKE 'FinanceDataReader:NAVER:%%')''', (key, end, Jsonb(json.loads(serialize(record)))))
                     records[key] = record
                 except Exception as error:
                     log.warning('dashboard price=%s failure=%s', key, type(error).__name__)

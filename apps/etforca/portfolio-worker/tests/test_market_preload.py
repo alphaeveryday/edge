@@ -1,0 +1,379 @@
+from datetime import date, datetime, timedelta
+
+import pandas as pd
+import pytest
+
+from edge_portfolio import dashboard, dashboard_work as work, market_data, market_preload as preload, store
+from test_dashboard_work import asset, record
+from test_store import isolated_db  # noqa: F401
+
+NOW = datetime.fromisoformat('2026-10-20T17:00:00+09:00')
+
+
+@pytest.mark.parametrize('hour,minute,expected', [(0, 10, False), (3, 0, False), (8, 10, False),
+    (15, 0, False), (15, 30, False), (19, 30, False), (7, 0, True), (9, 30, True), (17, 0, True), (21, 0, True)])
+def test_bulk_collection_does_not_start_in_existing_batch_slots(hour, minute, expected):
+    assert preload.in_window(NOW.replace(hour=hour, minute=minute)) is expected
+
+
+def test_catalog_seeding_is_shared_and_does_not_reset_schedules(isolated_db, monkeypatch):
+    from edge_portfolio import catalog
+    monkeypatch.setattr(catalog, 'directory', lambda: {'instruments': [{'id': 'US:SOXL'}, {'id': 'KR:069500'}]})
+    preload.seed()
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_market_preload SET quote_after=now()+interval '1 day'")
+        before = db.execute('SELECT * FROM portfolio_market_preload ORDER BY instrument').fetchall()
+    preload.seed()
+    with store.connect() as db:
+        assert db.execute('SELECT * FROM portfolio_market_preload ORDER BY instrument').fetchall() == before
+    assert len(before) == 3
+
+
+async def test_quotes_precede_archives_and_new_customer_uses_preloaded_quote(isolated_db, monkeypatch):
+    with store.connect() as db:
+        db.execute("INSERT INTO portfolio_market_preload(instrument) VALUES ('KR:069500'),('US:SOXL')")
+    calls = []
+    monkeypatch.setattr(work, 'today', lambda: NOW.date())
+    monkeypatch.setattr(work, 'price_end', lambda *args: date(2026, 10, 17))
+    async def load(symbol, end, **kwargs):
+        calls.append((symbol, kwargs['history_start']))
+        return {**record(currency='USD' if symbol == 'SOXL' else 'KRW'),
+                'history_complete': kwargs['history_start'] is None, 'repair_since': '2026-09-01'}
+    monkeypatch.setattr(market_data, 'fetch_prices', load)
+    now = NOW
+    assert await preload.collect_one(now=now)
+    dashboard.save('new', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
+    assert work.tracking('new')['market']['payload']['assets'][0]['value'] == 1100
+    assert await preload.collect_one(now=now)
+    assert [c[0] for c in calls] == ['069500.KS', 'SOXL']
+    assert all(c[1] is not None for c in calls), 'No archive may delay catalogue price coverage'
+
+
+async def test_preload_yields_to_customer_analysis_and_source_errors_back_off(isolated_db, monkeypatch):
+    with store.connect() as db:
+        db.execute("INSERT INTO portfolio_market_preload(instrument) VALUES ('US:SOXL')")
+    job = store.submit('customer', 'new', {})
+    assert not await preload.collect_one(now=NOW)
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_jobs SET state='failed' WHERE id=%s", (job['id'],))
+    async def fail(*args, **kwargs):
+        raise ValueError('PRICE_PROVIDER_RATE_LIMIT')
+    monkeypatch.setattr(market_data, 'fetch_prices', fail)
+    assert await preload.collect_one(now=NOW)
+    with store.connect() as db:
+        row = db.execute("SELECT * FROM portfolio_market_preload WHERE instrument='US:SOXL'").fetchone()
+    assert row['failures'] == 1 and row['last_error'] == 'PRICE_PROVIDER_RATE_LIMIT'
+    assert row['quote_after'] == NOW + timedelta(minutes=15) and row['lease_until'] is None
+    with store.connect() as db:
+        db.execute("INSERT INTO portfolio_market_preload(instrument) VALUES ('US:VOO')")
+    assert not await preload.collect_one(now=NOW), 'A source-wide rate limit must pause other symbols too'
+
+
+def test_daily_window_preserves_archive_but_changed_adjustments_do_not_mix(isolated_db):
+    old = {**record(), 'history_complete': True, 'repair_since': '2020-01-01',
+           'requested_at': '2026-10-17T00:00:00+00:00'}
+    old['frame'] = pd.concat([pd.DataFrame({'Close': [90.], 'Adj Close': [90.], 'Dividends': [0.]},
+        index=pd.to_datetime(['2020-01-02'])), old['frame']])
+    recent = {**record(), 'history_complete': False, 'repair_since': '2026-09-01',
+              'requested_at': '2026-10-18T00:00:00+00:00'}
+    with store.connect() as db:
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), old)
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), recent)
+        saved = db.execute('SELECT payload FROM portfolio_dashboard_prices').fetchone()['payload']
+        assert len(saved['frame']) == 3 and saved['history_complete']
+        assert saved['repair_since'] == '2020-01-01'
+        recent['frame']['Close'] *= .5
+        recent['requested_at'] = '2026-10-19T00:00:00+00:00'
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), recent)
+        saved = db.execute('SELECT payload FROM portfolio_dashboard_prices').fetchone()['payload']
+        assert len(saved['frame']) == 2 and not saved['history_complete']
+
+
+def test_recent_loader_requests_only_window_and_keeps_archive_for_explicit_backfill(monkeypatch):
+    calls = []
+    class Ticker:
+        history_metadata = {'currency': 'USD'}
+        def history(self, **kwargs):
+            calls.append(kwargs)
+            return record(currency='USD')['frame']
+    monkeypatch.setattr(market_data.yf, 'Ticker', lambda _: Ticker())
+    monkeypatch.setattr(market_data, 'repair_prices', lambda ticker, frame, *args, **kwargs: (frame, {}))
+    recent = market_data.load_prices('SOXL', date(2026, 10, 17), history_start=date(2026, 9, 12))
+    archive = market_data.load_prices('SOXL', date(2026, 10, 17))
+    assert calls[0]['start'] == '2026-09-12' and 'period' not in calls[0]
+    assert calls[1]['period'] == 'max'
+    assert recent['history_complete'] is False and archive['history_complete'] is True
+
+
+async def test_new_customer_symbol_precedes_existing_quote_refreshes(isolated_db, monkeypatch):
+    from edge_portfolio import dashboard_quotes as quotes
+    calls = []
+    async def fetch(ids, *args, **kwargs):
+        calls.extend(ids)
+    monkeypatch.setattr(work, 'records_for', fetch)
+    dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[
+        asset(), {**asset(), 'id': 'b', 'instrument_id': 'US:SOXL', 'currency': 'USD'}])))
+    with store.connect() as db:
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), {**record(), 'requested_at': '2026-10-18'})
+        db.execute("UPDATE portfolio_quote_refresh SET refresh_after=now()-interval '1 hour' WHERE instrument='KR:069500'")
+    await quotes.collect_once()
+    await quotes.collect_once()
+    assert calls == ['FX', 'US:SOXL'], 'Missing conversion and new prices precede refreshes that already have values'
+
+
+async def test_recent_quotes_never_satisfy_a_full_backtest_after_source_failure(isolated_db, monkeypatch):
+    with store.connect() as db:
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17),
+            {**record(), 'history_complete': False, 'repair_since': '2020-01-01',
+             'requested_at': '2026-10-18', 'actions_checked_on': '2026-10-18'})
+    async def fail(*args, **kwargs):
+        raise TimeoutError()
+    monkeypatch.setattr(market_data, 'fetch_prices', fail)
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18))
+    assert not records and failures == ['KR:069500']
+
+
+@pytest.mark.parametrize('price_only', [False, True])
+def test_recent_update_preserves_repair_debt_and_never_promotes_price_only_history(isolated_db, price_only):
+    old = {**record(), 'history_complete': True, 'repair_since': '2020-01-01',
+           'requested_at': '2026-10-17', 'price_recovery': {'status': 'partial', 'unresolved_dates': ['2020-01-03']}}
+    if price_only:
+        old['return_basis'] = 'price'
+    recent = {**record(), 'history_complete': False, 'repair_since': '2026-09-01',
+              'requested_at': '2026-10-18', 'price_recovery': {'status': 'not_needed'}}
+    with store.connect() as db:
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), old)
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), recent)
+        saved = db.execute('SELECT payload FROM portfolio_dashboard_prices').fetchone()['payload']
+    if price_only:
+        assert saved['history_complete'] is False
+    else:
+        assert saved['price_recovery'] == old['price_recovery']
+
+
+def test_distribution_adjustment_rebases_archive_without_losing_dividend_events(isolated_db):
+    old = {**record(), 'history_complete': True, 'repair_since': '2020-01-01', 'requested_at': '2026-10-17'}
+    old['frame'] = pd.concat([pd.DataFrame({'Close': [90.], 'Adj Close': [90.], 'Dividends': [3.]},
+        index=pd.to_datetime(['2020-01-02'])), old['frame']])
+    recent = {**record(), 'history_complete': False, 'repair_since': '2026-09-01', 'requested_at': '2026-10-18'}
+    recent['frame']['Adj Close'] *= .98
+    with store.connect() as db:
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), old)
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), recent)
+        saved = db.execute('SELECT payload FROM portfolio_dashboard_prices').fetchone()['payload']
+    assert saved['history_complete'] and len(saved['frame']) == 3
+    assert saved['frame'][0]['Adj Close'] == pytest.approx(88.2)
+    assert saved['frame'][0]['Dividends'] == 3
+
+
+async def test_warm_provider_reuses_child_but_timeout_kills_it_and_returns_capacity(monkeypatch):
+    import asyncio
+    import json
+    import sys
+    from edge_portfolio.price_fetch import serialize
+    payload = serialize(record())
+    code = ("import sys,json,time\nfor line in sys.stdin:\n"
+            " request=json.loads(line)\n"
+            " if request['symbol']=='HANG':time.sleep(60)\n"
+            f" print({payload!r},flush=True)\n")
+    original = asyncio.create_subprocess_exec
+    calls = []
+    async def spawn(*args, **kwargs):
+        calls.append(args)
+        return await original(sys.executable, '-u', '-c', code, **kwargs)
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', spawn)
+    session = preload.PriceSession()
+    try:
+        for symbol in ['SOXL', 'VOO']:
+            await session.fetch(symbol, date(2026, 10, 20), None)
+        assert len(calls) == 1
+        child = session.process
+        with pytest.raises(TimeoutError):
+            async with asyncio.timeout(.2):
+                await session.fetch('HANG', date(2026, 10, 20), None)
+        assert child.returncode is not None and session.process is None and not session.admitted
+        assert market_data._PRICE_SLOTS.acquire(blocking=False)
+        assert market_data._PRICE_SLOTS.acquire(blocking=False)
+        market_data._PRICE_SLOTS.release()
+        market_data._PRICE_SLOTS.release()
+    finally:
+        await session.close()
+
+
+async def test_warm_provider_retains_raw_quote_when_repair_fails(monkeypatch):
+    import asyncio
+    import sys
+    from edge_portfolio.price_fetch import serialize
+    payload = serialize({**record(), '_checkpoint': True})
+    code = ("import sys\nsys.stdin.readline()\n"
+            f"print({payload!r},flush=True)\n"
+            "print('{\"error\":\"PRICE_PROVIDER_RATE_LIMIT\"}',flush=True)\n")
+    original = asyncio.create_subprocess_exec
+    async def spawn(*args, **kwargs):
+        return await original(sys.executable, '-u', '-c', code, **kwargs)
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', spawn)
+    session = preload.PriceSession()
+    try:
+        saved = await session.fetch('SOXL', date(2026, 10, 20), None)
+        assert len(saved['frame']) == 2
+        assert saved['price_recovery']['reason'] == 'PRICE_PROVIDER_RATE_LIMIT'
+        assert session.process is None and not session.admitted
+    finally:
+        await session.close()
+
+
+async def test_usable_quote_with_rate_limited_repair_still_pauses_bulk_source(isolated_db, monkeypatch):
+    with store.connect() as db:
+        db.execute("INSERT INTO portfolio_market_preload(instrument) VALUES ('US:SOXL'),('US:VOO')")
+    async def load(*args, **kwargs):
+        return {**record(currency='USD'), 'history_complete': False,
+                'price_recovery': {'status': 'unavailable', 'reason': 'PRICE_PROVIDER_RATE_LIMIT'}}
+    monkeypatch.setattr(market_data, 'fetch_prices', load)
+    assert await preload.collect_one(now=NOW)
+    with store.connect() as db:
+        assert db.execute("SELECT 1 FROM portfolio_dashboard_prices WHERE instrument='US:SOXL'").fetchone()
+    assert not await preload.collect_one(now=NOW)
+
+
+@pytest.mark.parametrize('quote_due', [True, False])
+@pytest.mark.parametrize('limited', [True, False])
+async def test_superseded_archive_remains_due_for_retry(isolated_db, monkeypatch, quote_due, limited):
+    monkeypatch.setattr(work, 'price_end', lambda *args: date(2026, 10, 17))
+    with store.connect() as db:
+        db.execute("INSERT INTO portfolio_market_preload(instrument,quote_after) VALUES ('US:SOXL',now()+interval '1 day')")
+        if quote_due:
+            db.execute("UPDATE portfolio_market_preload SET quote_after=now()-interval '1 day'")
+        work.publish_prices(db, 'US:SOXL', date(2026, 10, 17),
+            {**record(currency='USD'), 'history_complete': False, 'requested_at': '2099-01-01'})
+    async def load(*args, **kwargs):
+        return {**record(currency='USD'), 'history_complete': True,
+                'price_recovery': {'reason': 'PRICE_PROVIDER_RATE_LIMIT' if limited else ''}}
+    monkeypatch.setattr(market_data, 'fetch_prices', load)
+    assert await preload.collect_one(now=NOW)
+    with store.connect() as db:
+        row = db.execute("SELECT *,history_after<now()+interval '2 minutes' AS soon,quote_after>now() AS deferred FROM portfolio_market_preload").fetchone()
+    assert row['last_error'] == ('PRICE_PROVIDER_RATE_LIMIT' if limited else 'PRICE_PUBLICATION_SUPERSEDED') and row['soon']
+    assert row['lease_until'] is None and row['deferred']
+    if limited:
+        with store.connect() as db:
+            db.execute("INSERT INTO portfolio_market_preload(instrument) VALUES ('US:VOO')")
+        assert not await preload.collect_one(now=NOW)
+
+
+def test_partial_adjusted_prices_cannot_erase_existing_archive(isolated_db):
+    old = {**record(), 'history_complete': True, 'repair_since': '2020-01-01', 'requested_at': '2026-10-17'}
+    old['frame'] = pd.concat([pd.DataFrame({'Close': [90.], 'Adj Close': [90.], 'Dividends': [3.]},
+        index=pd.to_datetime(['2020-01-02'])), old['frame']])
+    recent = {**record(), 'history_complete': False, 'repair_since': '2026-09-01', 'requested_at': '2026-10-18',
+              'price_recovery': {'status': 'partial'}}
+    recent['frame'].iloc[0, recent['frame'].columns.get_loc('Adj Close')] = float('nan')
+    with store.connect() as db:
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), old)
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), recent)
+        saved = db.execute('SELECT payload FROM portfolio_dashboard_prices').fetchone()['payload']
+    assert saved['history_complete'] is False and len(saved['frame']) == 3
+    assert saved['frame'][1]['Adj Close'] is None
+    assert saved['frame'][0]['Dividends'] == 3
+
+
+def test_fx_preload_runs_after_utc_day_advances():
+    assert preload.next_quote('FX', NOW.replace(hour=7)) == NOW.replace(hour=9, minute=30)
+
+
+async def test_valuation_reuses_recent_fx_without_demanding_two_year_archive(isolated_db, monkeypatch):
+    monkeypatch.setattr(work, 'price_end', lambda *args: date(2026, 10, 17))
+    with store.connect() as db:
+        work.publish_prices(db, 'FX', date(2026, 10, 17), {**record(), 'history_complete': False,
+            'repair_since': '2026-09-12', 'actions_checked_on': str(NOW.date()),
+            'requested_at': NOW.isoformat(), 'fetched_at': datetime.now(preload.KST).isoformat()})
+    async def fail(*args, **kwargs):
+        pytest.fail('Fresh FX quote must not request a full archive')
+    monkeypatch.setattr(market_data, 'fetch_prices', fail)
+    records, failures = await work.records_for(['FX'], NOW.date(), valuation_since={})
+    assert 'FX' in records and not failures
+
+
+async def test_preload_rejects_stale_positive_fx_despite_recent_empty_rows(isolated_db, monkeypatch):
+    monkeypatch.setattr(work, 'price_end', lambda *args: date(2026, 10, 20))
+    with store.connect() as db:
+        db.execute("INSERT INTO portfolio_market_preload(instrument) VALUES ('FX')")
+    class Session:
+        async def fetch(self, *args):
+            result = record(prices=(1300., float('nan')))
+            result['frame'].index = pd.to_datetime(['2026-10-01', '2026-10-19'])
+            return result
+    await preload.collect_one(now=NOW, session=Session())
+    with store.connect() as db:
+        assert not db.execute("SELECT 1 FROM portfolio_dashboard_prices").fetchone()
+        assert db.execute("SELECT last_error FROM portfolio_market_preload").fetchone()['last_error'] == 'PRICE_STALE'
+
+
+@pytest.mark.parametrize('missing_column', [True, False])
+def test_partial_updates_keep_actions_and_publish_raw_prices_without_adjustment_anchors(isolated_db, missing_column):
+    old = {**record(), 'history_complete': True, 'requested_at': '2026-10-17'}
+    old['frame']['Stock Splits'] = [2., 0.]
+    recent = {**record(prices=(100., 110.)), 'history_complete': False, 'requested_at': '2026-10-18'}
+    recent['frame']['Adj Close'] = float('nan')
+    recent['frame']['Dividends'] = float('nan')
+    if not missing_column:
+        recent['frame']['Stock Splits'] = float('nan')
+    recent['frame'].loc[pd.Timestamp('2026-10-19'), 'Close'] = 120.
+    with store.connect() as db:
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), old)
+        assert work.publish_prices(db, 'KR:069500', date(2026, 10, 20), recent)
+        saved = db.execute("SELECT payload FROM portfolio_dashboard_prices").fetchone()['payload']
+    assert saved['history_complete'] is False
+    assert saved['frame'][-1]['Close'] == 120
+    assert saved['frame'][0]['Stock Splits'] == 2
+    assert saved['frame'][1]['Dividends'] == 2
+    assert all(row['Adj Close'] is None for row in saved['frame'])
+
+
+def test_archive_merge_cannot_make_a_stale_response_fresh_or_clear_pending_split(isolated_db):
+    old = {**record(), 'history_complete': True, 'requested_at': '2026-10-17', 'pending_splits': ['2026-10-20']}
+    old['frame'].loc[pd.Timestamp('2026-10-19')] = [120., 120., 0.]
+    recent = {**record(), 'history_complete': False, 'requested_at': '2026-10-20', 'pending_splits': []}
+    with store.connect() as db:
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 20), old)
+        assert not work.publish_prices(db, 'KR:069500', date(2026, 10, 20), recent)
+        recent['frame'] = old['frame'].copy()
+        assert work.publish_prices(db, 'KR:069500', date(2026, 10, 20), recent)
+        saved = db.execute('SELECT payload FROM portfolio_dashboard_prices').fetchone()['payload']
+    assert saved['observed_on'] == '2026-10-19' and saved['pending_splits'] == ['2026-10-20']
+
+
+async def test_shutdown_while_waiting_does_not_start_provider_and_releases_claim(isolated_db, monkeypatch):
+    import asyncio
+    import threading
+    stopping = threading.Event()
+    with store.connect() as db:
+        db.execute("INSERT INTO portfolio_market_preload(instrument) VALUES ('US:SOXL')")
+    async def forbidden(*args, **kwargs):
+        pytest.fail('Shutdown must not start another provider process')
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', forbidden)
+    assert market_data._PRICE_SLOTS.acquire(blocking=False)
+    assert market_data._PRICE_SLOTS.acquire(blocking=False)
+    try:
+        task = asyncio.create_task(preload.collect_one(stopping, now=NOW, session=preload.PriceSession(stopping)))
+        await asyncio.sleep(.1)
+        stopping.set()
+        assert not await task
+    finally:
+        market_data._PRICE_SLOTS.release()
+        market_data._PRICE_SLOTS.release()
+    with store.connect() as db:
+        row = db.execute('SELECT * FROM portfolio_market_preload').fetchone()
+    assert row['lease_until'] is None and row['failures'] == 0
+
+
+def test_one_adjustment_anchor_cannot_extrapolate_through_a_dividend_date(isolated_db):
+    old = {**record(prices=(100., 98.), dividends=(0., 0.)), 'history_complete': True, 'requested_at': '2026-10-17'}
+    recent = {**record(prices=(100., 98.)), 'history_complete': False, 'requested_at': '2026-10-18'}
+    recent['frame']['Adj Close'] = [98., float('nan')]
+    with store.connect() as db:
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), old)
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), recent)
+        saved = db.execute('SELECT payload FROM portfolio_dashboard_prices').fetchone()['payload']
+    assert saved['history_complete'] is False
+    assert saved['frame'][1]['Close'] == 98 and saved['frame'][1]['Dividends'] == 2
+    assert saved['frame'][1]['Adj Close'] is None, 'A missing post-dividend anchor must not become 96.04'
