@@ -85,8 +85,9 @@ def test_scheduling_guards(dag_module):
     assert dag.dagrun_timeout == timedelta(seconds=1700)
     collect = dag.get_task("collect")
     assert collect.same_day_only is True and collect.noop_on_reprocess is True   # 수집 창 = 실행 시각 기준
-    # 외부 호출 스텝만 성공 이력 skip — 태깅은 기사당 LLM 과금이다.
-    assert {t for t in dag_module.STEPS if dag.get_task(t).skip_if_succeeded} == {"collect", "tag"}
+    # 성공 이력 skip 은 첫 외부 호출 스텝(수집)만 — 하류에 켜면 앞 스텝을 clear 해 입력이 바뀌어도 이전 성공 태스크에
+    # 재접속해 새 입력을 처리하지 않는다(태깅은 미태깅 기사만 골라 다시 돌려도 중복 과금이 없다).
+    assert {t for t in dag_module.STEPS if dag.get_task(t).skip_if_succeeded} == {"collect"}
     env = {e["name"]: e["value"] for e in dag.get_task("plan").overrides["containerOverrides"][0]["environment"]}
     assert env["OPS_PIPELINE_TYPE"] == "news" and env["OPS_ORCHESTRATOR"] == "AIRFLOW"
 

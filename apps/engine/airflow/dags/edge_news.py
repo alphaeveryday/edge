@@ -12,7 +12,9 @@ FMP 수집(CollectFmpNews)은 `us_fmp_enabled` 일 때만 SFN 에 들어간다 �
 달라진 것(의도):
 - 실행 요청 = 이 DAG run. plan 은 원장만 쓰고 SFN 을 시작하지 않는다(OPS_ORCHESTRATOR=AIRFLOW).
 - 업무 미시작이 확인된 경우와 도는 태스크 재접속만 재시도한다(EdgeStep). SFN 스케줄은 재시도 0 이었다.
-- 태깅(LLM)·수집(BigKinds)은 성공 이력이 있으면 다시 부르지 않는다(외부 호출 스텝만 — 장중 수급과 같은 규칙).
+- 수집(BigKinds)은 성공 이력이 있으면 다시 부르지 않는다(첫 외부 호출 스텝만 — 장중 수급과 같은 규칙). 태깅(LLM)엔
+  켜지 않는다 — 앞 스텝을 clear 해 정제 입력이 바뀌어도 이전 성공 태스크에 재접속해 새 기사를 태깅하지 않는다.
+  tag-news 는 미태깅 기사만 고르므로(버전·지문 skip) 다시 돌려도 이미 태깅한 기사엔 LLM 을 부르지 않는다.
 - SFN 은 태깅·문서 적재를 병렬로 돌렸다. 여기선 PARALLELISM=1 이라 한 줄로 돈다 — 그만큼 길어진다.
 - 시간 상한: SFN 2400초 → dagrun_timeout 1700초. Reconciler 수명(1800초)보다 짧아야 해서 SFN 값을 못 쓴다.
   실측(SFN 최근 40회, 병렬 실행) p50 477초·최대 1099초. 직렬로 늘어난 뒤의 값은 전환 전에 잰다(README).
@@ -154,7 +156,6 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
         )
         tag = step(
             **ecs_target, task_id="tag", taskdef_key="deepseek",
-            skip_if_succeeded=True,                   # 외부 호출(LLM) — 기사당 과금
             command=["tag-news", "--run-id", rid, "--input-run-id", rid,
                      "--limit", "{{ edge_lane_arg('tag_news_limit') }}"],
         )
