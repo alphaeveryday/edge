@@ -128,7 +128,7 @@
         "kind": { "enum": ["official", "disclosure", "news", "web", "video"], "description": "official=감독·수사·법원 등 공식 판단, disclosure=법정공시" },
         "publisher": { "type": "string", "minLength": 1 },
         "title": { "type": "string", "minLength": 1 },
-        "url": { "type": "string", "pattern": "^https?://[^\\s\\\\]+$", "description": "공백·백슬래시 금지 (Python 과 브라우저가 호스트를 다르게 읽는 주소 차단)" },
+        "url": { "type": "string", "pattern": "^https?://[^\\s\\\\]+(?![\\s\\S])", "description": "공백·백슬래시·끝 줄바꿈 금지 (Python 과 브라우저가 호스트를 다르게 읽는 주소 차단)" },
         "publishedAt": { "type": "string", "format": "date" },
         "accessedAt": { "type": "string", "format": "date" },
         "snapshot": { "type": "string", "description": "인용 검증용 원문 보관 위치 (비공개 버킷 키)" }
