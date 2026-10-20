@@ -1,10 +1,13 @@
 import posthog from 'posthog-js';
 import { preview } from './preview';
+import { ensureVisitorSession } from './api';
 
 export type Screen = 'input_holdings' | 'input_funding' | 'input_horizon' | 'input_interests' | 'input_question' | 'loading' | 'queued' | 'running' | 'result' | 'failed' | 'dashboard_overview' | 'dashboard_dividends' | 'dashboard_returns' | 'dashboard_backtest';
 const events = new Set(['$pageview', '$pageleave', 'portfolio_screen_engagement', 'portfolio_scroll_pause', 'portfolio_feedback', 'portfolio_action']);
 const properties = new Set(['token', 'distinct_id', '$lib', '$lib_version', '$device_type', '$browser', '$os', '$viewport_height', '$viewport_width', '$screen_height', '$screen_width', '$process_person_profile', '$cookieless_mode', 'screen', 'section', 'visible_seconds', 'pause_seconds', 'scroll_y', 'scroll_depth_pct', 'max_scroll_depth_pct', 'action', 'rating']);
 let initialized = false;
+let testVisitor: boolean | null = null;
+let classifying = false;
 const preferenceKey = 'orca-usage-analytics';
 export function analyticsEnabled() { try { return localStorage.getItem(preferenceKey) !== 'off' && navigator.doNotTrack !== '1'; } catch { return false; } }
 export function setAnalyticsEnabled(enabled: boolean) {
@@ -31,6 +34,18 @@ export function trackFeedback(action: 'shown' | 'dismissed' | 'submitted', ratin
 function initialize() {
   if (preview || !analyticsEnabled()) return false;
   if (!['etforca.com', 'www.etforca.com'].includes(location.hostname) || location.pathname !== '/portfolio/') return false;
+  if (testVisitor === null) {
+    if (!classifying) {
+      classifying = true;
+      void ensureVisitorSession().then(value => {
+        const classification = (value as { is_test?: boolean | null }).is_test;
+        testVisitor = typeof classification === 'boolean' ? classification : null;
+        if (testVisitor !== null) window.dispatchEvent(new Event('orca-analytics-change'));
+      }).catch(() => { /* Retry on the next interaction; do not misclassify an unknown visitor. */ })
+        .finally(() => { classifying = false; });
+    }
+    return false;
+  }
   if (!initialized) {
     try {
       posthog.init('phc_yiMfdC2Hi7iPBWHg7F9n3dBokvnXkjcsqFzN8Bs496R3', {
@@ -50,8 +65,10 @@ function initialize() {
         loaded: instance => { instance.opt_in_capturing(); instance.startSessionRecording(true); },
         advanced_disable_feature_flags: true, enable_heatmaps: false, capture_dead_clicks: false,
         before_send: event => {
+          if (testVisitor === null) return null;
           if (event?.event === '$snapshot') {
             event.properties = Object.fromEntries(Object.entries(event.properties).filter(([key]) => ['token', 'distinct_id', '$session_id', '$window_id', '$snapshot_data', '$snapshot_bytes', '$lib', '$lib_version'].includes(key)));
+            event.properties.is_test = testVisitor;
             return event;
           }
           if (!event || !events.has(event.event)) return null;
@@ -61,6 +78,7 @@ function initialize() {
           event.properties.$pathname = screen ? `/portfolio/${String(screen).replaceAll('_', '/')}` : '/portfolio/';
           event.properties.$current_url = 'https://etforca.com' + event.properties.$pathname;
           event.properties.$host = 'etforca.com';
+          event.properties.is_test = testVisitor;
           return { event: event.event, properties: event.properties, timestamp: event.timestamp, uuid: event.uuid };
         },
       });
@@ -71,10 +89,20 @@ function initialize() {
 }
 
 export function trackScreen(screen: Screen) {
-  let stop = startScreen(screen);
+  let stopped = false;
+  let stop = () => {};
+  if (!preview && analyticsEnabled() && ['etforca.com', 'www.etforca.com'].includes(location.hostname) && location.pathname === '/portfolio/') {
+    void ensureVisitorSession().then(value => {
+      if (stopped) return;
+      const classification = (value as { is_test?: boolean | null }).is_test;
+      testVisitor = typeof classification === 'boolean' ? classification : null;
+      stop();
+      if (testVisitor !== null) stop = startScreen(screen);
+    }).catch(() => { testVisitor = null; stop(); });
+  }
   const restart = () => { stop(); stop = startScreen(screen); };
   window.addEventListener('orca-analytics-change', restart);
-  return () => { stop(); window.removeEventListener('orca-analytics-change', restart); };
+  return () => { stopped = true; stop(); window.removeEventListener('orca-analytics-change', restart); };
 }
 
 function startScreen(screen: Screen) {

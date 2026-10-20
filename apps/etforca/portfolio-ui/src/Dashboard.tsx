@@ -125,6 +125,12 @@ export function Dashboard() {
     const quote = a && currentMarket && !market?.missing.includes(a.id) ? quotes.get(a.id) : null;
     setEditing(a ? { ...a, quantity: a.quantity !== null ? quote?.quantity ?? a.quantity : null, average: quote?.average ?? a.average } : { id: crypto.randomUUID(), instrument_id: null, name: '', account: account === '전체' ? accounts[0] : account, category: '기타', currency: 'KRW', quantity: null, average: null, price: null, cost_fx: null, amount: null, weight: null, target: null, fee: 0, price_date: null });
   }
+  useEffect(() => {
+    if (loading || !saved || seedOnly || new URLSearchParams(location.search).get('setup') !== 'holdings') return;
+    const url = new URL(location.href); url.searchParams.delete('setup'); history.replaceState(null, '', url);
+    const first = w.assets.find(a => a.category !== '현금' && (a.quantity === null || a.average === null));
+    if (first) edit(first);
+  }, [loading, saved, seedOnly]);
   function selectInstrument(item: Instrument) {
     if (!editing) return;
     if (w.assets.some(a => a.id !== editing.id && a.instrument_id === item.id && a.account === editing.account)) return '이 계좌에 이미 있어요. 보유 목록에서 수량을 수정해 주세요.';
@@ -197,7 +203,7 @@ export function Dashboard() {
         {editing.amount !== null && editing.quantity === null && <label>가져온 보유금액 (원)<TextInput name="amount" type="number" min="0" max="10000000000000" step="any" defaultValue={editing.amount} /><small>수량을 입력하면 실제 보유 수량으로 추적해요.</small></label>}
       </div>)}
       {editing.category !== '현금' && entryCost !== null && <p className="entry-cost" role="status">매입금액 <strong>{editing.currency === 'USD' ? `$${entryCost.toLocaleString('ko-KR', { maximumFractionDigits: 2 })}` : money(entryCost)}</strong></p>}
-      <p className="editor-note">현재가·환율·보유 비중은 자동으로 계산해요.</p><Button variant="primary" className="primary" loading={busy} disabled={!editing.instrument_id}>{busy ? '저장 중…' : '저장'}</Button>
+      <p className="editor-note" role="status">{dirty ? '아직 저장하지 않은 변경이 있어요.' : '수량과 평균매수가를 입력하면 평가손익을 확인할 수 있어요.'}</p><Button variant="primary" className="primary" loading={busy} disabled={!editing.instrument_id}>{busy ? '저장 중…' : '저장'}</Button><Button type="button" variant="secondary" disabled={busy} onClick={() => void cancelEditor()}>취소</Button>
       {w.assets.some(a => a.id === editing.id) && <Button type="button" className="delete-asset" disabled={busy} onClick={async () => { if (await ask('이 종목을 보유 목록에서 삭제할까요? 이전 자동 수익 기록은 유지해요.') && await persist({ ...w, assets: w.assets.filter(a => a.id !== editing.id), dividends: w.dividends.filter(d => d.asset_id !== editing.id) })) closeEditor(); }}>종목 삭제</Button>}
       {error && <p role="alert">{error} <Button type="button" onClick={() => void reload()}>저장된 내용 다시 불러오기</Button></p>}
     </fieldset></form></dialog>}

@@ -111,6 +111,7 @@
 - [Orca UI 디자인 시스템·반복 제작 절차](design/portfolio-design-system.md)
 - [포트폴리오 UI 디테일 조사·레퍼런스·해결 기록](design/portfolio-ui-detail-research.md)
 - [포트폴리오 고객 흐름 UX 문제·원인·해결·검증](design/portfolio-ux-audit.md)
+- [포트폴리오 분석 중단·입력 복구·테스트 제외](design/portfolio-recovery-20261021.md)
 
 # 투자정보 기만 검증 문서
 

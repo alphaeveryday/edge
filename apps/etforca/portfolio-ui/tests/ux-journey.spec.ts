@@ -73,7 +73,7 @@ test('Escape offers to keep unsaved asset edits and saving preserves them', asyn
   await page.getByLabel('보유 수량', { exact: true }).fill('401');
   await page.keyboard.press('Escape');
   await expect(page.locator('.ds-confirm-dialog')).toBeVisible();
-  await page.getByRole('button', { name: '취소', exact: true }).click();
+  await page.locator('.ds-confirm-dialog').getByRole('button', { name: '취소', exact: true }).click();
   await expect(page.getByLabel('보유 수량', { exact: true })).toHaveValue('401');
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
   await expect(page.locator('.dashboard-save-status')).toContainText('저장했어요');
@@ -96,10 +96,10 @@ test('catalog retry keeps entered values and recovers search without refreshing'
 
 test('invalid numeric precision is explained before an API submission fails', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
-  await page.getByLabel('현금 금액', { exact: true }).fill('12.345');
+  await page.getByLabel('현금 금액', { exact: true }).fill('12.34567');
   await expect(page.getByRole('button', { name: '다음', exact: true })).toBeDisabled();
-  await expect(page.locator('#step-guidance')).toContainText('소수 둘째 자리');
-  await page.getByLabel('현금 금액', { exact: true }).fill('12.34');
+  await expect(page.locator('#step-guidance')).toContainText('소수 넷째 자리');
+  await page.getByLabel('현금 금액', { exact: true }).fill('12.3456');
   await expect(page.getByRole('button', { name: '다음', exact: true })).toBeEnabled();
 });
 
@@ -136,7 +136,7 @@ test('storage failure preserves retry identity and still reaches an accepted ana
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await page.getByRole('button', { name: '내 포트폴리오 분석하기' }).click();
   await expect(page.getByText('요청을 처리하지 못했어요. 연결 상태를 확인해 주세요.')).toBeVisible();
-  await page.getByRole('button', { name: '내 포트폴리오 분석하기' }).click();
+  await page.getByRole('button', { name: '접수 다시 확인' }).click();
   await expect(page.locator('.progress')).toBeVisible();
   expect(keys).toHaveLength(2); expect(keys[0]).toBe(keys[1]);
   await expect(page.getByText(/분석 결과를 자동 복원할 수 없어요/)).toBeVisible();

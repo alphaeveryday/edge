@@ -6511,3 +6511,5 @@ to {
 @media (max-width: 600px) {
   .holdings-table tr[data-needs-input=true] { border-radius: var(--radius-control); padding: var(--space-4) var(--space-3); }
 }
+.bulk-entry > summary { min-height: 44px; padding-block: var(--space-3); cursor: pointer; }
+.bulk-entry .field { margin-block: var(--space-2); }

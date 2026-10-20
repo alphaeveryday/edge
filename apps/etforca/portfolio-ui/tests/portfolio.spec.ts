@@ -18,11 +18,11 @@ test('an unselected investment objective reaches analysis without inventing a pr
   expect(submitted?.preferences.interests).toEqual([]);
 });
 
-test('timeout explains the ten-minute maximum without claiming every request lasted ten minutes', async ({ page }) => {
+test('timeout explains interruption and preserved input without blaming customer data', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'timed-out'));
   await page.route('**/api/portfolio/**', route => route.fulfill({ json: { id: 'timed-out', state: 'failed', failure: 'TIMED_OUT' } }));
   await page.goto('/portfolio/');
-  await expect(page.locator('.ans')).toContainText('전체 분석은 최대 10분');
+  await expect(page.locator('.ans')).toContainText('입력한 내용은 그대로 보관');
   await expect(page.locator('.ans')).not.toContainText('5분 안에');
 });
 
@@ -30,7 +30,7 @@ test('external search throttling is distinguished from the visitors trial quota'
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'search-limited'));
   await page.route('**/api/portfolio/analyses/search-limited', route => route.fulfill({ json: { id: 'search-limited', state: 'failed', failure: 'SEARCH_RATE_LIMIT' } }));
   await page.goto('/portfolio/');
-  await expect(page.getByText(/외부 검색 서비스의 요청 제한/)).toBeVisible();
+  await expect(page.getByText(/자료 조회가 잠시 지연/)).toBeVisible();
   await expect(page.locator('.ans')).not.toContainText('오늘 체험 횟수');
 });
 
