@@ -753,6 +753,9 @@ module "airflow" {
     module.data_pipeline.task_definition_families["macro"],
     # 장전 유니버스 레인 edge_premarket(ALPHA-1408): KRX 수집은 krx task-def.
     module.data_pipeline.task_definition_families["krx"],
+    # 뉴스 레인 edge_news(ALPHA-1409): 태깅은 deepseek, 이벤트 조립은 events task-def.
+    module.data_pipeline.task_definition_families["deepseek"],
+    module.data_pipeline.task_definition_families["events"],
   ]
   # DAG 명령 인자 중 terraform 값 — SFN 잡 목록과 같은 변수(ALPHA-1408).
   lane_command_args            = module.data_pipeline.airflow_lane_args

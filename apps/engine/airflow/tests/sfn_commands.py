@@ -22,9 +22,15 @@ def _lane_args_output() -> str:
 
 
 def sfn_command(state: str) -> tuple[str, list[str]]:
-    """(taskdef_key, 명령 토큰) — `$.run_id` 는 그대로, terraform 값은 DAG 가 쓸 lane_arg 템플릿으로 바꾼다."""
+    """(taskdef_key, 명령 토큰) — `$.run_id` 는 그대로, terraform 값은 DAG 가 쓸 lane_arg 템플릿으로 바꾼다.
+
+    잡 목록 항목(`state = …` · `taskdef_key` · `command_expr`)과, 페이즈 빌더 밖에 직접 쓴 직렬 state(뉴스
+    `NewsLoadAssertions = merge(…)` 의 `TaskDefinition`·`"Command.$"`)를 둘 다 읽는다."""
     tf = "\n".join(p.read_text() for p in sorted(TF.glob("*.tf")))
     matches = re.findall(rf'state\s+= "{state}"\s+taskdef_key\s+= "(\w+)"\s+command_expr = "States\.Array\((.*)\)"', tf)
+    matches += re.findall(rf'^\s*{state} = merge\(local\.ecs_run_task_base, \{{.*?TaskDefinition = '
+                          rf'aws_ecs_task_definition\.this\["(\w+)"\]\.arn.*?"Command\.\$" = "States\.Array\((.*?)\)"$',
+                          tf, re.M | re.S)
     assert len(matches) == 1, f"{state} 잡이 data-pipeline 모듈에 하나가 아니다: {len(matches)}"
     taskdef, raw = matches[0]
     args = []
