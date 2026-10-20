@@ -113,44 +113,45 @@ a.trow:hover .no svg{display:block}
 }
 
 /* ── 첫 진입 인트로 (intro.js) ─────────────────────────────
-   스위스 포스터 구성: 길이가 다른 가로 막대 / 정보 한 줄(로고·이름·문구) / 화면 폭을 채우는 빨간 문구 / 막대.
-   막대는 사이트의 유리 패널 톤, 문구는 사이트 빨강. 막대가 줄마다 그어지고, 잠시 길이가 바뀐 뒤 걷히며 사이트가 드러난다. */
+   포스터 구성: 빨간 바탕을 굵고 좁은 검정 글자 두 줄(SEE TRUTH / MOVE BRAVE)이 위아래로 꽉 채우고,
+   가운데에 거친 흑백 망점 사진띠가 걸친다. 글자는 줄마다 화면 폭에 맞춰 늘리거나 줄인다(intro.js). */
 html.intro body>*{visibility:hidden}
-#intro{position:fixed;inset:0;z-index:1000;display:flex;flex-direction:column;gap:.6vh;padding:.6vh 0;overflow:hidden;
-  cursor:pointer;background:var(--bg);color:var(--text)}
+#intro{--poster:#f5231b;position:fixed;inset:0;z-index:1000;overflow:hidden;cursor:pointer;background:var(--poster);
+  font-family:Anton,Impact,"Arial Narrow",sans-serif;color:#000}
 #intro.leaving{animation:intro-out .45s ease-in .35s forwards}
-#intro .rows{flex:1 1 0;min-height:0;display:flex;flex-direction:column;gap:.6vh}
-#intro .rows.upper{flex-grow:1.3}
-#intro .bar{flex:1 1 0;min-height:0;border-radius:2px;
-  background:linear-gradient(180deg,rgba(255,255,255,.15),rgba(255,255,255,.08));box-shadow:inset 0 1px 0 rgba(255,255,255,.12);
-  transform:scaleX(0);transform-origin:var(--o) 50%}
-/* 길이 종류: f 전체 · a 81% · b 62% (왼쪽 기준) · r 오른쪽 기준 81% */
-#intro .bar.f{width:100%;--o:left}
-#intro .bar.a{width:81%;--o:left}
-#intro .bar.b{width:62%;--o:left}
-#intro .bar.r{width:81%;margin-left:19%;--o:right}
-#intro.go .bar{animation:bar-in .7s cubic-bezier(.16,1,.3,1) calc(var(--i) * 32ms) forwards}
-#intro.go .bar.s{animation:bar-in .7s cubic-bezier(.16,1,.3,1) calc(var(--i) * 32ms) forwards,
-  bar-shift .9s cubic-bezier(.65,0,.35,1) calc(900ms + var(--i) * 20ms)}
-#intro.leaving .bar{transform:scaleX(1);animation:bar-out .45s cubic-bezier(.7,0,.84,0) calc(var(--d) * 22ms) forwards}
-#intro .info{flex:none;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:2vw;padding:1.4vh 3vw .4vh;
-  font-size:clamp(10.5px,1.15vw,15px);line-height:1.45;color:var(--muted);opacity:0;transform:translateY(8px)}
-#intro .info b{display:block;color:var(--text);font-weight:700}
-#intro .info .brand{display:flex;align-items:center;gap:10px}
-#intro .info .brand img{flex:none;width:2.6em;height:2.6em;padding:.35em;border-radius:50%;background:rgba(255,255,255,.08);object-fit:contain}
-#intro.go .info{animation:rise .6s cubic-bezier(.16,1,.3,1) .45s forwards}
-#intro .big{display:block;flex:none;overflow:hidden;line-height:1}
-#intro .big span{display:block;width:max-content;white-space:nowrap;font-weight:800;letter-spacing:-.055em;line-height:.92;color:var(--red);
-  font-size:var(--fit,12vw);padding:0 1.2vw;transform:translateY(105%)}
-#intro .big span+span{margin-top:.04em}
-#intro.go .big span{animation:rise-full .8s cubic-bezier(.16,1,.3,1) .55s forwards}
-#intro.leaving .info,#intro.leaving .big span{opacity:1;transform:none;animation:fade-up .4s ease-in forwards}
-@keyframes bar-in{to{transform:scaleX(1)}}
-/* 길이 바꾸기: 시작 기준을 유지한 채 잠깐 짧아졌다 돌아온다 (포스터의 엇갈린 리듬이 움직인다) */
-@keyframes bar-shift{0%,100%{transform:scaleX(1)}50%{transform:scaleX(.72)}}
-@keyframes bar-out{to{transform:scaleX(0)}}
-@keyframes rise{to{opacity:1;transform:none}}
-@keyframes rise-full{to{transform:none}}
-@keyframes fade-up{to{opacity:0;transform:translateY(-12px)}}
+#intro .line{position:absolute;left:0;right:0;height:48.6%;overflow:hidden;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:var(--row-gap,0)}
+#intro .line.up{top:0}
+#intro .line.down{bottom:0}
+/* 줄 상자를 대문자 높이에 맞춰 자른다(text-box) — 글자가 줄 높이를 정확히 채우고 위아래가 잘리지 않는다 */
+#intro .line span{display:block;flex:none;width:max-content;white-space:nowrap;line-height:0;font-size:var(--fs,60vh);
+  letter-spacing:-.005em;transform-origin:50% 50%;transform:scaleX(var(--sx,1))}
+/* 글자마다 안쪽에서 미끄러져 들어온다: 위 줄은 위에서, 아래 줄은 아래에서 */
+#intro .line i{display:inline-block;line-height:1;text-box:trim-both cap alphabetic;font-style:normal;
+  transform:translateY(var(--from));will-change:transform}
+#intro .line.up i{--from:-104%}
+#intro .line.down i{--from:104%}
+#intro.go .line i{animation:glyph-in .75s cubic-bezier(.16,1,.3,1) calc(60ms + var(--k) * 45ms) forwards}
+#intro.leaving .line i{transform:none;animation:glyph-out .45s cubic-bezier(.7,0,.84,0) calc(var(--k) * 25ms) forwards}
+/* 사진띠: 오른쪽으로 치우쳐 두 줄 사이를 가린다 */
+/* 사진띠: 포스터처럼 글자 위에 얹는다 */
+#intro .photo{position:absolute;z-index:1;left:17%;right:6%;top:43%;height:24%;background:#cfcbc2;overflow:hidden;
+  clip-path:inset(0 100% 0 0);box-shadow:0 0 0 1px rgba(0,0,0,.25)}
+#intro .photo canvas{display:block;width:100%;height:100%;transform:scale(1.08);filter:contrast(1.15)}
+#intro.go .photo{animation:wipe-in .7s cubic-bezier(.77,0,.18,1) .55s forwards}
+#intro.go .photo canvas{animation:settle 2.2s cubic-bezier(.16,1,.3,1) .55s forwards}
+#intro.leaving .photo{clip-path:inset(0);animation:wipe-out .4s cubic-bezier(.7,0,.84,0) forwards}
+#intro .credit{position:absolute;z-index:2;left:1.4%;bottom:5%;display:flex;align-items:center;gap:8px;padding:5px 10px 5px 6px;
+  background:rgba(0,0,0,.78);color:#f5f5f7;font:600 clamp(10px,1vw,13px)/1.2 Pretendard,-apple-system,sans-serif;letter-spacing:-.01em;
+  opacity:0}
+#intro .credit img{width:20px;height:20px;border-radius:50%;object-fit:contain}
+#intro .credit small{color:rgba(245,245,247,.65);font-size:inherit;font-weight:500}
+#intro.go .credit{animation:fade-in .4s ease-out 1.05s forwards}
+@keyframes glyph-in{to{transform:none}}
+@keyframes glyph-out{to{transform:translateY(var(--from))}}
+@keyframes wipe-in{to{clip-path:inset(0)}}
+@keyframes wipe-out{to{clip-path:inset(0 0 0 100%)}}
+@keyframes settle{to{transform:scale(1)}}
+@keyframes fade-in{to{opacity:1}}
 @keyframes intro-out{to{opacity:0;visibility:hidden}}
-@media (max-aspect-ratio:3/4){#intro .info{grid-template-columns:1fr 1fr}#intro .info .when{display:none}}
+@media (max-aspect-ratio:3/4){#intro .photo{left:10%;right:4%;top:41%;height:19%}}
