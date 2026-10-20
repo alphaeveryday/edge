@@ -1,4 +1,4 @@
-/* 첫 진입·새로고침 인트로 (약 2초): 빨간 포스터 위로 SEE TRUTH / MOVE BRAVE 가 위아래에서 밀려 들어오고,
+/* 첫 진입·새로고침 인트로 (약 2.4초): 빨간 포스터 위로 SEE TRUTH / MOVE BRAVE 가 위아래에서 밀려 들어오고,
    가운데에 거친 망점 인쇄 같은 시세 차트 사진띠가 걸린 뒤, 거꾸로 빠지며 사이트가 드러난다.
    사이트 안에서 페이지를 옮길 때는 띄우지 않는다. 클릭·키 입력으로 건너뛴다. 움직임 줄이기 설정이면 띄우지 않는다.
    <head> 에서 실행해 본문이 먼저 그려지지 않게 html.intro 로 가린 뒤, 본문이 준비되면 덮개를 얹고 가림을 푼다. */
@@ -14,17 +14,12 @@
   const font = document.createElement('link');
   font.rel = 'stylesheet';
   font.href = 'https://fonts.googleapis.com/css2?family=Anton&display=block';
-  font.media = 'print'; // 페이지 스크립트·본문 표시를 막지 않게 받은 뒤 화면용으로 바꾼다(글꼴 서버가 느려도 사이트는 뜬다)
-  const fontReady = new Promise(r => { font.onload = () => { font.media = 'all'; r(); }; font.onerror = r; })
-    .then(() => document.fonts.load('100px "Anton"'));
+  const fontReady = new Promise(r => { font.onload = font.onerror = r; }).then(() => document.fonts.load('100px "Anton"'));
   document.head.append(font);
 
   const SIZE = .88; // 글자가 차지하는 비율(높이·폭)
-  const SPEED = 1.2; // 모든 움직임(지연 포함)의 재생 속도. CSS 의 시간값은 1배속 기준이다
-  const HOLD = 1650; // 들어오기 시작부터 빠지기 시작까지(ms, 1배속 아닌 실제 시간) — 다 들어온 뒤 잠깐만 멈춘다
   const root = document.documentElement;
   root.classList.add('intro');
-  setTimeout(() => root.classList.remove('intro'), 3000); // 무슨 일이 있어도 본문을 오래 가리지 않는다
   document.addEventListener('DOMContentLoaded', () => {
     let k = 0;
     const glyphs = text => [...text].map(ch => `<i style="--k:${k++}">${ch === ' ' ? '&nbsp;' : ch}</i>`).join('');
@@ -65,17 +60,17 @@
       halftone(el.querySelector('canvas'));
       el.classList.add('go');
       speed();
-      setTimeout(leave, HOLD);
+      setTimeout(leave, 1650); // 다 들어온 뒤 잠깐만 멈춘다
     };
     const leave = () => { start(); el.classList.add('leaving'); speed(); };
-    const speed = () => el.getAnimations({subtree: true}).forEach(a => { a.playbackRate = SPEED; });
-    Promise.race([fontReady, new Promise(r => setTimeout(r, 600))]).then(start, start);
+    const speed = () => el.getAnimations({subtree: true}).forEach(a => { a.playbackRate = 1.2; }); // 1.2배속
+    Promise.race([fontReady, new Promise(r => setTimeout(r, 900))]).then(start, start);
     fontReady.then(fit, () => {});
     addEventListener('resize', fit);
     el.addEventListener('animationend', e => { if (e.animationName === 'intro-out') el.remove(); });
     el.addEventListener('click', leave);
     addEventListener('keydown', leave, {once: true});
-    setTimeout(() => el.remove(), 4500); // 애니메이션 이벤트를 못 받아도 화면을 가리지 않게
+    setTimeout(() => el.remove(), 5500); // 애니메이션 이벤트를 못 받아도 화면을 가리지 않게
   });
 
   /* 사진띠: 급등 뒤 폭락하는 캔들 차트를 그린 다음, 신문 인쇄 같은 망점과 잡티로 바꾼다(외부 사진을 쓰지 않는다). */
