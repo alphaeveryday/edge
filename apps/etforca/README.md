@@ -170,7 +170,7 @@ SLO는 응답 1초 이내입니다.
 | 앱 API | Java·Spring Boot, PostgreSQL, Flyway, Redis, Lettuce, Resilience4j — [app-api](app-api/README.md) |
 | 랜딩 | 정적 HTML — [app-landing](app-landing/README.md) |
 | 포트폴리오 | React 화면, 독립 Python·FastAPI API/워커 — [실행·검증](portfolio-worker/README.md) |
-| 투자정보 기만 검증 | 정적 HTML 화면 — [truth-web](truth-web/README.md), Python 사건 계약 검사·공개 데이터 생성 — [설계](../../docs/design/truth-service.md) |
+| 투자정보 기만 검증 | 정적 HTML 화면 — [truth-web](truth-web/README.md), Python 사건 계약 검사·공개 데이터 생성·매시 갱신 에이전트 — [truth-agent](truth-agent/README.md), [설계](../../docs/design/truth-service.md) |
 
 모듈별 실행 명령과 환경 설정은 위 문서를 따릅니다. 실제 모델을 호출하는 포트폴리오 검증은 외부 호출 비용이 발생하며, DB 통합 테스트에는 전용 테스트 환경이 필요합니다.
 
