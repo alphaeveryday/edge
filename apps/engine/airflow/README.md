@@ -1230,7 +1230,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 - 종료 확인 ①·⑥: `pipeline_type = 'disclosure'`.
 - 종료 확인 ②: 작업 키 4개 `DISCLOSURE_COLLECTION_DART`·`NORMALIZE_DISCLOSURE`·`NORMALIZE_DISCLOSURE_SEGMENT`·`LOAD_DISCLOSURE`.
-- 종료 확인 ③: 이 레인 명령(`ingest-raw-disclosure`·`normalize-disclosure`·`normalize-disclosure-segment`·`load-disclosure`)으로 거른다.
+- 종료 확인 ③: `check3` 의 family 목록을 `dart bigkinds rds ops` 로 바꾸고, grep 패턴을 `ingest-raw-disclosure|normalize-disclosure|load-disclosure` 로 바꾼다. 앞 패턴이 `normalize-disclosure-segment` 도 잡는다. 장중 목록 그대로면 수집(dart) 태스크를 보지 않는다.
 - 종료 확인 ④: SFN `edge-dev-data-pipeline-disclosure`.
 - 전환 변수: `envs/dev/main.tf` 의 `disclosure_orchestrator`.
   - `"AIRFLOW"` 로 바꾸면 이 레인 EventBridge 스케줄이 DISABLED 가 된다.
