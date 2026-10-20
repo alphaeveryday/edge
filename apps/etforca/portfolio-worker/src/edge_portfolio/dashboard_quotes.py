@@ -85,8 +85,10 @@ async def collect_once(stopping=None):
         job = db.execute('''UPDATE portfolio_quote_refresh SET lease_until=now()+interval '5 minutes'
             WHERE instrument=(SELECT instrument FROM portfolio_quote_refresh
                 WHERE refresh_after<=now() AND (lease_until IS NULL OR lease_until<now())
-                ORDER BY EXISTS(SELECT 1 FROM portfolio_dashboard_prices p WHERE p.instrument=portfolio_quote_refresh.instrument),
-                    (instrument='FX') DESC,refresh_after FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *''').fetchone()
+                ORDER BY refresh_after-CASE WHEN EXISTS(
+                    SELECT 1 FROM portfolio_dashboard_prices p WHERE p.instrument=portfolio_quote_refresh.instrument)
+                    THEN interval '0 seconds' ELSE interval '1 minute' END,
+                    (instrument='FX') DESC FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *''').fetchone()
         if not job:
             return False
         active = db.execute('''SELECT 1 FROM portfolio_workbooks w, jsonb_array_elements(w.payload->'assets') a

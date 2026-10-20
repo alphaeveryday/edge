@@ -149,6 +149,23 @@ def load_prices(symbol, as_of, *, on_raw=None, repair_since=None, history_start=
     return {**original, 'frame': frame, 'price_recovery': recovery}
 
 
+def price_status(record, as_of):
+    columns = [record['frame'][name] for name in ('Adj Close', 'Close')]
+    valid = [column[column.map(positive_price)] for column in columns]
+    if any(column.empty for column in valid):
+        return 'PRICE_INVALID'
+    if any((as_of - column.index[-1].date()).days > 7 for column in valid):
+        return 'PRICE_STALE'
+    return None
+
+
+def with_actual_prices(returns, actual):
+    frame = actual['frame'].copy()
+    frame['Adj Close'] = returns['frame']['Adj Close'].reindex(frame.index)
+    return {**actual, 'frame': frame, 'return_basis': returns['return_basis'],
+            'return_source_url': returns['source_url']}
+
+
 async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None, history_start=None):
     # Admission is separate from provider timeouts; a busy worker is not a bad source.
     while not _PRICE_SLOTS.acquire(blocking=False):
@@ -159,11 +176,9 @@ async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_
             original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, **options), timeout=provider_timeout)
             if on_primary:
                 on_primary(original)
-            columns = [original['frame'][name] for name in ('Adj Close', 'Close')]
-            valid = [column[column.map(positive_price)] for column in columns]
-            if all(not column.empty and (as_of - column.index[-1].date()).days <= 7 for column in valid):
+            primary_failure = price_status(original, as_of)
+            if primary_failure is None:
                 return original
-            primary_failure = 'PRICE_INVALID' if any(column.empty for column in valid) else 'PRICE_STALE'
         except (ValueError, TimeoutError) as error:
             primary_failure = price_failure(error)
         record = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback'), timeout=provider_timeout)

@@ -155,8 +155,11 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
     # Serialize read/merge/write; a partial daily update must retain the archive.
     db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', ('portfolio-price:' + key,))
     old = db.execute('SELECT payload FROM portfolio_dashboard_prices WHERE instrument=%s', (key,)).fetchone()
-    if old and record.get('history_complete') is False:
-        saved = decode_prices(json.dumps(old['payload']))
+    saved = decode_prices(json.dumps(old['payload'])) if old else None
+    if saved:
+        record = {**record, 'pending_splits': sorted(set(record.get('pending_splits', [])) |
+            {day for day in saved.get('pending_splits', []) if day >= str(end)})}
+    if saved and record.get('history_complete') is False:
         overlap = saved['frame'].index.intersection(record['frame'].index)
         # Changed adjustment/split basis needs a fresh archive, never a mixed-basis chart.
         compatible = (saved['currency'] == record['currency'] and len(overlap) >= 2
@@ -168,14 +171,21 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
                 raise ValueError('PRICE_OVERLAP_UNAVAILABLE')
             compatible = all(math.isclose(a, b, rel_tol=1e-6) for a, b in pairs)
         if compatible:
-            ratios = [b / a for a, b in zip(saved['frame'].loc[overlap, 'Adj Close'], record['frame'].loc[overlap, 'Adj Close'])
+            priced = overlap[saved['frame'].loc[overlap, 'Close'].map(positive_price) | record['frame'].loc[overlap, 'Close'].map(positive_price)]
+            ratios = [b / a for a, b in zip(saved['frame'].loc[priced, 'Adj Close'], record['frame'].loc[priced, 'Adj Close'])
                       if positive_price(a) and positive_price(b)]
-            anchored = len(ratios) == len(overlap)
-            compatible = not anchored or all(math.isclose(ratio, ratios[0], rel_tol=1e-6) for ratio in ratios)
-            if compatible and anchored:
+            anchored = len(ratios) == len(priced) and len(ratios) >= 2
+            anchored = anchored and record.get('return_basis') != 'price' and all(math.isclose(ratio, ratios[0], rel_tol=1e-6) for ratio in ratios)
+            action_dates = record['frame'].index[record['frame'].index <= saved['frame'].index.max()]
+            for column in ('Dividends', 'Stock Splits'):
+                if column in record['frame']:
+                    previous = saved['frame'].get(column, pd.Series(dtype=float)).reindex(action_dates).fillna(0)
+                    incoming = record['frame'].loc[action_dates, column].fillna(previous)
+                    anchored = anchored and bool((incoming == previous).all())
+            if anchored:
                 # A new cash distribution rebases earlier adjusted closes by one factor.
                 saved['frame']['Adj Close'] *= ratios[0]
-            elif compatible:
+            else:
                 # Keep actual prices/actions usable, but never invent an adjustment basis.
                 saved['frame']['Adj Close'] = float('nan')
                 record = {**record, 'frame': record['frame'].copy()}
@@ -185,8 +195,6 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
             record = {**record, 'frame': record['frame'].copy()}
             if not record['frame'].loc[record['frame']['Close'].map(positive_price), 'Adj Close'].map(positive_price).all():
                 saved['history_complete'] = False
-            record['pending_splits'] = sorted(set(record.get('pending_splits', [])) |
-                {day for day in saved.get('pending_splits', []) if day >= str(end)})
             for column in ('Close', 'Adj Close'):
                 missing = overlap[~record['frame'].loc[overlap, column].map(positive_price)]
                 record['frame'].loc[missing, column] = saved['frame'].loc[missing, column]
@@ -195,16 +203,22 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
                     if column not in record['frame']:
                         record['frame'][column] = saved['frame'][column].reindex(record['frame'].index)
                     else:
-                        record['frame'][column] = record['frame'][column].fillna(saved['frame'][column])
+                        known = saved['frame'][column].reindex(record['frame'].index)
+                        missing = ~record['frame'][column].map(positive_price) & known.map(positive_price)
+                        record['frame'].loc[missing, column] = known.loc[missing]
             record = {**record, 'frame': pd.concat([saved['frame'].drop(record['frame'].index, errors='ignore'), record['frame']]).sort_index(),
                       'history_complete': saved.get('history_complete', True),
                       'repair_since': min(saved.get('repair_since', str(end)), record.get('repair_since', str(end)))}
             for metadata in ('return_basis', 'return_source_url'):
-                if metadata in saved:
+                if metadata in saved and metadata not in record:
                     record[metadata] = saved[metadata]
             if saved.get('price_recovery', {}).get('status') in ('partial', 'unavailable', 'rejected'):
                 record['price_recovery'] = saved['price_recovery']
-    record = {**record, 'observed_on': observed_on}
+    priced = record['frame']['Close'].map(positive_price)
+    actions_complete = key == 'FX' or ({'Dividends', 'Stock Splits'} <= set(record['frame'].columns) and not any(
+        record['frame'].loc[priced, column].isna().any()
+        for column in ('Dividends', 'Stock Splits') if column in record['frame']))
+    record = {**record, 'observed_on': observed_on, 'actions_complete': actions_complete}
     updated = db.execute('''INSERT INTO portfolio_dashboard_prices VALUES (%s,%s,%s)
         ON CONFLICT(instrument) DO UPDATE SET day=excluded.day,payload=excluded.payload
         WHERE (portfolio_dashboard_prices.day<excluded.day OR
@@ -218,7 +232,7 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
 
 
 async def records_for(ids, day, *, valuation_since=None, include_fx=True, collector_lease=None):
-    from .market_data import decode_prices, fetch_prices, positive_price, year_before
+    from .market_data import decode_prices, fetch_prices, positive_price, year_before, with_actual_prices
     records, failures = {}, []
     keys = set(ids) - {'CASH:KRW', None}
     if include_fx and any(k.startswith('US:') for k in keys):
@@ -274,9 +288,7 @@ async def records_for(ids, day, *, valuation_since=None, include_fx=True, collec
                                 raise
                             record = records[key]
                         if record.get('provider', '').startswith('FinanceDataReader:NAVER:') and captured and not captured.get('provider', '').startswith('FinanceDataReader:NAVER:'):
-                            frame = captured['frame'].copy()
-                            frame['Adj Close'] = record['frame']['Adj Close'].reindex(frame.index)
-                            record = {**captured, 'frame': frame, 'return_basis': record['return_basis'], 'return_source_url': record['source_url']}
+                            record = with_actual_prices(record, captured)
                         if record['currency'] != expected:
                             raise ValueError('UNSUPPORTED_CURRENCY')
                         record['observed_on'] = last_close(record)[1]

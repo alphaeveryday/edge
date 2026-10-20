@@ -25,23 +25,23 @@ class PriceSession:
         from . import market_data
         captured = None
         try:
-            if not self.admitted:
-                while not market_data._PRICE_SLOTS.acquire(blocking=False):
+            async with asyncio.timeout(30):
+                if not self.admitted:
+                    while not market_data._PRICE_SLOTS.acquire(blocking=False):
+                        if self.stopping and self.stopping.is_set():
+                            raise InterruptedError()
+                        await asyncio.sleep(.05)
+                    self.admitted = True
                     if self.stopping and self.stopping.is_set():
                         raise InterruptedError()
-                    await asyncio.sleep(.05)
-                self.admitted = True
+                    self.process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', '--serve',
+                        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
+                        limit=16 * 1024 * 1024,
+                        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
                 if self.stopping and self.stopping.is_set():
                     raise InterruptedError()
-                self.process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', '--serve',
-                    stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-                    limit=16 * 1024 * 1024,
-                    creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
-            if self.stopping and self.stopping.is_set():
-                raise InterruptedError()
-            self.process.stdin.write((json.dumps({'symbol': symbol, 'end': str(end), 'start': str(start) if start else None}) + '\n').encode())
-            await self.process.stdin.drain()
-            async with asyncio.timeout(30):
+                self.process.stdin.write((json.dumps({'symbol': symbol, 'end': str(end), 'start': str(start) if start else None}) + '\n').encode())
+                await self.process.stdin.drain()
                 while True:
                     record = market_data.decode_prices(await self.process.stdout.readline())
                     if record.pop('_checkpoint', False):
@@ -143,9 +143,9 @@ async def collect_one(stopping=None, *, now=None, session=None):
                               (key, job['lease_until'])).fetchone():
                 return True
             published = work.publish_prices(db, key, end, record)
-            saved = db.execute("SELECT payload->>'history_complete' AS complete,payload->'price_recovery'->>'status' AS recovery FROM portfolio_dashboard_prices WHERE instrument=%s", (key,)).fetchone()
-            limited = record.get('price_recovery', {}).get('reason') == 'PRICE_PROVIDER_RATE_LIMIT'
-            if not published and saved and saved['complete'] != 'true':
+            saved = db.execute("SELECT day,payload->>'actions_checked_on' AS checked,payload->>'history_complete' AS complete,payload->>'actions_complete' AS actions_complete,payload->'price_recovery'->>'status' AS recovery FROM portfolio_dashboard_prices WHERE instrument=%s", (key,)).fetchone()
+            limited = 'PRICE_PROVIDER_RATE_LIMIT' in (record.get('price_recovery', {}).get('reason'), record.get('primary_failure'))
+            if not published and (not saved or saved['complete'] != 'true' or saved['day'] != end or saved['checked'] != str(now.date())):
                 db.execute("""UPDATE portfolio_market_preload SET lease_until=NULL,history_after=now()+interval '1 minute',
                     quote_after=greatest(quote_after,now()+interval '1 minute'),
                     last_error=%s,failed_at=CASE WHEN %s THEN now() ELSE failed_at END WHERE instrument=%s""",
@@ -158,7 +158,7 @@ async def collect_one(stopping=None, *, now=None, session=None):
                 failed_at=CASE WHEN %s THEN now() ELSE failed_at END,
                 quote_after=%s,history_after=CASE WHEN %s THEN NULL WHEN %s THEN coalesce(history_after,now()) ELSE now()+interval '1 day' END
                 WHERE instrument=%s''', (error, limited, next_quote(key, now) if job['quote'] else job['quote_after'],
-                                       saved and saved['complete'] == 'true' and saved['recovery'] not in ('partial','unavailable','rejected'), job['quote'], key))
+                                       saved and saved['complete'] == 'true' and saved['actions_complete'] == 'true' and saved['recovery'] not in ('partial','unavailable','rejected'), job['quote'], key))
         # Quotes are committed before workbook locks, matching the interactive collector.
         with store.connect() as db:
             db.execute('''UPDATE portfolio_workbooks w SET refresh_after=least(refresh_after,now())
