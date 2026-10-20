@@ -218,6 +218,14 @@ def test_update_cannot_precede_any_date_in_the_record(name):
     assert any(line.startswith("updatedAt") and "가장 늦은 날짜" in line for line in problems(case, today=TODAY))
 
 
+def test_verdict_behavior_must_cite_the_resolution_source():
+    # 공식 근거가 유형 판정에 이어지지 않으면 화면에는 보도만 보고 '확인'을 붙인 것처럼 보인다.
+    case = seed("geumyang-monlaa")
+    for b in case["behaviors"]:
+        b["sourceIds"] = [s for s in b["sourceIds"] if s != case["resolution"]["sourceId"]] or ["news-mk-11153329"]
+    assert any("판정 근거" in line and line.startswith("behaviors") for line in problems(case, today=TODAY))
+
+
 def test_source_cannot_be_accessed_before_it_was_published():
     # 접근일을 발행일 앞으로 당기면 기록일도 함께 당겨져 '먼저 기록한 사건'으로 집계된다.
     case = seed("geumyang-monlaa")

@@ -21,7 +21,7 @@
       "type": "fabricated",
       "verdict": "confirmed",
       "basis": "금융위 의결 붙임은 실물 이전 없는 매출과 거래처와의 허위 증빙·재고 이동, 감리 때 허위 자료·진술 제출을 지적했습니다. 이 판정은 해당 행위에 한정한 공식 판단입니다.",
-      "sourceIds": ["official-fsc-87894-attach"]
+      "sourceIds": ["official-fsc-87894", "official-fsc-87894-attach"]
     }
   ],
   "contrast": {

@@ -173,6 +173,9 @@ def problems(case: dict, *, file_id: str | None = None, today: date | None = Non
             found.append(f"levels.behavior: status 가 '{status}' 이면 행동 확인 수준도 '{wanted}' 여야 합니다.")
         if not any(b["verdict"] == wanted for b in case["behaviors"]):
             found.append(f"behaviors: status 가 '{status}' 이면 판정이 '{wanted}' 인 유형이 하나 이상 있어야 합니다.")
+        elif resolution and not any(b["verdict"] == wanted and resolution["sourceId"] in b["sourceIds"] for b in case["behaviors"]):
+            # 화면의 '유형별 판정'은 유형의 출처만 잇는다 — 판정 근거가 거기 없으면 공식 근거 없이 판정이 붙어 보인다.
+            found.append(f"behaviors: 판정이 '{wanted}' 인 유형 중 하나는 판정 근거({resolution['sourceId']})를 sourceIds 에 담아야 합니다.")
 
     accessed = [s["accessedAt"] for s in case["sources"] if _DATE.fullmatch(s["accessedAt"])]
     if accessed and _DATE.fullmatch(case["flaggedAt"]) and case["flaggedAt"] < min(accessed):
