@@ -65,7 +65,8 @@ def test_branch_rules_follow_the_sfn(dag_module):
     # 판정은 leaf(verdict)가 정하고, 보고는 어떤 결말이든 돈다.
     assert [t.task_id for t in dag.leaves] == ["verdict"]
     assert dag.get_task("report").trigger_rule == "all_done"
-    assert dag.get_task("report").upstream_task_ids == {"load"}
+    # load 만 기다리면, 한 정제가 실패해 load 가 upstream_failed 로 끝난 순간 다른 정제가 끝나기 전에 보고가 돈다.
+    assert dag.get_task("report").upstream_task_ids == {"load", "normalize", "normalize_segment"}
 
 
 def test_partial_runs_close_failed(dag_module):

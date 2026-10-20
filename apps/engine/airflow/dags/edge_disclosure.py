@@ -174,6 +174,9 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
 
         plan >> collect >> [normalize, normalize_segment] >> load >> report >> verdict()
         plan >> [normalize, normalize_segment]
+        # 정제 하나가 실패하면 load 는 다른 정제를 기다리지 않고 upstream_failed 가 된다(all_success). report 가 두
+        # 정제를 직접 기다려야 아직 안 끝난 정제를 보류(결말 없는 시작)로 옮기거나 판정에서 빠뜨리지 않는다.
+        [normalize, normalize_segment] >> report
     return dag
 
 
