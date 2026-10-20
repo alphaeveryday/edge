@@ -5,12 +5,14 @@ import './catalog.css';
 import { Holdings } from '../Holdings';
 import { sample } from '../preview';
 import { NewsletterSignup } from '../NewsletterSignup';
+import { AppDownloadSheet } from '../AppDownloadSheet';
 
 export function DesignCatalog() {
   const [selected, setSelected] = useState('금액');
   const [email, setEmail] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [opened, setOpened] = useState<Set<string>>(() => new Set());
+  const [appDownload, setAppDownload] = useState(false);
   const { ask, confirmation, restoreFocus } = useConfirmation();
   return <main className="ds-catalog">
     <header><span className="eyebrow">Orca UI · 1.1</span><h1>같은 기준으로 만드는<br />편안한 금융 경험</h1><p>운영 화면에서 사용하는 실제 컴포넌트와 상태입니다. 입력한 내용은 저장하거나 발송하지 않아요.</p></header>
@@ -46,6 +48,8 @@ export function DesignCatalog() {
       <div className="ds-empty"><Icon name="dashboard" size={36} /><h3>아직 보유 종목이 없어요</h3><p>종목을 추가하면 자산과 배당을 볼 수 있어요.</p></div>
       <Button variant="secondary" type="button" onClick={async()=>{await ask('이 내용을 저장할까요?', '확인');restoreFocus();}}>팝업 열어보기</Button>
       {confirmation}
+      <Button variant="secondary" onClick={() => setAppDownload(true)}>앱 다운로드 시트 열어보기</Button>
+      <AppDownloadSheet open={appDownload} onClose={() => setAppDownload(false)} />
     </section>
     <section id="workflow"><SectionHeading title="다음 화면도 같은 방식으로" /><ol><li>사용자 과제와 다음 행동을 정해요.</li><li>기존 컴포넌트와 모든 상태를 확인해요.</li><li>공통 토큰으로 모바일·PC 화면을 만들어요.</li><li>접근성·문구·데이터·회귀 검사를 통과해요.</li><li>PR 검토 후 배포하고 실제 화면을 확인해요.</li></ol><div className="ds-examples"><a href="?preview=input">입력 화면 ↗</a><a href="?preview=result">분석 결과 ↗</a><a href="?preview=dashboard">대시보드 ↗</a></div></section>
   </main>;

@@ -7,7 +7,7 @@ import { preview } from './preview';
 import { AllocationChart, DividendChart, DividendSummary } from './WorkbookCharts';
 import { DividendReport } from './DividendReport';
 import { Holdings } from './Holdings';
-import { DashboardNewsletter } from './DashboardNewsletter';
+import { DashboardPromotions } from './DashboardPromotions';
 import { trackAction, trackScreen, type Screen } from './analytics';
 import { InstrumentSearch } from './InstrumentSearch';
 import { PerformanceChart } from './ReportCharts';
@@ -151,7 +151,7 @@ export function Dashboard() {
   }
   const graphAssets = assets.map(a => ({ ...a, quantity: null, price: null, amount: amountOf(a) }));
   return <div className="dashboard" data-analytics-section="dashboard">
-    {w.assets.some(a => a.category !== '현금' && a.instrument_id && (a.quantity ?? a.amount) !== 0) && <DashboardNewsletter blocked={loading || busy || !!editing || seedOnly || tab === 'AI 포폴 분석'} />}
+    <DashboardPromotions ready={!!saved && !loading} blocked={loading || busy || !!editing || seedOnly || tab === 'AI 포폴 분석'} newsletterEligible={w.assets.some(a => a.category !== '현금' && a.instrument_id && (a.quantity ?? a.amount) !== 0)} />
     <aside className="dashboard-nav"><a href={preview ? '?preview=input' : '?'} className="dashboard-brand"><Icon name="dashboard" size={24} />ETF Orca</a><nav aria-label="대시보드">{tabs.map(t => <Button key={t} aria-current={tab === t ? 'page' : undefined} onClick={() => { setTab(t); if (t === 'AI 포폴 분석') setAnalysisOpened(true); }}>{t}</Button>)}</nav><a href={preview ? '?preview=result' : '?'}>포트폴리오 분석 ↗</a></aside>
     <main className="dashboard-main"><header><div><p className="eyebrow">대시보드</p><h1>{w.title}</h1></div><label>계좌<Select value={account} onChange={e => setAccount(e.target.value)}><option>전체</option>{accounts.map(a => <option key={a}>{a}</option>)}</Select></label></header>
       <span className="dashboard-save-status" role="status">{busy ? '저장 중이에요.' : message}</span>
