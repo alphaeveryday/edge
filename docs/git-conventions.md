@@ -78,7 +78,7 @@ Refs: ALPHA-121
 
 - **type** — `feat`(기능) · `fix`(버그) · `docs`(문서) · `refactor`(리팩터) · `test`(테스트) · `chore`(잡무) · `build`(빌드/의존성) · `ci`(CI) · `perf`(성능)
 - **scope** — 변경된 패키지명. 모노레포라 어느 모듈인지 드러냅니다 (선택, 전역 변경 시 생략).
-  - apps: `tenant-console-ui` · `tenant-console-api` · `tenant-sync-api` · `publication-api` · `sync-agent` · `intake` · `screening-worker` · `super-admin-ui` · `super-admin-api` · `app-api` · `data-pipeline` · `airflow` · `analysis-engine`(`analysis-engine-v2` 모듈) · `db-query`
+  - apps: `tenant-console-ui` · `tenant-console-api` · `tenant-sync-api` · `publication-api` · `sync-agent` · `intake` · `screening-worker` · `super-admin-ui` · `super-admin-api` · `app-api` · `data-pipeline` · `airflow` · `analysis-engine`(`analysis-engine-v2` 모듈) · `db-query` · `truth-agent` · `truth-web`
   - libs: `schema` · `jvm-common` · `ui-kit` · `py-common` · `ontology`
   - 전역: `repo` · `config` 등
 - **제목** — 한국어, 50자 이내, 마침표 없음. 명령형(예: "추가", "수정").

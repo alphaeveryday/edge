@@ -29,7 +29,7 @@ EDGE는 금융 데이터를 수집하고 ETF 전망과 가격변동을 분석합
 
 ![ETF ORCA의 실제 포트폴리오·전망·가격변동 화면](docs/assets/readme/orca-screens.png)
 
-[서비스](https://etforca.com/) · [포트폴리오 분석](https://etforca.com/portfolio/) · [ETF ORCA 상세](apps/etforca/README.md)
+[서비스](https://etforca.com/) · [포트폴리오 분석](https://etforca.com/portfolio/) · [투자정보 기만 검증](https://etforca.com/truth/) · [ETF ORCA 상세](apps/etforca/README.md)
 
 ### EDGE SIGNAL — 분석의 게시 기준은 기업이 결정
 
