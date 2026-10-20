@@ -13,6 +13,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 INPUT_TABLES = ('portfolio', 'funding', 'horizon', 'interests', 'notes', 'tax')
+DEPLOYMENT = Path(__file__).with_name('data') / 'deployment.json'
 
 
 def connect():
@@ -27,8 +28,14 @@ def queued_count(db):
 
 
 def initialize():
+    version = json.loads(DEPLOYMENT.read_text())['version'] if DEPLOYMENT.exists() else None
     with connect() as db:
         db.execute('SELECT pg_advisory_xact_lock(1266001)')
+        if version:
+            db.execute('''CREATE TABLE IF NOT EXISTS portfolio_schema_version (
+                singleton integer PRIMARY KEY CHECK(singleton=1), version text NOT NULL)''')
+            if db.execute('SELECT 1 FROM portfolio_schema_version WHERE singleton=1 AND version=%s', (version,)).fetchone():
+                return
         db.execute("""CREATE TABLE IF NOT EXISTS portfolio_jobs (
             id text PRIMARY KEY, owner text NOT NULL, request_key text NOT NULL,
             input jsonb NOT NULL, state text NOT NULL DEFAULT 'queued',
@@ -65,6 +72,9 @@ def initialize():
         newsletter_store.initialize(db)
         from . import dashboard
         dashboard.initialize(db)
+        if version:
+            db.execute('''INSERT INTO portfolio_schema_version VALUES (1,%s)
+                ON CONFLICT(singleton) DO UPDATE SET version=excluded.version''', (version,))
 
 
 def save_draft(draft_id, owner, payload):
