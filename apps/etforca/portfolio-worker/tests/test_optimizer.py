@@ -229,14 +229,21 @@ async def test_shared_baseline_and_fx_are_loaded_before_slow_optional_candidates
     request, market, groups = batch()
     market.current = {'US:VOO': 1}
     market.catalog['US:VOO'] = {'ticker': 'VOO', 'market': 'US', 'kind': 'etf'}
-    market.semaphore = asyncio.Semaphore(1)
+    market.semaphore = asyncio.Semaphore(2)
     calls = []
+    baseline_finished = False
+    premature_candidates = []
     async def fetch(symbol, *_args, **_kwargs):
+        nonlocal baseline_finished
         calls.append(symbol)
         if symbol == 'KRW=X':
             return record(start=1000, finish=1000)
         if symbol == 'VOO':
+            await asyncio.sleep(.01)
+            baseline_finished = True
             return record('USD', finish=105)
+        if not baseline_finished:
+            premature_candidates.append(symbol)
         if symbol == 'A.KS':
             return record(finish=120)
         await asyncio.wait_for(asyncio.Event().wait(), timeout=_kwargs['provider_timeout'])
@@ -244,6 +251,7 @@ async def test_shared_baseline_and_fx_are_loaded_before_slow_optional_candidates
     monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .1)
     result = await Optimizer(market).tool({'combinations': groups})
     assert calls[:2] == ['KRW=X', 'VOO']
+    assert not premature_candidates
     assert result['status'] == 'available'
     assert result['candidates'][0]['allocations'] == [{'instrument_id': 'KR:A', 'weight_pct': 100}]
 

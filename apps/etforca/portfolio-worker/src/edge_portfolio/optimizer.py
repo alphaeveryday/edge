@@ -228,7 +228,8 @@ class Optimizer:
                 if remaining <= 0:
                     raise TimeoutError
                 async with asyncio.timeout(remaining):
-                    await asyncio.gather(*(fetch(key, needed[key]) for key in ordered), return_exceptions=True)
+                    for baseline in (True, False):
+                        await asyncio.gather(*(fetch(key, needed[key]) for key in ordered if (key in priority) == baseline), return_exceptions=True)
             except TimeoutError:
                 for key in needed:
                     if key not in self.market.records:
