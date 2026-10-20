@@ -4,10 +4,12 @@ import com.edge.app.application.etf.provided.EtfSummaryResponse;
 import com.edge.app.application.etf.required.EtfRepository;
 import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.application.member.required.PrincipalRepository;
+import com.edge.app.application.watch.provided.WatchFinder;
 import com.edge.app.application.watch.provided.WatchGroupCreateRequest;
 import com.edge.app.application.watch.provided.WatchGroupResponse;
 import com.edge.app.application.watch.provided.WatchMembersRequest;
 import com.edge.app.application.watch.provided.WatchMembershipRequest;
+import com.edge.app.application.watch.provided.WatchModifier;
 import com.edge.app.application.watch.required.WatchGroupRepository;
 import com.edge.app.application.watch.required.WatchItemRepository;
 import com.edge.app.domain.watch.WatchGroup;
@@ -39,7 +41,7 @@ import java.util.stream.Collectors;
  */
 @Service
 @RequiredArgsConstructor
-public class WatchService {
+public class WatchService implements WatchFinder, WatchModifier {
     private static final int USER_GROUP_MAX = 10;
     private static final String KEY_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"; // gitleaks:allow
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -49,6 +51,7 @@ public class WatchService {
     private final WatchItemRepository itemRepository;
     private final EtfRepository etfRepository;
 
+    @Override
     @Transactional
     public List<WatchGroupResponse> groups(AppPrincipal principal) {
         long principalId = principalRepository.resolve(principal);
@@ -58,6 +61,7 @@ public class WatchService {
                 .toList();
     }
 
+    @Override
     @Transactional
     public WatchGroupResponse createGroup(AppPrincipal principal, WatchGroupCreateRequest request) {
         long principalId = principalRepository.resolve(principal);
@@ -72,6 +76,7 @@ public class WatchService {
 
     // 삭제 그룹 종목의 기본 그룹 유지
     // 없는 그룹의 no-op 처리
+    @Override
     @Transactional
     public void deleteGroup(AppPrincipal principal, String key) {
         long principalId = principalRepository.resolve(principal);
@@ -95,6 +100,7 @@ public class WatchService {
         groupRepository.delete(group);
     }
 
+    @Override
     @Transactional
     public List<EtfSummaryResponse> list(AppPrincipal principal, String key) {
         long principalId = principalRepository.resolve(principal);
@@ -104,6 +110,7 @@ public class WatchService {
                 .orElse(List.of());
     }
 
+    @Override
     @Transactional
     public void setMembers(AppPrincipal principal, String key, WatchMembersRequest request) {
         long principalId = principalRepository.resolve(principal);
@@ -120,11 +127,13 @@ public class WatchService {
     }
 
     // principal 해소 upsert 때문에 readOnly 미적용
+    @Override
     @Transactional
     public List<String> membership(AppPrincipal principal, String code) {
         return itemRepository.groupKeysOf(principalRepository.resolve(principal), code);
     }
 
+    @Override
     @Transactional
     public void setMembership(AppPrincipal principal, String code, WatchMembershipRequest request) {
         long principalId = principalRepository.resolve(principal);
