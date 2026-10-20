@@ -12,6 +12,9 @@ premarket_pipeline.tf 서두), run_id = 슬롯 시각의 UTC `%Y%m%dT%H%M%SZ`(AS
 - 통보: SFN 의 ExecutionsFailed·ExecutionsTimedOut 알람과 정의 안 SNS 대신 run 실패 때 SNS 한 통
   (dagrun_timeout 포함). "실행이 아예 안 생김"은 SFN 의 스케줄러 DLQ 알람 대신 Airflow 서비스 정지 경보가 맡는다.
 - 보류(실행 상태 미상)는 원장에 남지 않는다(원장 밖 레인) — Airflow task 실패·XCom `hold` 로만 보인다.
+- 재처리 run(conf `reprocess_slot`)을 받지 않는다 — 원장 밖이라 Planner 의 "raw 가 있는 기존 슬롯" 확인이 없고,
+  EdgeStep 은 재처리 run 의 당일 검사를 건너뛰어 오늘 KRX 값이 과거 run_id 로 쓰이거나 옛 유니버스가 오늘 것을
+  덮는다. SFN 에도 재처리 경로가 없었다.
 
 일정·날짜:
 - 07:30 안에 끝나야 한다 — build-minute-universe 가 거래일 07:30 뒤 교체를 스스로 거부한다(ALPHA-953).
@@ -32,7 +35,7 @@ from airflow.sdk import DAG, TriggerRule, task
 from airflow.sdk.exceptions import AirflowFailException
 from airflow.timetables.trigger import MultipleCronTriggerTimetable
 
-from edge_batch import CLUSTER, EdgeStep, lane_arg, run_status, settlement, slot_time
+from edge_batch import CLUSTER, EdgeStep, lane_arg, reprocess_slot, run_status, settlement, slot_time
 
 LANE = "premarket"
 # variables.tf `premarket_schedule_expression` 와 같은 슬롯(드리프트는 tests 가 대조).
@@ -83,6 +86,13 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
         tags=["edge", "batch", LANE],
     ) as dag:
         rid = "{{ edge_run_id(logical_date, dag_run) }}"
+
+        @task(retries=0)
+        def refuse_reprocess(dag_run=None):
+            """재처리 conf 를 거부한다(위 '달라진 것'). 실패하면 뒤 스텝은 upstream_failed 로 돌지 않는다."""
+            if reprocess_slot({"dag_run": dag_run}):
+                raise AirflowFailException("장전 레인은 재처리 run 을 받지 않는다(원장 밖 — 슬롯 확인 없음)")
+
         collect = step(
             **ecs_target, task_id="collect", taskdef_key="krx", same_day_only=True, exclusive=False,
             command=["ingest-raw-etf", "--source", "krx", "--run-id", rid,
@@ -110,7 +120,7 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
                 raise AirflowFailException(f"런 실패 마감 exit_codes={codes}")
             return codes
 
-        collect >> normalize >> universe >> verdict()
+        refuse_reprocess() >> collect >> normalize >> universe >> verdict()
     return dag
 
 

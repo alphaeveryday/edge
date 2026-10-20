@@ -56,6 +56,7 @@ def test_any_step_failure_stops_the_chain(dag_module):
     # ASL Premarket*CheckResults: 수집이 실패하면 정제·유니버스를 돌리지 않는다(공시·장중과 다르다 — 어제 유니버스를
     # 유지하는 편이 반쪽 입력으로 갈아끼우는 것보다 낫다).
     dag = dag_module.dag
+    assert dag.get_task("collect").upstream_task_ids == {"refuse_reprocess"}
     assert dag.get_task("normalize").upstream_task_ids == {"collect"}
     assert dag.get_task("universe").upstream_task_ids == {"normalize"}
     for task_id in dag_module.STEPS:
@@ -74,6 +75,18 @@ def test_out_of_ledger_lane_takes_no_ledger_guards(dag_module):
     assert dag.get_task("collect").same_day_only is True     # KRX 는 실행 시각의 PDF 를 준다
     assert dag.is_paused_upon_creation is True and dag.catchup is False and dag.max_active_runs == 1
     assert dag.dagrun_timeout == timedelta(seconds=1500)     # 07:30 교체 마감 = SFN TimeoutSeconds
+
+
+def test_reprocess_conf_is_refused_before_collection(dag_module):
+    # 원장 밖이라 "raw 가 있는 기존 슬롯" 확인이 없고, EdgeStep 은 재처리 run 의 당일 검사를 건너뛴다 — 받으면 오늘 KRX
+    # 값이 과거 run_id 로 쓰이거나 옛 유니버스가 오늘 것을 덮는다.
+    from types import SimpleNamespace
+    from airflow.sdk.exceptions import AirflowFailException
+    guard = dag_module.dag.get_task("refuse_reprocess")
+    with pytest.raises(AirflowFailException, match="재처리"):
+        guard.python_callable(dag_run=SimpleNamespace(conf={"reprocess_slot": "2026-10-19T07:00:00+09:00"}))
+    guard.python_callable(dag_run=SimpleNamespace(conf={}))
+    assert dag_module.dag.get_task("collect").trigger_rule == "all_success"
 
 
 def test_lane_args_reach_airflow_from_the_same_output():

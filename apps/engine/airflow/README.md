@@ -1255,7 +1255,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
   - 값이 없으면 그 스텝이 실패한다.
   - ⚠️ 이 env 는 Airflow 태스크 정의에 들어간다. deploy-airflow 는 terraform 이 만든 최신 리비전을 복사하므로, terraform apply 보다 먼저 끝난 배포에는 env 가 없다. 전환 전에 서비스 태스크 정의에 `EDGE_LANE_ARGS` 가 있는지 확인한다(없으면 deploy-airflow 를 다시 돌린다).
 - **전환·롤백.** 장중 절차의 종료 확인 중 원장 항목(①②⑥)은 이 레인에 해당이 없다.
-  - ③: 이 레인 명령(`ingest-raw-etf --source krx`·`normalize-etf`·`build-minute-universe`)과 run_id 로 거른다. 마감 뒤 시장 레인도 같은 명령을 쓴다.
+  - ③: `check3` 의 family 목록을 `krx bigkinds` 로, grep 패턴을 `ingest-raw-etf|normalize-etf|build-minute-universe` 로 바꾸고 그날 run_id(UTC `…T220000Z`)로 한 번 더 거른다. 마감 뒤 시장 레인도 같은 명령을 쓰기 때문이다. 장중 목록 그대로면 수집(krx) 태스크를 보지 않는다.
   - ④: SFN `edge-dev-data-pipeline-premarket`.
   - ⑤: Airflow run.
   - 전환 변수: `envs/dev/main.tf` 의 `premarket_orchestrator`. `"AIRFLOW"` 면 스케줄이 DISABLED 가 된다.
