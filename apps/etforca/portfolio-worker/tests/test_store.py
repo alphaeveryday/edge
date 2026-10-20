@@ -35,6 +35,43 @@ def test_duplicate_submission_is_one_job_and_other_owner_cannot_read(isolated_db
         store.submit("owner", "same", {"value": 2})
 
 
+def test_same_deployment_initialization_never_relocks_active_analysis_tables(isolated_db, monkeypatch, tmp_path):
+    deployment = tmp_path / 'deployment.json'
+    deployment.write_text('{"version":"' + 'a' * 40 + '"}')
+    monkeypatch.setattr(store, 'DEPLOYMENT', deployment, raising=False)
+    store.initialize()
+    with store.connect() as active_analysis:
+        active_analysis.execute('LOCK TABLE portfolio_jobs IN ACCESS SHARE MODE')
+        store.initialize()  # Repeated ALTER TABLE would block here and time out.
+
+
+def test_new_deployment_initializes_once_and_failed_initialization_is_not_recorded(isolated_db, monkeypatch, tmp_path):
+    from edge_portfolio import dashboard
+    deployment = tmp_path / 'deployment.json'
+    monkeypatch.setattr(store, 'DEPLOYMENT', deployment, raising=False)
+    calls = []
+    original = dashboard.initialize
+    def initialize(db):
+        calls.append(True)
+        original(db)
+    monkeypatch.setattr(dashboard, 'initialize', initialize)
+    deployment.write_text('{"version":"' + 'a' * 40 + '"}')
+    with ThreadPoolExecutor(2) as pool:
+        list(pool.map(lambda _: store.initialize(), range(2)))
+    store.initialize()
+    assert len(calls) == 1
+    deployment.write_text('{"version":"' + 'b' * 40 + '"}')
+    def fail(db):
+        raise RuntimeError('migration failed')
+    monkeypatch.setattr(dashboard, 'initialize', fail)
+    with pytest.raises(RuntimeError, match='migration failed'):
+        store.initialize()
+    monkeypatch.setattr(dashboard, 'initialize', initialize)
+    store.initialize()
+    store.initialize()
+    assert len(calls) == 2
+
+
 def test_service_failures_do_not_consume_customer_retry_allowance(isolated_db):
     for index in range(4):
         job = store.submit('retry-owner', str(index), {'question': 'same input'}, reuse=True)

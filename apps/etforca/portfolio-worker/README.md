@@ -3,6 +3,8 @@
 독립 Python 런타임. 접수 API와 워커는 별도 프로세스이며 전용 PostgreSQL을 공유한다.
 설계와 근거는 [설계 문서](../../../docs/design/portfolio-worker.md)에 있다.
 
+배포 이미지의 `data/deployment.json` 버전별 스키마 초기화 완료를 DB에 기록한다. API·관리자·워커·검증 CLI는 같은 버전에서 DDL을 반복하지 않아 실행 중인 분석 테이블을 다시 잠그지 않는다. 초기화와 버전 기록은 한 트랜잭션이며 실패하면 재시도한다. 배포 메타데이터가 없는 로컬 개발에서는 기존 초기화를 수행한다.
+
 ## 로컬 실행
 
 프로젝트 루트에서 `PORTFOLIO_DB_PASSWORD`에 별도 DB 암호, `DEEPSEEK_API_KEY`에 포트폴리오 분석 모델 키, `DEEPSEEK_NEWSLESTTER_API_KEY`에 뉴스레터 전용 모델 키, `EXA_API_KEY`에 Exa 키를 설정한다. 뉴스레터는 분석 키로 대체하지 않는다.
