@@ -174,6 +174,9 @@ def problems(case: dict, *, file_id: str | None = None, today: date | None = Non
         for key in ("publishedAt", "accessedAt"):
             if (day := _day(s[key], f"sources[{i}].{key}", found)) and day > latest:
                 found.append(f"sources[{i}].{key}: {s[key]} 는 미래 날짜입니다.")
+        if _DATE.fullmatch(s["publishedAt"]) and _DATE.fullmatch(s["accessedAt"]) and s["accessedAt"] < s["publishedAt"]:
+            found.append(f"sources[{i}].accessedAt: {s['accessedAt']} 는 발행일({s['publishedAt']})보다 이릅니다. "
+                         "나오기 전의 출처를 볼 수는 없습니다(기록일 소급 방지).")
     _moment(case["updatedAt"], "updatedAt", found)
     for i, r in enumerate(case["related"]):
         _moment(r["addedAt"], f"related[{i}].addedAt", found)

@@ -179,6 +179,13 @@ def test_backslash_url_is_rejected_by_contract():
     assert any(line.startswith("sources[0].url") for line in problems(case, today=TODAY))
 
 
+def test_source_cannot_be_accessed_before_it_was_published():
+    # 접근일을 발행일 앞으로 당기면 기록일도 함께 당겨져 '먼저 기록한 사건'으로 집계된다.
+    case = seed("geumyang-monlaa")
+    case["sources"][0]["accessedAt"] = "2026-10-01"
+    assert any("발행일" in line and line.startswith("sources[0].accessedAt") for line in problems(case, today=TODAY))
+
+
 def test_flagged_date_cannot_precede_first_source_access():
     # 출처를 보기 전 날짜로 기록하면 '먼저 기록한 사건'으로 보여 적중률이 부풀려진다.
     case = seed("geumyang-monlaa")
