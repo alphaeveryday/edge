@@ -14,8 +14,6 @@ body{overflow-y:auto}
 
 /* 스포티파이 플레이리스트 머리: 큰 제목 + 요약 */
 .lhead{display:flex;align-items:flex-end;gap:24px;padding:20px 8px 26px}
-.lhead .ph-img{flex:none;width:150px;height:150px;border-radius:12px;box-shadow:0 16px 40px rgba(0,0,0,.5)}
-.lhead small{font-size:13px;font-weight:600;color:var(--muted)}
 .lhead h1{font-size:clamp(30px,4.5vw,56px);line-height:1.1;letter-spacing:-.03em;margin:6px 0 12px}
 .lhead p{font-size:14px;color:var(--muted)}
 .lhead p b{color:var(--text)}
@@ -29,7 +27,6 @@ body{overflow-y:auto}
 
 @media (max-width:900px){
   .lhead{flex-direction:column;align-items:flex-start}
-  .lhead .ph-img{width:110px;height:110px}
 }
 </style>
 </head>
@@ -65,10 +62,10 @@ function set(k, v){
   render();
 }
 
+// 목록 머리에는 사진을 두지 않는다 — 특정 인물 사진이 목록 전체를 대표하는 것처럼 읽힌다
 function head(cover, title, meta){
   $('bg').innerHTML = img(cover);
-  $('head').innerHTML = `<div class="ph-img">${img(cover)}</div>
-    <div><h1>${title}</h1><p>${meta}</p></div>`;
+  $('head').innerHTML = `<div><h1>${title}</h1><p>${meta}</p></div>`;
 }
 
 function render(){

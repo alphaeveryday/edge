@@ -54,7 +54,7 @@ const rateText = s => s.rate === null ? '적중률 집계 전' : `적중률 ${s.
 const ABOVE_PENDING = 4, ABOVE_RESOLVED = 5;
 
 /* 목록 표: 홈 아래 목록과 list.html 이 같은 행을 쓴다 */
-const ti = c => `<div class="ti"><div class="ph-img">${img(c.cover)}</div><div><b>${esc(titleOf(c))}</b><small>${esc(c.subject)}</small></div></div>`;
+const ti = c => `<div class="ti"><div class="ph-img">${img(c.cover)}</div><div><b>${esc(titleOf(c))}</b>${titleOf(c).includes(c.subject) ? '' : `<small>${esc(c.subject)}</small>`}</div></div>`;
 const no = i => `<span class="no"><span>${i + 1}</span>${ARROW}</span>`;
 
 const PENDING_HEAD = '<div class="trow thead"><span class="no">#</span><span>사건</span><span>유형</span><span>파급력 가치 <small>(최대 100억원)</small></span><span class="date">기록일</span></div>';

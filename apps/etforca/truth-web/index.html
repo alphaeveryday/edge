@@ -154,6 +154,9 @@ body.searching .search{display:flex}
   .cards{flex:none;height:230px}
   .card{flex-basis:72%}
   .results{grid-template-columns:1fr}
+  .tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .tile{height:92px;font-size:16px;padding:14px}
+  .tile .ph-img{width:54px;height:54px;right:-8px;bottom:-6px}
 }
 </style>
 </head>
@@ -197,7 +200,7 @@ body.searching .search{display:flex}
     <section class="search glass" id="searchView">
       <div class="sbox" id="sbox">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>
-        <input id="q" type="search" placeholder="어떤 사건을 찾으세요? 기업·언론·유형" autocomplete="off" aria-label="전체 사건 검색">
+        <input id="q" type="search" placeholder="기업·종목·유형으로 찾기" autocomplete="off" aria-label="전체 사건 검색">
         <button id="clear" aria-label="지우기">✕</button>
       </div>
       <div class="chips" id="chips"></div>
