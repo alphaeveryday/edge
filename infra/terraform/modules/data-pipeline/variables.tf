@@ -414,6 +414,18 @@ variable "premarket_schedule_state" {
   default     = "ENABLED"
 }
 
+variable "premarket_orchestrator" {
+  # 레인별 SFN→Airflow 이관(ALPHA-1408, investor_intraday_orchestrator 와 같은 장치). AIRFLOW 면 이 레인의 EventBridge
+  # 스케줄(SFN 직접 시작)이 꺼진다. 원장 밖 레인이라 슬롯 대조는 원래 없다. 이미 뜬 ECS 태스크는 멈추지 않는다.
+  description = "장전 유니버스 레인의 실행 주체(SFN|AIRFLOW). AIRFLOW 면 SFN 스케줄 DISABLED."
+  type        = string
+  default     = "SFN"
+  validation {
+    condition     = contains(["SFN", "AIRFLOW"], var.premarket_orchestrator)
+    error_message = "premarket_orchestrator 는 SFN 또는 AIRFLOW."
+  }
+}
+
 variable "premarket_state_machine_timeout_seconds" {
   # **교체 마감(07:30)까지가 상한이다** — 07:00 시작이면 1800s. 그보다 길게 두면 SFN 은
   # 살아 있는데 마지막 스텝이 마감에 걸려 거부하는, 실패 사유가 두 겹인 상태가 된다.

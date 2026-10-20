@@ -12,6 +12,7 @@
 | `dags/edge_investor_intraday.py` | 장중 수급 DAG: `plan → collect → normalize → load → verdict` |
 | `dags/edge_source_daily.py` | 원천 관측 DAG(ALPHA-1130, Airflow 전용 레인 `source-daily`): `plan → {매크로·업종·재무} 각각 collect → normalize → load → report → verdict`. 생성 시 pause — 아래 "원천 관측 레인" |
 | `dags/edge_disclosure.py` | 공시 보충 배치 DAG(ALPHA-1407, 평일 19:30): `plan → collect → {정제 2개} → load → report → verdict`. 생성 시 pause. 아직 SFN 이 실행한다 — 아래 "공시 보충 배치 레인" |
+| `dags/edge_premarket.py` | 장전 유니버스 DAG(ALPHA-1408, 평일 07:00, 원장 밖): `collect → normalize → universe → verdict`. 생성 시 pause. 아직 SFN 이 실행한다 — 아래 "장전 유니버스 레인" |
 | `dags/edge_dividend_daily.py` | 배당 갱신 전용 DAG: 03:00 KST, 기존 배치 종료 확인 → plan → collect → normalize → load → report. 생성 시 pause. 수집·조회 범위 계약과 활성화 순서는 `docs/design/portfolio-dividend-ledger.md` |
 | `tests/` | DagBag 파싱, terraform(슬롯·명령) 대조, exit code·당일 수집·재처리·보고·활성화 규칙. CI `test-airflow.yml`이 공식 Airflow 이미지(다이제스트 고정) 안에서 실행한다 |
 | `dags/edge_investor_intraday_verify.py` | 격리 검증 DAG — 운영 DAG 와 같은 `build_dag`·EdgeStep, 검증 전용 클러스터·태스크 정의, conf 장애 주입. `EDGE_VERIFY_CLUSTER` 가 있을 때만 등록 |
@@ -1238,6 +1239,29 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
   - `disclosure_schedule_state = "DISABLED"` 로 끄면 **안 된다.** 그 값은 슬롯 대조와 워터마크 창까지 끈다.
 - 경계: 하루 한 슬롯이다. 그날 19:30 run 이 끝나고 종료 확인을 마친 뒤, 다음 거래일 19:30 전에 바꾼다.
 - 시간대: 19:30 에는 다른 Airflow run 이 없다(PARALLELISM=1). 실측 걸린 시간은 p50 197초, 최대 238초다.
+
+## 장전 유니버스 레인(premarket, ALPHA-1408)
+
+**현재 상태(2026-10-20): 실행 경로만 있다. 운영 전환 전이다.** dev 의 평일 07:00 슬롯은 SFN `edge-dev-data-pipeline-premarket` 이 돈다. `edge_premarket` 은 pause 상태로 배포되고, `premarket_orchestrator` 는 기본값 `"SFN"` 이다.
+
+- **원장 밖 레인이다.** 장전 수집과 마감 뒤 수집이 같은 CLI 를 쓰는데, 그 CLI 의 원장 작업은 시장 레인 소유다(`premarket_pipeline.tf` 서두).
+  - 그래서 plan·report 가 없다.
+  - 실행권(`exclusive`)·성공 skip 가드도 쓰지 않는다. 지킬 기대 작업이 없고, 켜면 시장 레인 작업의 실행권을 잡는다.
+  - 보류는 Airflow 에만 남는다.
+- run_id 는 슬롯 시각의 UTC `%Y%m%dT%H%M%SZ` 다. SFN 과 같은 자리에 쓴다.
+- **terraform 값 인자.** `--deadline-sec`(`krx_etf_deadline_sec`)·`--universe`(`local.minute_universe_uri`)는 DAG 에 상수로 두지 않는다.
+  - 경로: data-pipeline 출력 `airflow_lane_args` → airflow 모듈 env `EDGE_LANE_ARGS` → `edge_batch.lane_arg`(렌더링 시점).
+  - SFN 과 같은 변수에서 온다.
+  - 값이 없으면 그 스텝이 실패한다.
+  - ⚠️ 이 env 는 Airflow 태스크 정의에 들어간다. deploy-airflow 는 terraform 이 만든 최신 리비전을 복사하므로, terraform apply 보다 먼저 끝난 배포에는 env 가 없다. 전환 전에 서비스 태스크 정의에 `EDGE_LANE_ARGS` 가 있는지 확인한다(없으면 deploy-airflow 를 다시 돌린다).
+- **전환·롤백.** 장중 절차의 종료 확인 중 원장 항목(①②⑥)은 이 레인에 해당이 없다.
+  - ③: 이 레인 명령(`ingest-raw-etf --source krx`·`normalize-etf`·`build-minute-universe`)과 run_id 로 거른다. 마감 뒤 시장 레인도 같은 명령을 쓴다.
+  - ④: SFN `edge-dev-data-pipeline-premarket`.
+  - ⑤: Airflow run.
+  - 전환 변수: `envs/dev/main.tf` 의 `premarket_orchestrator`. `"AIRFLOW"` 면 스케줄이 DISABLED 가 된다.
+  - 경계: 07:00 run 이 끝난 뒤, 다음 거래일 07:00 전에 바꾼다.
+- **알림이 달라진다.** SFN 의 실패·시간 초과 알람과 스케줄러 DLQ 알람 대신 run 실패 SNS 한 통과 Airflow 서비스 정지 경보가 맡는다.
+- 07:30 교체 마감이 있다(`build-minute-universe` 가 스스로 거부). dagrun_timeout 은 SFN 과 같은 1500초다. 실측(SFN 최근 40회): p50 217초, 최대 376초, FAILED 8회.
 
 ## 원천 관측 레인(source-daily, ALPHA-1130)
 

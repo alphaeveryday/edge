@@ -94,6 +94,20 @@ output "batch_pass_role_arns" {
   value       = [aws_iam_role.execution.arn, aws_iam_role.task.arn, aws_iam_role.ops_task.arn]
 }
 
+# Airflow DAG 가 SFN 잡 목록과 같은 terraform 값을 명령 인자로 쓰도록 넘긴다(ALPHA-1408) — airflow 모듈이
+# env `EDGE_LANE_ARGS` 로 싣고 DAG 가 렌더링 때 읽는다(edge_batch.lane_arg). 키는 잡 목록의 `${var.…}`·`${local.…}`
+# 이름 그대로다(apps/engine/airflow/tests/sfn_commands.py 가 대조). 뉴스 두 값은 그 레인 DAG(ALPHA-1409)가 쓴다 —
+# 미리 싣는 이유는 Airflow 태스크 정의 env 가 바뀌는 배포를 한 번으로 묶기 위해서다.
+output "airflow_lane_args" {
+  description = "Airflow DAG 명령 인자 중 terraform 값 — SFN 잡 목록과 같은 출처"
+  value = {
+    krx_etf_deadline_sec = tostring(var.krx_etf_deadline_sec)
+    minute_universe_uri  = local.minute_universe_uri
+    tag_news_limit       = tostring(var.tag_news_limit)
+    assemble_window_days = tostring(var.assemble_window_days)
+  }
+}
+
 output "ops_task_definition_family" {
   value = aws_ecs_task_definition.ops.family
 }

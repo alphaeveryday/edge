@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import time
 from datetime import date, datetime, timedelta, timezone
@@ -53,6 +54,17 @@ STEP_HELD_EXIT = 76
 HOLD_OPEN_ATTEMPT = "OPEN_ATTEMPT"
 HOLD_ECS_STATE_UNKNOWN = "ECS_STATE_UNKNOWN"
 HOLD_RESULT_UNKNOWN = "RESULT_UNKNOWN"
+
+
+def lane_arg(name: str) -> str:
+    """terraform 값이 든 명령 인자(예 `--deadline-sec`) — SFN 잡 목록과 **같은 terraform 변수**에서 airflow 모듈이
+    넣은 env `EDGE_LANE_ARGS`(JSON, data-pipeline 출력 `airflow_lane_args`)를 렌더링 시점에 읽는다(ALPHA-1408).
+    파싱 시점이 아니라 렌더링 시점이라 값이 아직 없는 배포에서도 DAG 파일은 import 된다. 없으면 그 스텝을
+    실패시킨다 — 빈 인자나 옛 상수로 업무를 돌리지 않는다."""
+    value = json.loads(os.environ.get("EDGE_LANE_ARGS") or "{}").get(name)
+    if not value:
+        raise AirflowFailException(f"EDGE_LANE_ARGS 에 {name} 이 없다 — airflow 모듈 env 배포를 확인한다")
+    return value
 
 
 def reprocess_slot(context) -> datetime | None:

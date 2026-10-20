@@ -425,6 +425,7 @@ locals {
     EDGE_ECS_SECURITY_GROUPS             = var.batch_security_group_id
     EDGE_ECS_LOG_GROUP                   = var.batch_log_group_name
     EDGE_ALARM_TOPIC_ARN                 = var.alarm_topic_arn
+    EDGE_LANE_ARGS                       = jsonencode(var.lane_command_args)
     EDGE_DIVIDEND_BLOCKING_SFN_ARNS      = jsonencode(var.blocking_batch_state_machine_arns)
     EDGE_DIVIDEND_BLOCKING_TASK_FAMILIES = jsonencode(var.blocking_batch_task_families)
     }, [for sg in aws_security_group.verify : {

@@ -43,7 +43,7 @@ def test_dagbag_parses_the_folder_like_the_dag_processor():
         socket.socket.connect = original
     assert bag.import_errors == {}
     # 원천 관측 레인(ALPHA-1130)이 같은 폴더에 있다 — 검증 DAG 는 EDGE_VERIFY_CLUSTER 없이는 등록되지 않는다.
-    assert sorted(bag.dag_ids) == ["edge_disclosure", "edge_dividend_daily", "edge_investor_intraday", "edge_source_daily"]
+    assert sorted(bag.dag_ids) == ["edge_disclosure", "edge_dividend_daily", "edge_investor_intraday", "edge_premarket", "edge_source_daily"]
 
 
 def test_pipeline_run_id_matches_production_run_ids():
