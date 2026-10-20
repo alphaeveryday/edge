@@ -77,3 +77,17 @@ test('narrow screens with enlarged text keep close and download reachable', asyn
   await page.keyboard.press('Escape');
   await expect(sheet(page)).not.toBeVisible();
 });
+
+test('preview reset restores a first visit without clearing real dashboard history', async ({ page }) => {
+  await page.goto('/portfolio/?preview=dashboard');
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('edge-preview-dashboard-visited'))).toBe('seen');
+  await page.evaluate(() => localStorage.setItem('edge-dashboard-visited', 'seen'));
+  await page.reload();
+  await expect(sheet(page)).toBeVisible({ timeout: 8000 });
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '테스트 초기화', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '내 포트폴리오', exact: true })).toBeVisible();
+  await page.waitForTimeout(3500);
+  await expect(sheet(page)).not.toBeVisible();
+  expect(await page.evaluate(() => localStorage.getItem('edge-dashboard-visited'))).toBe('seen');
+});
