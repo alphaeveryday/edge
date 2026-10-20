@@ -1,5 +1,6 @@
 package com.edge.app.application.block;
 
+import com.edge.app.application.block.provided.MemberBlocker;
 import com.edge.app.application.block.required.MemberBlockRepository;
 import com.edge.app.application.member.required.MemberRepository;
 import com.edge.app.domain.member.Member;
@@ -11,11 +12,12 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 @RequiredArgsConstructor
-public class BlockService {
+public class BlockService implements MemberBlocker {
     private final MemberRepository memberRepository;
     private final MemberBlockRepository blockRepository;
 
     // 이미 차단한 경우에도 성공하는 멱등 처리
+    @Override
     @Transactional
     public void block(long memberId, String handle) {
         Member target = memberRepository.findByHandleAndDeletedAtIsNull(handle)

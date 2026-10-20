@@ -6,6 +6,7 @@ import com.edge.app.application.member.required.MemberRepository;
 import com.edge.app.application.post.required.CommentRepository;
 import com.edge.app.application.post.required.PostRepository;
 import com.edge.app.application.report.provided.ReportRequest;
+import com.edge.app.application.report.provided.Reporter;
 import com.edge.app.application.report.required.ReportRepository;
 import com.edge.app.domain.member.Member;
 import com.edge.app.support.exception.AppErrorStatus;
@@ -21,7 +22,7 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 @RequiredArgsConstructor
-public class ReportService {
+public class ReportService implements Reporter {
     private final ReportRepository reportRepository;
     private final PostRepository postRepository;
     private final CommentRepository commentRepository;
@@ -35,6 +36,7 @@ public class ReportService {
     private record Target(long authorId, String body) {
     }
 
+    @Override
     @Transactional
     public void report(long memberId, ReportRequest request) {
         long targetId = parseId(request.targetId());
