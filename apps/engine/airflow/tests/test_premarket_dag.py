@@ -86,7 +86,10 @@ def test_reprocess_conf_is_refused_before_collection(dag_module):
     with pytest.raises(AirflowFailException, match="재처리"):
         guard.python_callable(dag_run=SimpleNamespace(conf={"reprocess_slot": "2026-10-19T07:00:00+09:00"}))
     guard.python_callable(dag_run=SimpleNamespace(conf={}))
-    assert dag_module.dag.get_task("collect").trigger_rule == "all_success"
+    collect = dag_module.dag.get_task("collect")
+    assert collect.trigger_rule == "all_success"
+    # 거부 task 는 EdgeStep 이 아니라 결말 XCom 을 남기지 않는다 — 보류 검사를 켜면 정상 run 마다 수집이 skip 된다.
+    assert collect.stop_on_upstream_hold is False
 
 
 def test_lane_args_reach_airflow_from_the_same_output():

@@ -10,7 +10,9 @@ premarket_pipeline.tf 서두), run_id = 슬롯 시각의 UTC `%Y%m%dT%H%M%SZ`(AS
 - 실행권 가드(`exclusive`)를 켜지 않는다 — 원장에 이 run 의 기대 작업이 없어 지킬 것이 없고, 실행권은 작업 키
   단위라 같은 CLI 를 쓰는 시장 레인 작업의 실행권을 잡게 된다. 성공 skip 도 같은 이유로 없다.
 - 통보: SFN 의 ExecutionsFailed·ExecutionsTimedOut 알람과 정의 안 SNS 대신 run 실패 때 SNS 한 통
-  (dagrun_timeout 포함). "실행이 아예 안 생김"은 SFN 의 스케줄러 DLQ 알람 대신 Airflow 서비스 정지 경보가 맡는다.
+  (dagrun_timeout 포함). ⚠️ "실행이 아예 안 생김"을 잡던 스케줄러 DLQ 알람의 대체는 없다 — Airflow 서비스가 죽으면
+  서비스 정지 경보가 울지만, 서비스는 살아 있는데 run 이 안 생기면(DAG import 오류·pause) 아무것도 울지 않는다.
+  원장 밖이라 PLANNER_MISSING 도 없다(README "장전 유니버스 레인").
 - 보류(실행 상태 미상)는 원장에 남지 않는다(원장 밖 레인) — Airflow task 실패·XCom `hold` 로만 보인다.
 - 재처리 run(conf `reprocess_slot`)을 받지 않는다 — 원장 밖이라 Planner 의 "raw 가 있는 기존 슬롯" 확인이 없고,
   EdgeStep 은 재처리 run 의 당일 검사를 건너뛰어 오늘 KRX 값이 과거 run_id 로 쓰이거나 옛 유니버스가 오늘 것을
@@ -95,6 +97,9 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
 
         collect = step(
             **ecs_target, task_id="collect", taskdef_key="krx", same_day_only=True, exclusive=False,
+            # 선행은 EdgeStep 이 아닌 재처리 거부 task 라 결말 XCom(exit_code·no_ecs_task)이 없다 — 보류 검사를 켜면
+            # 정상 run 마다 "결말 미확인"으로 수집을 건너뛴다(배당 DAG 의 plan 과 같은 처리).
+            stop_on_upstream_hold=False,
             command=["ingest-raw-etf", "--source", "krx", "--run-id", rid,
                      "--deadline-sec", "{{ edge_lane_arg('krx_etf_deadline_sec') }}"],
         )
