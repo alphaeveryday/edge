@@ -2,6 +2,7 @@ package com.edge.app.application.etf;
 
 import com.edge.app.application.etf.provided.ChartResponse;
 import com.edge.app.application.etf.provided.EtfDetailResponse;
+import com.edge.app.application.etf.provided.EtfFinder;
 import com.edge.app.application.etf.provided.EtfSummaryResponse;
 import com.edge.app.application.etf.provided.MoveResponse;
 import com.edge.app.application.etf.required.EtfCandleRepository;
@@ -27,7 +28,7 @@ import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
-public class EtfService {
+public class EtfService implements EtfFinder {
     private static final DateTimeFormatter AXIS = DateTimeFormatter.ofPattern("M/d");
 
     private final EtfRepository etfRepository;
@@ -35,11 +36,13 @@ public class EtfService {
     private final EtfMoveRepository moveRepository;
     private final EtfDetailRepository detailRepository;
 
+    @Override
     @Transactional(readOnly = true)
     public List<EtfSummaryResponse> list(String q) {
         return etfRepository.search(q == null ? "" : q.trim()).stream().map(EtfSummaryResponse::from).toList();
     }
 
+    @Override
     @Transactional(readOnly = true)
     public EtfSummaryResponse get(String code) {
         return etfRepository.summaries(List.of(code)).stream().findFirst().map(EtfSummaryResponse::from)
@@ -50,6 +53,7 @@ public class EtfService {
      * 최신 일봉 기준 구간의 차트 조회
      * 선행 행 부족 시 이동평균의 null 처리
      */
+    @Override
     @Transactional(readOnly = true)
     public ChartResponse chart(String code, ChartRange range) {
         requireEtf(code);
@@ -80,6 +84,7 @@ public class EtfService {
      * 오늘 움직임 조회
      * 발행본이나 summary 가 없을 때의 ANALYSIS4001 응답
      */
+    @Override
     @Transactional(readOnly = true)
     public MoveResponse move(String code) {
         requireEtf(code);
@@ -104,6 +109,7 @@ public class EtfService {
      * EtfDetailData 전체를 payload 로 담은 종목정보 조회
      * 발행본이 없을 때의 ANALYSIS4001 응답
      */
+    @Override
     @Transactional(readOnly = true)
     public EtfDetailResponse detail(String code) {
         requireEtf(code);
