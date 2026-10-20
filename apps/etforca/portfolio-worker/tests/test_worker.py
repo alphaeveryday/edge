@@ -203,13 +203,13 @@ async def test_shutdown_drains_both_analysis_and_valuation_without_claiming_more
         if kind == 'backtest': return False
         assert not stopping.is_set()
         started.set()
-        await asyncio.sleep(.01)
+        assert await asyncio.to_thread(stopping.wait, 2)
         completed.append('valuation')
         return True
     monkeypatch.setattr(worker, 'work_once', analysis)
     monkeypatch.setattr(dashboard_work, 'work_once', dashboard)
     await worker.main()
-    assert completed == ['analysis', 'valuation']
+    assert sorted(completed) == ['analysis', 'valuation']
     assert not worker.HEARTBEAT.exists()
 
 
