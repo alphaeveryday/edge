@@ -1,5 +1,6 @@
 package com.edge.app.adapter.integration.notification;
 
+import com.edge.app.application.notification.required.PushSender;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
@@ -16,7 +17,7 @@ import java.util.Map;
  */
 @Slf4j
 @Service
-public class ExpoPushClient {
+public class ExpoPushClient implements PushSender {
     private static final int BATCH = 100;
 
     private final RestClient http;
@@ -30,6 +31,7 @@ public class ExpoPushClient {
         this.http = http;
     }
 
+    @Override
     public List<String> send(List<String> tokens, String title, String body, Map<String, String> data) {
         List<String> dead = new ArrayList<>();
         for (int from = 0; from < tokens.size(); from += BATCH) {

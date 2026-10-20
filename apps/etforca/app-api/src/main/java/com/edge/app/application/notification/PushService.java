@@ -1,9 +1,9 @@
 package com.edge.app.application.notification;
 
-import com.edge.app.adapter.integration.notification.ExpoPushClient;
 import com.edge.app.application.member.provided.AppPrincipal;
 import com.edge.app.application.member.required.DeviceRepository;
 import com.edge.app.application.member.required.PrincipalRepository;
+import com.edge.app.application.notification.required.PushSender;
 import com.edge.app.domain.member.Principal;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
@@ -17,7 +17,7 @@ import java.util.Map;
 public class PushService {
     private final PrincipalRepository principalRepository;
     private final DeviceRepository deviceRepository;
-    private final ExpoPushClient expo;
+    private final PushSender pushSender;
 
     /** 같은 토큰을 가진 다른 기기에서 떼어 이 기기에 등록 */
     @Transactional
@@ -39,7 +39,7 @@ public class PushService {
         if (tokens.isEmpty()) {
             return;
         }
-        List<String> dead = expo.send(tokens, title, body, data);
+        List<String> dead = pushSender.send(tokens, title, body, data);
         if (!dead.isEmpty()) {
             deviceRepository.dropPushTokens(dead);
         }
