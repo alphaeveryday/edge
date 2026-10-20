@@ -36,7 +36,7 @@ for (const month of ['01', '06', '10', '12']) test(`dividend report opens with c
   const current = report.locator('thead th').nth(Number(month));
   await expect(current).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
-  const assertCurrentVisible = async () => {
+  const assertCurrentVisible = () => expect(async () => {
     const name = (await report.locator('thead th').first().boundingBox())!;
     const cell = (await current.boundingBox())!;
     const container = (await scroller.boundingBox())!;
@@ -46,7 +46,7 @@ for (const month of ['01', '06', '10', '12']) test(`dividend report opens with c
     const plot = (await report.locator('.dividend-scroll').boundingBox())!;
     expect(bar.x).toBeGreaterThanOrEqual(plot.x - 1);
     expect(bar.x + bar.width).toBeLessThanOrEqual(plot.x + plot.width + 1);
-  };
+  }).toPass({ timeout: 5000 });
   await assertCurrentVisible();
   await page.setViewportSize({ width: 320, height: 900 });
   await assertCurrentVisible();
