@@ -43,7 +43,7 @@ def test_dagbag_parses_the_folder_like_the_dag_processor():
         socket.socket.connect = original
     assert bag.import_errors == {}
     # 원천 관측 레인(ALPHA-1130)이 같은 폴더에 있다 — 검증 DAG 는 EDGE_VERIFY_CLUSTER 없이는 등록되지 않는다.
-    assert sorted(bag.dag_ids) == ["edge_dividend_daily", "edge_investor_intraday", "edge_source_daily"]
+    assert sorted(bag.dag_ids) == ["edge_disclosure", "edge_dividend_daily", "edge_investor_intraday", "edge_source_daily"]
 
 
 def test_pipeline_run_id_matches_production_run_ids():
@@ -65,17 +65,14 @@ def test_slots_match_terraform_schedule(dag_module):
 
 
 def test_commands_match_sfn_definition(dag_module):
-    tf = (TF / "statemachine.tf").read_text()
+    from sfn_commands import dag_command, sfn_command
     for task_id, state in (("collect", "CollectKisInvestorEstimate"),
                            ("normalize", "NormalizeInvestorEstimate"),
                            ("load", "LoadInvestorIntraday")):
-        expr = re.search(rf'state\s+= "{state}"\s+taskdef_key\s+= "(\w+)"\s+command_expr = "States\.Array\((.*)\)"',
-                         tf).groups()
-        taskdef, args = expr[0], [a.strip().strip("'") for a in expr[1].split(",")]
+        taskdef, args = sfn_command(state)
         op = dag_module.dag.get_task(task_id)
         assert op.task_definition.endswith(f"-{taskdef}")
-        command = op.overrides["containerOverrides"][0]["command"]
-        assert [("$.run_id" if "edge_run_id" in c else c) for c in command] == args
+        assert dag_command(op) == args
 
 
 def test_scheduling_guards(dag_module):
