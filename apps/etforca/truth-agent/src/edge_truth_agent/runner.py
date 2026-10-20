@@ -222,7 +222,7 @@ def run(cfg, mode: str, *, lake=None, session_runner=session.run, now: datetime 
         # 잡음이 걸러져도 다음 실행이 스스로 채운다. 모델 세션은 위의 새 기사(routed)로만 연다.
         corpus_related = routing.route(list(texts.values()), list(cases.values())) if mode == "hourly" else {}
         for cid, case in cases.items():
-            if not case.get("locked") and routing.add_related(case, corpus_related.get(cid, []), today, now.isoformat()):
+            if not case.get("locked") and routing.add_related(case, routing.newest(corpus_related.get(cid, [])), today, now.isoformat()):
                 case["updatedAt"] = now.isoformat()
         for c in cases.values():
             (cases_dir / f"{c['id']}.json").write_bytes(_json(c))

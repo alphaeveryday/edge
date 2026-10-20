@@ -54,6 +54,17 @@ def test_related_needs_a_case_topic_not_just_the_company_name():
     assert not routing.related("소액주주단체, 고려아연·한진그룹 회장 배임 혐의로 경찰 고발", zinc)
 
 
+def test_related_news_stays_put_when_more_matches_than_the_limit():
+    # 매 실행 말뭉치 전체로 관련 보도를 다시 고른다 — 새 기사가 없으면 공개 목록이 바뀌면 안 된다.
+    case = seed("hybe-ipo-2019")
+    many = [article(f"하이브 상장 기사 {i}", aid=f"{i:04d}" + "b" * 60, url=f"https://www.yna.co.kr/view/b{i}",
+                    published=f"2026-10-{1 + i % 19:02d} 10:00:00") for i in range(routing.RELATED_LIMIT + 10)]
+    routing.add_related(case, routing.newest(many), date(2026, 10, 20), "2026-10-20T10:00:00+09:00")
+    before = [r["sourceId"] for r in case["related"]]
+    assert not routing.add_related(case, routing.newest(many), date(2026, 10, 20), "2026-10-20T11:00:00+09:00")
+    assert [r["sourceId"] for r in case["related"]] == before
+
+
 def test_related_news_that_no_longer_fits_is_pruned_but_cited_sources_stay():
     # 예전 규칙으로 붙은 잡음 관련 보도는 다음 실행이 걷어 내야 한다. 본문이 인용하는 출처는 남긴다.
     case = seed("hybe-ipo-2019")

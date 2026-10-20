@@ -53,6 +53,12 @@ def route(articles: list[Article], cases: list[dict]) -> dict[str, list[Article]
     return out
 
 
+def newest(articles: list[Article]) -> list[Article]:
+    """관련 보도 후보 중 최신 RELATED_LIMIT 건(발행 시각·id 순으로 정해진 집합).
+    한도보다 많을 때 전부 넘기면, 매 실행 밀려난 기사가 다시 들어와 관련 보도가 실행마다 바뀐다."""
+    return sorted(articles, key=lambda a: (a.published, a.id))[-RELATED_LIMIT:]
+
+
 def needs_session(articles: list[Article]) -> bool:
     """배정된 기사 중 절차·대응 단서가 있는가."""
     return any(t in f"{a.title} {a.lead}" for a in articles for t in TRIGGERS)
