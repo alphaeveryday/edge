@@ -52,6 +52,10 @@ jobs:
           # CloudFront default_root_object 는 / 에만 적용된다 — /truth/ 가 열리게 같은 내용을 'truth/' 키에도 둔다.
           aws s3api put-object --bucket "$BUCKET" --key 'truth/' --body index.html \
             --content-type "text/html; charset=utf-8" --cache-control "no-cache" > /dev/null
+          # 슬래시 없는 /truth 는 키 'truth' 로 들어온다 — 404 대신 /truth/ 로 보낸다.
+          printf '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/truth/"><link rel="canonical" href="/truth/"><a href="/truth/">/truth/</a>' > "$RUNNER_TEMP/truth-redirect.html"
+          aws s3api put-object --bucket "$BUCKET" --key 'truth' --body "$RUNNER_TEMP/truth-redirect.html" \
+            --content-type "text/html; charset=utf-8" --cache-control "no-cache" > /dev/null
 
       - uses: astral-sh/setup-uv@v6
 
@@ -81,7 +85,7 @@ jobs:
           set -euo pipefail
           : "${DISTRIBUTION_ID:?repo var APP_LANDING_DISTRIBUTION_ID 가 비어 있다}"
           id="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
-            --paths '/truth/*' '/truth/' --query 'Invalidation.Id' --output text)"
+            --paths '/truth/*' '/truth/' '/truth' --query 'Invalidation.Id' --output text)"
           aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$id"
           for path in truth/ truth/issue.html truth/data/index.json; do
             curl --fail --silent --show-error --retry 5 --retry-all-errors -o /dev/null "https://etforca.com/${path}"
