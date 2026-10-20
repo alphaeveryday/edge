@@ -1,4 +1,4 @@
-/* 첫 진입·새로고침 인트로 (약 2.7초): 빨간 포스터 위로 SEE TRUTH / MOVE BRAVE 가 위아래에서 밀려 들어오고,
+/* 첫 진입·새로고침 인트로 (약 2.4초): 빨간 포스터 위로 SEE TRUTH / MOVE BRAVE 가 위아래에서 밀려 들어오고,
    가운데에 거친 망점 인쇄 같은 시세 차트 사진띠가 걸린 뒤, 거꾸로 빠지며 사이트가 드러난다.
    사이트 안에서 페이지를 옮길 때는 띄우지 않는다. 클릭·키 입력으로 건너뛴다. 움직임 줄이기 설정이면 띄우지 않는다.
    <head> 에서 실행해 본문이 먼저 그려지지 않게 html.intro 로 가린 뒤, 본문이 준비되면 덮개를 얹고 가림을 푼다. */
@@ -59,9 +59,11 @@
       fit();
       halftone(el.querySelector('canvas'));
       el.classList.add('go');
-      setTimeout(leave, 2300);
+      speed();
+      setTimeout(leave, 1650); // 다 들어온 뒤 잠깐만 멈춘다
     };
-    const leave = () => { start(); el.classList.add('leaving'); };
+    const leave = () => { start(); el.classList.add('leaving'); speed(); };
+    const speed = () => el.getAnimations({subtree: true}).forEach(a => { a.playbackRate = 1.2; }); // 1.2배속
     Promise.race([fontReady, new Promise(r => setTimeout(r, 900))]).then(start, start);
     fontReady.then(fit, () => {});
     addEventListener('resize', fit);
