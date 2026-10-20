@@ -69,3 +69,4 @@
 | [0059](0059-target-etf-selection-criteria.md) | 대상 ETF 선정 기준 — 국내 주식형에서 테마별 거래대금 상위 10종 ([0024](0024-scope-domestic-etf.md) 구체화) | 제안됨 |
 | [0060](0060-dedicated-kis-key-for-minute-price.md) | 분 가격 수집을 전용 KIS 키로 분리 — 공유 호출 예산은 켜지 않는다 ([0055](0055-kis-shared-call-budget-on-postgres.md) 를 대체하지 않음) | 제안됨 |
 | [0061](0061-product-axis-directory-layout.md) | 제품 축 디렉터리 배치와 src/ 제거 ([0001](0001-monorepo-structure.md)·[0029](0029-apps-plane-grouping.md) 일부 대체) | 승인됨 |
+| [0062](0062-truth-agent-pi-harness-direct-publish.md) | 기만 검증 에이전트는 pi 하네스로 돌리고, 검사를 통과한 결과를 사이트에 바로 게시 | 제안됨 |
