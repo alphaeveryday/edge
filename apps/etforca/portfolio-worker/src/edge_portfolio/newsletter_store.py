@@ -9,6 +9,18 @@ from psycopg import Error as DatabaseError
 
 from .store import connect
 
+DEFAULT_HOLDINGS = [
+    {'instrument_id': 'KR:360750', 'name': 'TIGER 미국S&P500', 'amount_krw': 1},
+    {'instrument_id': 'KR:091160', 'name': 'KODEX 반도체', 'amount_krw': 1},
+]
+
+
+def instruments(holdings, *, analysis=False):
+    return list({h['instrument_id']: {'instrument_id': h['instrument_id'], 'name': h.get('name') or h['instrument_id']}
+                 for h in holdings if h.get('instrument_id') and h.get('kind') != 'cash'
+                 and not h['instrument_id'].startswith('CASH:')
+                 and (analysis or (h.get('quantity') if h.get('quantity') is not None else h.get('amount')) != 0)}.values())
+
 
 def initialize(db):
     db.execute("""CREATE TABLE IF NOT EXISTS portfolio_newsletter_runtime (
@@ -45,14 +57,9 @@ def subscribe(job_id, owner, email):
         job = db.execute("SELECT input FROM portfolio_jobs WHERE id=%s AND owner=%s AND kind='analysis' AND state='succeeded'",
                          (job_id, owner)).fetchone() if job_id else db.execute(
                              "SELECT jsonb_build_object('holdings',payload->'assets') AS input FROM portfolio_workbooks WHERE owner=%s", (owner,)).fetchone()
-        if not job:
+        if job_id and not job:
             raise ValueError('NOT_FOUND')
-        holdings = {h['instrument_id']: {'instrument_id': h['instrument_id'], 'name': h['name']}
-                    for h in job['input'].get('holdings', [])
-                    if h.get('instrument_id') and h.get('kind') != 'cash' and not h['instrument_id'].startswith('CASH:')
-                    and (job_id or (h.get('quantity') if h.get('quantity') is not None else h.get('amount')) != 0)}
-        if not holdings:
-            raise ValueError('NO_HOLDINGS')
+        holdings = instruments(job['input'].get('holdings', []) if job else [], analysis=bool(job_id)) or instruments(DEFAULT_HOLDINGS)
         existing = db.execute("""SELECT status FROM portfolio_newsletter_subscriptions
             WHERE owner=%s AND email=%s AND job_id IS NOT DISTINCT FROM %s AND
             (status='confirmed' OR (status='pending' AND
@@ -67,7 +74,7 @@ def subscribe(job_id, owner, email):
         token = secrets.token_urlsafe(32)
         db.execute("""INSERT INTO portfolio_newsletter_subscriptions
             (id,owner,email,job_id,holdings,token_hash,confirmation_token) VALUES (%s,%s,%s,%s,%s,%s,%s)""",
-            (uuid4().hex, owner, email, job_id, Jsonb(list(holdings.values())), hashlib.sha256(token.encode()).hexdigest(), token))
+            (uuid4().hex, owner, email, job_id, Jsonb(holdings), hashlib.sha256(token.encode()).hexdigest(), token))
         return 'pending'
 
 

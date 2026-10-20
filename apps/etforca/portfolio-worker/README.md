@@ -37,6 +37,7 @@ uv run python -m edge_portfolio.worker
 수익 기록은 자동 저장된 일별 평가손익을 보여준다. 과거 수동 월 기록과 계산 기준·출처 영역은 대시보드에서 숨기되 원본 기록과 분석 보고서의 출처는 보존한다.
 고객·관리자는 [Orca UI](../../../docs/design/portfolio-design-system.md)의 공통 토큰과 조작부를 사용한다. `/portfolio/?preview=design-system`에서 실제 컴포넌트와 상태를 확인한다. `pnpm --filter portfolio-ui check:design`은 색상 원천·공통 조작부·대비를 검사하며 빌드에도 포함된다. 종목 삭제와 미저장 수정 취소는 공통 확인 팝업을 사용한다. 분석 결과에서 입력한 포트폴리오 저장은 추가 확인 없이 진행한다.
 저장 팝업은 예시 데이터로 촬영한 `portfolio-ui/src/dashboard-preview.png`를 보여준다. 뉴스레터는 이메일과 신청 버튼으로 접수하며 기존 이메일 확인 절차를 유지한다.
+뉴스레터는 이메일 확인 후 매일 15:30 KST부터 발송한다. 매일 최신 저장 포트폴리오를 우선 사용하고, 저장 문서가 없으면 신청한 분석의 입력 종목을 사용한다. 보유 종목이 없으면 TIGER 미국S&P500(360750)·KODEX 반도체(091160) 50:50 기본 구성을 사용하며 메일에도 기본 구성임을 표시한다. 기본 구성은 사용자의 실제 보유 문서에 저장하지 않는다.
 분석 결과의 저장 버튼은 입력했던 보유 종목을 가져오며 추천안을 실제 매매로 반영하지 않는다.
 `portfolio_workbooks`는 소유자별 문서와 버전을 전용 DB에 저장한다. `GET/POST /api/portfolio/workbook`은 기존 세션 소유권과 POST origin 검사를 사용하며 오래된 저장 버전은 409로 거절한다.
 `GET /api/portfolio/analyses/{job_id}/workbook`은 소유한 분석의 입력을 변환한다.
