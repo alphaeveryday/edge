@@ -1,6 +1,6 @@
 package com.edge.app.adapter.webapi.notification;
 
-import com.edge.app.adapter.integration.notification.ExpoPushClient;
+import com.edge.app.application.notification.required.PushSender;
 import com.edge.app.domain.member.MemberFixture;
 import com.edge.app.support.stereotype.WebApiAdapterTest;
 import org.junit.jupiter.api.BeforeAll;
@@ -32,8 +32,8 @@ import static org.mockito.Mockito.when;
  * 로그아웃 뒤 게스트 재등록, 토큰 이동, 무효 토큰 정리
  */
 @WebApiAdapterTest
-@MockitoBean(types = ExpoPushClient.class)
-record PushApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTemplate jdbc, ExpoPushClient expo) {
+@MockitoBean(types = PushSender.class)
+record PushApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTemplate jdbc, PushSender expo) {
     private static final String PUSH = "/api/v1/notifications/push-token";
 
     @BeforeAll
