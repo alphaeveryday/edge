@@ -34,4 +34,3 @@ def validate(value, schema, path, *, target=None):
         suffix = ''.join(f'[{part}]' if isinstance(part, int) else f'.{part}' for part in error.path)
         expected = list(error.schema.get('properties', {})) if error.validator == 'additionalProperties' else error.validator_value
         raise ResponseError(path + suffix, error.validator, expected, error.instance, target=target)
-
