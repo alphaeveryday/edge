@@ -10,6 +10,8 @@ log = logging.getLogger(__name__)
 
 
 def initialize(db):
+    from . import market_preload
+    market_preload.initialize(db)
     db.execute('''CREATE TABLE IF NOT EXISTS portfolio_quote_refresh (
         instrument text PRIMARY KEY, since date NOT NULL,
         refresh_after timestamptz NOT NULL DEFAULT now(), lease_until timestamptz)''')
@@ -83,7 +85,10 @@ async def collect_once(stopping=None):
         job = db.execute('''UPDATE portfolio_quote_refresh SET lease_until=now()+interval '5 minutes'
             WHERE instrument=(SELECT instrument FROM portfolio_quote_refresh
                 WHERE refresh_after<=now() AND (lease_until IS NULL OR lease_until<now())
-                ORDER BY refresh_after FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *''').fetchone()
+                ORDER BY refresh_after-CASE WHEN EXISTS(
+                    SELECT 1 FROM portfolio_dashboard_prices p WHERE p.instrument=portfolio_quote_refresh.instrument)
+                    THEN interval '0 seconds' ELSE interval '1 minute' END,
+                    (instrument='FX') DESC FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING *''').fetchone()
         if not job:
             return False
         active = db.execute('''SELECT 1 FROM portfolio_workbooks w, jsonb_array_elements(w.payload->'assets') a

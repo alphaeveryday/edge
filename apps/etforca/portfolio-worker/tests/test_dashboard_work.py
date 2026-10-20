@@ -607,7 +607,7 @@ def test_annual_distribution_this_month_is_preserved_in_the_next_twelve_months()
 
 
 @pytest.mark.parametrize('recovery', ['not_needed', 'partial'])
-async def test_adding_a_holding_reuses_other_quotes_until_the_minute_cache_expires(isolated_db, monkeypatch, recovery):
+async def test_adding_a_holding_reuses_quotes_but_action_checks_refresh_each_minute(isolated_db, monkeypatch, recovery):
     from edge_portfolio import market_data
     calls = []
     async def fetch(symbol, day, **kwargs):
@@ -623,7 +623,7 @@ async def test_adding_a_holding_reuses_other_quotes_until_the_minute_cache_expir
     with store.connect() as db:
         db.execute("UPDATE portfolio_dashboard_prices SET payload=jsonb_set(payload,'{fetched_at}',to_jsonb((now()-interval '61 seconds')::text)) WHERE instrument='KR:069500'")
     await work.records_for(list(since), day, valuation_since=since)
-    assert calls == ['069500.KS', '360750.KS', '069500.KS'], 'Only the expired instrument is fetched again'
+    assert calls == ['069500.KS', '360750.KS', '069500.KS'], 'Only expired quotes refresh; late split announcements must still be detected'
 
 
 async def test_a_collection_deadline_cannot_reclassify_failed_expired_quotes_as_fresh(isolated_db, monkeypatch):
@@ -636,7 +636,7 @@ async def test_a_collection_deadline_cannot_reclassify_failed_expired_quotes_as_
     monkeypatch.setattr(market_data, 'fetch_prices', fetch)
     await work.records_for(list(since), day, valuation_since=since)
     with store.connect() as db:
-        db.execute("UPDATE portfolio_dashboard_prices SET payload=jsonb_set(payload,'{fetched_at}',to_jsonb((now()-interval '61 seconds')::text))")
+        db.execute("UPDATE portfolio_dashboard_prices SET payload=payload-'actions_checked_on'")
     timeout = asyncio.timeout
     monkeypatch.setattr(work.asyncio, 'timeout', lambda _: timeout(1))
     async def unavailable(symbol, *args, **kwargs):
