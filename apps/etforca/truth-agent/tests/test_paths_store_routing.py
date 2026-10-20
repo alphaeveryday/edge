@@ -40,6 +40,32 @@ def test_two_letter_name_needs_a_non_hangul_left_boundary():
     assert routing.mentions("금양 상장폐지 결정", "금양")
     assert routing.mentions("[단독] 금양은 ...", "금양")
     assert not routing.mentions("지금양산 계획", "금양")
+    # 이름 뒤에 한글이 이어지면 조사일 때만 같은 이름이다 — 실제로 '하이브리드' 자동차 기사가 하이브 사건에 붙었다.
+    assert routing.mentions("하이브는 상장 전", "하이브")
+    assert not routing.mentions("렉서스 ES 하이브리드 상장", "하이브")
+
+
+def test_related_needs_a_case_topic_not_just_the_company_name():
+    # 회사 이름만 나오는 실적·신상품 기사는 이 사건의 보도가 아니다(공개 화면의 관련 보도가 잡음으로 찬다).
+    hybe, zinc = seed("hybe-ipo-2019"), seed("koreazinc-offering-2024")
+    assert routing.related("경찰, 방시혁 하이브 의장 불구속 송치", hybe)
+    assert not routing.related("하이브, BTS 투어에 3분기 흑자전환 전망…목표가 29만원", hybe)
+    assert routing.related("고려아연 유상증자 의혹…수사 주체 바뀌나", zinc)
+    assert not routing.related("소액주주단체, 고려아연·한진그룹 회장 배임 혐의로 경찰 고발", zinc)
+
+
+def test_related_news_that_no_longer_fits_is_pruned_but_cited_sources_stay():
+    # 예전 규칙으로 붙은 잡음 관련 보도는 다음 실행이 걷어 내야 한다. 본문이 인용하는 출처는 남긴다.
+    case = seed("hybe-ipo-2019")
+    cited = case["contrast"]["before"]["sourceId"]
+    junk = article("[시승기] 렉서스 ES 하이브리드의 매력", aid="f" * 64, url="https://www.example.com/car")
+    case["sources"].append({"id": junk.source_id, "kind": "news", "publisher": "x", "title": junk.title, "url": junk.url,
+                            "publishedAt": "2026-10-19", "accessedAt": "2026-10-20"})
+    case["related"] += [{"sourceId": junk.source_id, "addedAt": "2026-10-20T00:00:00+09:00"},
+                        {"sourceId": cited, "addedAt": "2026-10-20T00:00:00+09:00"}]
+    assert routing.add_related(case, [], date(2026, 10, 20), "2026-10-20T10:00:00+09:00")
+    assert [r["sourceId"] for r in case["related"]] == [cited]
+    assert junk.source_id not in {s["id"] for s in case["sources"]} and cited in {s["id"] for s in case["sources"]}
 
 
 def test_route_skips_locked_cases_and_matches_aliases():
@@ -60,7 +86,7 @@ def test_add_related_caps_list_and_keeps_cited_sources():
     cited = case["contrast"]["before"]["sourceId"]
     case["related"].append({"sourceId": cited, "addedAt": "2026-10-20T00:00:00+09:00"})
     # 실제 id 는 sha256 이라 앞 16자리(출처 id)가 겹치지 않는다. 시험 id 도 앞자리부터 달라야 한다.
-    many = [article(f"하이브 기사 {i}", aid=f"{i:04d}" + "a" * 60, url=f"https://www.yna.co.kr/view/{i}") for i in range(routing.RELATED_LIMIT + 5)]
+    many = [article(f"하이브 상장 기사 {i}", aid=f"{i:04d}" + "a" * 60, url=f"https://www.yna.co.kr/view/{i}") for i in range(routing.RELATED_LIMIT + 5)]
     assert routing.add_related(case, many, date(2026, 10, 20), "2026-10-20T10:00:00+09:00")
     assert len(case["related"]) == routing.RELATED_LIMIT
     ids = {s["id"] for s in case["sources"]}

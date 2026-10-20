@@ -11,6 +11,7 @@ TRIGGERS = ("송치", "기소", "불기소", "무혐의", "판결", "선고", "�
             "수사", "정정", "해명", "반박", "부인", "사과", "배상", "소송", "합의", "상장폐지", "거래정지", "감리", "철회")
 RELATED_LIMIT = 30
 _HANGUL = re.compile(r"[가-힣]")
+_JOSA = set("은는이가을를의에와과도만로측")  # 이름 바로 뒤에 붙어도 같은 이름으로 보는 조사 첫 글자
 
 
 def terms(case: dict) -> list[str]:
@@ -20,13 +21,24 @@ def terms(case: dict) -> list[str]:
 
 
 def mentions(text: str, term: str) -> bool:
-    """text 가 term 을 언급하는가. 두 글자 이름은 앞 글자가 한글이 아닐 때만 (예: '지금양' 의 '금양' 제외)."""
+    """text 가 term 을 언급하는가. 이름이 다른 낱말 속에 든 경우는 뺀다:
+    두 글자 이름은 앞이 한글이면 아니다('지금양'의 '금양'), 뒤가 한글이면 조사일 때만 같은 이름이다('하이브리드'의 '하이브' 제외)."""
     start = text.find(term)
     while start != -1:
-        if len(term) > 2 or start == 0 or not _HANGUL.match(text[start - 1]):
+        before, after = text[start - 1:start], text[start + len(term):start + len(term) + 1]
+        left_ok = len(term) > 2 or not before or not _HANGUL.match(before)
+        right_ok = not after or not _HANGUL.match(after) or after in _JOSA
+        if left_ok and right_ok:
             return True
         start = text.find(term, start + 1)
     return False
+
+
+def related(title: str, case: dict) -> bool:
+    """기사 제목이 이 사건의 보도인가: 사건 이름과 사건 주제어(topics, 없으면 절차 단서)가 함께 나와야 한다.
+    이름만으로 붙이면 같은 회사의 실적·신상품 기사가 관련 보도로 공개된다."""
+    topics = case.get("topics") or TRIGGERS
+    return any(mentions(title, n) for n in terms(case)) and any(t in title for t in topics)
 
 
 def route(articles: list[Article], cases: list[dict]) -> dict[str, list[Article]]:
@@ -35,8 +47,7 @@ def route(articles: list[Article], cases: list[dict]) -> dict[str, list[Article]
     for case in cases:
         if case.get("locked"):
             continue
-        names = terms(case)
-        hits = [a for a in articles if any(mentions(f"{a.title} {a.lead}", n) for n in names)]
+        hits = [a for a in articles if related(a.title, case)]
         if hits:
             out[case["id"]] = hits
     return out
@@ -48,16 +59,23 @@ def needs_session(articles: list[Article]) -> bool:
 
 
 def add_related(case: dict, articles: list[Article], today: date, now_iso: str) -> bool:
-    """관련 보도를 붙인다. 새로 붙은 것이 있으면 True. 오래된 관련 보도는 RELATED_LIMIT 를 넘으면 뺀다.
-
-    본문·대조·반론이 인용하지 않는 관련 보도 출처만 함께 지운다(인용 중인 출처는 남긴다).
+    """관련 보도를 붙인다. 바뀐 것이 있으면 True. 지금 규칙(related)에 맞지 않게 된 관련 보도는 빼고,
+    오래된 관련 보도는 RELATED_LIMIT 를 넘으면 뺀다. 본문·대조·반론이 인용하지 않는 출처만 함께 지운다.
     """
     sources = {s["id"]: s for s in case["sources"]}
-    related = {r["sourceId"] for r in case["related"]}
-    added = False
+    kept = [r for r in case["related"] if r["sourceId"] in sources and related(sources[r["sourceId"]]["title"], case)]
+    pruned = len(kept) != len(case["related"])
+    if pruned:
+        gone = {r["sourceId"] for r in case["related"]} - {r["sourceId"] for r in kept}
+        case["related"] = kept
+        cited = _cited(case) | {r["sourceId"] for r in kept}
+        case["sources"] = [s for s in case["sources"] if s["id"] not in gone or s["id"] in cited]
+        sources = {s["id"]: s for s in case["sources"]}
+    linked = {r["sourceId"] for r in case["related"]}
+    added = pruned
     for a in sorted(articles, key=lambda a: a.published):
         sid = a.source_id
-        if sid in related or not a.url.startswith(("http://", "https://")):
+        if sid in linked or not a.url.startswith(("http://", "https://")) or not related(a.title, case):
             continue
         if sid not in sources:
             source = {"id": sid, "kind": "news", "publisher": a.publisher or "언론사 미상", "title": a.title, "url": a.url,
@@ -65,7 +83,7 @@ def add_related(case: dict, articles: list[Article], today: date, now_iso: str) 
             case["sources"].append(source)
             sources[sid] = source
         case["related"].append({"sourceId": sid, "addedAt": now_iso})
-        related.add(sid)
+        linked.add(sid)
         added = True
     overflow = len(case["related"]) - RELATED_LIMIT
     if overflow > 0:

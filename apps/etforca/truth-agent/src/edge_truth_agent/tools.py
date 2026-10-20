@@ -21,7 +21,7 @@ from .workspace import Workspace
 
 KST = timezone(timedelta(hours=9))
 
-EDITABLE = frozenset({"subject", "instruments", "aliases", "speaker", "audience", "headline", "behaviors", "contrast", "levels",
+EDITABLE = frozenset({"subject", "instruments", "aliases", "topics", "speaker", "audience", "headline", "behaviors", "contrast", "levels",
                       "legalStatus", "ach", "beneficiary", "cover", "video", "body", "rebuttal"})
 READ_ONLY = ("id", "schemaVersion", "status", "resolution", "resolvedAt", "flaggedAt", "updatedAt", "origin", "locked",
              "sources", "related", "impact", "impactReason")

@@ -26,6 +26,7 @@
       }
     },
     "aliases": { "type": "array", "items": { "type": "string", "minLength": 2 }, "description": "뉴스 배정에 쓰는 별칭 (인명·영문명)" },
+    "topics": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 2 }, "description": "이 사건 보도에만 나오는 주제어 (예: 유상증자·공개매수). 제목에 이름과 함께 있어야 관련 보도로 붙는다. 없으면 절차 단서(송치·기소·제재 등)를 쓴다" },
     "speaker": { "type": "string", "minLength": 1, "description": "조사 대상 발언자" },
     "audience": { "type": "string", "minLength": 1, "description": "정보를 받은 대상" },
     "headline": {
