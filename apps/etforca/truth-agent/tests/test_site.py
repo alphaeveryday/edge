@@ -42,3 +42,13 @@ def test_build_is_deterministic():
     # 매시 실행에서 내용이 같으면 같은 바이트여야 바뀐 파일만 다시 올릴 수 있다.
     cases = load_dir(SEED)
     assert site.build(cases, NOW) == site.build(list(reversed(cases)), NOW)
+
+
+def test_rebuild_removes_withdrawn_case_details(tmp_path):
+    # 목록에서 내린 사건의 상세 파일이 남으면 주소로 계속 열린다.
+    cases = load_dir(SEED)
+    site.write(site.build(cases, NOW), tmp_path)
+    gone = cases[0]["id"]
+    site.write(site.build(cases[1:], NOW), tmp_path)
+    assert not (tmp_path / "cases" / f"{gone}.json").exists()
+    assert len(list((tmp_path / "cases").glob("*.json"))) == len(cases) - 1

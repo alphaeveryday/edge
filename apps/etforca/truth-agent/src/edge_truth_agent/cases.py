@@ -82,13 +82,17 @@ def _day(value: str, where: str, problems: list[str]) -> date | None:
         return None
 
 
-def _moment(value: str, where: str, problems: list[str]) -> None:
-    """시간대가 붙은 날짜·시각인지 본다."""
+def _moment(value: str, where: str, problems: list[str], latest: date) -> None:
+    """시간대가 붙은 날짜·시각이고 미래가 아닌지 본다."""
     try:
-        if datetime.fromisoformat(value).tzinfo is None or not _DATE.match(value):
-            problems.append(f"{where}: 시간대를 붙인 날짜·시각으로 쓰세요 (예: 2026-10-20T09:00:00+09:00).")
+        moment = datetime.fromisoformat(value)
     except ValueError:
         problems.append(f"{where}: '{value}' 는 날짜·시각이 아닙니다.")
+        return
+    if moment.tzinfo is None or not _DATE.match(value):
+        problems.append(f"{where}: 시간대를 붙인 날짜·시각으로 쓰세요 (예: 2026-10-20T09:00:00+09:00).")
+    elif moment.date() > latest:
+        problems.append(f"{where}: {value} 는 미래 시각입니다.")
 
 
 def problems(case: dict, *, file_id: str | None = None, today: date | None = None) -> list[str]:
@@ -187,9 +191,9 @@ def problems(case: dict, *, file_id: str | None = None, today: date | None = Non
         if _DATE.fullmatch(s["publishedAt"]) and _DATE.fullmatch(s["accessedAt"]) and s["accessedAt"] < s["publishedAt"]:
             found.append(f"sources[{i}].accessedAt: {s['accessedAt']} 는 발행일({s['publishedAt']})보다 이릅니다. "
                          "나오기 전의 출처를 볼 수는 없습니다(기록일 소급 방지).")
-    _moment(case["updatedAt"], "updatedAt", found)
+    _moment(case["updatedAt"], "updatedAt", found, latest)
     for i, r in enumerate(case["related"]):
-        _moment(r["addedAt"], f"related[{i}].addedAt", found)
+        _moment(r["addedAt"], f"related[{i}].addedAt", found, latest)
     if not math.isfinite(case["impact"]):
         found.append("impact: 0~100 사이 숫자여야 합니다.")
 

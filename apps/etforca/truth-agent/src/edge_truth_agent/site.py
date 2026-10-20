@@ -45,7 +45,10 @@ def build(cases: list[dict], now: datetime) -> dict[str, bytes]:
 
 
 def write(files: dict[str, bytes], out_dir: Path) -> None:
-    """파일 묶음을 폴더에 쓴다 (로컬 미리보기·배포 준비용)."""
+    """파일 묶음을 폴더에 쓴다 (로컬 미리보기·배포 준비용). 이번 묶음에 없는 사건 상세는 지운다 — 내린 사건이 남지 않게."""
+    for stale in (Path(out_dir) / "cases").glob("*.json"):
+        if f"cases/{stale.name}" not in files:
+            stale.unlink()
     for rel, body in files.items():
         path = Path(out_dir) / rel
         path.parent.mkdir(parents=True, exist_ok=True)
