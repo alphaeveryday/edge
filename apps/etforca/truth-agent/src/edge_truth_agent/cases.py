@@ -179,6 +179,8 @@ def problems(case: dict, *, file_id: str | None = None, today: date | None = Non
         if value is not None and (day := _day(value, where, found)) and day > latest:
             found.append(f"{where}: {value} 는 미래 날짜입니다.")
     for i, s in enumerate(case["sources"]):
+        if not host_of(s["url"]):
+            found.append(f"sources[{i}].url: '{s['url']}' 에서 호스트를 읽을 수 없습니다. 원문 주소를 그대로 쓰세요.")
         for key in ("publishedAt", "accessedAt"):
             if (day := _day(s[key], f"sources[{i}].{key}", found)) and day > latest:
                 found.append(f"sources[{i}].{key}: {s[key]} 는 미래 날짜입니다.")

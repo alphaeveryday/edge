@@ -182,6 +182,14 @@ def test_malformed_resolution_url_is_reported_not_crashed():
     assert any("공식 기관·공시 도메인이 아닙니다" in line for line in problems(case, today=TODAY))
 
 
+@pytest.mark.parametrize("url", ["https://[x/", "https://?x"])
+def test_every_source_url_needs_a_host(url):
+    # 판정 근거가 아닌 출처라도 깨진 주소는 공개 화면에 죽은 근거 링크로 나간다.
+    case = seed("hybe-ipo-2019")
+    case["sources"][0]["url"] = url
+    assert any(line.startswith("sources[0].url") for line in problems(case, today=TODAY))
+
+
 def test_backslash_url_is_rejected_by_contract():
     case = seed("geumyang-monlaa")
     case["sources"][0]["url"] = "https://evil.com\\@fsc.go.kr/no010101/87894"
