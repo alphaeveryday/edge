@@ -6,6 +6,7 @@ import json
 import sys
 import subprocess
 import tempfile
+from contextlib import asynccontextmanager
 from threading import BoundedSemaphore
 from pathlib import Path
 from datetime import date, datetime, timedelta
@@ -167,11 +168,19 @@ def with_actual_prices(returns, actual):
             'return_source_url': returns['source_url']}
 
 
-async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None, history_start=None):
+@asynccontextmanager
+async def price_slot():
     # Admission is separate from provider timeouts; a busy worker is not a bad source.
     while not _PRICE_SLOTS.acquire(blocking=False):
         await asyncio.sleep(.05)
     try:
+        yield
+    finally:
+        _PRICE_SLOTS.release()
+
+
+async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None, history_start=None):
+    async with price_slot():
         try:
             options = {k: v for k, v in {'repair_since': repair_since, 'history_start': history_start}.items() if v is not None}
             original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, **options), timeout=provider_timeout)
@@ -185,8 +194,6 @@ async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_
         record = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback'), timeout=provider_timeout)
         record['primary_failure'] = primary_failure
         return record
-    finally:
-        _PRICE_SLOTS.release()
 
 
 async def _fetch_prices(symbol, as_of, *, on_raw=None, provider='yahoo', repair_since=None, history_start=None):
