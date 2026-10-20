@@ -305,6 +305,19 @@ variable "disclosure_schedule_state" {
   default     = "DISABLED"
 }
 
+variable "disclosure_orchestrator" {
+  # 레인별 SFN→Airflow 이관(ALPHA-1407, 장중 수급 investor_intraday_orchestrator 와 같은 장치). AIRFLOW 로 바꾸면
+  # 이 레인의 EventBridge 스케줄이 꺼지고(SFN 미시작) 슬롯 대조·워터마크 창은 유지된다. 이 값은 새 실행 생성만
+  # 바꾸고 이미 뜬 ECS 태스크를 멈추지 않는다 — 바꾸기 전에 README 의 종료 확인 절차를 따른다.
+  description = "공시 레인의 실행 주체(SFN|AIRFLOW). AIRFLOW 면 SFN 스케줄 DISABLED, 슬롯 대조·워터마크는 유지."
+  type        = string
+  default     = "SFN"
+  validation {
+    condition     = contains(["SFN", "AIRFLOW"], var.disclosure_orchestrator)
+    error_message = "disclosure_orchestrator 는 SFN 또는 AIRFLOW."
+  }
+}
+
 variable "disclosure_state_machine_timeout_seconds" {
   # 슬롯 간격(3600s)보다 **짧아야** 한 실행이 다음 실행과 겹치지 않는다 — 겹치면 두 실행이
   # 같은 rcept_no 본문을 동시에 보고 seen-map(ALPHA-720)의 TOCTOU 로 같은 ZIP 을 두 번 받고,

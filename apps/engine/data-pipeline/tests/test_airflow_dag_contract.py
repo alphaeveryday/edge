@@ -47,6 +47,20 @@ def test_dag_task_keys_are_catalog_keys_of_the_lane():
         e.task_key for e in catalog.entries(catalog.INVESTOR_INTRADAY_PIPELINE_TYPE))
 
 
+def test_disclosure_dag_task_keys_are_catalog_keys_of_the_lane():
+    # WHY(ALPHA-1407): 같은 CLI 를 시장 레인도 썼다(disclosure_pipeline.tf 컷오버 주석) — 레인을 틀리게 읽으면 보류가
+    # 다른 레인 작업에 기록된다. 태스크 정의·CLI 까지 카탈로그와 맞아야 원장이 이 실행을 그 작업으로 센다.
+    source = (DAGS / "edge_disclosure.py").read_text(encoding="utf-8")
+    keys = ast.literal_eval(re.search(r"^TASK_KEYS = (\{.*?\})$", source, re.M | re.S).group(1))
+    lane = {e.task_key: e for e in catalog.entries(catalog.DISCLOSURE_PIPELINE_TYPE)}
+    assert set(keys.values()) == set(lane)
+    for task_id, task_key in keys.items():
+        entry = lane[task_key]
+        assert f'task_id="{task_id}", taskdef_key="{entry.ecs_task_definition}"' in source, task_id
+        assert f'command=["{entry.cli_command[0]}", ' in source, task_id
+    assert re.search(r'^LANE = "disclosure"$', source, re.M)
+
+
 def test_pipeline_run_id_material_matches_stable_domain_id():
     # 구분자(\x01)는 화면에 안 보인다 — 손으로 옮기다 틀린 전력이 있다(학습 문서 §32).
     assert _const("_PIPELINE_ID", EDGE_BATCH).strip('"') == db.PIPELINE_ID
@@ -80,8 +94,9 @@ def test_dag_run_timeout_is_shorter_than_the_reconciler_lifetime():
     # Reconciler 는 수명(1800초)을 넘긴 미확정 실행만 보류로 올린다 — DAG 시간 초과가 더 길면 살아 있는 run 을
     # 보류로, 더 짧아야 죽은 run 을 놓치지 않는다.
     from data_pipeline.ops import reconciler
-    default = int(re.search(r'EDGE_LAB_DAGRUN_TIMEOUT_SECONDS", "(\d+)"', DAG).group(1))
-    assert default < reconciler.AIRFLOW_RUN_LIFETIME_SECONDS
+    for source in (DAG, (DAGS / "edge_disclosure.py").read_text(encoding="utf-8")):
+        default = int(re.search(r'EDGE_LAB_DAGRUN_TIMEOUT_SECONDS", "(\d+)"', source).group(1))
+        assert default < reconciler.AIRFLOW_RUN_LIFETIME_SECONDS
 
 
 SOURCE_DAG = (DAGS / "edge_source_daily.py").read_text(encoding="utf-8")
