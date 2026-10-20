@@ -3,6 +3,8 @@
 # 파일 소유: 이 워크플로는 truth/ 아래 정적 파일(html·css·js·logo)만 올린다. truth/data/ 는
 # 에이전트(apps/etforca/truth-agent)가 매시 게시하는 자리라 건드리지 않는다. 단 truth/data/index.json
 # 이 아직 없을 때(첫 배포)만 저장소 seed 사건으로 한 번 채운다 — 에이전트 첫 실행 전에도 빈 화면이 아니게.
+# 수동 실행의 reseed=true 는 seed 로 공개 데이터를 다시 쓴다(정정·게시 중단이 급할 때). 에이전트가 운영 중이면
+# 다음 실행이 비공개 저장소 내용으로 다시 게시하므로, 그때의 사람 정정은 seed 에 locked 사건으로 넣는 경로를 쓴다.
 # 랜딩(deploy-app-landing)·포트폴리오(deploy-portfolio)와 같은 버킷이지만 서로 다른 접두어만 쓴다.
 name: deploy-truth-web
 
@@ -13,6 +15,11 @@ on:
       - "apps/etforca/truth-web/**"
       - ".github/workflows/deploy-truth-web.yml"
   workflow_dispatch:
+    inputs:
+      reseed:
+        description: "seed 사건으로 truth/data 를 다시 쓴다 (정정·게시 중단용)"
+        type: boolean
+        default: false
 
 permissions:
   id-token: write # OIDC
@@ -59,23 +66,27 @@ jobs:
 
       - uses: astral-sh/setup-uv@v6
 
-      - name: Seed data on first deploy only
+      - name: Seed data on first deploy (or on manual reseed)
         env:
           BUCKET: ${{ vars.APP_LANDING_BUCKET }}
+          RESEED: ${{ github.event_name == 'workflow_dispatch' && inputs.reseed }}
         run: |
           set -euo pipefail
-          # 404 일 때만 채운다. 권한·네트워크 오류를 '없음'으로 읽으면 에이전트 데이터를 seed 로 덮어쓴다.
-          if out="$(aws s3api head-object --bucket "$BUCKET" --key truth/data/index.json 2>&1)"; then
-            echo "truth/data 는 에이전트가 관리 중 — 건드리지 않는다"
-            exit 0
-          fi
-          if ! grep -q -e "Not Found" -e "(404)" <<< "$out"; then
-            echo "$out" >&2
-            exit 1
+          if [ "$RESEED" != "true" ]; then
+            # 404 일 때만 채운다. 권한·네트워크 오류를 '없음'으로 읽으면 에이전트 데이터를 seed 로 덮어쓴다.
+            if out="$(aws s3api head-object --bucket "$BUCKET" --key truth/data/index.json 2>&1)"; then
+              echo "truth/data 는 에이전트가 관리 중 — 건드리지 않는다"
+              exit 0
+            fi
+            if ! grep -q -e "Not Found" -e "(404)" <<< "$out"; then
+              echo "$out" >&2
+              exit 1
+            fi
           fi
           uv run --locked --package edge-truth-agent python -m edge_truth_agent build-site \
             --cases apps/etforca/truth-agent/seed --out "$RUNNER_TEMP/truth-data"
-          aws s3 cp "$RUNNER_TEMP/truth-data" "s3://${BUCKET}/truth/data" --recursive \
+          # --delete: seed 에서 뺀 사건(게시 중단)의 상세 파일도 공개 위치에서 지운다.
+          aws s3 sync "$RUNNER_TEMP/truth-data" "s3://${BUCKET}/truth/data" --delete \
             --content-type "application/json; charset=utf-8" --cache-control "no-cache"
 
       - name: Invalidate and verify

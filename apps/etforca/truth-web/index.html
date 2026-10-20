@@ -377,7 +377,7 @@ $('chips').addEventListener('click', e => { const b = e.target.closest('[data-fi
 /* ── 화면 전환: #search 또는 #search/검색어 면 검색, 아니면 홈 ── */
 function route(){
   const searching = location.hash.startsWith('#search');
-  if (searching) $('q').value = decodeURIComponent(location.hash.slice(8));
+  if (searching) { try { $('q').value = decodeURIComponent(location.hash.slice(8)); } catch { $('q').value = ''; } }
   document.body.classList.toggle('searching', searching);
   $('navSearch').classList.toggle('on', searching);
   $('navHome').classList.toggle('on', !searching);

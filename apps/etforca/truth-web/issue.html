@@ -193,9 +193,20 @@ function render(c, cases){
 }
 
 const id = new URLSearchParams(location.search).get('id') || '';
-Promise.all([loadIndex(), loadCase(id)])
-  .then(([index, c]) => render(c, index.cases))
-  .catch(() => { $('article').innerHTML = '<p class="vcap">사건을 찾을 수 없습니다. <a href="index.html">홈으로</a></p>'; });
+const fail = msg => { $('article').innerHTML = `<p class="vcap">${msg} <a href="index.html">홈으로</a></p>`; };
+// 사건 파일과 요약(성적용)을 따로 다룬다 — 요약을 못 읽어도 사건은 보여준다.
+Promise.allSettled([loadCase(id), loadIndex()]).then(([one, all]) => {
+  if (one.status === 'rejected') {
+    console.error(one.reason);
+    return fail(String(one.reason).includes(': 404') || String(one.reason).includes(': 403') ? '사건을 찾을 수 없습니다.' : '사건을 불러오지 못했습니다. 잠시 뒤 다시 열어 주세요.');
+  }
+  try {
+    render(one.value, all.status === 'fulfilled' ? all.value.cases : [one.value]);
+  } catch (error) {
+    console.error(error);
+    fail('사건 화면을 그리지 못했습니다.');
+  }
+});
 </script>
 </body>
 </html>
