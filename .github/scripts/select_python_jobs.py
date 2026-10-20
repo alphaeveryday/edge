@@ -10,6 +10,7 @@ APPS = ("data-pipeline", "db-query")
 OPTIONAL = {
     "analysis-engine-v2": "apps/engine/analysis-engine-v2",
     "edge-analysis-tools": "libs/analysis-tools",
+    "edge-truth-agent": "apps/etforca/truth-agent",
 }
 
 
@@ -64,6 +65,8 @@ def select_jobs(paths: list[str], available: set[str]) -> dict:
                 requested.add("analysis-engine-v2")
         elif path.startswith("apps/engine/analysis-engine-v2/"):
             requested.add("analysis-engine-v2")
+        elif path.startswith("apps/etforca/truth-agent/"):
+            requested.add("edge-truth-agent")
         elif any(path.startswith(f"apps/engine/{app}/") for app in APPS):
             apps.update(app for app in APPS if path.startswith(f"apps/engine/{app}/"))
         elif path.startswith("apps/engine/airflow/dags/") or path == "apps/engine/airflow/tests/ecs_stop_cases.json":

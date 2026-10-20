@@ -16,6 +16,7 @@ members = [
     "data-pipeline",
     "db-query",
     "edge-ontology",
+    "edge-truth-agent",
 ]
 
 [[package]]
@@ -487,6 +488,25 @@ dev = [
 
 [package.metadata]
 requires-dist = [{ name = "pyyaml", specifier = ">=6" }]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8" }]
+
+[[package]]
+name = "edge-truth-agent"
+version = "0.1.0"
+source = { editable = "apps/etforca/truth-agent" }
+dependencies = [
+    { name = "jsonschema" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "jsonschema", specifier = ">=4.23,<5" }]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8" }]

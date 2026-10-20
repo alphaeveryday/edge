@@ -1,0 +1,99 @@
+{
+  "schemaVersion": 1,
+  "id": "geumyang-monlaa",
+  "subject": "금양",
+  "instruments": [{ "code": "001570", "name": "금양" }],
+  "aliases": ["MONLAA", "몽골 광산"],
+  "speaker": "금양(회사)",
+  "audience": "재무제표·공시를 보는 투자자",
+  "headline": [
+    "금융위는 금양이 공동지배 법인인 몽골 MONLAA를 종속기업으로 연결해 재무제표에 반영했다고 판단했습니다.",
+    "같은 의결에서 실물 이전 없는 매출과 허위 증빙으로 감사를 방해한 행위를 지적하고 회사 과징금 76억3,300만원을 의결했습니다."
+  ],
+  "status": "confirmed",
+  "resolution": {
+    "sourceId": "official-fsc-87894",
+    "at": "2026-10-07",
+    "note": "금융위 과징금 의결(회사 76억3,300만원, 대표이사 등 6인 합계 15억2,190만원). 납부·불복·형사 판단과는 별개다."
+  },
+  "behaviors": [
+    {
+      "type": "fabricated",
+      "verdict": "confirmed",
+      "basis": "금융위 의결 붙임은 실물 이전 없는 매출과 거래처와의 허위 증빙·재고 이동, 감리 때 허위 자료·진술 제출을 지적했습니다. 이 판정은 해당 행위에 한정한 공식 판단입니다.",
+      "sourceIds": ["official-fsc-87894-attach"]
+    }
+  ],
+  "contrast": {
+    "before": {
+      "label": "회사 공시 (2024-03-21)",
+      "text": "2023년 말 몽골 MONLAA 지분 60%를 연결대상 종속기업으로 제시했습니다.",
+      "sourceId": "disclosure-kind-20240321004083"
+    },
+    "after": {
+      "label": "금융위 판단 (2026-10-07)",
+      "text": "주주간계약상 공동지배인 법인에 연결회계를 적용한 점을 회계처리 위반으로 판단했습니다.",
+      "sourceId": "official-fsc-87894"
+    }
+  },
+  "levels": { "behavior": "confirmed", "intent": "suspected", "harm": "insufficient", "legal": "suspected" },
+  "legalStatus": "증선위·금융위 과징금 의결(2026-10-07)과 검찰 고발. 납부·불복·형사 판단은 미확인",
+  "ach": {
+    "best": "H2",
+    "strongestCounter": "회사 사과문은 외부 요인과 함께 자체 판단 오류를 인정했습니다. 연결 분류 자체는 계약 해석 차이로 설명될 여지가 남아 있습니다.",
+    "decisiveEvidence": "MONLAA 주주간계약 전문, 회수가능액 산정자료, 허위 증빙 작성·전달 지시와 인지 기록"
+  },
+  "impact": 85,
+  "impactReason": "감사의견 거절에 따른 상장폐지 결정과 재무정보 신뢰가 투자 판단에 직접 연결됩니다.",
+  "cover": null,
+  "video": null,
+  "body": [
+    { "h": "전망이 빗나간 문제와 감사자료 문제는 다릅니다" },
+    {
+      "p": "금양의 핵심 충돌은 몽골 광산이 기대만큼 벌지 못했다는 점이 아닙니다. 회사 자료는 2023년 말 MONLAA 지분 60%와 종속기업 편입을 제시했지만, 금융당국은 주주간계약상 공동지배인 법인에 연결회계를 적용한 점을 문제 삼았습니다. 같은 과거 지배구조를 어떻게 처리했는지의 충돌이므로 이후 업황 악화로 해소되지 않습니다.",
+      "sourceIds": ["disclosure-kind-20240321004083", "official-fsc-87894"]
+    },
+    { "h": "확인한 순서" },
+    {
+      "list": [
+        "2023-05-10 몽골 광산 투자·리튬 원재료 확보 계획을 공정공시했습니다. 사업계획·전망 단계라는 조건이 붙어 있습니다.",
+        "2024-03-21 정정 주주총회소집공고에서 MONLAA를 연결대상 종속기업으로 제시했습니다.",
+        "2024-09-27 정정공시로 몽골 2024년 매출전망을 4,024억원에서 66억원으로 낮췄고, 10월 말 사과문을 냈습니다.",
+        "2026-09-02 증선위가 회계처리 위반을 조치했습니다.",
+        "2026-10-07 금융위가 회사와 개인에게 과징금을 의결했습니다."
+      ]
+    },
+    {
+      "p": "금융위 붙임은 연결범위·손상 문제 외에도 실물 이전 없는 매출, 허위 증빙을 통한 감사 방해, 감리 때 허위 자료 제출을 지적합니다. 이는 단순 전망 오류로 설명하기 어려운 별도 행위입니다.",
+      "sourceIds": ["official-fsc-87894-attach"]
+    },
+    { "h": "계산하지 않은 것" },
+    {
+      "p": "연결범위 오류 618.2억원과 손상 미인식 741.7억원은 겹칠 수 있는 회계조정이라 더해서 피해액으로 만들지 않았습니다. 상장폐지 결정과 상장폐지 완료는 다르며, 가처분 결정 이후의 거래 가능 여부는 확인하지 못했습니다.",
+      "sourceIds": ["official-fsc-87894-attach", "disclosure-spn-502901"]
+    }
+  ],
+  "rebuttal": [
+    {
+      "label": "회사 사과문 (2024-10-29)",
+      "text": "회사는 전기차 수요 둔화와 공매도 금지 같은 외부 요인과 함께 자체 판단 오류를 언급했습니다.",
+      "sourceId": "news-mk-11153329"
+    }
+  ],
+  "sources": [
+    { "id": "official-fsc-87894", "kind": "official", "publisher": "금융위원회", "title": "금양 회계처리 위반 과징금 부과 의결", "url": "https://www.fsc.go.kr/no010101/87894", "publishedAt": "2026-10-07", "accessedAt": "2026-10-20" },
+    { "id": "official-fsc-87894-attach", "kind": "official", "publisher": "금융위원회", "title": "과징금 부과 의결 붙임 원문", "url": "https://www.fsc.go.kr/comm/getFile?srvcId=BBSTY1&upperNo=87894&fileTy=ATTACH&fileNo=1", "publishedAt": "2026-10-07", "accessedAt": "2026-10-20" },
+    { "id": "official-fsc-87639", "kind": "official", "publisher": "금융위원회", "title": "증권선물위원회 회계처리 위반 조치", "url": "https://www.fsc.go.kr/no010101/87639", "publishedAt": "2026-09-02", "accessedAt": "2026-10-20" },
+    { "id": "disclosure-kind-20240321004083", "kind": "disclosure", "publisher": "한국거래소 KIND", "title": "금양 정정 주주총회소집공고", "url": "https://kind.krx.co.kr/external/2024/03/21/000932/20240321004083/00591.htm", "publishedAt": "2024-03-21", "accessedAt": "2026-10-20" },
+    { "id": "disclosure-kind-20230510001203", "kind": "disclosure", "publisher": "한국거래소 KIND", "title": "금양 몽골 광산 투자 공정공시", "url": "https://kind.krx.co.kr/external/2023/05/10/000543/20230510001203/99618.htm", "publishedAt": "2023-05-10", "accessedAt": "2026-10-20" },
+    { "id": "news-mk-11153329", "kind": "news", "publisher": "매일경제", "title": "금양, 불성실공시법인 지정에 사과문 발표…“캐즘과 공매도 금지 때문”", "url": "https://www.mk.co.kr/news/stock/11153329", "publishedAt": "2024-10-29", "accessedAt": "2026-10-20" },
+    { "id": "news-yna-20260902", "kind": "news", "publisher": "연합뉴스", "title": "증선위, ‘회계기준 위반’ 금양에 감사인지정·과징금 조치(종합2보)", "url": "https://www.yna.co.kr/amp/view/AKR20260902164752002", "publishedAt": "2026-09-02", "accessedAt": "2026-10-20" },
+    { "id": "disclosure-spn-502901", "kind": "disclosure", "publisher": "코스콤 공시 전재", "title": "(주)금양, 회계처리기준 위반행위 관련 상장적격성 실질심사 절차 미진행 안내", "url": "https://spn.stockplus.com/news/api/v1/disclosure_views/koscom/502901", "publishedAt": "2026-09-02", "accessedAt": "2026-10-20" }
+  ],
+  "related": [],
+  "flaggedAt": "2026-10-20",
+  "resolvedAt": "2026-10-07",
+  "updatedAt": "2026-10-20T00:00:00+09:00",
+  "origin": "seed",
+  "locked": false
+}
