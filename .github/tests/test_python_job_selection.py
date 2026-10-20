@@ -71,6 +71,14 @@ class SelectionTests(unittest.TestCase):
         result = self.select("libs/analysis-tools/tool.py", available=("edge-analysis-tools",))
         self.assertEqual([p["package"] for p in result["optional"]], ["edge-analysis-tools"])
 
+    def test_truth_agent_change_runs_only_its_own_offline_tests(self):
+        # 사건 계약 검사기가 바뀌면 그 패키지 테스트는 반드시 돌고, 무관한 DB E2E·이미지는 돌지 않는다.
+        result = self.select("apps/etforca/truth-agent/src/edge_truth_agent/cases.py",
+                             available=("edge-truth-agent",))
+        self.assertEqual([p["package"] for p in result["optional"]], ["edge-truth-agent"])
+        self.assertEqual(result["legacy"], [])
+        self.assertFalse(result["e2e"])
+
     def test_v2_change_without_registration_fails_instead_of_skipping(self):
         with self.assertRaisesRegex(ValueError, "analysis-engine-v2"):
             self.select("apps/engine/analysis-engine-v2/pyproject.toml", available=())

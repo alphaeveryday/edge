@@ -32,7 +32,9 @@ edge/
 │       ├── app-ui/           # Node   · ETF Orca 모바일 앱 (Expo, pnpm 워크스페이스 밖)
 │       ├── app-landing/      # 정적   · ETF Orca 랜딩페이지 (etforca.com, HTML 한 장 — 빌드 도구 없음)
 │       ├── portfolio-ui/     # Node   · 포트폴리오 분석·보유 관리 대시보드·화면 테스트 (React 19)
-│       └── portfolio-worker/ # Python · 포트폴리오 API·워커·뉴스레터·대시보드 시세/기록/백테스트 (독립 워크스페이스, 전용 PostgreSQL)
+│       ├── portfolio-worker/ # Python · 포트폴리오 API·워커·뉴스레터·대시보드 시세/기록/백테스트 (독립 워크스페이스, 전용 PostgreSQL)
+│       ├── truth-web/        # 정적   · 투자정보 기만 검증 화면 (etforca.com/truth/, 빌드 도구 없음)
+│       └── truth-agent/      # Python · 기만 검증 사건 계약 검사·공개 데이터 생성
 ├── libs/                     # 가져다 쓰는 공유 코드 (제품 무관 공유)
 │   ├── schema/               # ★ DB 스키마 = 단일 진실 공급원(SSOT)
 │   │   ├── migrations-cloud/ #   Flyway cloud 세트 (+ migrations-onprem/ = 온프렘 세트)
@@ -59,11 +61,12 @@ JVM은 `settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs
 | JVM | `settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api · sync-agent · intake · screening-worker |
 | JVM (ETF Orca) | `apps/etforca/app-api/settings.gradle` | app-api |
 | Node | `pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
-| Python | `pyproject.toml` | analysis-engine-v2 · db-query · data-pipeline · ontology |
+| Python | `pyproject.toml` | analysis-engine-v2 · db-query · data-pipeline · ontology · truth-agent |
 
 ## apps — 배포 단위
 
 포트폴리오 서비스는 `apps/etforca/portfolio-ui`(React 19)와 `apps/etforca/portfolio-worker`(독립 Python 워크스페이스)로 구성한다. 후자는 API·워커를 별도 프로세스로 실행하고 전용 PostgreSQL을 사용한다. 분석 실행은 기존 분석 엔진·온톨로지와 독립적이며, 보유 ETF 뉴스레터는 공개된 기존 전망을 우선 재사용하고 없는 종목은 워커에서 조사한다. 이메일 발송은 같은 호스트의 별도 예약 프로세스가 담당한다. [설계와 실행 경계](design/portfolio-worker.md).
+투자정보 기만 검증 서비스는 `apps/etforca/truth-web`(정적 화면)과 `apps/etforca/truth-agent`(사건 계약 검사·공개 데이터 생성)로 구성한다. 사건 하나를 JSON 파일 하나로 두고, 화면은 그 파일에서 만든 공개 데이터만 읽는다. [설계](design/truth-service.md) · [조사 방법론](design/truth-investigation-methodology.md).
 포폴 고객·관리자 UI의 토큰·공통 조작부·확인 팝업은 `portfolio-ui/src/design-system`에서 관리한다. 기존 `ui-kit` 아이콘을 재사용한다. 전시 화면과 변경 절차는 [Orca UI](design/portfolio-design-system.md)를 따른다.
 
 | 앱 | 런타임 | 아티팩트 | 역할 |
@@ -84,6 +87,8 @@ JVM은 `settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs
 | `app-api` | JVM | **edge-cloud** (`etforca.edgesignal.dev`, 별도 RDS·ElastiCache — [ADR-0056](adr/0056-etforca-app-api-infra.md)) | ETF Orca 앱 API. 회원·ETF·커뮤니티·전망 투표 — Redis 장애 격리 실험 트랙(Sentinel failover·Cluster 부분 장애, 모듈 README 가 정본). **자체 PostgreSQL 스키마·Flyway 를 모듈 안에 둔다(`libs/schema` 밖)** — 배포 아티팩트·스키마 SSOT 편입은 ADR 미결(ALPHA-1070·1078) |
 | `app-ui` | Node(Expo) | **앱 스토어** (iOS·Android, EAS 빌드) | ETF Orca 모바일 앱. pnpm 워크스페이스에서 제외하고 자체 npm lock 으로 관리한다(Metro 와 pnpm 심볼릭 링크 충돌, 모듈 README 가 정본) |
 | `app-landing` | 정적(HTML) | **edge-cloud** (`etforca.com`, S3·CloudFront) | ETF Orca 랜딩페이지. 원본은 Claude Artifact용 조각 문서이고 `build.sh` 가 문서 뼈대(doctype·`<html>`·`<head>`·`<body>`)를 씌워 서빙용 `index.html` 을 만든다. 워크스페이스(JVM·Node·Python) 어디에도 등록하지 않는다. dev 머지 시 `deploy-app-landing.yml` 이 S3 에 올린다(모듈 README 가 정본) |
+| `truth-web` | 정적(HTML) | **edge-cloud** (`etforca.com/truth/`, 랜딩 버킷 `truth/` 접두어) | 투자정보 기만 검증 화면(홈·사건 상세·목록). `truth/data/` 의 공개 데이터를 읽기만 한다. 워크스페이스 미등록, dev 머지 시 `deploy-truth-web.yml` 이 올린다 |
+| `truth-agent` | Python | **edge-cloud** | 사건 JSON 계약 검사(`case.schema.json` + 의미 규칙)와 공개 데이터(`index.json`·`cases/<id>.json`) 생성. 처음 게시할 사건은 `seed/` |
 
 sync-agent(DMZ Pull·릴레이) · intake(내부망 수신·저장) · screening-worker(상태 분기·자동 게시)는 **edge-onprem**으로 구현됐습니다([ADR-0036](adr/0036-sync-agent-intake-topology.md) · [docs/implementation.md](implementation.md) §1). `tenant-sync-api`는 별도 엣지(sync 전용 ALB)로 노출되며, mTLS 종단은 trust store 주입(ALPHA-447) 전까지 꺼져 있습니다([ADR-0032](adr/0032-retire-gateway.md)로 클라우드 gateway 은퇴).
 

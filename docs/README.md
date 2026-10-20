@@ -111,3 +111,8 @@
 - [Orca UI 디자인 시스템·반복 제작 절차](design/portfolio-design-system.md)
 - [포트폴리오 UI 디테일 조사·레퍼런스·해결 기록](design/portfolio-ui-detail-research.md)
 - [포트폴리오 고객 흐름 UX 문제·원인·해결·검증](design/portfolio-ux-audit.md)
+
+# 투자정보 기만 검증 문서
+
+- [투자정보 기만 검증 조사 방법론](design/truth-investigation-methodology.md): 6유형·유형별 판정·경쟁가설·공개용 두 문장. 사건을 쓰거나 판정할 때의 정본.
+- [투자정보 기만 검증 서비스 설계](design/truth-service.md): 사건 JSON 계약, 화면 숫자의 정의, 매시 갱신 흐름과 한계.

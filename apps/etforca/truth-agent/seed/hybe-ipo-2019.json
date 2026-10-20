@@ -1,0 +1,95 @@
+{
+  "schemaVersion": 1,
+  "id": "hybe-ipo-2019",
+  "subject": "하이브",
+  "instruments": [{ "code": "352820", "name": "하이브" }],
+  "aliases": ["방시혁", "HYBE", "빅히트"],
+  "speaker": "방시혁 의장 측 (경찰 발표 기준)",
+  "audience": "기존 주주(구주 매도자)와 매수 측 PEF 출자자",
+  "headline": [
+    "팔 사람에겐 ‘상장 계획 없다’, 살 펀드의 출자자에겐 ‘IPO 목표’라고 설명했다는 게 경찰 발표입니다.",
+    "상장 후 주식을 팔아 얻은 이익 일부를 대주주가 나눠 받는 계약도 있었습니다."
+  ],
+  "status": "pending",
+  "behaviors": [
+    {
+      "type": "concealed",
+      "verdict": "suspected",
+      "basis": "경찰은 2019년 상장 준비가 진행되던 시기에 기존 주주에게는 상장 계획이 없다는 취지로 설명하고, 매수 측 PEF 출자자에게는 IPO 목표를 설명했다고 발표했습니다. 수신자별 설명 원문은 공개되지 않았습니다.",
+      "sourceIds": ["news-donga-20260903"]
+    }
+  ],
+  "contrast": {
+    "before": {
+      "label": "기존 주주에게 한 설명 (경찰 발표)",
+      "text": "상장 계획이 없다는 취지로 설명하며 지분을 넘기게 했습니다.",
+      "sourceId": "news-donga-20260903"
+    },
+    "after": {
+      "label": "PEF 출자자에게 한 설명 (경찰 발표)",
+      "text": "같은 시기 매수 측 PEF는 상장을 목표로 출자자를 모았습니다.",
+      "sourceId": "news-donga-20260903"
+    }
+  },
+  "levels": { "behavior": "suspected", "intent": "insufficient", "harm": "insufficient", "legal": "suspected" },
+  "legalStatus": "경찰 불구속 송치(2026-09-03). 검찰 처분은 미확인",
+  "ach": {
+    "best": "undecided",
+    "strongestCounter": "상장 준비가 있었다는 사실만으로 상장 성공이 확정돼 있었다고 할 수 없습니다. PEF 측은 수익배분이 IPO 실패 때 재매입 위험을 부담한 대가라고 설명했습니다.",
+    "decisiveEvidence": "상대방별 제안서·통신 원문, 문서 수정·삭제 이력, 펀드별 배분표. 매도자도 같은 준비 정보를 받았다는 자료가 나오면 강한 반증이 됩니다."
+  },
+  "beneficiary": "경찰은 혐의 이익을 2,631억원으로 산정했습니다. 수사기관의 산정액이며 하이브 회사의 손실이나 확정된 이익이 아닙니다.",
+  "impact": 92,
+  "impactReason": "상장 당시 정보 공정성, 경영진 신뢰와 대주주 지분 처분 제한이 하이브 투자 판단에 연결됩니다.",
+  "cover": "https://dimg.donga.com/wps/NEWS/IMAGE/2026/09/03/134599648.1.jpg",
+  "video": { "youtube": "eGnCRa5nd58", "title": "‘1900억원대 부당이득 혐의’…경찰, 방시혁 하이브 의장에 구속영장 신청 (MBN)" },
+  "body": [
+    { "h": "전문가 검토와 기존 주주에게 한 설명은 서로 다른 질문입니다" },
+    {
+      "p": "하이브는 2024년 11월 해명공시에서 주주간계약을 상장 주관사에 제공해 검토를 거쳤고 위법이 없다고 판단한다고 밝혔습니다. 경찰이 문제 삼은 것은 기존 매도자에게 전달된 설명과 PEF 출자자에게 전달된 상장 정보의 차이입니다. 주관사가 계약을 검토했다는 사실은 모든 매도자가 같은 정보를 받았다는 사실을 증명하지 않습니다.",
+      "sourceIds": ["disclosure-spn-295677", "news-donga-20260903"]
+    },
+    { "h": "확인한 순서" },
+    {
+      "list": [
+        "2019-04·07 경찰은 상장 검토 지시와 준비팀 가동을 설명했습니다. 내부 원문은 공개되지 않았습니다.",
+        "2019-08~11 매도자에게는 계획 부재 취지로, 매수 측 출자자에게는 IPO 목표로 설명했다는 것이 경찰 주장입니다.",
+        "2020-10-15 유가증권시장에 상장했습니다.",
+        "2020-10-15~20 메인스톤 등이 상장 나흘간 약 3,600억원어치를 장내 매도했다는 보도가 나왔습니다. 매도대금이며 순이익이나 불법이익과 다릅니다.",
+        "2024-11-29 회사가 계약 제공·검토 해명공시를 냈습니다.",
+        "2026-04·05 두 차례 구속영장 신청이 검찰 단계에서 받아들여지지 않았습니다. 본안 무죄 판단은 아닙니다.",
+        "2026-09-03 경찰이 5명을 불구속 송치했습니다."
+      ]
+    },
+    {
+      "p": "해명 취재를 실었다는 사실만으로 매체가 기만에 가담했다고 할 수 없으며, 경찰 브리핑을 인용한 기사 수를 독립 증거 수로 세지 않았습니다.",
+      "sourceIds": ["news-edaily-20260903"]
+    }
+  ],
+  "rebuttal": [
+    {
+      "label": "방 의장 측 변호인",
+      "text": "상장은 불확실했고 각 주체의 별개 의사결정이 결과적으로 맞물렸을 뿐이라며 혐의를 부인했습니다.",
+      "sourceId": "news-donga-20260903"
+    },
+    {
+      "label": "하이브 해명공시 (2024-11-29)",
+      "text": "주주간계약을 상장 주관사에 제공해 검토를 거쳤으며 관련 법령 위반이 없다고 판단한다고 밝혔습니다.",
+      "sourceId": "disclosure-spn-295677"
+    }
+  ],
+  "sources": [
+    { "id": "news-donga-20260903", "kind": "news", "publisher": "동아일보", "title": "경찰 “방시혁, 상장정보 기존 주주에 숨기고 사모펀드에 알려줘”", "url": "https://www.donga.com/news/Society/article/all/20260903/134598941/1", "publishedAt": "2026-09-03", "accessedAt": "2026-10-20" },
+    { "id": "news-edaily-20260903", "kind": "news", "publisher": "이데일리", "title": "“주주 속여 2631억 부당이득”…방시혁 검찰 송치", "url": "https://www.edaily.co.kr/News/Read?mediaCodeNo=257&newsId=03981926645576512", "publishedAt": "2026-09-03", "accessedAt": "2026-10-20" },
+    { "id": "disclosure-spn-295677", "kind": "disclosure", "publisher": "코스콤 공시 전재", "title": "풍문 또는 보도에 대한 해명 (주주간 계약 관련 보도)", "url": "https://spn.stockplus.com/news/api/v1/disclosure_views/koscom/295677", "publishedAt": "2024-11-29", "accessedAt": "2026-10-20" },
+    { "id": "news-edaily-marketin-20241129", "kind": "news", "publisher": "이데일리 마켓인", "title": "‘수천억 차익’ 하이브 상장 전 ‘주주간계약’ 논란…쟁점은", "url": "https://marketin.edaily.co.kr/News/Read?newsId=01859766639090640", "publishedAt": "2024-11-29", "accessedAt": "2026-10-20" },
+    { "id": "news-hani-1257653", "kind": "news", "publisher": "한겨레", "title": "검찰, 방시혁 구속영장 또 반려…“경찰, 보완 수사 이행 안 해”", "url": "https://www.hani.co.kr/arti/society/society_general/1257653.html", "publishedAt": "2026-05-07", "accessedAt": "2026-10-20" },
+    { "id": "news-yna-20201022", "kind": "news", "publisher": "연합뉴스", "title": "빅히트 주주 메인스톤, 상장 나흘간 3천600억 팔아", "url": "https://www.yna.co.kr/view/AKR20201022043800002", "publishedAt": "2020-10-22", "accessedAt": "2026-10-20" },
+    { "id": "video-mbn-egncra5nd58", "kind": "video", "publisher": "MBN", "title": "‘1900억원대 부당이득 혐의’…경찰, 방시혁 하이브 의장에 구속영장 신청", "url": "https://www.youtube.com/watch?v=eGnCRa5nd58", "publishedAt": "2026-04-21", "accessedAt": "2026-10-20" }
+  ],
+  "related": [],
+  "flaggedAt": "2026-10-20",
+  "updatedAt": "2026-10-20T00:00:00+09:00",
+  "origin": "seed",
+  "locked": false
+}

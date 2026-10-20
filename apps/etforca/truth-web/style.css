@@ -1,0 +1,113 @@
+:root{
+  --bg:#050506; --text:#f5f5f7; --muted:rgba(245,245,247,.62); --faint:rgba(245,245,247,.38);
+  --glass:rgba(255,255,255,.055); --line:rgba(255,255,255,.10); --hi:inset 0 1px 0 rgba(255,255,255,.08);
+  --red:#ff453a; --red-text:#ff8a82; --red-soft:rgba(255,69,58,.16);
+  --r-xl:34px; --r-lg:22px; --r-md:16px;
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--text);font-family:Pretendard,-apple-system,"Segoe UI",sans-serif;
+  -webkit-font-smoothing:antialiased;overflow:hidden;word-break:keep-all}
+a{color:inherit;text-decoration:none}
+img{display:block;width:100%;height:100%;object-fit:cover}
+.ph-img{position:relative;background:radial-gradient(120% 90% at 85% 10%,#3a1716 0%,#16161a 55%,#0d0d10 100%);overflow:hidden}
+.ph-img>img{position:absolute;inset:0}
+
+/* 배경: 대표 사진을 크게 흐려 깐다 */
+.bg{position:fixed;inset:-80px;z-index:-1;filter:blur(70px) brightness(.32) saturate(1.3)}
+
+.glass{background:var(--glass);border:1px solid var(--line);box-shadow:var(--hi);
+  backdrop-filter:blur(30px) saturate(160%);-webkit-backdrop-filter:blur(30px) saturate(160%)}
+.pill{border-radius:999px;display:inline-flex;align-items:center;gap:8px}
+
+.window{margin:24px auto;width:min(1360px,calc(100vw - 48px));height:calc(100vh - 48px);border-radius:var(--r-xl);padding:18px;
+  display:flex;flex-direction:column;gap:16px;background:rgba(22,22,26,.45);border:1px solid rgba(255,255,255,.12);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 40px 120px rgba(0,0,0,.6);
+  backdrop-filter:blur(50px) saturate(150%);-webkit-backdrop-filter:blur(50px) saturate(150%)}
+
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.top .pill{padding:10px 18px;font-size:14px}
+/* 최상단 바 (ETF Orca 헤더형) — 스크롤해도 위에 붙어 있다 */
+.topbar{position:sticky;top:14px;z-index:50;width:min(900px,calc(100vw - 48px));margin:14px auto 0;
+  display:flex;align-items:center;justify-content:space-between;gap:20px;padding:6px 6px 6px 12px;border-radius:999px;
+  background:linear-gradient(180deg,rgba(44,44,50,.78),rgba(16,16,20,.78));border:1px solid rgba(255,255,255,.12);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.1),0 14px 40px rgba(0,0,0,.45);
+  backdrop-filter:blur(24px) saturate(170%);-webkit-backdrop-filter:blur(24px) saturate(170%)}
+.logo{display:flex;align-items:center;gap:10px;min-width:0;white-space:nowrap}
+.logo img{flex:none;width:34px;height:34px;padding:4px;border-radius:50%;object-fit:contain;background:rgba(255,255,255,.08)}
+.logo b{font-size:14.5px;font-weight:700;letter-spacing:-.02em}
+.logo small{font-size:13px;color:var(--muted);margin-left:4px;padding-left:12px;border-left:1px solid rgba(255,255,255,.16);overflow:hidden;text-overflow:ellipsis}
+.cta{flex:none;display:flex;align-items:center;gap:6px;padding:9px 14px 9px 18px;border-radius:999px;background:#fff;color:#000;
+  font-size:13.5px;font-weight:700;transition:transform .2s,box-shadow .2s}
+.cta svg{width:13px;height:13px}
+.cta:hover{transform:translateY(-1px);box-shadow:0 6px 18px rgba(255,255,255,.18)}
+.window{margin-top:16px}
+.score{color:var(--muted)}
+.score b{color:var(--text);font-variant-numeric:tabular-nums}
+.score em{font-style:normal;color:var(--red-text);font-weight:600}
+
+/* 파급력 가치 막대: 0원 ~ 100억원 */
+.vbar{height:6px;border-radius:6px;background:rgba(255,255,255,.14);overflow:hidden}
+.vbar i{display:block;height:100%;border-radius:6px;background:var(--red)}
+
+.tag{padding:5px 11px;font-size:11px;font-weight:600}
+.tag.red{background:var(--red-soft);border-color:rgba(255,69,58,.3);color:var(--red-text)}
+.btn{padding:11px 20px;font-size:14px;font-weight:600;background:#fff;color:#000}
+.btn svg{width:14px;height:14px}
+
+.ph{display:flex;justify-content:space-between;align-items:center;padding:0 4px 12px}
+.ph h3{font-size:15px;font-weight:600}
+.ph small,.ph a{font-size:11px;color:var(--faint)}
+.ph a:hover{color:var(--text)}
+
+/* 목록 표 (스포티파이 차트형): 홈 아래 목록과 list.html 이 같이 쓴다 */
+.chart{padding:28px 6px 8px}
+.chart .ph h3{font-size:22px}
+.trow{display:grid;grid-template-columns:44px minmax(0,1fr) 130px 210px 100px;align-items:center;gap:16px;padding:10px 14px;border-radius:12px}
+.thead{font-size:12px;color:var(--faint);border-bottom:1px solid var(--line);border-radius:0;padding-bottom:10px;margin-bottom:8px}
+a.trow:hover{background:rgba(255,255,255,.07)}
+.no{font-size:17px;font-weight:600;color:var(--muted);text-align:center;font-variant-numeric:tabular-nums}
+.no svg{display:none;width:16px;height:16px;margin:auto;color:var(--text)}
+a.trow:hover .no span{display:none}
+a.trow:hover .no svg{display:block}
+.top3 .trow:nth-child(n+2):nth-child(-n+4) .no{color:var(--red-text)}  /* 1번째 자식은 머리행 */
+.ti{display:flex;align-items:center;gap:14px;min-width:0}
+.ti .ph-img{flex:none;width:48px;height:48px;border-radius:6px}
+.ti div:last-child{min-width:0}
+.ti b{display:block;font-size:15px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ti small{font-size:13px;color:var(--muted)}
+.trow .type,.trow .date{font-size:13px;color:var(--muted)}
+.trow .date{text-align:right;font-variant-numeric:tabular-nums}
+.st b{display:block;font-size:14px;margin-bottom:7px;font-variant-numeric:tabular-nums}
+.years-tab{display:flex;gap:8px;margin:0 4px 14px}
+.years-tab button{font:inherit;font-size:13px;color:var(--muted);padding:7px 14px;border-radius:999px;border:1px solid var(--line);background:none;cursor:pointer}
+.years-tab button.on{background:#fff;color:#000;border-color:#fff;font-weight:600}
+.trow.r{grid-template-columns:44px minmax(0,1fr) 90px 130px 190px 70px}
+.trow.r .date{text-align:left}
+.res{display:flex}
+
+/* 결과 태그: 상세 페이지 유형 태그와 같은 알약형. 적중 빨강 · 빗나감 회색 · 판단 중 밝은 회색 */
+.sticker{display:inline-block;font-style:normal;font-size:11.5px;font-weight:600;line-height:1.2;white-space:nowrap;
+  padding:4px 11px;border-radius:999px;border:1px solid;box-shadow:var(--hi);backdrop-filter:blur(12px)}
+.s-confirmed{background:var(--red-soft);border-color:rgba(255,69,58,.35);color:var(--red-text)}
+.s-refuted{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.16);color:var(--muted)}
+.s-pending{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.24);color:var(--text)}
+.trow.miss b{color:var(--faint);text-decoration:line-through}
+.trow .span{font-size:13px;color:var(--muted);text-align:right;font-variant-numeric:tabular-nums}
+.empty{padding:24px 14px;color:var(--faint);font-size:14px}
+.see-all{display:flex;justify-content:center;align-items:center;gap:10px;margin-top:14px}
+.see-all small{font-size:12px;color:var(--faint)}
+.see-all a{padding:11px 22px;font-size:14px;font-weight:600;transition:background .2s,color .2s}
+.see-all a:hover{background:#fff;color:#000}
+
+@media (max-width:900px){
+  body{overflow:auto}
+  .window{height:auto;width:auto;margin:12px;padding:14px;border-radius:26px}
+  .top .pill{padding:8px 14px;font-size:13px}
+  .topbar{width:auto;margin:8px 12px 0;top:8px;padding-left:12px}
+  .logo small{display:none}
+  .logo b{font-size:14px;overflow:hidden;text-overflow:ellipsis}
+  .trow{grid-template-columns:32px minmax(0,1fr) 90px;gap:12px;padding:10px 6px}
+  .trow .type,.trow .date,.trow .span{display:none}
+  .trow.r{grid-template-columns:32px minmax(0,1fr) 60px}
+}
