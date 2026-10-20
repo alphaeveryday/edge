@@ -30,6 +30,7 @@ body{overflow-y:auto}
 .big b{font-size:52px;line-height:1;font-weight:800;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
 .big span{font-size:18px;font-weight:700}
 .rate{margin-left:auto;align-self:center;padding:7px 13px;border-radius:999px;background:var(--red-soft);color:var(--red-text);font-size:14px;font-weight:700}
+.rate.none{background:none;padding:0;color:var(--faint);font-size:12.5px;font-weight:500}
 .legend{display:flex;gap:14px;margin-top:12px;font-size:12px;color:var(--muted)}
 .legend b{color:var(--text);font-variant-numeric:tabular-nums}
 .key{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px}
@@ -73,7 +74,8 @@ body{overflow-y:auto}
 .hero-body>span{align-self:flex-start;padding:8px 14px;font-size:12px;font-weight:600}
 .hero-main{max-width:640px}
 .subject{font-size:14px;font-weight:700;color:var(--red-text);margin-bottom:10px}
-.hero h1{font-size:clamp(22px,2.4vw,34px);line-height:1.25;letter-spacing:-.02em;font-weight:700}
+.hero h1{font-size:clamp(24px,2.8vw,40px);line-height:1.2;letter-spacing:-.025em;font-weight:800}
+.hero-sub{margin-top:12px;font-size:15px;line-height:1.55;color:rgba(245,245,247,.82);max-width:560px}
 .val{display:flex;align-items:baseline;gap:10px;margin-top:22px}
 .val small{font-size:13px;color:var(--muted)}
 .val b{font-size:26px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
@@ -121,6 +123,7 @@ body.searching .search{display:flex}
 .tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px}
 .tile{position:relative;height:120px;border-radius:12px;overflow:hidden;padding:16px;font-size:19px;font-weight:700;cursor:pointer;border:0;color:#fff;text-align:left;font-family:inherit}
 .tile small{display:block;font-size:12px;font-weight:500;opacity:.75;margin-top:4px}
+.tile:disabled{opacity:.4;cursor:default}
 .tile .ph-img{position:absolute;right:-14px;bottom:-8px;width:84px;height:84px;border-radius:6px;transform:rotate(25deg);box-shadow:0 4px 16px rgba(0,0,0,.45)}
 
 /* 결과: 상위 결과 + 사건 목록 */
@@ -141,6 +144,9 @@ body.searching .search{display:flex}
 
 @media (max-width:900px){
   .grid{display:flex;flex-direction:column;height:auto}
+  .side{display:contents}
+  .nav{order:-4;display:flex;padding:6px}
+  .nav a{flex:1;justify-content:center;padding:8px}
   .hero{order:-2;height:460px}
   .more{order:-1}
   .search{order:-3;min-height:70vh}
@@ -148,6 +154,9 @@ body.searching .search{display:flex}
   .cards{flex:none;height:230px}
   .card{flex-basis:72%}
   .results{grid-template-columns:1fr}
+  .tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .tile{height:92px;font-size:16px;padding:14px}
+  .tile .ph-img{width:54px;height:54px;right:-8px;bottom:-6px}
 }
 </style>
 </head>
@@ -169,8 +178,7 @@ body.searching .search{display:flex}
           <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 3v18M9 3v18M14 4l6 16.5"/></svg>밝혀진 거짓
         </div>
         <div class="stat">
-          <small>확인된 거짓 이슈</small>
-          <div class="big"><b id="hitN">–</b><span>개</span><span class="rate" id="rate"></span></div>
+          <div class="big"><b id="hitN">–</b><span>건</span><span class="rate" id="rate"></span></div>
           <div class="legend" id="legend"></div>
         </div>
         <div class="chart-box">
@@ -192,7 +200,7 @@ body.searching .search{display:flex}
     <section class="search glass" id="searchView">
       <div class="sbox" id="sbox">
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>
-        <input id="q" type="search" placeholder="어떤 사건을 찾으세요? 기업·언론·유형" autocomplete="off" aria-label="전체 사건 검색">
+        <input id="q" type="search" placeholder="기업·종목·유형으로 찾기" autocomplete="off" aria-label="전체 사건 검색">
         <button id="clear" aria-label="지우기">✕</button>
       </div>
       <div class="chips" id="chips"></div>
@@ -227,7 +235,7 @@ const seeAll = (total, href) =>
 const row = c => `
   <a class="row${c.status === 'refuted' ? ' miss' : ''}" href="${issueHref(c)}" title="${esc(c.headline[0])}">
     <div class="ph-img">${img(c.cover)}</div>
-    <div><b>${esc(c.headline[0])}</b><small>${sticker(c)} ${esc(c.subject)} · ${short(c.resolvedAt || c.flaggedAt)}</small></div>
+    <div><b>${esc(titleOf(c))}</b><small>${sticker(c)} ${esc(c.subject)} · ${short(c.resolvedAt || c.flaggedAt)}</small></div>
   </a>`;
 
 /* ── 성적 · 그래프 ── */
@@ -235,12 +243,14 @@ function renderStat(){
   const s = scoreOf(CASES);
   $('hitN').textContent = s.confirmed;
   $('rate').textContent = rateText(s);
+  $('rate').classList.toggle('none', s.rate === null);
   $('rate').title = '이 서비스가 확인일보다 먼저 기록한 사건 중 행위가 확인된 비율';
   $('legend').innerHTML = `<span><i class="key hit"></i>밝혀짐 <b>${s.confirmed}</b></span><span><i class="key miss"></i>해소 <b>${s.refuted}</b></span><span>판단 중 <b>${pendingOf(CASES).length}</b></span>`;
 }
 
 // 확인 연도별 누적 막대. 첫 확인 연도부터 올해까지 빈 해도 0으로 보여준다.
 function renderBars(done){
+  document.querySelector('.chart-box').hidden = new Set(done.map(yearOf)).size < 2;
   if (!done.length) {
     $('bars').innerHTML = '<p class="empty">아직 판정이 난 사건이 없습니다.</p>';
     $('years').innerHTML = '';
@@ -272,10 +282,13 @@ function renderHome(){
   $('past').innerHTML = done.length ? done.map(row).join('') : '<p class="empty">밝혀진 사건이 생기면 여기에 쌓입니다.</p>';
 
   // 아래 목록: 상위 10건 + 자세히 보기
-  $('chart').innerHTML = pending.length ? PENDING_HEAD + pending.slice(0, HOME_LIMIT).map(pendingRow).join('') : '<p class="empty">지금 판단 중인 사건이 없습니다.</p>';
-  $('rankMore').innerHTML = pending.length ? seeAll(pending.length, 'list.html?kind=pending') : '';
-  $('resolvedList').innerHTML = done.length ? RESOLVED_HEAD + done.slice(0, HOME_LIMIT).map(resolvedRow).join('') : '<p class="empty">아직 판정이 난 사건이 없습니다.</p>';
-  $('resolvedMore').innerHTML = done.length ? seeAll(done.length, 'list.html?kind=resolved') : '';
+  $('rank').hidden = pending.length <= ABOVE_PENDING;
+  $('resolved').hidden = done.length <= ABOVE_RESOLVED;
+  document.querySelector('.below').hidden = $('rank').hidden && $('resolved').hidden;
+  $('chart').innerHTML = PENDING_HEAD + pending.slice(0, HOME_LIMIT).map(pendingRow).join('');
+  $('rankMore').innerHTML = pending.length > HOME_LIMIT ? seeAll(pending.length, 'list.html?kind=pending') : '';
+  $('resolvedList').innerHTML = RESOLVED_HEAD + done.slice(0, HOME_LIMIT).map(resolvedRow).join('');
+  $('resolvedMore').innerHTML = done.length > HOME_LIMIT ? seeAll(done.length, 'list.html?kind=resolved') : '';
 
   const [top, ...rest] = pending;
   if (top) {
@@ -284,10 +297,11 @@ function renderHome(){
     $('hero').innerHTML = `
       <div class="ph-img">${img(top.cover)}</div>
       <div class="hero-body">
-        <span class="pill glass">⚠️ 판단 중 1위</span>
+        <span class="pill glass">판단 중 · 파급력 1위</span>
         <div class="hero-main">
-          <div class="subject">${esc(top.subject)}</div>
-          <h1>${esc(top.headline[0])}</h1>
+          ${top.title ? '' : `<div class="subject">${esc(top.subject)}</div>`}
+          <h1>${esc(titleOf(top))}</h1>
+          ${top.title ? `<p class="hero-sub">${esc(top.headline[0])}</p>` : ''}
           <div class="val"><small>파급력 가치</small><b>${won(top.impact)}</b></div>
           ${vbar(top.impact)}
           <span class="btn pill">자세히 보기 ${ARROW}</span>
@@ -302,8 +316,8 @@ function renderHome(){
     <a class="card ph-img" href="${issueHref(c)}">${img(c.cover)}
       <span class="rank">${String(i + 2).padStart(2, '0')}</span>
       <div class="meta">
-        <div class="subject">${esc(c.subject)}</div>
-        <h4>${esc(c.headline[0])}</h4>
+        ${c.title ? '' : `<div class="subject">${esc(c.subject)}</div>`}
+        <h4>${esc(titleOf(c))}</h4>
         <div class="cval"><span>파급력 가치</span><b>${won(c.impact)}</b></div>
         ${vbar(c.impact)}
       </div>
@@ -334,8 +348,8 @@ function renderSearch(){
     $('chips').innerHTML = '';
     $('sres').innerHTML = `<h2>유형별 둘러보기</h2><div class="tiles">${Object.entries(TYPES).map(([code, name], i) => {
       const of = CASES.filter(c => (c.types || []).includes(code)), pic = of.find(c => c.cover)?.cover;
-      return `<button class="tile" style="background:${TILE_COLORS[i % TILE_COLORS.length]}" data-q="${esc(name)}">
-        ${esc(name)}<small>${of.length}건</small><div class="ph-img">${img(pic)}</div></button>`;
+      return `<button class="tile" style="background:${TILE_COLORS[i % TILE_COLORS.length]}" data-q="${esc(name)}"${of.length ? '' : ' disabled'}>
+        ${esc(name)}<small>${of.length}건</small>${pic ? `<div class="ph-img">${img(pic)}</div>` : ''}</button>`;
     }).join('')}</div>`;
     return;
   }
@@ -357,7 +371,7 @@ function renderSearch(){
         <h2>상위 결과</h2>
         <a class="topcard" href="${issueHref(top)}">
           <div class="ph-img">${img(top.cover)}</div>
-          <h3>${esc(top.headline[0])}</h3>
+          <h3>${esc(titleOf(top))}</h3>
           <div class="meta">${sticker(top)}${esc(top.subject)} · ${esc(typeNames(top))}</div>
           <span class="play">${ARROW}</span>
         </a>

@@ -61,6 +61,10 @@ def render(cases: list[dict], web_dir: Path, focus: list[str], *, timeout_ms: in
                     errors: list[str] = []
                     warnings: list[str] = []
                     page = browser.new_page()
+                    # 외부 글꼴·스타일은 받지 않는다 — 글꼴 CDN 이 느리면 멀쩡한 사건이 '그려지지 않음'으로 되돌려진다.
+                    # 화면 구조 검사에는 필요 없고, 사진(외부 이미지)은 경고 확인용으로 그대로 받는다.
+                    page.route("**/*", lambda route: route.abort() if route.request.resource_type in ("font", "stylesheet")
+                               and not route.request.url.startswith(base) else route.continue_())
                     _watch(page, errors, warnings)
                     try:
                         page.goto(url, wait_until="load", timeout=timeout_ms)
@@ -120,8 +124,8 @@ def _issue_problems(page, case: dict) -> list[str]:
     out = []
     if shown["missing"]:
         return ["상세 화면이 '사건을 찾을 수 없습니다'로 그려졌습니다. 사건 파일을 읽지 못했습니다."]
-    if shown["h1"] != case["headline"][0].strip():
-        out.append("상세 화면 제목이 headline[0] 과 다르게 그려졌습니다.")
+    if shown["h1"] != (case.get("title") or case["headline"][0]).strip():
+        out.append("상세 화면 제목이 title(없으면 headline[0])과 다르게 그려졌습니다.")
     if shown["sections"] != 3:
         out.append(f"핵심 거짓·본문·반론 세 섹션 중 {shown['sections']}개만 그려졌습니다.")
     if shown["sources"] != len(case["sources"]):

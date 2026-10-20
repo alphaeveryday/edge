@@ -29,6 +29,8 @@ DISCLOSURE_HOSTS = ("dart.fss.or.kr", "opendart.fss.or.kr", "kind.krx.co.kr")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # 공개 문장에서 확인 수준을 넘어서는 단정어. 행위를 구체적으로 쓰게 한다 (방법론 §8 작성 원칙).
 BANNED_HEADLINE_WORDS = ("거짓말", "사기꾼")
+# 짧은 제목은 훑어 읽는 자리라 판정·감정·뭉뚱그린 말이 더 쉽게 단정처럼 읽힌다
+BANNED_TITLE_WORDS = BANNED_HEADLINE_WORDS + ("거짓", "기만", "논란", "의혹", "충격", "경악", "폭로", "결국")
 
 
 class CaseError(ValueError):
@@ -206,6 +208,15 @@ def problems(case: dict, *, file_id: str | None = None, today: date | None = Non
     if not math.isfinite(case["impact"]):
         found.append("impact: 0~100 사이 숫자여야 합니다.")
 
+    if title := case.get("title"):
+        names = [case["subject"], *(i["name"] for i in case["instruments"]), *case.get("aliases", [])]
+        if not any(n and n in title for n in names):
+            found.append(f"title: '{title}' 에 주체 이름(subject·종목명·별칭 중 하나)이 없습니다. 누구의 사건인지 제목만 보고 알아야 합니다.")
+        if title.rstrip()[-1:] in (".", "?", "!", "…"):
+            found.append("title: 문장이 아니라 제목입니다. 끝에 마침표·물음표·느낌표를 쓰지 않습니다.")
+        for word in BANNED_TITLE_WORDS:
+            if word in title:
+                found.append(f"title: '{word}' 대신 무슨 일인지 구체적으로 쓰세요 (예: '공개매수 직후 2.5조 증자 발표').")
     for i, sentence in enumerate(case["headline"]):
         for word in BANNED_HEADLINE_WORDS:
             if word in sentence:

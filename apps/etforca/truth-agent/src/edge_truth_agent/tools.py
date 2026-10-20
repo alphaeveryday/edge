@@ -21,7 +21,7 @@ from .workspace import Workspace
 
 KST = timezone(timedelta(hours=9))
 
-EDITABLE = frozenset({"subject", "instruments", "aliases", "topics", "speaker", "audience", "headline", "behaviors", "contrast", "levels",
+EDITABLE = frozenset({"subject", "title", "instruments", "aliases", "topics", "speaker", "audience", "headline", "behaviors", "contrast", "levels",
                       "legalStatus", "ach", "beneficiary", "cover", "video", "body", "rebuttal"})
 READ_ONLY = ("id", "schemaVersion", "status", "resolution", "resolvedAt", "flaggedAt", "updatedAt", "origin", "locked",
              "sources", "related", "impact", "impactReason")
@@ -431,6 +431,8 @@ def session_problems(ws: Workspace) -> list[str]:
         if case.get("status") != "pending" or case.get("origin") != "agent" or case.get("flaggedAt") != state["today"]:
             found.append("새 사건은 status=pending, origin=agent, flaggedAt=오늘로만 등록합니다.")
         found += _new_firm_verdicts(case, None)
+        if not case.get("title"):
+            found.append("title: 새 사건은 짧은 제목(6~28자, 주체 이름 + 무슨 일)을 채웁니다.")
         # 매체 이름은 모델이 적을 수 있어 주소 호스트로 센다
         publishers = {host_of(s["url"]) for s in case.get("sources", []) if s["kind"] in ("news", "official", "disclosure")} - {""}
         if len(publishers) < 2:

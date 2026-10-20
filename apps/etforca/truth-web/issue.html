@@ -21,10 +21,10 @@
 /* 기사 머리 */
 .head{margin:36px 0 28px}
 .tags{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:16px}
-.subject{font-size:15px;font-weight:700;color:var(--red-text);margin-bottom:8px}
-.subject small{font-weight:500;color:var(--faint);margin-left:6px}
+.codes{margin-top:8px;font-size:13px;color:var(--faint);font-variant-numeric:tabular-nums}
 h1{font-size:clamp(24px,3vw,34px);line-height:1.35;letter-spacing:-.02em}
 .lead{font-size:18px;line-height:1.7;color:rgba(255,255,255,.82);margin-top:14px}
+.lead b{color:var(--text);font-weight:600}
 .byline{font-size:13px;color:var(--faint);margin-top:16px}
 .track{margin-top:24px;max-width:520px}
 .track-label{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:var(--muted);margin-bottom:10px}
@@ -63,7 +63,12 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.35;letter-spacing:-.02em}
 .body figure .ph-img{border-radius:var(--r-lg);aspect-ratio:16/10;border:1px solid var(--line)}
 .body figcaption{font-size:12px;color:var(--faint);margin-top:10px}
 .ref{font-size:11px;vertical-align:super;color:var(--red-text);margin-left:2px}
-.basis{margin-top:30px}
+.basis{margin-top:30px;border-top:1px solid var(--line);padding-top:16px}
+.basis summary{cursor:pointer;font-size:14px;font-weight:600;color:var(--muted);list-style:none;display:flex;align-items:center;gap:8px}
+.basis summary::-webkit-details-marker{display:none}
+.basis summary::before{content:"";width:7px;height:7px;border-right:2px solid currentColor;border-bottom:2px solid currentColor;transform:rotate(-45deg);transition:transform .2s}
+.basis[open] summary{color:var(--text);margin-bottom:16px}
+.basis[open] summary::before{transform:rotate(45deg)}
 .basis h3{font-size:15px;margin-bottom:10px}
 .bh{padding:14px 16px;border-radius:12px;background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07);margin-bottom:8px}
 .bh div{display:flex;gap:8px;align-items:center;margin-bottom:6px;font-size:14px;font-weight:600}
@@ -106,7 +111,7 @@ h1{font-size:clamp(24px,3vw,34px);line-height:1.35;letter-spacing:-.02em}
 <script src="common.js"></script>
 <script>
 const KINDS = {official: '공식 판단', disclosure: '공시', news: '보도', web: '웹 문서', video: '영상'};
-const LEVELS = [['behavior', '행동'], ['intent', '고의'], ['harm', '피해'], ['legal', '법적 책임']];
+const LEVELS = [['behavior', '그렇게 했나'], ['intent', '알고 했나'], ['harm', '피해가 났나'], ['legal', '법적 책임']];
 const HYPOTHESES = {H0: '정당한 설명·수정', H1: '오류·부실 대응', H2: '의도적 기만·회피', H3: '조직적 공모', undecided: '판별 보류'};
 
 function render(c, cases){
@@ -142,9 +147,9 @@ function render(c, cases){
         ${sticker(c)}
         ${c.origin === 'agent' ? '<span class="tag pill glass">AI 감시 중</span>' : ''}
       </div>
-      <div class="subject">${esc(c.subject)}<small>${c.instruments.map(i => `${i.name === c.subject ? '' : esc(i.name) + ' '}${esc(i.code)}`).join(' · ')}</small></div>
-      <h1>${esc(c.headline[0])}</h1>
-      <p class="lead">${esc(c.headline[1])}</p>
+      <h1>${esc(titleOf(c))}</h1>
+      <div class="codes">관련 종목 ${c.instruments.map(i => `${esc(i.name)} ${esc(i.code)}`).join(' · ')}</div>
+      <p class="lead">${c.title ? `<b>${esc(c.headline[0])}</b> ` : ''}${esc(c.headline[1])}</p>
       <div class="byline">기록 ${esc(c.flaggedAt)}${c.resolvedAt ? ` · 확인 ${esc(c.resolvedAt)}` : ''} · 갱신 ${esc(c.updatedAt.slice(0, 10))}</div>
       <div class="track">
         <div class="track-label"><span>파급력 가치</span><b>${won(c.impact)}</b></div>
@@ -155,7 +160,7 @@ function render(c, cases){
     </header>
 
     <section class="sec">
-      <div class="sec-h"><span>01</span>핵심 거짓</div>
+      <div class="sec-h">핵심 거짓</div>
       <div class="qa">
         <div class="qbox glass"><small>${esc(c.contrast.before.label)}</small><p>${esc(c.contrast.before.text)}${ref(c.contrast.before.sourceId)}</p></div>
         <div class="qbox glass after"><small>${esc(c.contrast.after.label)}</small><p>${esc(c.contrast.after.text)}${ref(c.contrast.after.sourceId)}</p></div>
@@ -166,9 +171,10 @@ function render(c, cases){
     </section>
 
     <section class="sec">
-      <div class="sec-h"><span>02</span>본문</div>
+      <div class="sec-h">본문</div>
       <div class="body">${c.body.map(block).join('')}</div>
-      <div class="basis">
+      <details class="basis">
+        <summary>판단 근거 자세히 보기</summary>
         <h3>유형별 판정</h3>
         ${c.behaviors.map(b => `<div class="bh"><div>${esc(TYPES[b.type])}<i class="sticker s-${b.verdict === 'confirmed' ? 'confirmed' : 'pending'}">${VERDICTS[b.verdict]}</i></div><p>${esc(b.basis)}${refs(b.sourceIds)}</p></div>`).join('')}
         <h3 style="margin-top:22px">경쟁 가설</h3>
@@ -178,11 +184,11 @@ function render(c, cases){
           <p><b>결론을 바꿀 증거</b>${esc(c.ach.decisiveEvidence)}</p>
           ${c.beneficiary ? `<p><b>경제적 수혜·위험 부담</b>${esc(c.beneficiary)}</p>` : ''}
         </div>
-      </div>
+      </details>
     </section>
 
     <section class="sec">
-      <div class="sec-h"><span>03</span>반론</div>
+      <div class="sec-h">반론</div>
       ${c.rebuttal.length
         ? c.rebuttal.map(r => `<div class="rebut glass"><small>${esc(r.label)}</small>${esc(r.text)}${ref(r.sourceId)}</div>`).join('')
         : '<div class="rebut glass none">당사자 반론을 확인하고 있습니다.</div>'}
