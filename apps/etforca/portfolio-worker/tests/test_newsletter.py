@@ -116,7 +116,7 @@ def test_signup_api_requires_explicit_consent_and_origin_but_confirmation_needs_
         assert client.post('/api/portfolio/newsletter/confirm', headers=headers, json={'token': token}).json() == {'status': 'confirmed', 'delivery_ready': False}
 
 
-def test_dashboard_signup_needs_owned_holdings_and_explicit_consent_without_an_analysis(newsletter_db):
+def test_dashboard_signup_uses_owned_holdings_and_explicit_consent_without_an_analysis(newsletter_db):
     from edge_portfolio import dashboard
     from test_dashboard_work import asset
     _, owner = newsletter_db
@@ -125,7 +125,7 @@ def test_dashboard_signup_needs_owned_holdings_and_explicit_consent_without_an_a
         headers = {'origin': 'http://localhost:5180'}
         url = '/api/portfolio/workbook/newsletter'
         client.cookies.set(api.COOKIE, 'b' * 64)
-        assert client.post(url, headers=headers, json={'email': 'reader@example.test', 'consent': True}).status_code == 404
+        assert client.get(url).json() == {'subscribed': False}
         client.cookies.set(api.COOKIE, 'a' * 64)
         assert client.get(url).json() == {'subscribed': False}
         assert client.post(url, json={'email': 'reader@example.test', 'consent': True}).status_code == 403
@@ -142,12 +142,13 @@ def test_dashboard_signup_needs_owned_holdings_and_explicit_consent_without_an_a
 
 
 @pytest.mark.parametrize('archive_outage', [False, True])
-def test_dashboard_newsletter_uses_current_holdings_and_skips_an_empty_portfolio(newsletter_db, monkeypatch, archive_outage):
+@pytest.mark.parametrize('from_analysis', [False, True])
+def test_newsletter_follows_current_holdings_then_defaults_when_cleared(newsletter_db, monkeypatch, archive_outage, from_analysis):
     from edge_portfolio import dashboard
     from test_dashboard_work import asset
-    _, owner = newsletter_db
+    job, owner = newsletter_db
     dashboard.save(owner, dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
-    news.subscribe(None, owner, 'reader@example.test')
+    news.subscribe(job if from_analysis else None, owner, 'reader@example.test')
     replacement = {**asset(), 'instrument_id': 'US:QQQ', 'currency': 'USD', 'name': 'QQQ'}
     dashboard.save(owner, dashboard.Save(version=1, workbook=dashboard.Workbook(assets=[replacement])))
     now = datetime.now(agent.KST).replace(hour=15, minute=30)
@@ -194,6 +195,49 @@ def test_dashboard_newsletter_uses_current_holdings_and_skips_an_empty_portfolio
     dashboard.save(owner, dashboard.Save(version=2, workbook=dashboard.Workbook()))
     sender.process_daily(ses, now + timedelta(days=1))
     assert len(sends) == 1
+    with store.connect() as db:
+        queued = db.execute('SELECT instrument_id FROM portfolio_newsletter_content WHERE edition=%s', ((now + timedelta(days=1)).date(),)).fetchall()
+    assert {r['instrument_id'] for r in queued} == {'KR:360750', 'KR:091160'}, 'Clearing holdings switches the next edition to the default instead of stale holdings'
+
+
+@pytest.mark.parametrize('portfolio', ['absent', 'empty', 'cash', 'sold'])
+def test_default_signup_and_daily_delivery_use_equal_weights_without_creating_holdings(newsletter_db, monkeypatch, portfolio):
+    from edge_portfolio import dashboard
+    from test_dashboard_work import asset
+    _, owner = newsletter_db
+    if portfolio != 'absent':
+        assets = [] if portfolio == 'empty' else [
+            {**asset(), 'quantity': 0} if portfolio == 'sold' else
+            {'id': 'cash', 'account': '일반 계좌', 'instrument_id': 'CASH:KRW', 'name': '현금', 'currency': 'KRW', 'amount': 100000}]
+        dashboard.save(owner, dashboard.Save(version=0, workbook=dashboard.Workbook(assets=assets)))
+    with store.connect() as db:
+        original_workbook = db.execute('SELECT payload FROM portfolio_workbooks WHERE owner=%s', (owner,)).fetchone()
+    assert news.subscribe(None, owner, 'reader@example.test') == 'pending'
+    now = datetime.now(agent.KST).replace(hour=15, minute=30)
+    sends = []
+    ses = SimpleNamespace(get_contact=lambda **kw: {'TopicPreferences': [{'TopicName': sender.TOPIC, 'SubscriptionStatus': 'OPT_IN'}]},
+                          send_email=lambda **kw: sends.append(kw) or {'MessageId': 'default-edition'})
+    monkeypatch.setattr(sender.time, 'sleep', lambda _: None)
+    sender.process_daily(ses, now)
+    assert not sends, 'Registration alone never opts the reader into daily mail'
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_newsletter_subscriptions SET status='active'")
+        for holding, change in zip(news.DEFAULT_HOLDINGS, [2, 4]):
+            card = {**holding, 'format': agent.DEFAULT_FORMAT, **H_STORED, 'sources': [],
+                    'quote': {'close': 100, 'change_pct': change, 'trading_date': str(now.date() - timedelta(days=1))}}
+            db.execute("INSERT INTO portfolio_newsletter_content(instrument_id,edition,name,state,content) VALUES (%s,%s,%s,'ready',%s::jsonb)",
+                       (holding['instrument_id'], now.date(), holding['name'], json.dumps(card)))
+    sender.process_daily(ses, now.replace(minute=29))
+    assert not sends
+    sender.process_daily(ses, now)
+    sender.process_daily(ses, now)
+    assert len(sends) == 1
+    message = sends[0]['Content']['Simple']
+    assert '포트폴리오 하루 +3.00%' in message['Subject']['Data'], 'The default is 50:50, not a fabricated customer allocation'
+    assert '기본 구성' in message['Body']['Html']['Data'] and '50%' in message['Body']['Text']['Data']
+    with store.connect() as db:
+        workbook = db.execute('SELECT payload FROM portfolio_workbooks WHERE owner=%s', (owner,)).fetchone()
+    assert workbook == original_workbook, 'Default newsletter holdings must never be saved as actual customer holdings'
 
 
 def test_readiness_outage_cannot_turn_a_committed_confirmation_into_an_error(newsletter_db, monkeypatch, caplog):

@@ -10,7 +10,7 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 from psycopg import Error as DatabaseError
 
-from . import newsletter_email
+from . import newsletter_email, newsletter_store
 from .store import connect
 
 LIST = 'edge-portfolio-newsletter'
@@ -213,15 +213,15 @@ def process_daily(ses, now, *, deadline=float('inf')):
     for row in subscriptions:
         if time.monotonic() >= deadline:
             break
-        # Advance before skipping an empty workbook or making remote calls.
+        # Advance before making remote calls so one slow subscription cannot starve the rest.
         with connect() as db:
             db.execute('UPDATE portfolio_newsletter_subscriptions SET checked_at=now() WHERE id=%s', (row['id'],))
-        if row['job_id'] is None:
-            assets = (row['workbook'] or {}).get('assets', [])
-            row['holdings'] = list({a['instrument_id']: {'instrument_id': a['instrument_id'], 'name': a['name']} for a in assets
-                if a.get('instrument_id') and not a['instrument_id'].startswith('CASH:') and (a.get('quantity') if a.get('quantity') is not None else a.get('amount')) != 0}.values())
-            if not row['holdings']:
-                continue
+        use_workbook = row['workbook'] is not None
+        source = row['workbook'].get('assets', []) if use_workbook else (row['analysis_input'] or {}).get('holdings', [])
+        row['holdings'] = newsletter_store.instruments(source, analysis=not use_workbook)
+        use_default = not row['holdings']
+        if use_default:
+            row['holdings'] = newsletter_store.instruments(newsletter_store.DEFAULT_HOLDINGS)
         try:
             contact = contact_for(ses, row['email'])
         except (ClientError, BotoCoreError) as error:
@@ -260,8 +260,13 @@ def process_daily(ses, now, *, deadline=float('inf')):
         if (now.hour, now.minute) < (15, 30):
             continue
         try:
-            weights = dashboard_weights(row, cards) if row['job_id'] is None else None if row['analysis_input'].get('input_mode') == 'names' else portfolio_weights(row['analysis_input'].get('holdings', []))
-            if row['job_id'] is None and weights is None:
+            if use_default:
+                weights = portfolio_weights(newsletter_store.DEFAULT_HOLDINGS)
+            elif use_workbook:
+                weights = dashboard_weights(row, cards)
+            else:
+                weights = None if (row['analysis_input'] or {}).get('input_mode') == 'names' else portfolio_weights(source)
+            if use_workbook and not use_default and weights is None:
                 # Prepared news can describe the prior session after today's Korean close is available.
                 try:
                     with connect() as db:
@@ -271,7 +276,7 @@ def process_daily(ses, now, *, deadline=float('inf')):
                     continue
                 weights = dashboard_weights(row, cards, snapshots)
             rendered = newsletter_email.daily(edition, cards, newsletter_email.DEFAULT_FORMAT, issued_at=now,
-                                               weights=weights)
+                                               weights=weights, default_portfolio=use_default)
         except Exception as error:
             # One unrenderable edition must not stop the tick for every later recipient. Rendering is deterministic on
             # the cached cards, so record the failure instead of retrying it every tick until midnight.

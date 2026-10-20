@@ -480,7 +480,7 @@ def calendar(letter, edition, cards):
                '앞으로 예정된 일정:', *text, '')
 
 
-def brief_letter(edition, cards, weights, at, full=None):
+def brief_letter(edition, cards, weights, at, full=None, *, default_portfolio=False):
     """Production letter H: one headline, a one-glance dashboard, a short block only for holdings whose thesis moved
     (or moved twice the usual range), the calendar, and every source on one line."""
     ready = [card for card in cards if fits(card, 'H')]
@@ -500,6 +500,9 @@ def brief_letter(edition, cards, weights, at, full=None):
         headline, dek = '오늘의 소식을 준비하지 못했어요', '최신 자료를 확보하지 못했어요. 다음 발행에서 다시 확인할게요.'
     letter = Letter()
     masthead(letter, edition, at)
+    if default_portfolio:
+        note = '보유 종목이 없어 기본 구성으로 보내드려요. TIGER 미국S&P500 50% · KODEX 반도체 50%'
+        letter.add(row(para(note, 13, MUTED)), note, '')
     letter.add(row(f'<h1 class="hl" style="margin:0;font-family:{SERIF};font-size:29px;line-height:1.38;letter-spacing:-.5px;color:{INK};font-weight:700;word-break:keep-all">{e(headline)}</h1>', '32px 32px 30px'),
                headline, '')
     dashboard(letter, cards, ready, weights)
@@ -523,14 +526,14 @@ def brief_letter(edition, cards, weights, at, full=None):
     return finish(letter, edition, headline, dek, 'H', portfolio_change(cards, weights))
 
 
-def daily(edition, cards, fmt=DEFAULT_FORMAT, *, weights=None, purpose='long_term', issued_at=None):
-    """weights: instrument_id → portfolio share (A only, when the reader gave one). purpose: G's reading lens.
+def daily(edition, cards, fmt=DEFAULT_FORMAT, *, weights=None, purpose='long_term', issued_at=None, default_portfolio=False):
+    """weights: instrument_id → portfolio share. purpose: G's reading lens.
     issued_at: the send time shown in the masthead.
 
     Stories print in full in importance order until the letter would pass BUDGET; the rest become briefs
     (headline and dek), the way a magazine runs the remainder as short items."""
     for full in range(len(cards), -1, -1):
-        rendered = (brief_letter(edition, cards, weights, issued_at, full) if fmt == 'H'
+        rendered = (brief_letter(edition, cards, weights, issued_at, full, default_portfolio=default_portfolio) if fmt == 'H'
                     else compose(edition, cards, fmt, weights, purpose, full, issued_at))
         if len(rendered[1].encode()) <= BUDGET:
             return rendered
