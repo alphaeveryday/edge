@@ -11,6 +11,7 @@
 | `dags/edge_batch.py` | 레인 공통 연결 코드. `EdgeStep`(ECS 실행과 exit code 해석), 슬롯과 `pipeline_run_id` 파생 |
 | `dags/edge_investor_intraday.py` | 장중 수급 DAG: `plan → collect → normalize → load → verdict` |
 | `dags/edge_source_daily.py` | 원천 관측 DAG(ALPHA-1130, Airflow 전용 레인 `source-daily`): `plan → {매크로·업종·재무} 각각 collect → normalize → load → report → verdict`. 생성 시 pause — 아래 "원천 관측 레인" |
+| `dags/edge_disclosure.py` | 공시 보충 배치 DAG(ALPHA-1407, 평일 19:30): `plan → collect → {정제 2개} → load → report → verdict`. 생성 시 pause. 아직 SFN 이 실행한다 — 아래 "공시 보충 배치 레인" |
 | `dags/edge_dividend_daily.py` | 배당 갱신 전용 DAG: 03:00 KST, 기존 배치 종료 확인 → plan → collect → normalize → load → report. 생성 시 pause. 수집·조회 범위 계약과 활성화 순서는 `docs/design/portfolio-dividend-ledger.md` |
 | `tests/` | DagBag 파싱, terraform(슬롯·명령) 대조, exit code·당일 수집·재처리·보고·활성화 규칙. CI `test-airflow.yml`이 공식 Airflow 이미지(다이제스트 고정) 안에서 실행한다 |
 | `dags/edge_investor_intraday_verify.py` | 격리 검증 DAG — 운영 DAG 와 같은 `build_dag`·EdgeStep, 검증 전용 클러스터·태스크 정의, conf 장애 주입. `EDGE_VERIFY_CLUSTER` 가 있을 때만 등록 |
@@ -1214,6 +1215,29 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
 - entry.py `_LANE_STATE_MACHINE_ARN_ENV`의 이 레인 행과 `OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN` 주입
 
 Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 제거한다.
+
+## 공시 보충 배치 레인(disclosure, ALPHA-1407)
+
+**현재 상태(2026-10-20): 실행 경로만 있다. 운영 전환 전이다.** dev 의 평일 19:30 슬롯은 SFN `edge-dev-data-pipeline-disclosure` 가 돈다. `edge_disclosure` 는 pause 상태로 배포되고, `disclosure_orchestrator` 는 기본값 `"SFN"` 이다.
+
+- 롤백할 길을 남기려고 `ops.entry._AIRFLOW_ONLY_LANES` 에 넣지 않는다. 그래서 SFN 과 Airflow 둘 다 이 레인을 계획할 수 있다.
+- 이 레인의 스텝을 한 주체만 실행하게 하는 장치는 아래 전환 절차뿐이다. pause 와 스케줄 DISABLED 가 그 역할을 한다.
+- SFN 과 같은 것·달라진 것은 DAG 도크스트링에 있다.
+- 명령은 `statemachine.tf` 잡 목록이 정본이다. `tests/sfn_commands.py` 가 DAG 명령을 태스크 정의·인자까지 대조한다.
+- 인자에 terraform 변수(`${var.…}`)가 섞인 잡(장전 `krx_etf_deadline_sec`, 뉴스 `tag_news_limit`·`assemble_window_days`)은 그 대조에서 실패한다. 그 레인을 옮길 때 값을 넘기는 방법을 정하고 대조도 함께 넓힌다.
+
+**전환·롤백.** 위 "운영 전환·롤백 절차(장중 수급)"를 따르되, 아래만 바꿔 읽는다.
+
+- 종료 확인 ①·⑥: `pipeline_type = 'disclosure'`.
+- 종료 확인 ②: 작업 키 4개 `DISCLOSURE_COLLECTION_DART`·`NORMALIZE_DISCLOSURE`·`NORMALIZE_DISCLOSURE_SEGMENT`·`LOAD_DISCLOSURE`.
+- 종료 확인 ③: 이 레인 명령(`ingest-raw-disclosure`·`normalize-disclosure`·`normalize-disclosure-segment`·`load-disclosure`)으로 거른다.
+- 종료 확인 ④: SFN `edge-dev-data-pipeline-disclosure`.
+- 전환 변수: `envs/dev/main.tf` 의 `disclosure_orchestrator`.
+  - `"AIRFLOW"` 로 바꾸면 이 레인 EventBridge 스케줄이 DISABLED 가 된다.
+  - 슬롯 대조(`OPS_DISCLOSURE_SCHED_HHMM`)와 dart 워터마크 창(`DATA_PIPELINE_DART_DISCLOSURE__WATERMARK_WINDOW`)은 유지된다.
+  - `disclosure_schedule_state = "DISABLED"` 로 끄면 **안 된다.** 그 값은 슬롯 대조와 워터마크 창까지 끈다.
+- 경계: 하루 한 슬롯이다. 그날 19:30 run 이 끝나고 종료 확인을 마친 뒤, 다음 거래일 19:30 전에 바꾼다.
+- 시간대: 19:30 에는 다른 Airflow run 이 없다(PARALLELISM=1). 실측 걸린 시간은 p50 197초, 최대 238초다.
 
 ## 원천 관측 레인(source-daily, ALPHA-1130)
 

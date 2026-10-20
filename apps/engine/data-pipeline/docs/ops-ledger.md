@@ -194,9 +194,9 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
   이유로 `OPS_DAILY_SCHED_HHMM`·`OPS_NEWS_SCHED_HHMM`·`OPS_DISCLOSURE_SCHED_HHMM`·
   `OPS_INVESTOR_INTRADAY_SCHED_HHMM` 은 별도 변수가 아니라 terraform 이 각 스케줄 cron 에서
   뽑고, cron 을 KST 로 읽으므로 `schedule_timezone` 은 `Asia/Seoul` 로 강제된다. ⚠️ 공시와
-  장중 수급 것만 **스케줄이 ENABLED 일 때만 주입한다**(ALPHA-722·769, 장중 수급은
-  `investor_intraday_orchestrator = "AIRFLOW"` 일 때도 주입 — 스케줄은 꺼져도 Airflow 가 그 슬롯을
-  돌리므로, ALPHA-1088) — 슬롯 기준은 Reconciler
+  장중 수급 것만 **스케줄이 ENABLED 일 때만 주입한다**(ALPHA-722·769, 두 레인 다 실행 주체가 Airflow 일 때
+  — `investor_intraday_orchestrator`·`disclosure_orchestrator = "AIRFLOW"` — 도 주입한다. 스케줄은 꺼져도
+  Airflow 가 그 슬롯을 돌리므로, ALPHA-1088·1407) — 슬롯 기준은 Reconciler
   에게 "이 시각엔 런이 있어야 한다"는 주장이라, 꺼진 채 넣으면 뜰 리 없는 슬롯을 결측으로
   판정해 **참인** PLANNER_MISSING 을 그날 지난 슬롯마다 연다(현재 공시는 19:30·장중 수급 5개).
   빈 값 = 그 레인 결측 판정 없음이 안전 기본값이다(`entry._lane_sched_hhmms`).

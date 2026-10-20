@@ -35,7 +35,7 @@ locals {
     for k in sort(keys(var.disclosure_schedule_expressions)) :
     regex("^cron\\(([0-9]+) ([0-9]+) ", var.disclosure_schedule_expressions[k])
   ]
-  # ⚠️ **스케줄이 ENABLED 일 때만 값을 낸다.** 슬롯 기준은 Reconciler 에게 "이 시각엔 런이
+  # ⚠️ **배치 레인이 공시를 소유할 때만(스케줄 ENABLED 또는 Airflow 실행) 값을 낸다.** 슬롯 기준은 Reconciler 에게 "이 시각엔 런이
   # 있어야 한다"는 주장이라, 스케줄이 꺼진 채 이 값만 주입하면 Planner 가 뜰 리 없는 슬롯을
   # 매시간 결측으로 판정해 **참인 PLANNER_MISSING** 을 10개씩 연다(resolve 되지 않는다 —
   # 실제로 안 돌았으니까). 뉴스 레인엔 이 조건이 없는데, dev 에서 스케줄과 원장 편입이 같은
