@@ -32,9 +32,9 @@ export function DashboardNewsletter({ blocked }: { blocked: boolean }) {
   function close() { remember(); dialog.current?.close(); previousFocus.current?.isConnected && previousFocus.current.focus({ preventScroll: true }); }
   return <dialog ref={dialog} className="followup-dialog dashboard-newsletter" aria-labelledby="dashboard-newsletter-title" onCancel={remember} onClose={remember}>
     <Button className="dialog-close" aria-label="이메일 안내 닫기" onClick={close}>×</Button>
-    <h2 id="dashboard-newsletter-title">내 ETF 핵심 소식 이메일로 받기</h2>
-    <p>매일 오후 3시 30분, 내 보유 종목의 중요한 변화만 짧게 정리해 드려요.</p>
-    <NewsletterSignup onSubscribed={remember} />
-    <Button onClick={close}>나중에 할게요</Button>
+    <h2 id="dashboard-newsletter-title">내 ETF 소식, 매일 짧게</h2>
+    <p>오후 3시 30분, 핵심 이슈와 가격이 움직인 이유를 보내드려요.</p>
+    <NewsletterSignup compact showPreview onSubscribed={remember} />
+    <Button className="newsletter-later" onClick={close}>나중에 할게요</Button>
   </dialog>;
 }
