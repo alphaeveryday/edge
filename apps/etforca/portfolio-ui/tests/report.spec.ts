@@ -15,6 +15,17 @@ const report = {
   insights: [{ title: '결혼 자금은 따로 확보하세요', content: section }]
 };
 
+test('small positive allocations remain visible in composition and account totals', async ({ page }) => {
+  const small = structuredClone(report);
+  small.recommendation.allocations[0] = { ...small.recommendation.allocations[0], weight_pct: .004, amount_krw: null as any };
+  small.recommendation.allocations[1] = { ...small.recommendation.allocations[1], weight_pct: 99.996, account: 'ISA', amount_krw: null as any };
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'small'));
+  await page.route('**/api/portfolio/analyses/small', route => route.fulfill({ json: { id: 'small', state: 'succeeded', result: small } }));
+  await page.goto('/portfolio/');
+  await expect(page.locator('.mixviz li').first()).toContainText('0.01% 미만');
+  await expect(page.locator('.account-plan').first().locator('.account-total')).toContainText('0.01% 미만');
+});
+
 test('evaluation labels reflow without clipping when report text is enlarged', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'large-type'));
   await page.route('**/api/portfolio/analyses/large-type', route => route.fulfill({ json: { id: 'large-type', state: 'succeeded', result: report } }));

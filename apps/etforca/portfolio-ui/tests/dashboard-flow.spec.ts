@@ -26,6 +26,25 @@ async function setup(page: Page, initial: Saved = { version: 0, workbook: null }
 }
 const saveButton = (page: Page) => page.locator('.feedback-anchor > .save-portfolio').getByRole('button', { name: '입력한 내 포트폴리오 저장하기' });
 
+test('dashboard analysis reconciles tab-local pending input before restoring the latest report', async ({ page }) => {
+  await setup(page, { version: 1, workbook });
+  await page.addInitScript(() => sessionStorage.setItem('edge-portfolio-pending', JSON.stringify({
+    input: JSON.stringify({ holdings: [], planning: true, horizon: '10년 이상' }), key: 'pending-in-dashboard'
+  })));
+  let submitted = false;
+  await page.route('**/api/portfolio/analyses', route => {
+    expect(route.request().headers()['idempotency-key']).toBe('pending-in-dashboard');
+    submitted = true;
+    return route.fulfill({ json: { id: 'recovered', state: 'queued' } });
+  });
+  await page.route('**/api/portfolio/analyses/recovered', route => route.fulfill({ json: { id: 'recovered', state: 'queued' } }));
+  await page.goto('/portfolio/?view=dashboard');
+  await page.getByRole('button', { name: 'AI 포폴 분석', exact: true }).click();
+  await expect.poll(() => submitted).toBe(true);
+  await expect(page.locator('.progress')).toBeVisible();
+  await expect(page.locator('#report')).toHaveCount(0);
+});
+
 test('pending quotes appear promptly and polling slows down after they arrive', async ({ page }) => {
   await setup(page, { version: 1, workbook });
   let calls = 0;
@@ -66,6 +85,7 @@ test('saving input opens usable holdings while the first quote is pending', asyn
   await expect(page.locator('.holding-edit')).toContainText('KODEX 200');
   await expect(page.getByRole('status').filter({ hasText: '시세' })).toBeVisible();
   expect(writes).toHaveLength(1);
+  await page.getByRole('button', { name: '취소', exact: true }).click();
   await page.getByRole('button', { name: 'AI 포폴 분석', exact: true }).click();
   await expect(page.locator('#report')).toContainText('내 분석 결과');
 });
@@ -90,7 +110,6 @@ test('incomplete legacy weights can be saved and corrected without an impossible
   await page.goto('/portfolio/');
   await saveButton(page).click();
   await expect(page).toHaveURL(/view=dashboard/);
-  await page.locator('.holding-edit').click();
   await expect(page.getByLabel('보유 수량', { exact: true })).toBeEditable();
 });
 

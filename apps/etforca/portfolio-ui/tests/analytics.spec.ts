@@ -12,6 +12,39 @@ function unpackReplay(value: any): any {
 test.use({ launchOptions: { args: ['--disable-blink-features=AutomationControlled'] }, userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36' });
 test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'wait' }); });
 
+test('confirmed test visitors retain events with an explicit customer-exclusion marker', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await page.route('**/api/portfolio/session', route => route.fulfill({ json: { is_test: true } }));
+  await page.goto('https://etforca.com/portfolio/');
+  await expect.poll(() => events.some(event => event.event === '$pageview' && event.properties.is_test === true)).toBe(true);
+  expect(events.filter(event => event.event === '$pageview').every(event => event.properties.is_test === true)).toBe(true);
+});
+
+test('screen transitions refresh mixed visitors instead of keeping their prior test-only classification', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  let isTest = true;
+  await page.route('**/api/portfolio/session', route => route.fulfill({ json: { is_test: isTest } }));
+  await page.goto('https://etforca.com/portfolio/');
+  await expect.poll(() => events.some(e => e.event === '$pageview' && e.properties.is_test === true)).toBe(true);
+  isTest = false;
+  await page.getByRole('button', { name: '종목부터 추천받기' }).click();
+  await expect.poll(() => events.some(e => e.event === '$pageview' && e.properties.screen === 'input_funding' && e.properties.is_test === false)).toBe(true);
+});
+
+test('unknown classification withholds analytics without blocking input and recovers next screen', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  let classification: boolean | null = null;
+  await page.route('**/api/portfolio/session', route => route.fulfill({ json: { is_test: classification } }));
+  await page.goto('https://etforca.com/portfolio/');
+  await page.getByRole('button', { name: '종목부터 추천받기' }).click();
+  await expect(page.getByRole('button', { name: '이미 다 매수한 상태에요', exact: true })).toBeVisible();
+  expect(events).toEqual([]);
+  classification = false;
+  await page.getByRole('button', { name: '이미 다 매수한 상태에요', exact: true }).click();
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await expect.poll(() => events.some(e => e.event === '$pageview' && e.properties.is_test === false)).toBe(true);
+});
+
 test('session replay masks customer text and cookies while linking visits and respecting opt out', async ({ page, baseURL }) => {
   test.setTimeout(60000);
   const events = await instrument(page, baseURL!, false, true);
@@ -44,6 +77,7 @@ test('session replay masks customer text and cookies while linking visits and re
   expect(events.filter(e => e.event === '$snapshot').every(e => e.properties.$session_id && e.properties.distinct_id === id)).toBe(true);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByText('이용 통계 설정', { exact: true })).toBeVisible();
+  await expect.poll(async () => (await page.context().cookies()).some(c => c.name === 'ph_orca_portfolio')).toBe(true);
   const cookie = (await page.context().cookies()).find(c => c.name === 'ph_orca_portfolio')!;
   expect(JSON.parse(decodeURIComponent(cookie.value)).distinct_id).toBe(id);
   await page.getByText('이용 통계 설정', { exact: true }).click();
@@ -87,7 +121,7 @@ async function instrument(page: Page, baseURL: string, blocked = false, replay =
   });
   await page.route('https://etforca.com/**', async route => {
     const url = new URL(route.request().url());
-    if (url.pathname.startsWith('/api/')) return route.fulfill({ json: {} });
+    if (url.pathname.startsWith('/api/')) return route.fulfill({ json: url.pathname.endsWith('/session') ? { is_test: false } : {} });
     const response = await route.fetch({ url: `${baseURL}${url.pathname}${url.search}` });
     await route.fulfill({ response });
   });

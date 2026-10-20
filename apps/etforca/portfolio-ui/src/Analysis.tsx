@@ -1,7 +1,7 @@
 import { Notice, Button, Loading } from './design-system/components';
 import { useEffect, useRef, useState } from 'react';
 import { request, ensureVisitorSession, type Input, type Job } from './api';
-import { inputDraftKey, readInputDraft } from './inputDraft';
+import { inputDraftKey, readInputDraft, restoreInputDraft } from './inputDraft';
 import { InputForm } from './InputForm';
 import { ReportView } from './ReportView';
 import { Followup } from './Followup';
@@ -20,9 +20,24 @@ export function Analysis({ embedded = false, active = true }: { embedded?: boole
   const [job, setJob] = useState<Job | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [pendingInput, setPendingInput] = useState<Input | null>(null);
+  const [rejectedInput, setRejectedInput] = useState<Input | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const pendingRestored = useRef(false);
+  useEffect(() => {
+    if (pendingRestored.current) return;
+    try {
+      const pending = JSON.parse(sessionStorage.getItem(pendingKey) || 'null');
+      const input = pending && JSON.parse(pending.input);
+      if (typeof pending?.key === 'string' && Array.isArray(input?.holdings) && typeof input.horizon === 'string') {
+        pendingRestored.current = true;
+        void submit(input);
+      }
+    } catch { /* Malformed browser state must not submit an analysis. */ }
+  }, []);
   useEffect(() => {
     if (!embedded) return;
+    if (pendingRestored.current) { setRestoring(false); return; }
     let stopped = false;
     setRestoring(true); setError('');
     void ensureVisitorSession().then(() => request<Job | null>('/analyses/latest')).then(next => {
@@ -55,7 +70,7 @@ export function Analysis({ embedded = false, active = true }: { embedded?: boole
     tick(); const timer = setInterval(tick, 1000); return () => clearInterval(timer);
   }, [job?.state, job?.started_at]);
   async function submit(input: Input) {
-    setBusy(true); setError('');
+    setBusy(true); setError(''); setPendingInput(input); setRejectedInput(null); setJobId(null); setJob(null);
     const serialized = JSON.stringify(input);
     let pending = pendingMemory.current;
     try { pending ??= JSON.parse(sessionStorage.getItem(pendingKey) || 'null'); } catch { /* Invalid local state is replaced. */ }
@@ -69,16 +84,44 @@ export function Analysis({ embedded = false, active = true }: { embedded?: boole
       try { localStorage.setItem(jobKey, next.id); } catch { setStorageWarning('이 브라우저에서는 분석 결과를 자동 복원할 수 없어요. 결과를 확인할 때까지 이 화면을 유지해 주세요.'); }
       pendingMemory.current = null;
       try { sessionStorage.removeItem(pendingKey); } catch { /* The accepted job remains available in this tab. */ }
-      setJob(next); setJobId(next.id); window.scrollTo(0, 0);
-    } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+      setJob(next); setJobId(next.id); setPendingInput(null); window.scrollTo(0, 0);
+    } catch (e) {
+      setError((e as Error).message);
+      const status = (e as { status?: number }).status;
+      if (status && status >= 400 && status < 500 && status !== 408) {
+        setRejectedInput(input); setPendingInput(null); pendingMemory.current = null;
+        try { restoreInputDraft(input); sessionStorage.removeItem(pendingKey); } catch { /* Keep editable input in memory. */ }
+        try { localStorage.removeItem(jobKey); } catch { /* Current tab remains editable. */ }
+      }
+    } finally { setBusy(false); }
   }
-  function reset() { try { if (job?.state === 'succeeded' && readInputDraft()?.submittedJobId === jobId) sessionStorage.removeItem(inputDraftKey); } catch { /* Continue to input when browser storage is unavailable. */ } try { localStorage.removeItem(jobKey); } catch { /* Reset still works in this tab. */ } setJobId(null); setJob(null); setError(''); }
+  function retry() {
+    if (!job?.input) return;
+    const input = { ...job.input };
+    delete input.draft_id; // Editable drafts expire independently of the immutable request.
+    void submit(input);
+  }
+  function reset() {
+    setRejectedInput(job?.state === 'failed' ? job.input ?? null : null);
+    if (job?.state === 'failed' && job.input) {
+      try { restoreInputDraft(job.input); }
+      catch { /* The server input remains editable in this tab even without draft storage. */ }
+    }
+    try {
+      if (job?.state === 'succeeded' && readInputDraft()?.submittedJobId === jobId) sessionStorage.removeItem(inputDraftKey);
+      sessionStorage.removeItem(pendingKey);
+    } catch { /* Optional cleanup must not trap the visitor on a completed report. */ }
+    pendingMemory.current = null;
+    try { localStorage.removeItem(jobKey); } catch { /* Reset still works in this tab. */ }
+    setJobId(null); setJob(null); setError('');
+  }
   const Container = embedded ? 'div' : 'main';
+  if (pendingInput) return <Container className="app"><article className="ans"><h1>분석 요청을 확인하고 있어요.</h1><p>입력한 내용은 보관돼 있어요. 접수 여부를 다시 확인해도 같은 요청이 중복되지 않아요.</p>{error && <Notice tone="error">{error}</Notice>}{busy ? <Loading>접수 확인 중</Loading> : <Button variant="primary" onClick={() => void submit(pendingInput)}>접수 다시 확인</Button>}</article></Container>;
   if (restoring) return <section className="dashboard-card">{error ? <><Notice tone="error">{error}</Notice><Button onClick={() => setRestoreAttempt(n => n + 1)}>다시 불러오기</Button></> : <Loading>최근 분석을 불러오고 있어요.</Loading>}</section>;
   return <Container className="app">{!embedded && <a className="dashboard-link" href={preview ? '?preview=dashboard' : '?view=dashboard'}>내 포트폴리오 ↗</a>}{embedded && jobId && <div className="card-heading"><h2>최근 AI 포폴 분석</h2><Button onClick={reset}>새로 분석하기</Button></div>}{jobId && <div className="nav"><div className="nav__pill"><span className="nav__logo">ETF Orca</span></div></div>}
     {storageWarning && <Notice>{storageWarning}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}
-    {!jobId ? <InputForm onSubmit={submit} busy={busy} /> : job?.state === 'succeeded' && job.result ? <><ReportView report={job.result} feedbackJobId={jobId} /><Followup jobId={jobId} /><Button variant="secondary" className="secondary" onClick={reset}>새 포트폴리오 분석하기</Button></> : job?.state === 'failed' ? <><article className="ans"><h1>분석을 마치지 못했어요.</h1><p>{job.failure === 'SEARCH_RATE_LIMIT' ? '외부 검색 서비스의 요청 제한으로 자료를 모두 확인하지 못했어요. 잠시 후 다시 시도해 주세요.' : job.failure === 'TIMED_OUT' ? '분석 또는 자료 조회의 제한 시간 안에 근거 확인을 마치지 못했어요. 전체 분석은 최대 10분까지 진행해요.' : '자료 조회 또는 결과 검증 중 문제가 생겼어요.'} 중단된 분석은 최종 추천으로 사용하지 마세요.</p><Button variant="primary" className="primary" onClick={reset}>다시 입력하기</Button></article>
+    {!jobId ? <InputForm onSubmit={submit} busy={busy} initialInput={rejectedInput} /> : job?.state === 'succeeded' && job.result ? <><ReportView report={job.result} feedbackJobId={jobId} /><Followup jobId={jobId} /><Button variant="secondary" className="secondary" onClick={reset}>새 포트폴리오 분석하기</Button></> : job?.state === 'failed' ? <><article className="ans"><h1>분석을 마치지 못했어요.</h1><p>{job.failure === 'SEARCH_RATE_LIMIT' ? '자료 조회가 잠시 지연됐어요.' : job.failure === 'TIMED_OUT' ? '분석이 예상보다 오래 걸려 중단됐어요.' : '분석을 마무리하는 중 문제가 생겼어요.'} 입력한 내용은 그대로 보관돼 있어요.</p>{job.input && <Button variant="primary" loading={busy} onClick={retry}>같은 입력으로 다시 분석</Button>}<Button variant="secondary" disabled={busy} onClick={reset}>입력 수정하기</Button></article>
       {job.result?.partial_report && Object.keys(job.result.partial_report.sections || {}).length > 0 && <details><summary>중단 전 작성된 분석 보기</summary><ReportView report={{ ...job.result.partial_report, recommendation: null,
         completion: { tasks: [], missing_research: [], ...job.result.partial_report.completion, status: 'partial',
           missing_inputs: [...(job.result.partial_report.completion?.missing_inputs || []), '분석이 중단되어 최종 검토가 끝나지 않았어요.'] } }} /></details>}
