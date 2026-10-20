@@ -31,13 +31,12 @@ async def test_price_process_limit_is_shared_across_dashboard_and_analysis_threa
         await asyncio.gather(*(market_data.fetch_prices('TEST', date(2026, 10, 12)) for _ in range(3)))
     await asyncio.gather(batch(), asyncio.to_thread(lambda: asyncio.run(batch())))
     assert completed == 6
-    assert peak == 2, 'The existing 512 MB worker must not spawn a third price process'
+    assert peak == 1, 'Analysis and dashboard must share the single memory-bounded provider slot'
     assert active == 0
 
 
 async def test_cancelled_price_waiter_never_leaks_a_process_slot(monkeypatch):
     from edge_portfolio import market_data
-    assert market_data._PRICE_SLOTS.acquire(blocking=False)
     assert market_data._PRICE_SLOTS.acquire(blocking=False)
     try:
         waiter = asyncio.create_task(market_data.fetch_prices('TEST', date(2026, 10, 19)))
@@ -47,7 +46,6 @@ async def test_cancelled_price_waiter_never_leaks_a_process_slot(monkeypatch):
             await waiter
     finally:
         market_data._PRICE_SLOTS.release()
-        market_data._PRICE_SLOTS.release()
     async def cancelled(*args):
         raise asyncio.CancelledError
     monkeypatch.setattr(market_data, '_fetch_prices_with_checkpoint', cancelled)
@@ -55,7 +53,7 @@ async def test_cancelled_price_waiter_never_leaks_a_process_slot(monkeypatch):
         await market_data.fetch_prices('TEST', date(2026, 10, 19))
     acquired = 0
     try:
-        for _ in range(2):
+        for _ in range(1):
             assert market_data._PRICE_SLOTS.acquire(blocking=False)
             acquired += 1
     finally:
@@ -71,14 +69,12 @@ async def test_capacity_wait_does_not_spend_a_healthy_providers_timeout(monkeypa
         return record()
     monkeypatch.setattr(market_data, '_fetch_prices_with_checkpoint', fetch)
     assert market_data._PRICE_SLOTS.acquire(blocking=False)
-    assert market_data._PRICE_SLOTS.acquire(blocking=False)
     try:
         pending = asyncio.create_task(market_data.fetch_prices('TEST', date(2026, 10, 12), provider_timeout=.01))
         await asyncio.sleep(.04)
         assert not pending.done()
         assert calls == [], 'Capacity contention must not be reported as provider failure'
     finally:
-        market_data._PRICE_SLOTS.release()
         market_data._PRICE_SLOTS.release()
     assert (await asyncio.wait_for(pending, 1))['currency'] == 'KRW'
     assert calls == ['yahoo']
@@ -232,8 +228,10 @@ async def test_optimizer_cache_alone_cannot_authorize_a_forecast_without_reading
         'history': {'start_date': '2025-10-10', 'end_date': '2026-10-09', 'method': 'test', 'sources': []}}
     published = {'recommendation': {'allocations': rows, 'expected_return_1y': None}}
     sources = [{'id': 's1', 'url': 'https://official.example', 'passages': [{'id': 'p1', 'text': 'Official outlook'}]}]
-    with pytest.raises(ValueError, match='Call read_portfolio_history'):
-        await enrich_report(published, final, market, sources)
+    await enrich_report(published, final, market, sources)
+    assert published['recommendation']['allocations'] == rows
+    assert published['recommendation']['expected_return_1y'] is None
+    assert 'return_forecast' not in published['recommendation']
     await market.tool({'allocations': rows})
     await enrich_report(published, final, market, sources)
     assert published['recommendation']['expected_return_1y'] == 8

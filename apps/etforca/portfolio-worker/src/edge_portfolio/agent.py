@@ -242,6 +242,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
         calls = 0
         model_retries = 0
         catalog_calls = 0
+        execution_stalls = 0
         for role in ROLES:
             on_stage(role)
             emit('stage_started', role=role)
@@ -398,7 +399,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 for row in args['allocations']:
                                     target[row['instrument_id']] = target.get(row['instrument_id'], Decimal(0)) + Decimal(str(row['weight_pct']))
                                 for candidate in (optimizer.result or {}).get('candidates', []):
-                                    expected = {row['instrument_id']: row['weight_pct'] for row in candidate.get('allocations', [])}
+                                    expected = {row['instrument_id']: Decimal(str(row['weight_pct'])) for row in candidate.get('allocations', [])}
                                     if target == expected:
                                         if answer['status'] in {'ready', 'conditional'}:
                                             execution_feasible.add(candidate['candidate_id'])
@@ -408,6 +409,12 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                             execution_failures.pop(candidate['candidate_id'], None)
                             except ValueError as error:
                                 answer = {'status': 'rejected', 'reason': str(error)[:300]}
+                            execution_stalls = execution_stalls + 1 if answer['status'] in {'rejected', 'infeasible', 'needs_input'} else 0
+                            if execution_stalls >= 3:
+                                answer['instruction'] = ('계좌 배치 계산이 반복해서 완료되지 않았습니다. 같은 입력 반복을 멈추고 '
+                                    '계좌별 기존 금액과 납입 한도를 지키도록 계좌 배치를 수정하세요. '
+                                    '종목 비중도 바꿔야 한다면 optimize_portfolios로 검산하세요. '
+                                    '고객 제약은 유지하고, 가능한 추천과 결론을 완성하세요.')
                         elif function['name'] == 'calculate_scenarios':
                             try:
                                 calculation = ScenarioToolInput.model_validate(args)
@@ -457,7 +464,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 scenario_result = answer
                         elif function['name'] == 'optimize_portfolios':
                             try:
+                                previous_search = deepcopy(optimizer.result)
                                 answer = model_price_payload(await optimizer.tool(args))
+                                if optimizer.result != previous_search:
+                                    execution_stalls = 0
                             except ValueError as error:
                                 answer = {'status': 'rejected', 'reason': str(error)[:300]}
                         elif function['name'] == 'read_portfolio_history':
@@ -698,6 +708,9 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         raise ValueError("OUTPUT_INVALID: " + str(error)[:500]) from error
                     low, high = LIMITS[role]
                     messages.append({"role": "user", "content": f"출력 검증 실패: {str(error)[:400]}. 현재 역할의 JSON을 한 번 수정하세요. 본문은 {(low + high) // 2}자 목표, 최대 {high}자. 근거는 실제 도구가 준 source_id와 passage_id를 고르세요. 등록 근거가 없는 질문 해석 단계는 evidence: []로 고치세요."})
+                    if validation_step == 'execution_feasibility' and execution_rejection:
+                        messages[-1]['content'] += (' 계좌별 합계 비중을 max_weight_pct 이하로 수정하고 calculate_rebalance로 다시 확인하세요. '
+                            '계좌 한도 계산: ' + json.dumps(execution_rejection['accounts'], ensure_ascii=False))
                     if role == 'opinion':
                         messages[-1]['content'] += f' 최종 출력에는 네 칸 모두 필요합니다. 오류가 난 칸의 한도를 적용하세요: {LIMITS}.'
         emit('run_completed', counters={'model_calls': calls, 'exa_calls': getattr(evidence, 'calls', 0),

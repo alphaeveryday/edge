@@ -70,6 +70,16 @@ def test_cash_current_rating_can_be_absent_without_hiding_recommended_stars():
     assert result['recommendation']['evaluation']['overall'] == 4
 
 
+def test_first_portfolio_has_no_external_evidence_for_nonexistent_current_holdings():
+    raw = final_payload()
+    raw['current_evaluation']['scores'] = None
+    raw['current_evaluation']['reason']['evidence'] = []
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상')
+    result = publish(raw, request)
+    assert result['current_evaluation']['overall'] is None
+    assert result['recommendation']['evaluation']['overall'] == 4
+
+
 def test_unrated_etf_current_evaluation_still_requires_external_evidence():
     raw = final_payload()
     raw['current_evaluation']['scores'] = None

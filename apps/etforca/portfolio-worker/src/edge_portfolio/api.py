@@ -71,7 +71,14 @@ def session(request: Request, response: Response):
     # Renew the same owner so active visitors do not lose their saved workbook after 30 days.
     response.set_cookie(COOKIE, value, httponly=True, samesite="strict",
                         secure=os.getenv("PORTFOLIO_COOKIE_SECURE", "0") == "1", max_age=86400 * 30)
-    return {"estimated_seconds": 300}
+    is_test = None
+    try:
+        with store.connect() as db:
+            is_test = bool(db.execute(f'SELECT 1 FROM ({admin_store.TEST_OWNERS}) AS tests WHERE owner=%s',
+                (hashlib.sha256(value.encode()).hexdigest(),)).fetchone())
+    except DatabaseError as error:
+        logging.getLogger(__name__).warning('visitor_classification_unavailable code=%s', type(error).__name__)
+    return {"estimated_seconds": 300, "is_test": is_test}
 
 
 @app.get('/api/portfolio/catalog')
@@ -86,7 +93,7 @@ def presence(request: Request):
 
 
 def public(row):
-    return {k: row[k] for k in ("id", "state", "stage", "result", "failure", "created_at", "started_at", "finished_at")}
+    return {k: row[k] for k in ("id", "state", "stage", "input", "result", "failure", "created_at", "started_at", "finished_at")}
 
 
 class ChatInput(StrictModel):

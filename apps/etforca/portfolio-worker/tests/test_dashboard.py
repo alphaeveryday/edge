@@ -79,7 +79,19 @@ def test_source_snapshot_never_reads_another_visitors_job(monkeypatch):
     assert calls == [('other-job', hashlib.sha256(('a' * 64).encode()).hexdigest())]
 
 
-def test_active_visitor_keeps_same_owner_with_renewed_cookie(monkeypatch):
+def test_session_survives_classification_outage_without_counting_unknown_as_customer(monkeypatch):
+    monkeypatch.delenv('PORTFOLIO_ORIGIN_SECRET', raising=False)
+    def fail():
+        raise OperationalError('classification unavailable')
+    monkeypatch.setattr(api.store, 'connect', fail)
+    client = TestClient(api.app)
+    response = client.get('/api/portfolio/session')
+    assert response.status_code == 200
+    assert response.json()['is_test'] is None
+    assert len(client.cookies.get(api.COOKIE)) == 64
+
+
+def test_active_visitor_keeps_same_owner_with_renewed_cookie(monkeypatch, isolated_db):
     monkeypatch.delenv('PORTFOLIO_ORIGIN_SECRET', raising=False)
     client = TestClient(api.app)
     client.cookies.set(api.COOKIE, 'a' * 64)

@@ -6,6 +6,9 @@ from . import store
 
 def initialize(db):
     db.execute('ALTER TABLE portfolio_jobs ADD COLUMN IF NOT EXISTS test_label text')
+    db.execute('''CREATE TABLE IF NOT EXISTS portfolio_test_visitors (
+        owner text PRIMARY KEY, label text NOT NULL, posthog_distinct_id text,
+        marked_at timestamptz NOT NULL DEFAULT now())''')
     db.execute('''CREATE TABLE IF NOT EXISTS portfolio_presence (
         owner text PRIMARY KEY, first_seen timestamptz NOT NULL DEFAULT now(),
         last_seen timestamptz NOT NULL DEFAULT now())''')
@@ -34,6 +37,21 @@ def mark_tests(job_ids, label):
         db.execute('UPDATE portfolio_jobs SET test_label=%s WHERE id=ANY(%s)', (label.strip(), list(job_ids)))
 
 
+def mark_test_visitor(owner, label, posthog_distinct_id=None):
+    """Explicit operator classification; retain originals and classify future requests."""
+    if not owner or not isinstance(label, str) or not label.strip() or len(label) > 200:
+        raise ValueError('INVALID_TEST_LABEL')
+    with store.connect() as db:
+        db.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (owner,))
+        if not db.execute('SELECT 1 FROM portfolio_jobs WHERE owner=%s LIMIT 1', (owner,)).fetchone():
+            raise ValueError('UNKNOWN_VISITOR')
+        db.execute('''INSERT INTO portfolio_test_visitors(owner,label,posthog_distinct_id) VALUES (%s,%s,%s)
+            ON CONFLICT(owner) DO UPDATE SET label=excluded.label,
+            posthog_distinct_id=COALESCE(excluded.posthog_distinct_id,portfolio_test_visitors.posthog_distinct_id)''',
+            (owner, label.strip(), posthog_distinct_id))
+        db.execute('UPDATE portfolio_jobs SET test_label=%s WHERE owner=%s', (label.strip(), owner))
+
+
 def scope_filter(scope):
     return {'all': 'TRUE', 'customers': 'test_label IS NULL', 'tests': 'test_label IS NOT NULL'}[scope]
 
@@ -46,7 +64,7 @@ def delete_test_reports():
 
 
 # A mixed visitor retains customer activity; a test job never relabels their real jobs.
-TEST_OWNERS = """SELECT owner FROM portfolio_jobs WHERE kind='analysis'
+TEST_OWNERS = """SELECT owner FROM portfolio_test_visitors UNION SELECT owner FROM portfolio_jobs WHERE kind='analysis'
     GROUP BY owner HAVING bool_and(test_label IS NOT NULL)"""
 
 

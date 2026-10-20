@@ -364,6 +364,7 @@ async def test_execution_rejection_is_not_misreported_as_a_low_rating(monkeypatc
             content = {**content, 'decision': {}}
         if role == 'opinion':
             if feasible_retry and len(repairs) == 1:
+                assert '"max_weight_pct": "0.00000000"' in payload['messages'][-1]['content']
                 repairs.append('retry')
                 return {'choices': [{'message': {'role': 'assistant', 'content': '', 'tool_calls': [{
                     'id': 'retry-account', 'type': 'function', 'function': {'name': 'calculate_rebalance',
@@ -560,3 +561,72 @@ def test_estimated_money_label_is_generated_even_if_model_explanation_is_generic
     decision = Decision(funding={'source': req.question, 'monthly_krw': 1000000, 'estimated_fields': ['monthly_krw'], 'assumptions': ['가격 변동 없음']})
     result = plan_execution(req, target(**{'US:VOO': 100}), decision)
     assert any('월 납입금 1,000,000원' in text and '가정' in text for text in result['assumptions'])
+
+
+def test_account_failure_explains_usable_budget_and_preserves_explicit_zero():
+    from edge_portfolio.execution import execution_tool
+    from edge_portfolio.decision import Decision
+    req = request([('KR:379800', 1000000, '연금저축'), ('US:VOO', 1000000, '일반 계좌')],
+        preferences={'accounts': ['일반 계좌', '연금저축'], 'tax_profile': {
+            'residence': '대한민국 거주자', 'age': '19~54세', 'income': '확인 필요',
+            'financial_income_tax': '확인 필요',
+            'accounts': [{'account': '연금저축', 'remaining_man': '0'}]}})
+    result = execution_tool(req, {'allocations': [
+        {'instrument_id': 'KR:379800', 'account': '연금저축', 'weight_pct': 80},
+        {'instrument_id': 'US:VOO', 'account': '일반 계좌', 'weight_pct': 20}]}, Decision(),
+        {'KR:379800': {'market': 'KR', 'kind': 'etf'}, 'US:VOO': {'market': 'US', 'kind': 'etf'}})
+    assert result['status'] == 'infeasible'
+    budget = next(row for row in result['accounts'] if row['account'] == '연금저축')
+    assert budget['remaining_contribution_krw'] == '0'
+    assert budget['max_weight_pct'] == '50.00000000'
+    assert budget['before_krw'] == '1000000'
+    assert '계좌' in result['instruction']
+
+
+def test_account_weight_ceiling_rounds_down_so_monthly_deposits_cannot_exceed_zero_room():
+    req = request([('KR:379800', 8000000, '연금저축'), ('US:VOO', 24000000, '일반 계좌')],
+        preferences={'tax_profile': {'residence': '대한민국 거주자', 'age': '19~54세',
+            'income': '확인 필요', 'financial_income_tax': '확인 필요',
+            'accounts': [{'account': '연금저축', 'remaining_man': '0'}]}})
+    plan = build_execution(req, [
+        {'instrument_id': 'KR:379800', 'account': '연금저축', 'weight_pct': 23.53},
+        {'instrument_id': 'US:VOO', 'account': '일반 계좌', 'weight_pct': 76.47}], monthly_krw=2000000)
+    account = next(row for row in plan['accounts'] if row['account'] == '연금저축')
+    assert plan['status'] == 'infeasible'
+    assert account['max_weight_pct'] == '23.52941176'
+    assert Decimal(account['max_weight_pct']) * 34000000 / 100 <= 8000000
+    corrected = build_execution(req, [
+        {'instrument_id': 'KR:379800', 'account': '연금저축', 'weight_pct': 23.52941176},
+        {'instrument_id': 'US:VOO', 'account': '일반 계좌', 'weight_pct': 76.47058824}], monthly_krw=2000000)
+    assert corrected['status'] == 'conditional'
+    pension = next(row for row in corrected['accounts'] if row['account'] == '연금저축')
+    assert pension['deposit_krw'] == pension['withdrawal_krw'] == '0'
+
+
+def test_conservative_funding_bound_cannot_reject_a_feasible_finite_monthly_plan():
+    from edge_portfolio.decision import Decision
+    from edge_portfolio.execution import plan_execution
+    req = request([('US:VOO', 100, '일반 계좌')], question='매도 금지. 매월 99499900원씩 1개월 투자')
+    decision = Decision(funding={'source': req.question, 'monthly_krw': 99499900, 'max_months': 1},
+        constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
+    plan = plan_execution(req, target(**{'US:VOO': 0.0001, 'US:QQQ': 99.9999}), decision)
+    assert plan['status'] == 'conditional'
+    assert plan['months'] == 1
+    assert plan['reasons'] == []
+    assert all(Decimal(row['sell_krw']) == 0 for row in plan['rows'])
+
+
+def test_tiny_permitted_weight_cannot_block_no_sell_calculation():
+    import subprocess
+    import sys
+    req = request([('US:VOO', 100, '일반 계좌')])
+    code = (
+        "from edge_portfolio.contracts import AnalysisInput\n"
+        "from edge_portfolio.execution import build_execution\n"
+        f"req = AnalysisInput.model_validate_json({req.model_dump_json()!r})\n"
+        "plan = build_execution(req, [{'instrument_id':'US:VOO','account':'일반 계좌','weight_pct':0.00000001},"
+        "{'instrument_id':'US:QQQ','account':'일반 계좌','weight_pct':99.99999999}], no_sell=True)\n"
+        "assert plan['required_additional_is_minimum'] is False\n"
+        "assert int(plan['required_additional_krw']) == 999999999900\n"
+        "assert plan['status'] == 'infeasible'\n")
+    subprocess.run([sys.executable, '-X', 'utf8', '-c', code], check=True, capture_output=True, timeout=5)

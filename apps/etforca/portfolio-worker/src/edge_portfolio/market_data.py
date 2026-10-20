@@ -22,7 +22,8 @@ import exchange_calendars as calendars
 from .catalog import directory
 
 log = logging.getLogger(__name__)
-_PRICE_SLOTS = BoundedSemaphore(2)
+# The analysis process and price libraries share one container memory limit.
+_PRICE_SLOTS = BoundedSemaphore(1)
 # KRX notice (2026 local election / Constitution Day), absent in calendars 4.13.2:
 # https://stock.mk.co.kr/news/disclosure/template/1029043
 KRX_EXTRA_CLOSURES = pd.DatetimeIndex(['2026-06-03', '2026-07-17'])
@@ -562,10 +563,9 @@ async def enrich_report(published, final, market, sources):
     plan = published['recommendation']
     dividends = {}
     target = weights(plan['allocations'])
-    forecast_evidence = cited(final.return_forecast.evidence, sources) if final.return_forecast else []
     queried = tuple(sorted(target.items())) in market.queried
-    if final.return_forecast and not queried:
-        raise ValueError('Call read_portfolio_history with the final allocation before writing return_forecast')
+    # An ungrounded optional forecast must not discard the validated allocation.
+    forecast_evidence = cited(final.return_forecast.evidence, sources) if final.return_forecast and queried else []
     result = await market.get(plan['allocations'])
     plan['target_return_1y'] = 7
     # Web research informs the analysis, but numeric yields use identified cash events.

@@ -108,6 +108,9 @@ async def collect_one(stopping=None, *, now=None, session=None):
     with store.connect() as db:
         if store.queued_count(db) or db.execute("SELECT 1 FROM portfolio_newsletter_content WHERE state='running' LIMIT 1").fetchone():
             return False
+        # Release the warm child so customer quotes can use the single price slot.
+        if db.execute("SELECT 1 FROM portfolio_quote_refresh WHERE refresh_after<=now() OR lease_until>now() LIMIT 1").fetchone():
+            return False
         if db.execute("""SELECT 1 FROM portfolio_market_preload WHERE last_error='PRICE_PROVIDER_RATE_LIMIT'
                 AND failed_at>now()-interval '15 minutes' LIMIT 1""").fetchone():
             return False

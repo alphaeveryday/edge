@@ -239,7 +239,7 @@ async def test_shared_baseline_and_fx_are_loaded_before_slow_optional_candidates
             return record('USD', finish=105)
         if symbol == 'A.KS':
             return record(finish=120)
-        await asyncio.Event().wait()
+        await asyncio.wait_for(asyncio.Event().wait(), timeout=_kwargs['provider_timeout'])
     monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
     monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .1)
     result = await Optimizer(market).tool({'combinations': groups})
@@ -335,7 +335,7 @@ async def test_partial_price_failures_preserve_nine_independent_combinations(mon
         market.as_of = date(2026, 10, 2)
     async def fetch(symbol, as_of, **kwargs):
         if failure == 'timeout' and symbol == 'E.KS':
-            await asyncio.sleep(10)
+            await asyncio.wait_for(asyncio.sleep(10), timeout=kwargs['provider_timeout'])
         if symbol == 'KRW=X':
             raise ValueError('No FX available')
         dates = None
@@ -483,7 +483,7 @@ async def test_collection_timeout_does_not_overwrite_an_already_known_price_fail
         if symbol == 'E.KS':
             raise ValueError('PRICE_STALE')
         if symbol == 'D.KS':
-            await asyncio.sleep(10)
+            await asyncio.wait_for(asyncio.sleep(10), timeout=kwargs['provider_timeout'])
         return record()
     monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
     monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .05)
@@ -539,34 +539,24 @@ def test_agent_can_withhold_backtest_winner_when_rating_evidence_is_insufficient
 
 
 async def test_queued_instruments_receive_their_own_provider_timeout(monkeypatch):
+    from edge_portfolio import market_data
     request, market, groups = batch()
-    semaphore, timeout = market.semaphore, asyncio.timeout
-    owners, started, deadlines, active_counts = set(), [], [], []
-    class ObservedSlots:
-        async def __aenter__(self):
-            await semaphore.__aenter__()
-            owners.add(asyncio.current_task())
-            active_counts.append(len(owners))
-        async def __aexit__(self, *args):
-            owners.remove(asyncio.current_task())
-            return await semaphore.__aexit__(*args)
-    def provider_timeout(seconds):
-        if seconds == .07:
-            assert asyncio.current_task() in owners, 'Provider timeout must begin after acquiring its slot'
-            deadlines.append(seconds)
-            return timeout(10)  # Ordering, not host scheduling latency, is under test here.
-        return timeout(seconds)
+    started = []
     async def fetch(symbol, _, **kwargs):
         started.append(symbol)
-        await asyncio.sleep(0)
+        await asyncio.sleep(.01)
         return record()
-    market.semaphore = ObservedSlots()
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
-    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .07)
-    monkeypatch.setattr(asyncio, 'timeout', provider_timeout)
-    result = await Optimizer(market, request).tool({'combinations': groups})
-    assert len(deadlines) == 5
-    assert max(active_counts) == 2
+    monkeypatch.setattr(market_data, '_fetch_prices', fetch)
+    monkeypatch.setattr(market_data, 'price_status', lambda *_: None)
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .1)
+    assert market_data._PRICE_SLOTS.acquire(blocking=False)
+    task = asyncio.create_task(Optimizer(market, request).tool({'combinations': groups}))
+    try:
+        await asyncio.sleep(.2)  # Another loop occupies the shared slot longer than a provider deadline.
+        assert not started
+    finally:
+        market_data._PRICE_SLOTS.release()
+    result = await task
     assert result['status'] == 'available'
     assert set(started) == {'A.KS', 'B.KS', 'C.KS', 'D.KS', 'E.KS'}
     assert not market.failures
@@ -599,8 +589,8 @@ async def test_timeout_checkpoint_is_not_reported_as_an_unavailable_instrument(m
     request, market, groups = batch()
     async def fetch(symbol, _, **kwargs):
         try:
-            await asyncio.sleep(10)
-        except asyncio.CancelledError:
+            await asyncio.wait_for(asyncio.sleep(10), timeout=kwargs['provider_timeout'])
+        except TimeoutError:
             kwargs['on_raw'](record())
             raise
     monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
@@ -722,13 +712,20 @@ async def test_search_grid_does_not_reject_model_weights_that_satisfy_a_five_per
     assert result['candidates'][0]['allocations'] == allocations
 
 
-async def test_model_weights_outside_grid_receive_comparable_metrics_and_history():
+@pytest.mark.parametrize('first_weight', [31, 23.52941176])
+async def test_model_weights_outside_grid_receive_comparable_metrics_and_history(first_weight):
+    from edge_portfolio.contracts import FinalReport
+    from report_fixtures import final_payload
     request, market, _ = batch()
     market.loader = lambda symbol, as_of: record(finish=120 if symbol == 'A.KS' else 110)
     optimizer = Optimizer(market, request)
-    allocation = [{'instrument_id': 'KR:A', 'weight_pct': 31}, {'instrument_id': 'KR:B', 'weight_pct': 69}]
+    allocation = [{'instrument_id': 'KR:A', 'weight_pct': first_weight}, {'instrument_id': 'KR:B', 'weight_pct': 100 - first_weight}]
     result = await optimizer.tool({'combinations': [['KR:A', 'KR:B']], 'preferred_allocations': allocation})
     selected = next(c for c in result['candidates'] if c['allocations'] == allocation)
+    final = final_payload()
+    final['recommendation']['allocations'] = [{**row, 'account': '일반 계좌'} for row in allocation]
+    final['selected_candidate_id'] = selected['candidate_id']
+    assert optimizer.validate(FinalReport.model_validate(final)) == selected
     assert selected['excess_pp'] is not None
     assert selected['max_drawdown_pct'] is not None
     assert selected.get('comparison_status') != 'unavailable'
