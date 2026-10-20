@@ -109,7 +109,8 @@ const LEVELS = [['behavior', '행동'], ['intent', '고의'], ['harm', '피해']
 const HYPOTHESES = {H0: '정당한 설명·수정', H1: '오류·부실 대응', H2: '의도적 기만·회피', H3: '조직적 공모', undecided: '판별 보류'};
 
 function render(c, cases){
-  renderScore(cases);
+  if (cases) renderScore(cases);
+  else $('score').textContent = '집계를 불러오지 못했습니다';
   document.title = `${c.subject} · 투자정보 기만 검증`;
   $('bg').innerHTML = img(c.cover);
 
@@ -201,7 +202,7 @@ Promise.allSettled([loadCase(id), loadIndex()]).then(([one, all]) => {
     return fail(String(one.reason).includes(': 404') || String(one.reason).includes(': 403') ? '사건을 찾을 수 없습니다.' : '사건을 불러오지 못했습니다. 잠시 뒤 다시 열어 주세요.');
   }
   try {
-    render(one.value, all.status === 'fulfilled' ? all.value.cases : [one.value]);
+    render(one.value, all.status === 'fulfilled' ? all.value.cases : null);  // 사건 하나로 성적을 계산해 공개하지 않는다
   } catch (error) {
     console.error(error);
     fail('사건 화면을 그리지 못했습니다.');

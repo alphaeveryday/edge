@@ -24,7 +24,7 @@ _VALIDATOR = Draft202012Validator(SCHEMA)
 RESOLUTION_KINDS = frozenset({"official", "disclosure"})
 REFUTATION_KINDS = frozenset({"official"})
 # 출처 종류를 사건 파일이 스스로 주장하므로, 판정 근거 출처만큼은 주소로 다시 확인한다.
-OFFICIAL_HOSTS = ("fsc.go.kr", "fss.or.kr", "spo.go.kr", "police.go.kr", "scourt.go.kr", "ftc.go.kr", "moj.go.kr", "krx.co.kr")
+OFFICIAL_HOSTS = ("fsc.go.kr", "fss.or.kr", "spo.go.kr", "police.go.kr", "scourt.go.kr", "ftc.go.kr", "moj.go.kr", "www.krx.co.kr")
 DISCLOSURE_HOSTS = ("dart.fss.or.kr", "opendart.fss.or.kr", "kind.krx.co.kr")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # 공개 문장에서 확인 수준을 넘어서는 단정어. 행위를 구체적으로 쓰게 한다 (방법론 §8 작성 원칙).
@@ -45,6 +45,8 @@ def _path(error) -> str:
 
 def host_kind(url: str) -> str | None:
     """주소가 공식 판단(official)·법정공시(disclosure) 기관 도메인이면 그 종류. 공시 도메인을 먼저 본다."""
+    if "\\" in url or any(ch.isspace() for ch in url):
+        return None  # Python 과 브라우저가 호스트를 다르게 읽는 주소는 공식 출처로 인정하지 않는다
     host = (urlsplit(url).hostname or "").lower()
 
     def under(domains: tuple[str, ...]) -> bool:
@@ -160,6 +162,10 @@ def problems(case: dict, *, file_id: str | None = None, today: date | None = Non
         if not any(b["verdict"] == wanted for b in case["behaviors"]):
             found.append(f"behaviors: status 가 '{status}' 이면 판정이 '{wanted}' 인 유형이 하나 이상 있어야 합니다.")
 
+    accessed = [s["accessedAt"] for s in case["sources"] if _DATE.fullmatch(s["accessedAt"])]
+    if accessed and _DATE.fullmatch(case["flaggedAt"]) and case["flaggedAt"] < min(accessed):
+        found.append(f"flaggedAt: {case['flaggedAt']} 는 가장 이른 출처 접근일({min(accessed)})보다 이릅니다. "
+                     "출처를 보기 전에 사건으로 기록할 수는 없습니다(적중률 부풀림 방지).")
     for where, value in [("flaggedAt", case["flaggedAt"]), ("resolvedAt", case.get("resolvedAt")),
                          ("resolution.at", (resolution or {}).get("at"))]:
         if value is not None and (day := _day(value, where, found)) and day > latest:

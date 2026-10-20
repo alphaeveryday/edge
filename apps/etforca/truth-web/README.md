@@ -4,7 +4,7 @@
 
 ## 데이터
 
-화면 코드에는 사건 내용이 없다. 같은 경로의 `data/index.json`(요약)과 `data/cases/<id>.json`(상세)을 읽는다. 이 파일은 `truth-agent` 가 만든다. 배포 워크플로는 `truth/data/` 를 건드리지 않고, 그 자리가 비어 있을 때만 seed 사건으로 한 번 채운다.
+화면 코드에는 사건 내용이 없다. 같은 경로의 `data/index.json`(요약)과 `data/cases/<id>.json`(상세)을 읽는다. 이 파일은 `truth-agent` 가 만든다. 배포 워크플로는 `truth/data/` 를 건드리지 않고, 그 자리가 비어 있을 때만 seed 사건으로 한 번 채운다. 예외는 수동 실행의 `reseed=true` 로, 정정·게시 중단이 급할 때 seed 로 `truth/data/` 를 다시 쓴다(seed 에 없는 사건 파일은 지운다).
 
 ## 로컬 미리보기
 

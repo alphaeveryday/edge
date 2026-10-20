@@ -134,6 +134,49 @@ def test_behavior_verdict_needs_a_cited_source():
     assert any(line.startswith("behaviors[0].sourceIds") for line in problems(case, today=TODAY))
 
 
+def test_resolution_on_the_source_day_is_allowed():
+    # 경계: 판단이 나온 그날 발행된 원문은 정상 근거다(> 를 >= 로 바꾸면 이 테스트가 깨진다).
+    case = seed("geumyang-monlaa")
+    assert case["resolution"]["at"] == case["sources"][0]["publishedAt"]
+    assert problems(case, today=TODAY) == []
+
+
+@pytest.mark.parametrize("field", ["updatedAt", "related"])
+def test_timestamps_need_a_timezone(field):
+    case = seed("hybe-ipo-2019")
+    if field == "updatedAt":
+        case["updatedAt"] = "2026-10-20T09:00:00"
+    else:
+        case["related"] = [{"sourceId": "news-donga-20260903", "addedAt": "2026-10-20T09:00:00"}]
+    assert any("시간대" in line for line in problems(case, today=TODAY))
+
+
+@pytest.mark.parametrize("url, kind", [
+    ("https://WWW.FSC.GO.KR/no010101/1", "official"),
+    ("https://www.fsc.go.kr:443/x", "official"),
+    ("https://dart.fss.or.kr/dsaf001/main.do?rcpNo=1", "disclosure"),
+    ("https://fsc.go.kr.evil.com/x", None),
+    ("https://data.krx.co.kr/x", None),  # 시장 데이터 사이트는 공식 판단이 아니다
+    ("https://evil.com\\@fsc.go.kr/x", None),  # 브라우저는 evil.com 으로 읽는다
+])
+def test_host_kind_matches_only_real_official_hosts(url, kind):
+    from edge_truth_agent.cases import host_kind
+    assert host_kind(url) == kind
+
+
+def test_backslash_url_is_rejected_by_contract():
+    case = seed("geumyang-monlaa")
+    case["sources"][0]["url"] = "https://evil.com\\@fsc.go.kr/no010101/87894"
+    assert any(line.startswith("sources[0].url") for line in problems(case, today=TODAY))
+
+
+def test_flagged_date_cannot_precede_first_source_access():
+    # 출처를 보기 전 날짜로 기록하면 '먼저 기록한 사건'으로 보여 적중률이 부풀려진다.
+    case = seed("geumyang-monlaa")
+    case["flaggedAt"] = "2020-01-01"
+    assert any("가장 이른 출처 접근일" in line for line in problems(case, today=TODAY))
+
+
 def test_broken_json_file_is_reported_by_name(tmp_path):
     # 한 파일이 깨져도 어느 파일인지 알려야 고칠 수 있다(스택트레이스로 끝나지 않게).
     (tmp_path / "broken.json").write_text("{", encoding="utf-8")
