@@ -16,6 +16,8 @@ from jsonschema import Draft202012Validator
 
 from edge_analysis_v2.agent.output_schema import EDIT_SCHEMAS, FIELDS, INVESTIGATION, MOVEMENT, OUTLOOK, OUTLOOK_REVISION, WRITING, merge_outlook_revision
 from edge_analysis_v2.analysis.current_flow import current_flow
+from edge_analysis_v2.contracts.publication_validation import movement_selection
+from edge_analysis_v2.contracts.response_errors import ResponseError, validate
 from edge_analysis_v2.tools.execution import AuditedExecution, ToolInputError
 from edge_analysis_v2.analysis.body_editor import BodyEditor
 from edge_analysis_v2.contracts.outlook_limits import movement_violations, violations
@@ -419,6 +421,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                 problems = []
                 try:
                     candidate = merge_outlook_revision(previous_fields, final) if previous_fields is not None else final
+                    if kind == "movement":
+                        movement_selection(final, (item["item_id"] for item in previous_items or ()))
                 except ValueError as error:
                     return str(error) + '\n이번 수정에서 의도한 변경 속성을 모두 다시 내세요. 직전 시도에서 유효했던 변경도 포함하세요.'
                 for reference in sorted(set(listed_references(candidate)), key=str):
@@ -430,8 +434,10 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                 message = ('이 번호들은 최종 근거로 쓸 수 없습니다. 근거로 쓸 수 있는 호출로 다시 확인해 번호를 바꾸거나 그 항목을 빼세요.\n'
                            + '\n'.join(problems) + '\n') if problems else ''
                 if previous_fields is not None:
-                    for error in Draft202012Validator(OUTLOOK).iter_errors(candidate):
-                        message += f'직전 값과 병합한 응답을 고쳐 주세요: {error.json_path}: {error.validator}={error.validator_value}\n'
+                    try:
+                        validate(candidate, OUTLOOK, '$')
+                    except ResponseError as error:
+                        message += str(error) + '\n'
                 long = movement_violations(final, previous_items) if kind == 'movement' else []
                 if long:
                     message += '글자 수 상한을 넘은 곳이 있습니다. 내용을 버리지 말고 가장 중요한 것만 남겨 줄이세요.\n' + '\n'.join(long) + '\n'

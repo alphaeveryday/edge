@@ -93,3 +93,35 @@ def test_latest_same_cutoff_prefers_publication_time_over_identifier(lineage):
                 VALUES (%s,%s,'2026-09-21T10:00:00+09:00','2026-09-21','completed',%s,'synthetic')''',
                 (identity, etf, '2026-09-21T'+published+':00+09:00'))
         assert _previous(connection, 'movement', etf, cutoff) == newer
+
+
+def test_selection_is_repairable_before_publication_with_same_day_parent(lineage):
+    request, _, _ = lineage
+    parent, _ = request(0, explain('earlier-today'), previous_analysis_id=None)
+    async def corrected(**kwargs):
+        import json
+        item = kwargs['initial']['previous_items'][0]
+        response = {'new_items': [], 'selected_item_ids': ['mistyped-id'], 'summary': 'keep earlier explanation'}
+        feedback = kwargs['final_check'](response)
+        issue = json.loads(feedback.split('\n', 1)[0])
+        assert issue['path'] == '$.selected_item_ids[0]'
+        assert issue['expected'] == [item['item_id']]
+        response['selected_item_ids'] = [item['item_id']]
+        assert kwargs['final_check'](response) is None
+        return response
+    _, screen = request(1, corrected, previous_analysis_id=parent)
+    assert screen['items'][0]['sentence'] == 'earlier-today'
+
+
+def test_candidate_selection_typo_is_rejected_before_database_writes(lineage):
+    request, _, _ = lineage
+    async def corrected(**kwargs):
+        response = await explain('skt-aidc-plan-1012')(**kwargs)
+        response['selected_item_ids'] = ['skt-aidc-plan-0121']
+        feedback = kwargs['final_check'](response)
+        assert 'skt-aidc-plan-1012' in feedback and 'skt-aidc-plan-0121' in feedback
+        response['selected_item_ids'] = ['skt-aidc-plan-1012']
+        assert kwargs['final_check'](response) is None
+        return response
+    _, screen = request(0, corrected, previous_analysis_id=None)
+    assert screen['items'][0]['sentence'] == 'skt-aidc-plan-1012'
