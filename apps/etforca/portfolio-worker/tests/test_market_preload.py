@@ -44,9 +44,23 @@ async def test_quotes_precede_archives_and_new_customer_uses_preloaded_quote(iso
     assert await preload.collect_one(now=now)
     dashboard.save('new', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
     assert work.tracking('new')['market']['payload']['assets'][0]['value'] == 1100
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_quote_refresh SET refresh_after=now()+interval '1 minute'")
     assert await preload.collect_one(now=now)
     assert [c[0] for c in calls] == ['069500.KS', 'SOXL']
     assert all(c[1] is not None for c in calls), 'No archive may delay catalogue price coverage'
+
+
+@pytest.mark.parametrize('leased', [False, True])
+async def test_preload_yields_to_due_or_running_customer_quotes(isolated_db, leased):
+    with store.connect() as db:
+        db.execute("INSERT INTO portfolio_market_preload(instrument) VALUES ('US:SOXL')")
+        db.execute("""INSERT INTO portfolio_quote_refresh(instrument,since,refresh_after,lease_until)
+            VALUES ('US:VOO',current_date,CASE WHEN %s THEN now()+interval '1 minute' ELSE now() END,
+                CASE WHEN %s THEN now()+interval '5 minutes' ELSE NULL END)""", (leased, leased))
+    assert not await preload.collect_one(now=NOW), 'A warm background child must not starve a customer price request'
+    with store.connect() as db:
+        assert db.execute("SELECT lease_until FROM portfolio_market_preload").fetchone()['lease_until'] is None
 
 
 async def test_preload_yields_to_customer_analysis_and_source_errors_back_off(isolated_db, monkeypatch):
@@ -193,8 +207,7 @@ async def test_warm_provider_reuses_child_but_timeout_kills_it_and_returns_capac
                 await session.fetch('HANG', date(2026, 10, 20), None)
         assert child.returncode is not None and session.process is None and not session.admitted
         assert market_data._PRICE_SLOTS.acquire(blocking=False)
-        assert market_data._PRICE_SLOTS.acquire(blocking=False)
-        market_data._PRICE_SLOTS.release()
+        assert not market_data._PRICE_SLOTS.acquire(blocking=False)
         market_data._PRICE_SLOTS.release()
     finally:
         await session.close()
@@ -358,14 +371,12 @@ async def test_shutdown_while_waiting_does_not_start_provider_and_releases_claim
         pytest.fail('Shutdown must not start another provider process')
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', forbidden)
     assert market_data._PRICE_SLOTS.acquire(blocking=False)
-    assert market_data._PRICE_SLOTS.acquire(blocking=False)
     try:
         task = asyncio.create_task(preload.collect_one(stopping, now=NOW, session=preload.PriceSession(stopping)))
         await asyncio.sleep(.1)
         stopping.set()
         assert not await task
     finally:
-        market_data._PRICE_SLOTS.release()
         market_data._PRICE_SLOTS.release()
     with store.connect() as db:
         row = db.execute('SELECT * FROM portfolio_market_preload').fetchone()

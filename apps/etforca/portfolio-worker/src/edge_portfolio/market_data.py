@@ -6,6 +6,7 @@ import json
 import sys
 import subprocess
 import tempfile
+from contextlib import asynccontextmanager
 from threading import BoundedSemaphore
 from pathlib import Path
 from datetime import date, datetime, timedelta
@@ -22,7 +23,8 @@ import exchange_calendars as calendars
 from .catalog import directory
 
 log = logging.getLogger(__name__)
-_PRICE_SLOTS = BoundedSemaphore(2)
+# The analysis process and price libraries share one container memory limit.
+_PRICE_SLOTS = BoundedSemaphore(1)
 # KRX notice (2026 local election / Constitution Day), absent in calendars 4.13.2:
 # https://stock.mk.co.kr/news/disclosure/template/1029043
 KRX_EXTRA_CLOSURES = pd.DatetimeIndex(['2026-06-03', '2026-07-17'])
@@ -166,11 +168,19 @@ def with_actual_prices(returns, actual):
             'return_source_url': returns['source_url']}
 
 
-async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None, history_start=None):
+@asynccontextmanager
+async def price_slot():
     # Admission is separate from provider timeouts; a busy worker is not a bad source.
     while not _PRICE_SLOTS.acquire(blocking=False):
         await asyncio.sleep(.05)
     try:
+        yield
+    finally:
+        _PRICE_SLOTS.release()
+
+
+async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None, history_start=None):
+    async with price_slot():
         try:
             options = {k: v for k, v in {'repair_since': repair_since, 'history_start': history_start}.items() if v is not None}
             original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, **options), timeout=provider_timeout)
@@ -184,8 +194,6 @@ async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_
         record = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback'), timeout=provider_timeout)
         record['primary_failure'] = primary_failure
         return record
-    finally:
-        _PRICE_SLOTS.release()
 
 
 async def _fetch_prices(symbol, as_of, *, on_raw=None, provider='yahoo', repair_since=None, history_start=None):
@@ -562,10 +570,9 @@ async def enrich_report(published, final, market, sources):
     plan = published['recommendation']
     dividends = {}
     target = weights(plan['allocations'])
-    forecast_evidence = cited(final.return_forecast.evidence, sources) if final.return_forecast else []
     queried = tuple(sorted(target.items())) in market.queried
-    if final.return_forecast and not queried:
-        raise ValueError('Call read_portfolio_history with the final allocation before writing return_forecast')
+    # An ungrounded optional forecast must not discard the validated allocation.
+    forecast_evidence = cited(final.return_forecast.evidence, sources) if final.return_forecast and queried else []
     result = await market.get(plan['allocations'])
     plan['target_return_1y'] = 7
     # Web research informs the analysis, but numeric yields use identified cash events.

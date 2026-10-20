@@ -11,6 +11,20 @@ from test_store import isolated_db
 ORIGIN = {'Origin': 'http://localhost:5180'}
 
 
+def test_confirmed_test_visitor_stays_excluded_after_new_requests(client):
+    from edge_portfolio import admin_store
+    original = store.submit('confirmed-test', 'first', {})
+    customer = store.submit('real-customer', 'first', {})
+    admin_store.mark_test_visitor('confirmed-test', 'operator-confirmed', 'anonymous-posthog-id')
+    later = store.submit('confirmed-test', 'later', {'question': 'new input'})
+    assert later['test_label'] == 'operator-confirmed'
+    assert admin_store.records('analyses', 7, '', 1)['total'] == 1
+    with store.connect() as db:
+        assert db.execute('SELECT count(*) AS n FROM portfolio_jobs').fetchone()['n'] == 3
+        assert db.execute('SELECT input FROM portfolio_jobs WHERE id=%s', (original['id'],)).fetchone()['input'] == {}
+    assert admin_store.detail('analyses', customer['id'])['test_label'] is None
+
+
 def test_test_records_are_explicit_and_filter_counts_match_rows(client):
     from edge_portfolio import admin_store
     customer = store.submit('same-owner', 'customer', {'question': 'same question'})

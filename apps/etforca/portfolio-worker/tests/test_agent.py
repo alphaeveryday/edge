@@ -54,6 +54,42 @@ class Evidence:
     sources = [{"id": "s1", "passages": [{"id": "p1", "text": "official source quotation"}]}]
 
 
+@pytest.mark.parametrize('status', ['infeasible', 'needs_input'])
+async def test_repeated_account_failure_guides_correction_without_blocking_new_placement(monkeypatch, status):
+    stages, attempts = [], []
+    class Optimizer:
+        def __init__(self, *args):
+            self.result = {'status': 'available', 'candidates': []}
+    def calculate(*args):
+        attempts.append(1)
+        if len(attempts) == 4:
+            assert args[1]['allocations'][0]['account'] == '일반 계좌'
+            return {'status': 'ready'}
+        return {'status': status, 'reasons': ['ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:IRP' if status == 'infeasible' else 'ACCOUNT_WITHDRAWAL_REVIEW_REQUIRED:IRP']}
+    async def model(payload):
+        if stages[-1] == 'question':
+            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps({
+                **final_payload()['question'], 'decision': {}})}}]}
+        if len(attempts) == 3:
+            names = {tool['function']['name'] for tool in payload['tools']}
+            assert 'calculate_rebalance' in names
+            assert 'optimize_portfolios' in names
+            assert '계좌 배치를 수정' in payload['messages'][-1]['content']
+        if len(attempts) == 4:
+            assert json.loads(payload['messages'][-1]['content'])['status'] == 'ready'
+            raise RuntimeError('CORRECTED_PLACEMENT')
+        return {'choices': [{'message': {'role': 'assistant', 'tool_calls': [{
+            'id': str(len(attempts)), 'type': 'function', 'function': {
+                'name': 'calculate_rebalance', 'arguments': json.dumps({'allocations': [
+                    {'instrument_id': 'US:VOO', 'weight_pct': 100, 'account': '일반 계좌' if len(attempts) == 3 else 'IRP'}]})}}]}}]}
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    monkeypatch.setattr('edge_portfolio.agent.execution_tool', calculate)
+    with pytest.raises(RuntimeError, match='CORRECTED_PLACEMENT'):
+        await run_analysis(AnalysisInput(holdings=[], planning=True, horizon='10년 이상'),
+            'test', stages.append, model_call=model, evidence=Evidence())
+    assert len(attempts) == 4
+
+
 @pytest.mark.parametrize('kind', ['review', 'rebalance', 'new_money', 'new_portfolio', 'scenario'])
 async def test_task_label_cannot_hide_research_or_recommendation_tools(kind):
     stages = []

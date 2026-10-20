@@ -7,7 +7,7 @@ from time import monotonic
 
 import numpy as np
 
-from .market_data import fetch_prices, normalized_prices, comparison_bounds, expected_sessions, history_basis, history_returns, price_failure
+from .market_data import fetch_prices, normalized_prices, comparison_bounds, expected_sessions, history_basis, history_returns, price_failure, weights
 from .recommendation import selected_accounts, allocation_error
 from .decision import Decision, check_constraints
 from .execution import plan_execution
@@ -91,12 +91,12 @@ def rank(groups, ids_by_group, objectives=(), preferred=()):
         best = max(group, key=lambda r: priority(r, len(ids)))
         choices = [(f'candidate-{number}', best)]
         for index, requested in enumerate(preferred, 1):
-            matched = next((row for row in group if tuple(zip(ids, [round(w * 100) for w in row['weights']])) == requested), None)
+            matched = next((row for row in group if tuple(zip(ids, [round(w * 100, 8) for w in row['weights']])) == requested), None)
             if matched is not None and matched is not best:
                 choices.append((f'candidate-{number}-preferred-{index}', matched))
         for candidate_id, chosen in choices:
             winners.append({'candidate_id': candidate_id,
-                        'allocations': [{'instrument_id': key, 'weight_pct': round(weight * 100)} for key, weight in zip(ids, chosen['weights'])],
+                        'allocations': [{'instrument_id': key, 'weight_pct': round(weight * 100, 8)} for key, weight in zip(ids, chosen['weights'])],
                         **{key: round(chosen[key], 6) for key in ('score', 'duration_pct', 'excess_pp', 'preservation_pct')},
                         'max_drawdown_pct': chosen.get('max_drawdown_pct'), 'income_yield_pct': chosen.get('income_yield_pct'),
                         'recent_outperform_days': chosen.get('recent_outperform_days', 0)})
@@ -153,11 +153,12 @@ class Optimizer:
         allocations = args.get('preferred_allocations', [])
         if not isinstance(allocations, list) or len(allocations) > 5 or any(
             not isinstance(row, dict) or set(row) != {'instrument_id', 'weight_pct'}
-            or not isinstance(row['instrument_id'], str) or type(row['weight_pct']) is not int
-            or not 1 <= row['weight_pct'] <= 100 for row in allocations):
-            raise ValueError('Preferred allocations need distinct ETF IDs and positive integer weights totaling 100')
+            or not isinstance(row['instrument_id'], str) or type(row['weight_pct']) not in (int, float)
+            or not 0 < row['weight_pct'] <= 100
+            or Decimal(str(row['weight_pct'])) != Decimal(str(row['weight_pct'])).quantize(Decimal('.00000001')) for row in allocations):
+            raise ValueError('Preferred allocations need distinct ETF IDs and positive weights with at most 8 decimal places totaling 100')
         preferred = tuple(sorted((row['instrument_id'], row['weight_pct']) for row in allocations))
-        if preferred and (sum(weight for _, weight in preferred) != 100 or [key for key, _ in preferred] not in groups):
+        if preferred and (sum(Decimal(str(weight)) for _, weight in preferred) != 100 or [key for key, _ in preferred] not in groups):
             raise ValueError('Preferred allocations must total 100 and match one submitted ETF combination')
         conflicts = self.policy_conflicts()
         if conflicts:
@@ -213,9 +214,8 @@ class Optimizer:
                 async with self.market.semaphore:
                     attempted.add(key)
                     try:
-                        async with asyncio.timeout(PRICE_TIMEOUT_SECONDS):
-                            self.market.records[key] = self.market.loader(symbol, self.market.as_of) if self.market.loader else await fetch_prices(symbol, self.market.as_of,
-                                on_raw=lambda record: self.market.records.__setitem__(key, record))
+                        self.market.records[key] = self.market.loader(symbol, self.market.as_of) if self.market.loader else await fetch_prices(symbol, self.market.as_of,
+                            provider_timeout=PRICE_TIMEOUT_SECONDS, on_raw=lambda record: self.market.records.__setitem__(key, record))
                         self.market.failures.pop(key, None)
                     except Exception as error:
                         if key not in self.market.records:
@@ -228,7 +228,8 @@ class Optimizer:
                 if remaining <= 0:
                     raise TimeoutError
                 async with asyncio.timeout(remaining):
-                    await asyncio.gather(*(fetch(key, needed[key]) for key in ordered), return_exceptions=True)
+                    for baseline in (True, False):
+                        await asyncio.gather(*(fetch(key, needed[key]) for key in ordered if (key in priority) == baseline), return_exceptions=True)
             except TimeoutError:
                 for key in needed:
                     if key not in self.market.records:
@@ -330,7 +331,7 @@ class Optimizer:
             for ids_in_group, rows in zip(eligible, results):
                 dividends = [dividends_by_id.get(key) for key in ids_in_group]
                 for row in rows[:]:
-                    allocation = [{'instrument_id': key, 'weight_pct': round(weight * 100)} for key, weight in zip(ids_in_group, row['weights'])]
+                    allocation = [{'instrument_id': key, 'weight_pct': round(weight * 100, 8)} for key, weight in zip(ids_in_group, row['weights'])]
                     checks = self.vector_checks(allocation)
                     if any(check['status'] not in {'pass', 'model_review'} for check in checks):
                         unknown_count += any(check['status'] == 'unknown' for check in checks)
@@ -357,7 +358,7 @@ class Optimizer:
             comparison_records = {key: record for key, record in self.market.records.items() if key in valid_ids}
             baseline = sum(frame[key] * value for key, value in self.market.current.items())
             for candidate in candidates:
-                target = {row['instrument_id']: row['weight_pct'] / 100 for row in candidate['allocations']}
+                target = weights(candidate['allocations'])
                 values = sum(frame[key] * weight for key, weight in target.items())
                 history = {'points': [{'date': str(day.date()), 'recommended': round(float(values.loc[day] * 1000000), 2),
                                        'current': round(float(baseline.loc[day] * 1000000), 2)} for day in frame.index],
@@ -453,17 +454,17 @@ class Optimizer:
         actual = {}
         for row in final.recommendation.allocations:
             actual[row.instrument_id] = actual.get(row.instrument_id, Decimal(0)) + Decimal(str(row.weight_pct))
-        expected = {row['instrument_id']: row['weight_pct'] for row in candidate['allocations']}
+        expected = {row['instrument_id']: Decimal(str(row['weight_pct'])) for row in candidate['allocations']}
         if actual != expected:
             raise ValueError(f'Final allocation must exactly match {candidate["candidate_id"]}: {expected}; use candidate_id, not rank, to identify the candidate')
         return candidate
 
 
 TOOL = {'type': 'function', 'function': {'name': 'optimize_portfolios',
-    'description': '고객 요청과 투자 의도에 맞게 선정한 ETF 조합 1~10개를 비교하고 고객 제약을 검사한다. 통과 후보를 초과수익률, 오버퍼폼 기간 비율 순으로 정렬하며 고객 목적 적합성은 LLM이 판단한다. MDD는 선택 기준이 아니다. preferred_allocations로 LLM이 설계한 1% 단위 비중을 검산한다. 고객 제약을 통과하면 비교 자료가 부족해도 추천 후보에 남기고 미계산 지표만 null이다. 자동 탐색은 10% 단위다. 새 ETF 조합이나 다른 비중도 재검토할 수 있다. 현금 0%, 조합당 최대 5종, 전체 40종. 현재 revision의 후보만 선택한다.',
+    'description': '고객 요청과 투자 의도에 맞게 선정한 ETF 조합 1~10개를 비교하고 고객 제약을 검사한다. 통과 후보를 초과수익률, 오버퍼폼 기간 비율 순으로 정렬하며 고객 목적 적합성은 LLM이 판단한다. MDD는 선택 기준이 아니다. preferred_allocations로 LLM이 설계한 소수점 8자리까지의 비중을 그대로 검산한다. 고객 제약을 통과하면 비교 자료가 부족해도 추천 후보에 남기고 미계산 지표만 null이다. 자동 탐색은 10% 단위다. 새 ETF 조합이나 다른 비중도 재검토할 수 있다. 현금 0%, 조합당 최대 5종, 전체 40종. 현재 revision의 후보만 선택한다.',
     'parameters': {'type': 'object', 'properties': {'combinations': {'type': 'array', 'minItems': 1, 'maxItems': 10,
         'items': {'type': 'array', 'minItems': 1, 'maxItems': 5, 'items': {'type': 'string'}}},
         'preferred_allocations': {'type': 'array', 'maxItems': 5, 'items': {'type': 'object', 'properties': {
-            'instrument_id': {'type': 'string'}, 'weight_pct': {'type': 'integer', 'minimum': 1, 'maximum': 100}},
+            'instrument_id': {'type': 'string'}, 'weight_pct': {'type': 'number', 'exclusiveMinimum': 0, 'maximum': 100, 'multipleOf': 0.00000001}},
             'required': ['instrument_id', 'weight_pct'], 'additionalProperties': False}}},
         'required': ['combinations'], 'additionalProperties': False}}}

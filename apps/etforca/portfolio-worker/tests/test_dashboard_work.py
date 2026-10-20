@@ -326,13 +326,11 @@ async def test_dashboard_waits_for_capacity_before_starting_provider_deadlines(i
         return record()
     monkeypatch.setattr(market_data, '_fetch_prices', fetch)
     assert market_data._PRICE_SLOTS.acquire(blocking=False)
-    assert market_data._PRICE_SLOTS.acquire(blocking=False)
     try:
         pending = asyncio.create_task(work.records_for(['KR:069500'], date(2026, 10, 18)))
         await asyncio.sleep(.05)
         assert not pending.done(), 'A queued quote is not a failed source'
     finally:
-        market_data._PRICE_SLOTS.release()
         market_data._PRICE_SLOTS.release()
     records, failures = await wait_for(pending, 2)
     assert set(records) == {'KR:069500'}
@@ -788,7 +786,7 @@ async def test_each_instrument_repairs_only_its_own_holding_basis(isolated_db, m
     with store.connect() as db:
         saved = dashboard.read('owner')['workbook']
         saved['assets'] = [old, new]
-        db.execute("UPDATE portfolio_workbooks SET payload=%s WHERE owner='owner'", (Jsonb(saved),))
+        db.execute("UPDATE portfolio_workbooks SET payload=%s,refresh_after=now() WHERE owner='owner'", (Jsonb(saved),))
     calls = []
     def prices(db, since, day):
         calls.append(since)

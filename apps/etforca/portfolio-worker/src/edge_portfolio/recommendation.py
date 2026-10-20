@@ -41,7 +41,7 @@ def publish_recommendation(final, request, metrics, sources, decision=None):
     def evaluation(value, current=False):
         scores = value.scores.model_dump() if value.scores else None
         overall = float((sum(Decimal(str(v)) for v in scores.values()) / 3).quantize(Decimal('.1'), rounding=ROUND_HALF_UP)) if scores else None
-        input_only = current and scores is None and (decision and decision.scenario_requested or not sources or bool(request.holdings) and all(h.kind == 'cash' for h in request.holdings))
+        input_only = current and scores is None and (decision and decision.scenario_requested or not sources or all(h.kind == 'cash' for h in request.holdings))
         return {'scores': scores, 'overall': overall, 'rubric_version': 1, 'reason': validate_section('question' if input_only else 'portfolio', value.reason.model_dump(), sources),
                 'method': '시장 주도성·수익성·안정성 세 항목의 평균이에요. ETF 구성 종목·과거 가격·보수율을 확인해 평가하며, 사용자 선호는 점수에 넣지 않아요.'}
 

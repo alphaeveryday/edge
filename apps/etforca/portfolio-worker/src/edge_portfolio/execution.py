@@ -60,7 +60,7 @@ def zero_funding_quote(request, decision):
 
 def execution_tool(request, args, decision, catalog):
     from .recommendation import selected_accounts, allocation_error
-    if set(args) != {'allocations'} or not isinstance(args['allocations'], list) or not 1 <= len(args['allocations']) <= 10:
+    if set(args) != {'allocations'} or not isinstance(args['allocations'], list) or not 1 <= len(args['allocations']) <= 20:
         raise ValueError('INVALID_EXECUTION_ALLOCATION')
     rows = [Allocation.model_validate(row).model_dump() for row in args['allocations']]
     for row in rows:
@@ -70,6 +70,12 @@ def execution_tool(request, args, decision, catalog):
         if error := allocation_error(item, row['account'], request.preferences.tax_profile):
             raise ValueError(error)
     result = plan_execution(request, rows, decision)
+    if any(reason.startswith('ACCOUNT_') for reason in result['reasons']):
+        result['instruction'] = ('계좌별 before_krw와 remaining_contribution_krw, max_weight_pct를 확인하세요. '
+            '계좌 내 모든 종목 비중의 합은 max_weight_pct를 넘지 않도록 소수점 8자리까지 그대로 사용하세요. '
+            '남은 납입 한도가 0인 계좌에는 새 돈을 넣지 말고, 기존 계좌 안에서 종목을 교체하는 배치를 먼저 계산하세요. '
+            '동일 종목을 여러 계좌에 나눠도 됩니다. 같은 실패 배치를 반복하지 말고 계좌 배치나 후보 비중을 수정하세요. '
+            '납입 여력이 확인되지 않은 금액 계획은 조건부로 설명하되, 추천 비중과 결론은 완성하세요.')
     for row in result['rows']:
         row['name'] = catalog.get(row['instrument_id'], {}).get('name', row['instrument_id'])
     return result
@@ -77,7 +83,7 @@ def execution_tool(request, args, decision, catalog):
 
 TOOL = {'type': 'function', 'function': {'name': 'calculate_rebalance',
     'description': '전체 포트폴리오 목표 비중에서 실제 매수·매도 금액, 추가 자금, 매도 금지·계좌 제약을 계산한다. 자금은 고객 원문에서만 읽으며 후보 승인과 별개다.',
-    'parameters': {'type': 'object', 'properties': {'allocations': {'type': 'array', 'minItems': 1, 'maxItems': 10,
+    'parameters': {'type': 'object', 'properties': {'allocations': {'type': 'array', 'minItems': 1, 'maxItems': 20,
         'items': Allocation.model_json_schema()}}, 'required': ['allocations'], 'additionalProperties': False}}}
 
 
@@ -286,13 +292,22 @@ def build_execution(request, allocations, *, additional_krw=0, monthly_krw=None,
             return all(amounts[key] >= value for key, value in protected.items())
         # Largest-remainder rounding can save up to one won per holding. Search that
         # bounded interval instead of assuming monotonic apportionment.
-        required = Decimal(next(value for value in range(int(lower.to_integral_value(rounding=ROUND_CEILING)), int(required) + 1) if preserves(value)))
+        if required - lower <= 10000:
+            required = Decimal(next(value for value in range(int(lower.to_integral_value(rounding=ROUND_CEILING)), int(required) + 1) if preserves(value)))
+        else:
+            # shortcut: tiny weights use a safe bound; exact minima need a bounded apportionment solver.
+            result['required_additional_is_minimum'] = False
+            result['assumptions'].append('아주 작은 목표 비중은 반올림에 따른 최소금액 대신 매도 없이 가능한 추가 자금의 상한을 계산했어요.')
         result['required_additional_krw'] = str(required)
         if not preserves(additional) or not additional and monthly:
             if not monthly:
                 return {**result, 'status': 'infeasible', 'reasons': ['ADDITIONAL_FUNDING_REQUIRED']}
             months = int(((required - additional) / monthly).to_integral_value(rounding=ROUND_CEILING))
             months = max(1, months)
+            if result.get('required_additional_is_minimum') is False:
+                # Check every supported finite funding duration before rejecting it on a conservative bound.
+                first = max(1, int(((lower - additional) / monthly).to_integral_value(rounding=ROUND_CEILING)))
+                months = next((n for n in range(first, min(months, 600) + 1) if preserves(additional + n * monthly)), months)
             while not preserves(additional + months * monthly):
                 months += 1
             additional += months * monthly
@@ -325,8 +340,14 @@ def build_execution(request, allocations, *, additional_krw=0, monthly_krw=None,
         before = sum(value for key, value in current.items() if key[1] == account)
         after = sum(value for key, value in amounts.items() if key[1] == account)
         deposit, withdrawal = max(Decimal(0), after - before), max(Decimal(0), before - after)
+        profile = next((row for row in tax.accounts if row.account == account), None) if tax else None
+        remaining = Decimal(profile.remaining_man) * 10000 if profile and profile.remaining_man else None
         result['accounts'].append({'account': account, 'before_krw': str(before), 'target_krw': str(after),
-                                   'deposit_krw': str(deposit), 'withdrawal_krw': str(withdrawal)})
+                                   'deposit_krw': str(deposit), 'withdrawal_krw': str(withdrawal),
+                                   'remaining_contribution_krw': str(remaining) if remaining is not None else None,
+                                   'max_weight_pct': format(min(Decimal(100), ((before + remaining) / (total + additional) * 100)
+                                       .quantize(Decimal('.00000001'), rounding=ROUND_FLOOR)), 'f')
+                                       if remaining is not None and account != '일반 계좌' and (result['months'] or 0) <= 1 else None})
         if account == '일반 계좌':
             continue
         if account not in known_accounts and after > 0:
@@ -334,7 +355,6 @@ def build_execution(request, allocations, *, additional_krw=0, monthly_krw=None,
         if withdrawal:
             reasons.append('ACCOUNT_WITHDRAWAL_REVIEW_REQUIRED:' + account)
         if deposit:
-            profile = next((row for row in tax.accounts if row.account == account), None) if tax else None
             if profile is None or not profile.remaining_man or (result['months'] or 0) > 1:
                 reasons.append('ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED:' + account)
             elif deposit > Decimal(profile.remaining_man) * 10000:

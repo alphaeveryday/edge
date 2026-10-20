@@ -34,6 +34,12 @@ def daily_quote(instrument_id, edition):
 
 
 async def load_quote(instrument_id, edition):
+    from .market_data import price_slot
+    async with price_slot():
+        return await _load_quote(instrument_id, edition)
+
+
+async def _load_quote(instrument_id, edition):
     process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.newsletter_quote', instrument_id, edition.isoformat(),
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)

@@ -35,6 +35,16 @@ def test_duplicate_submission_is_one_job_and_other_owner_cannot_read(isolated_db
         store.submit("owner", "same", {"value": 2})
 
 
+def test_service_failures_do_not_consume_customer_retry_allowance(isolated_db):
+    for index in range(4):
+        job = store.submit('retry-owner', str(index), {'question': 'same input'}, reuse=True)
+        assert store.claim()['id'] == job['id']
+        store.finish(job['id'], failure='ANALYSIS_FAILED')
+    retried = store.submit('retry-owner', 'retry', {'question': 'same input'}, reuse=True)
+    assert retried['state'] == 'queued'
+    assert store.submit('retry-owner', 'retry', {'question': 'same input'}, reuse=True)['id'] == retried['id']
+
+
 def test_two_workers_cannot_claim_same_job(isolated_db):
     store.submit("owner", "same", {})
     with ThreadPoolExecutor(2) as pool:

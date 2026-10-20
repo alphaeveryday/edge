@@ -145,7 +145,7 @@ def submit(owner, key, payload, parent_id=None, *, reuse=False):
                 used = db.execute("SELECT id FROM portfolio_jobs WHERE owner=%s AND kind='chat' AND COALESCE(input->>'mode','question')='question' AND state IN ('queued','running','succeeded')", (owner,)).fetchone()
                 if used:
                     raise ValueError("CHAT_LIMIT")
-        active = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE owner=%s AND NOT (kind='chat' AND (state='failed' OR COALESCE(input->>'mode','question')='recovery')) AND (state IN ('queued','running') OR created_at>now()-interval '1 day')", (owner,)).fetchone()["n"]
+        active = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE owner=%s AND state!='failed' AND NOT (kind='chat' AND COALESCE(input->>'mode','question')='recovery') AND (state IN ('queued','running') OR created_at>now()-interval '1 day')", (owner,)).fetchone()["n"]
         if not recovery and active >= 3:
             raise ValueError("REQUEST_LIMIT")
         queued = queued_count(db)
@@ -154,8 +154,9 @@ def submit(owner, key, payload, parent_id=None, *, reuse=False):
         daily = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE created_at>now()-interval '1 day'").fetchone()["n"]
         if daily >= int(os.getenv("PORTFOLIO_DAILY_JOB_LIMIT", "50")):
             raise ValueError("DAILY_LIMIT")
-        return db.execute("INSERT INTO portfolio_jobs(id,owner,request_key,input,kind,parent_id,cache_key,requested_at) VALUES (%s,%s,%s,%s,%s,%s,%s,now()) RETURNING *",
-                          (uuid4().hex, owner, key, Jsonb(payload), "chat" if parent_id else "analysis", parent_id, cache_key)).fetchone()
+        return db.execute("""INSERT INTO portfolio_jobs(id,owner,request_key,input,kind,parent_id,cache_key,requested_at,test_label)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,now(),(SELECT label FROM portfolio_test_visitors WHERE owner=%s)) RETURNING *""",
+                          (uuid4().hex, owner, key, Jsonb(payload), "chat" if parent_id else "analysis", parent_id, cache_key, owner)).fetchone()
 
 
 def latest(owner):

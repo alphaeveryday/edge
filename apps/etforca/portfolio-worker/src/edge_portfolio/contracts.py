@@ -143,12 +143,12 @@ class RecommendationEvaluation(Evaluation):
 class Allocation(StrictModel):
     instrument_id: str = Field(min_length=1, max_length=32)
     account: Literal['일반 계좌', 'ISA', '연금저축', 'IRP']
-    weight_pct: Decimal = Field(gt=0, le=100, max_digits=5, decimal_places=2)
+    weight_pct: Decimal = Field(gt=0, le=100, max_digits=11, decimal_places=8)
 
 
 class Recommendation(StrictModel):
     title: str = Field(min_length=1, max_length=40)
-    allocations: list[Allocation] = Field(min_length=1, max_length=10)
+    allocations: list[Allocation] = Field(min_length=1, max_length=20)
     evaluation: RecommendationEvaluation
 
     @model_validator(mode='after')
