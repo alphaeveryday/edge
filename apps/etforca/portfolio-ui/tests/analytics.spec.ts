@@ -556,8 +556,9 @@ test('focus moved by the form itself is not counted as the visitor opening the s
   const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
   await expect.poll(() => actions().filter(a => a === 'bulk_entry_opened').length).toBe(2);
   expect(actions()).not.toContain('input_search_opened');
-  // 코드가 옮긴 검색창에 방문자가 바로 입력하면 그때는 방문자의 첫 검색이다.
-  await search.focus();
+  // 코드가 옮긴 검색창에 방문자가 바로 입력하면 그때는 방문자의 첫 검색이다(포커스 이벤트 없이 입력만으로 세야 한다).
+  await page.getByRole('textbox', { name: 'VOO 금액' }).press('Enter');
+  await expect(search).toBeFocused();
   await page.keyboard.type('V');
   await expect.poll(actions).toContain('input_search_opened');
 });

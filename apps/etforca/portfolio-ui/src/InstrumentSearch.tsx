@@ -28,7 +28,7 @@ export function InstrumentSearch({ account, catalog, onAdd, onOpen }: { account:
     if (row.top < bounds.top) list.scrollTop -= bounds.top - row.top;
     else if (row.bottom > bounds.bottom) list.scrollTop += row.bottom - bounds.bottom;
   }, [active, open, id]);
-  function choose(item: Instrument) { const rejected = onAdd(item); if (rejected) { setError(rejected); return; } setError(''); setQuery(''); setOpen(false); setActive(0); }
+  function choose(item: Instrument) { onOpen?.(); const rejected = onAdd(item); if (rejected) { setError(rejected); return; } setError(''); setQuery(''); setOpen(false); setActive(0); }
   return <div className="find instrument-search"><Button type="button" className="find__plus" aria-label={account + ' ETF 또는 현금 찾기'} onClick={() => { setOpen(!open); document.getElementById(id)?.focus(); }}>+</Button>
     <TextInput id={id} className="field" role="combobox" aria-label={account + '에 담은 ETF 찾기'} aria-autocomplete="list" aria-expanded={open} aria-controls={id + '-list'} aria-activedescendant={open && options[active] ? id + '-' + active : undefined} autoComplete="off" placeholder="ETF 추가하기" value={query} onFocus={() => { setOpen(true); onOpen?.(); }} onBlur={() => setOpen(false)} onChange={e => { onOpen?.(); setQuery(e.target.value); setError(''); setOpen(true); setActive(0); }} onKeyDown={e => {
       if (e.key === 'Escape') setOpen(false);
