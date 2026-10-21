@@ -67,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         except RunBusy as busy:
             logging.info(json.dumps({"event": "run_skipped", "reason": str(busy)}, ensure_ascii=False))
             return 0
-        # 반영되지 못한 사건이 있으면 실패로 끝내 운영 알림(ECS 실패 규칙)이 울리게 한다. 저장·게시된 것은 그대로 둔다.
+        # 반영되지 못한 사건이 있으면 실패 코드로 끝내 ECS 태스크 상태에 남긴다(알림은 보내지 않는다). 저장·게시된 것은 그대로 둔다.
         return 1 if report["failed"] or report["dropped"] else 0
 
     from . import site
