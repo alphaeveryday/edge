@@ -33,8 +33,21 @@ test('switching to percent converts amounts and shows the running total as typed
   await expect(page.locator('.portfolio-preview .donut__c')).toContainText('400만');
 });
 
-test('a draft saved in 만 원 before the unit change reopens as the same amount in won', async ({ page }) => {
-  await page.addInitScript(() => sessionStorage.setItem('edge-preview-form-v1', JSON.stringify({ step: 0, holdings: [{ name: '현금', kind: 'cash', instrument_id: 'CASH:KRW', account: '일반 계좌', amount_krw: '123.4567' }], alternate: [], selected: ['일반 계좌'], question: '', horizon: '', how: '', interests: [], note: '', contribution: '', keyword: '', tax: null, draftId: 'legacy', mode: 'amount', fresh: false })));
+// Only the amount side of a pre-change draft is in 만 원; percentages must survive untouched.
+for (const mode of ['amount', 'percent'] as const) test(`a ${mode}-mode draft saved in 만 원 reopens with the same won amount and untouched weights`, async ({ page }) => {
+  const cash = (amount_krw: string) => [{ name: '현금', kind: 'cash', instrument_id: 'CASH:KRW', account: '일반 계좌', amount_krw }];
+  const draft = { step: 0, holdings: cash(mode === 'amount' ? '123.4567' : '100'), alternate: mode === 'amount' ? [] : cash('123.4567'), selected: ['일반 계좌'], question: '', horizon: '', how: '', interests: [], note: '', contribution: '', keyword: '', tax: null, draftId: 'legacy', mode, fresh: false };
+  await page.addInitScript(d => sessionStorage.setItem('edge-preview-form-v1', d), JSON.stringify(draft));
   await page.goto('/portfolio/?preview=input');
+  if (mode === 'percent') {
+    await expect(page.getByLabel('현금 비율', { exact: true })).toHaveValue('100');
+    await page.getByRole('button', { name: '금액', exact: true }).click();
+  }
+  await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('1,234,567');
+});
+
+test('a pasted decimal amount keeps its won value instead of shifting 100x', async ({ page }) => {
+  await page.goto('/portfolio/?preview=input');
+  await addCash(page, '1,234,567.89');
   await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('1,234,567');
 });
