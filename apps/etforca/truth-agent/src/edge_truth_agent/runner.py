@@ -16,7 +16,7 @@ from pathlib import Path
 import tempfile
 import uuid
 
-from . import corpus, news, routing, session, site
+from . import corpus, media, news, routing, session, site
 from .cases import problems
 from .render import render
 from .store import ABSENT, ConflictError, open_store
@@ -239,6 +239,9 @@ def run(cfg, mode: str, *, lake=None, session_runner=session.run, now: datetime 
         corpus_related = routing.route(list(texts.values()), list(cases.values()), public=True) if mode == "hourly" else {}
         for cid, case in cases.items():
             if not case.get("locked") and routing.add_related(case, routing.newest(corpus_related.get(cid, [])), today, now.isoformat()):
+                case["updatedAt"] = now.isoformat()
+            # 사진·영상도 같은 방식: 모델이 아니라 코드가 등록된 출처에서 채우고, 못 찾으면 다음 실행이 다시 찾는다.
+            if mode == "hourly" and not case.get("locked") and media.fill(case):
                 case["updatedAt"] = now.isoformat()
         for c in cases.values():
             (cases_dir / f"{c['id']}.json").write_bytes(_json(c))

@@ -67,6 +67,7 @@
 - 고치기 전에 `view_case` 로 본다. 다른 도구로 사건이 바뀌면 다시 본다.
 - 작은 수정은 `str_replace`(그 칸 안에서 정확히 한 번 나오는 문자열), 칸 전체는 `set_value`, 목록 끝 추가는 경로 끝에 `[+]`.
 - 고칠 수 없는 칸: id·status·resolution·resolvedAt·flaggedAt·updatedAt·origin·locked·sources·related·impact(→ `set_impact`).
+- cover·video(대표 사진·영상)는 코드가 등록된 출처에서 채운다. 주소를 적지 않는다. 깨진 사진·영상만 `set_value` 로 null 을 넣는다.
 - **바꿀 근거가 없으면 고치지 않는다.** 새 기사가 이미 반영된 내용을 되풀이하면 그대로 `finish` 한다. 이것도 정상 결과다.
 - 끝내기 전에 `check` 가 '통과'여야 한다. 오류가 나오면 그 문장대로 고친다.
 - 도구 오류 문장은 다음에 무엇을 할지 알려준다. 같은 오류를 세 번 받으면 그 수정은 포기하고 바꾼 부분이 검사를 통과하는 상태로 마무리한다.
