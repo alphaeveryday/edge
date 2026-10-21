@@ -22,7 +22,7 @@ uv run --package edge-truth-agent python -m edge_truth_agent run discover   # �
 | `EXA_API_KEY` | | 없으면 웹 검색 도구를 끈다 |
 | `TRUTH_LAKE_BUCKET` | | 뉴스 레이크 버킷. 없으면 뉴스 수집을 건너뛴다 |
 | `TRUTH_MODEL` · `TRUTH_THINKING` | | 기본 `deepseek/deepseek-flash` · `medium` |
-| `TRUTH_MAX_SESSIONS` · `TRUTH_PARALLEL` | | 한 실행의 세션 수 상한(8)·동시 실행 수(3) |
+| `TRUTH_MAX_SESSIONS` | | 한 실행에서 조사할 사건 수 상한(4). 사건 세션은 하나씩 돈다 |
 | `TRUTH_SESSION_TIMEOUT` · `TRUTH_MAX_TOOL_CALLS` | | 세션 하나의 시간(600초)·도구 호출(50회) 상한 |
 
 컨테이너는 `TRUTH_PI_DIR`·`TRUTH_WEB_DIR`·`TRUTH_SEED_DIR` 를 이미지 안 경로로 덮는다. 저장소에서 돌릴 때는 기본값(저장소 배치)을 쓴다.
@@ -31,7 +31,15 @@ uv run --package edge-truth-agent python -m edge_truth_agent run discover   # �
 
 - Node 22.19 이상과 pi: `cd apps/etforca/truth-agent/pi && npm ci`. pi 형제 패키지는 `overrides` 로 1.0.4에 고정돼 있다. 범위 지정으로 1.3.x가 섞이면 기동하지 않는다.
 - 렌더 검사용 Chromium: `uv run --package edge-truth-agent playwright install chromium`. 없으면 렌더 시험은 건너뛴다(사유를 표시한다).
-- 저장·게시를 로컬 폴더로 주면 AWS 없이 돈다. 이때 `TRUTH_LAKE_BUCKET` 이 없으면 새 기사가 없어 세션도 열리지 않는다.
+- 저장·게시를 로컬 폴더로 주면 AWS 없이 돈다. 이때 `TRUTH_LAKE_BUCKET` 이 없으면 새 기사가 없다. 한 번도 조사하지 않은 사건은 그래도 계획 후보가 되므로 첫 실행은 모델을 부른다.
+
+## 조사 흐름
+
+매시 실행은 계획 세션 → 사건 세션(하나씩) 순서로 돈다. 자세한 단계는 [설계 문서 4절](../../../docs/design/truth-service.md#4-사건-갱신-에이전트).
+
+- 비공개 저장소 `notes/<사건 id>.md`: 사건별 조사 노트. '다음에 찾아볼 것'과 최근 조사 기록 8개. 사건 세션은 자기 사건 노트만 받고 `write_notes` 로 갱신한다. 세션이 마무리하지 못하면 코드가 '(코드 기록)' 항목을 남긴다.
+- 비공개 저장소 `plans/<날짜>/<실행 id>.md`: 그 실행의 조사 순서·이유·건너뛴 사건.
+- 계획 세션 지침은 `prompts/plan-day.md`, 사건 세션 지침은 `prompts/update-case.md`.
 
 ## 실행 결과
 
