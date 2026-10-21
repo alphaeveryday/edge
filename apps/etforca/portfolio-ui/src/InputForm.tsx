@@ -1,5 +1,5 @@
 import { Button, TextInput, TextArea } from './design-system/components';
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { request, ensureVisitorSession, type Catalog, type Instrument, type Holding, type Input } from './api';
 import { InstrumentSearch } from './InstrumentSearch';
 import { PortfolioPreview } from './PortfolioPreview';
@@ -8,7 +8,7 @@ import { trackScreen } from './analytics';
 
 import { inputDraftKey, readInputDraft, inputDraftFromInput } from './inputDraft';
 import { useConfirmation } from './design-system/confirmation';
-import { bulkHoldings } from './bulkHoldings';
+import { bulkHoldings, toPercents } from './bulkHoldings';
 import type { Saved } from './workbook';
 import { pendingKey } from './preview';
 
@@ -30,7 +30,14 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
   }, []);
   const [step, setStep] = useState(initial?.step ?? 0);
   useEffect(() => trackScreen((['input_holdings', 'input_funding', 'input_horizon', 'input_interests', 'input_question'] as const)[step]), [step]);
-  const [holdings, setHoldings] = useState<Holding[]>(initial?.holdings ?? [{ name: '현금', kind: 'cash', instrument_id: 'CASH:KRW', account: '일반 계좌', amount_krw: '100' }]);
+  const [holdings, setHoldings] = useState<Holding[]>(initial?.holdings ?? []);
+  // After a search pick, move straight to that row's amount so each holding is pick → type → Enter.
+  const focusRow = useRef<string | null>(null);
+  useEffect(() => {
+    if (!focusRow.current) return;
+    document.querySelector<HTMLInputElement>(`[data-holding="${CSS.escape(focusRow.current)}"]`)?.focus();
+    focusRow.current = null;
+  }, [holdings]);
   const [selected, setSelected] = useState(initial?.selected ?? ['일반 계좌']);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [catalogAttempt, setCatalogAttempt] = useState(0);
@@ -56,22 +63,40 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
   const [alternate, setAlternate] = useState<Holding[]>(initial?.alternate ?? []);
   const [storageError, setStorageError] = useState(false);
   useEffect(() => {
-    try { sessionStorage.setItem(inputDraftKey, JSON.stringify({ step, holdings, alternate, selected, question, horizon, how, interests, note, dividendGoal, contribution, keyword, tax, draftId, mode, fresh })); setStorageError(false); }
+    try { sessionStorage.setItem(inputDraftKey, JSON.stringify({ unit: 'won', step, holdings, alternate, selected, question, horizon, how, interests, note, dividendGoal, contribution, keyword, tax, draftId, mode, fresh })); setStorageError(false); }
     catch { setStorageError(true); }
   }, [step, holdings, alternate, selected, question, horizon, how, interests, note, dividendGoal, contribution, keyword, tax, draftId, mode, fresh]);
   const previousStep = useRef(step);
   useEffect(() => { if (step !== previousStep.current) { heading.current?.focus({ preventScroll: true }); window.scrollTo(0, 0); previousStep.current = step; } }, [step]);
   const [inputError, setInputError] = useState('');
   const [bulk, setBulk] = useState('');
-  const invalidHolding = holdings.some(h => !(mode === 'amount' ? /^(?:\d+(?:\.\d{0,4})?|\.\d{1,4})$/ : /^(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/).test(h.amount_krw || '') || !(Number(h.amount_krw) > 0) || Number(h.amount_krw) > (mode === 'percent' ? 100 : 1000000000));
-  const holdingsValid = holdings.length > 0 && !invalidHolding && (mode !== 'percent' || holdings.reduce((n, h) => n + Math.round(Number(h.amount_krw) * 100), 0) === 10000);
+  const invalidHolding = holdings.some(h => !(mode === 'amount' ? /^\d+$/ : /^(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/).test(h.amount_krw || '') || !(Number(h.amount_krw) > 0) || Number(h.amount_krw) > (mode === 'percent' ? 100 : 1e13));
+  const percentHundredths = holdings.reduce((n, h) => n + Math.round(Number(h.amount_krw) * 100), 0);
+  const percentSum = (percentHundredths / 100).toLocaleString('ko-KR', { maximumFractionDigits: 2 });
+  const percentLeft = ((10000 - percentHundredths) / 100).toLocaleString('ko-KR', { maximumFractionDigits: 2 });
+  const holdingsValid = holdings.length > 0 && !invalidHolding && (mode !== 'percent' || percentHundredths === 10000);
   function add(account: string, item: Instrument) {
     if (holdings.some(h => h.account === account && h.instrument_id === item.id)) return '이미 담은 종목이에요. 보유 금액이나 비율을 수정해 주세요.';
     if (holdings.length >= 20) return '최대 20종목까지 담을 수 있어요. 기존 종목을 빼고 추가해 주세요.';
+    focusRow.current = account + '|' + item.id;
     setHoldings([...holdings, { name: item.name, account, amount_krw: '', kind: item.kind, instrument_id: item.id }]);
   }
+  // Enter on an amount returns to the account search, so the next holding needs no pointer.
+  // ponytail: comma formatting re-renders the amount, so mid-number edits jump the caret to the end; track selection if visitors edit mid-number often.
+  function nextSearch(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    e.currentTarget.closest('.acct')?.querySelector<HTMLInputElement>('[role=combobox]')?.focus();
+  }
+  function changeMode(next: 'amount' | 'percent') {
+    if (next === mode) return;
+    const kept = holdings.map(h => alternate.find(a => a.account === h.account && a.instrument_id === h.instrument_id)?.amount_krw ?? '');
+    // Amounts fully determine the weights, so converting beats asking the visitor to retype them.
+    const converted = next === 'percent' && !invalidHolding ? toPercents(holdings.map(h => Number(h.amount_krw))) : kept;
+    setAlternate(holdings); setHoldings(holdings.map((h, i) => ({ ...h, amount_krw: converted[i] }))); setMode(next);
+  }
   function payload(profile = tax, planning = fresh): Input {
-    return { holdings: holdings.map(h => ({ ...h, amount_krw: !Number(h.amount_krw) ? null : String(mode === 'amount' ? Math.round(Number(h.amount_krw) * 10000) : Number(h.amount_krw)) })), horizon, question, input_mode: mode, planning,
+    return { holdings: holdings.map(h => ({ ...h, amount_krw: !Number(h.amount_krw) ? null : String(mode === 'amount' ? Math.round(Number(h.amount_krw)) : Number(h.amount_krw)) })), horizon, question, input_mode: mode, planning,
       preferences: { accounts: selected, contribution: how + (contribution && how === '매달 꾸준히' ? ` ${contribution}만 원` : ''), ...(initial?.dividendGoal ? { dividend_goal: dividendGoal } : {}), interests, note, tax_profile: profile ? { ...profile, accounts: profile.accounts.filter(a => selected.includes(a.account)) } : null } };
   }
   async function save(profile = tax, planning = fresh) {
@@ -94,7 +119,7 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
         const quote = market?.assets.find(row => row.id === asset.id);
         const amount = instrumentId === 'CASH:KRW' ? asset.amount : missing ? null : quote?.value;
         return { name: asset.name, instrument_id: instrumentId, account: asset.account,
-          kind: asset.category === '현금' ? 'cash' : 'etf', amount_krw: amount == null ? '' : String(Number((Math.round(amount) / 10000).toFixed(4))) };
+          kind: asset.category === '현금' ? 'cash' : 'etf', amount_krw: amount == null ? '' : String(Math.round(amount)) };
       });
       if (!await ask('현재 입력을 저장된 보유 종목으로 바꿀까요?', '불러오기')) return;
       try { sessionStorage.removeItem(pendingKey); } catch { /* Import remains available in memory without browser storage. */ }
@@ -114,7 +139,7 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
     onSubmit({ ...payload(), draft_id: draftId });
   }
   const valid = step === 0 ? holdingsValid || fresh && !holdings.length : step === 1 ? !!how && (how !== '매달 꾸준히' || Number(contribution) > 0) : step === 2 ? !!horizon : true;
-  const guidance = !valid ? step === 0 ? !holdings.length ? '보유 종목을 추가하거나 종목부터 추천받기를 눌러 주세요.' : holdings.some(h => !(Number(h.amount_krw) > 0)) ? mode === 'percent' ? '각 종목의 비중을 입력해 주세요.' : '보유 종목의 금액을 입력해 주세요.' : invalidHolding ? mode === 'percent' ? '비중은 100% 이하, 소수 둘째 자리까지 적어 주세요.' : '금액은 10조 원 이하, 만 원 단위로 소수 넷째 자리까지 적어 주세요.' : '비중 합계를 100%로 맞춰 주세요.' : step === 1 ? how === '매달 꾸준히' ? '매달 투자할 금액을 입력해 주세요.' : '투자 방법을 골라 주세요.' : '투자 기간을 골라 주세요.' : step === 4 ? '분석에 약 5분이 걸려요' : '';
+  const guidance = !valid ? step === 0 ? !holdings.length ? '보유 종목을 추가하거나 종목부터 추천받기를 눌러 주세요.' : holdings.some(h => !(Number(h.amount_krw) > 0)) ? mode === 'percent' ? '각 종목의 비중을 입력해 주세요.' : '보유 종목의 금액을 입력해 주세요.' : invalidHolding ? mode === 'percent' ? '비중은 100% 이하, 소수 둘째 자리까지 적어 주세요.' : '금액은 10조 원 이하로 적어 주세요.' : `비중 합계를 100%로 맞춰 주세요. 지금 ${percentSum}%예요.` : step === 1 ? how === '매달 꾸준히' ? '매달 투자할 금액을 입력해 주세요.' : '투자 방법을 골라 주세요.' : '투자 기간을 골라 주세요.' : step === 4 ? '분석에 약 5분이 걸려요' : '';
   const choices = (values: string[], current: string, change: (v: string) => void, labels = values) => <div className="chips big">{values.map((v, i) => <Button className="chip" key={v} aria-pressed={current === v} onClick={() => change(v)}>{labels[i]}</Button>)}</div>;
   return <>
     <div className="nav"><div className="nav__pill"><Button disabled={!step || saving || busy} className={'nav__back' + (!step ? ' off' : '')} aria-label="앞 질문으로" onClick={() => setStep(step - 1)}>‹</Button><span className="nav__logo">ETF Orca</span><div className="prog"><i style={{ width: `${(step + 1) / 5 * 100}%` }} /></div><span className="nav__n" aria-label={`전체 5단계 중 ${step + 1}단계`}>{step + 1} / 5</span></div></div>
@@ -126,11 +151,13 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
         <Button variant="secondary" disabled={saving} onClick={() => void reuse()}>저장된 보유 종목 불러오기</Button>
         <div className="holdings-layout"><div className="holdings-input">
         <>
-          {!!holdings.length && <div className="unit"><div className="unit__row"><div className="switch" data-u={mode === 'percent' ? 'pct' : 'won'} aria-label="숫자 적는 방법">{(['amount', 'percent'] as const).map((m, i) => <Button key={m} aria-pressed={mode === m} onClick={() => { if (m === mode) return; setAlternate(holdings); setHoldings(holdings.map(h => ({ ...h, amount_krw: alternate.find(a => a.account === h.account && a.instrument_id === h.instrument_id)?.amount_krw ?? '' }))); setMode(m); }}>{i ? '비율' : '금액'}</Button>)}</div></div><p className="unit__note">{mode === 'percent' ? '전체 계좌를 합쳐 100%가 되도록 적어 주세요. 금액 입력은 따로 보관돼요.' : '현재 평가금액을 만 원 단위로 적어 주세요.'}</p></div>}
+          {!!holdings.length && <div className="unit"><div className="unit__row"><div className="switch" data-u={mode === 'percent' ? 'pct' : 'won'} aria-label="숫자 적는 방법">{(['amount', 'percent'] as const).map((m, i) => <Button key={m} aria-pressed={mode === m} onClick={() => changeMode(m)}>{i ? '비율' : '금액'}</Button>)}</div></div><p className="unit__note">{mode === 'percent' ? `전체 계좌 합계 ${percentSum}% · ${percentHundredths === 10000 ? '100%를 맞췄어요' : percentHundredths < 10000 ? `${percentLeft}% 남았어요` : `${percentLeft.replace('-', '')}% 넘었어요`}` : '증권사 앱의 평가금액을 원 단위 그대로 적어 주세요.'}</p></div>}
           {selected.map(account => <article className="acct" key={account}><div className="acct__head"><h3 className="acct__name">{account}</h3>{account !== '일반 계좌' && <Button className="x" aria-label={account + ' 지우기'} onClick={async () => { if (holdings.some(h => h.account === account) && !await ask(account + '와 담은 종목을 입력에서 지울까요?')) return; setSelected(selected.filter(a => a !== account)); setHoldings(holdings.filter(h => h.account !== account)); setAlternate(alternate.filter(h => h.account !== account)); restoreFocus(heading.current); }}>×</Button>}</div>
-            {!!holdings.filter(h => h.account === account).length && <ul className="rows">{holdings.map((h, i) => h.account === account && <li className="row" key={i}><span className="row__name">{h.name}</span><label className="num won"><TextInput aria-label={h.name + (mode === 'amount' ? ' 금액' : ' 비율')} inputMode="decimal" type="number" min={mode === 'percent' ? 0.01 : 0.0001} max={mode === 'percent' ? 100 : 1000000000} step={mode === 'percent' ? 0.01 : 0.0001} placeholder="0" value={h.amount_krw || ''} onChange={e => setHoldings(holdings.map((x, n) => n === i ? { ...x, amount_krw: e.target.value } : x))} /><span>{mode === 'amount' ? '만 원' : '%'}</span></label><Button className="x" aria-label={h.name + ' 빼기'} onClick={() => { setHoldings(holdings.filter((_, n) => n !== i)); setAlternate(alternate.filter(a => a.account !== h.account || a.instrument_id !== h.instrument_id)); }}>×</Button></li>)}</ul>}
+            {!!holdings.filter(h => h.account === account).length && <ul className="rows">{holdings.map((h, i) => h.account === account && <li className="row" key={i}><span className="row__name">{h.name}</span><label className="num won" data-unit={mode}>{mode === 'amount'
+                ? <TextInput aria-label={h.name + ' 금액'} data-holding={h.account + '|' + h.instrument_id} inputMode="numeric" autoComplete="off" placeholder="0" value={h.amount_krw ? Number(h.amount_krw).toLocaleString('ko-KR') : ''} onKeyDown={nextSearch} onChange={e => setHoldings(holdings.map((x, n) => n === i ? { ...x, amount_krw: e.target.value.replace(/\D/g, '').replace(/^0+/, '').slice(0, 14) } : x))} />
+                : <TextInput aria-label={h.name + ' 비율'} data-holding={h.account + '|' + h.instrument_id} inputMode="decimal" type="number" min={0.01} max={100} step={0.01} placeholder="0" value={h.amount_krw || ''} onKeyDown={nextSearch} onChange={e => setHoldings(holdings.map((x, n) => n === i ? { ...x, amount_krw: e.target.value } : x))} />}<span>{mode === 'amount' ? '원' : '%'}</span></label><Button className="x" aria-label={h.name + ' 빼기'} onClick={() => { setHoldings(holdings.filter((_, n) => n !== i)); setAlternate(alternate.filter(a => a.account !== h.account || a.instrument_id !== h.instrument_id)); }}>×</Button></li>)}</ul>}
             <InstrumentSearch account={account} catalog={catalog} onAdd={item => add(account, item)} />
-            <details className="bulk-entry"><summary>여러 종목 한 번에 넣기</summary><label>{account} · 종목 코드와 {mode === 'amount' ? '금액(만 원)' : '비중(%)'}<TextArea className="field" value={bulk} onChange={e => setBulk(e.target.value)} placeholder={'360750 50\n379810 50'} /></label><Button variant="secondary" disabled={!catalog || !bulk.trim()} onClick={() => {
+            <details className="bulk-entry"><summary>여러 종목 한 번에 넣기</summary><label>{account} · 종목 코드와 {mode === 'amount' ? '금액(원)' : '비중(%)'}<TextArea className="field" value={bulk} onChange={e => setBulk(e.target.value)} placeholder={mode === 'amount' ? '360750 5,000,000\n379810 3,000,000' : '360750 50\n379810 50'} /></label><Button variant="secondary" disabled={!catalog || !bulk.trim()} onClick={() => {
               try {
                 const rows = bulkHoldings(bulk, catalog!, account, mode);
                 if (rows.length + holdings.length > 20) throw new Error('최대 20종목까지 담을 수 있어요.');

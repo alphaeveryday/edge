@@ -1,4 +1,5 @@
 ﻿import { test, expect } from '@playwright/test';
+import { addCash } from './holdings';
 
 test('Korean text and financial figures use the bundled font without a font CDN', async ({ page }) => {
   const externalFonts: string[] = [];
@@ -31,13 +32,14 @@ test('financial column headings align with their values and chart headings share
 
 test('input guidance describes the current decision and the optional selection limit is visible', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
+  await addCash(page);
   await page.getByRole('button', { name: '비율', exact: true }).click();
   await page.getByLabel('현금 비율').fill('100');
   await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).fill('VOO');
   await page.getByRole('option').filter({ hasText: 'Vanguard S&P 500 ETF' }).click();
   await expect(page.locator('#step-guidance')).toHaveText('각 종목의 비중을 입력해 주세요.');
   await page.getByLabel('Vanguard S&P 500 ETF 비율', { exact: true }).fill('1');
-  await expect(page.locator('#step-guidance')).toHaveText('비중 합계를 100%로 맞춰 주세요.');
+  await expect(page.locator('#step-guidance')).toHaveText('비중 합계를 100%로 맞춰 주세요. 지금 101%예요.');
   await page.getByRole('button', { name: 'Vanguard S&P 500 ETF 빼기' }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await expect(page.locator('#step-guidance')).toHaveText('투자 방법을 골라 주세요.');

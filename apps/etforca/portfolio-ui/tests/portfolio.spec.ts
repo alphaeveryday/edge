@@ -1,6 +1,7 @@
 import { fillForm } from '../scripts/fill-form.mjs';
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { addCash } from './holdings';
 const catalog = JSON.parse(readFileSync(new URL('../../portfolio-worker/src/edge_portfolio/data/etf_catalog.json', import.meta.url), 'utf8'));
 
 test('an unselected investment objective reaches analysis without inventing a preference', async ({ page }) => {
@@ -93,21 +94,32 @@ test('default account, real stages, result restoration, chat gate and email rece
   await page.screenshot({ path: `test-results/report-${test.info().project.name}.png`, fullPage: true });
 });
 
-test('cash default, live donut, ETF-only search and direct recommendation flow', async ({ page }) => {
+test('empty start, keyboard holding entry, live donut, ETF-only search and direct recommendation flow', async ({ page }) => {
   await page.route('**/api/portfolio/session', route => route.fulfill({ json: {} }));
   await page.route('**/api/portfolio/drafts/**', route => route.fulfill({ json: { status: 'saved' } }));
   await page.route('**/api/portfolio/catalog', route => route.fulfill({ json: catalog }));
   await page.goto('/portfolio/');
-  await expect(page.getByRole('spinbutton', { name: '현금 금액' })).toHaveValue('100');
-  await expect(page.locator('.portfolio-preview')).toContainText('100만');
+  // No invented cash: the visitor starts from their own holdings.
+  await expect(page.locator('.rows .row')).toHaveCount(0);
+  await expect(page.locator('.portfolio-preview')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '최적의 ISA, IRP 등 세금 혜택과 투자전략까지 정리해드릴까요?' })).toBeVisible();
-  await page.getByRole('button', { name: '금액', exact: true }).click();
-  await expect(page.getByRole('spinbutton', { name: '현금 금액' })).toHaveValue('100');
   const firstSearch = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
   await firstSearch.fill('VOO');
   await page.getByRole('option').filter({ hasText: 'Vanguard S&P 500 ETF' }).click();
+  // Pick → type → Enter → next search, without reaching for the pointer.
+  await expect(page.getByRole('textbox', { name: 'Vanguard S&P 500 ETF 금액' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(firstSearch).toBeFocused();
+  await firstSearch.fill('현금');
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('textbox', { name: '현금 금액' })).toBeFocused();
+  await page.keyboard.type('1000000');
+  await expect(page.getByRole('textbox', { name: '현금 금액' })).toHaveValue('1,000,000');
   await expect(page.locator('.portfolio-preview li').filter({ hasText: '현금' })).toContainText('100만 원');
-  await expect(page.locator('.portfolio-preview li').filter({ hasText: '현금' })).not.toContainText('미입력');
+  await expect(page.locator('.portfolio-preview li').filter({ hasText: 'Vanguard' })).toContainText('미입력');
+  await firstSearch.fill('에코프로');
+  await expect(page.locator('.sug')).toContainText('개별 주식은 아직 분석하지 않으니');
+  await firstSearch.fill('');
   await page.getByRole('button', { name: 'Vanguard S&P 500 ETF 빼기' }).click();
   await expect(page.getByRole('button', { name: '계좌별로 추천받기' })).toHaveCount(0);
   await page.getByRole('button', { name: '현금 빼기' }).click();
@@ -121,9 +133,9 @@ test('cash default, live donut, ETF-only search and direct recommendation flow',
   await expect(find).toHaveCSS('background-image', 'none');
   await find.fill('현금');
   await page.getByRole('option', { name: '현금 원화 현금' }).click();
-  await expect(page.getByRole('spinbutton', { name: '현금 금액' })).toBeVisible();
-  await page.getByRole('spinbutton', { name: '현금 금액' }).fill('100');
-  await page.getByRole('spinbutton', { name: 'Vanguard S&P 500 ETF 금액' }).fill('100');
+  await expect(page.getByRole('textbox', { name: '현금 금액' })).toBeVisible();
+  await page.getByRole('textbox', { name: '현금 금액' }).fill('100');
+  await page.getByRole('textbox', { name: 'Vanguard S&P 500 ETF 금액' }).fill('100');
   await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
   await expect(page.getByRole('heading', { name: '어떻게 투자할 계획인가요?' })).toBeVisible();
   await expect(page.getByRole('button', { name: '이미 다 매수한 상태에요' })).toBeVisible();
@@ -147,6 +159,7 @@ test('tax details and custom interests persist without a dividend step', async (
   });
   await page.goto('/portfolio/');
   await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
+  await addCash(page);
   await page.getByRole('button', { name: '+ISA', exact: true }).click();
   await page.getByRole('button', { name: '최적의 ISA, IRP 등 세금 혜택과 투자전략까지 정리해드릴까요?' }).click();
   await expect(page.locator('input[type=radio]:checked')).toHaveCount(0);

@@ -4,12 +4,12 @@ import { accounts } from './workbook';
 import { preview } from './preview';
 
 export const inputDraftKey = preview ? 'edge-preview-form-v1' : 'edge-portfolio-form-v1';
-export type InputDraft = { submittedJobId?: string; dividendGoal?: string; step: number; holdings: Holding[]; alternate: Holding[]; selected: string[]; question: string; horizon: string; how: string; interests: string[]; note: string; contribution: string; keyword: string; tax: TaxProfile | null; draftId: string; mode: 'amount' | 'percent'; fresh: boolean };
+export type InputDraft = { unit?: 'won'; submittedJobId?: string; dividendGoal?: string; step: number; holdings: Holding[]; alternate: Holding[]; selected: string[]; question: string; horizon: string; how: string; interests: string[]; note: string; contribution: string; keyword: string; tax: TaxProfile | null; draftId: string; mode: 'amount' | 'percent'; fresh: boolean };
 export function inputDraftFromInput(input: Input) {
   const mode = input.input_mode === 'percent' ? 'percent' : 'amount';
   const funding = input.preferences?.contribution || '';
   const monthly = /^매달 꾸준히 ([\d.]+)만 원$/.exec(funding);
-  const draft: InputDraft = { step: 0, holdings: input.holdings.map(h => ({ ...h, amount_krw: h.amount_krw == null ? null : String(mode === 'amount' ? Number((Number(h.amount_krw) / 10000).toFixed(4)) : Number(h.amount_krw)) })),
+  const draft: InputDraft = { step: 0, unit: 'won', holdings: input.holdings.map(h => ({ ...h, amount_krw: h.amount_krw == null ? null : String(Number(h.amount_krw)) })),
     alternate: [], selected: [...new Set([...(input.preferences?.accounts || []), ...input.holdings.map(h => h.account)])],
     question: input.question, horizon: input.horizon, how: monthly ? '매달 꾸준히' : funding, contribution: monthly?.[1] || '',
     interests: input.preferences?.interests || [], note: input.preferences?.note || '', dividendGoal: input.preferences?.dividend_goal || '', keyword: '', tax: input.preferences?.tax_profile || null,
@@ -31,6 +31,12 @@ export function readInputDraft(): InputDraft | null {
     if (d.dividendGoal !== undefined && (typeof d.dividendGoal !== 'string' || d.dividendGoal.length > 100)) return null;
     const t = d.tax;
     if (t !== null && (!t || !['residence', 'age', 'income', 'financial_income_tax'].every(k => typeof t[k] === 'string') || !strings(t.recommended_accounts) || !Array.isArray(t.accounts) || !t.accounts.every((a: Record<string, unknown>) => a && ['account', 'subtype', 'opened', 'remaining_man', 'paid_man'].every(k => typeof a[k] === 'string')))) return null;
+    if (d.unit !== 'won') {
+      // Drafts written before amounts moved to won held 만 원 values; convert the amount side once.
+      const won = (rows: Holding[]) => rows.map(h => ({ ...h, amount_krw: h.amount_krw ? String(Math.round(Number(h.amount_krw) * 10000)) : h.amount_krw }));
+      if (d.mode === 'amount') d.holdings = won(d.holdings); else d.alternate = won(d.alternate);
+      d.unit = 'won';
+    }
     return d;
   } catch { return null; }
 }

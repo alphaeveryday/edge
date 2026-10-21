@@ -6436,6 +6436,13 @@ to {
 .holdings-input .row + .row { border-top: 1px solid var(--color-border); }
 .holdings-input .num { height: 48px; background: var(--color-surface); border: 1px solid var(--color-border-strong); }
 .holdings-input .num:focus-within { border-color: var(--color-primary); }
+.holdings-input .num[data-unit=amount] input { width: 7.5em; }
+.holdings-input .num[data-unit=percent] input { width: 4.5em; }
+/* Narrow phones: the donut beside the legend squeezes names into one letter per line. */
+@media (max-width: 420px) {
+  .portfolio-preview .mixviz { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+  .portfolio-preview .mixviz ul { width: 100%; }
+}
 .holdings-input .row__name { overflow-wrap: anywhere; }
 .holdings-input .instrument-search .field { background: var(--color-surface); }
 @media (max-width: 1099px) {

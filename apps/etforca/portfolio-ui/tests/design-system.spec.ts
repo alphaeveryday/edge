@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { addCash } from './holdings';
 
 test('the design catalog uses production controls without customer traffic or persistence', async ({ page }) => {
   const calls: string[] = [];
@@ -59,6 +60,7 @@ test('keyboard focus stays distinct and the final CTA grows with enlarged text',
   await search.focus();
   await expect(search).toHaveCSS('outline-color', 'rgb(27, 100, 218)');
   await expect(search).toHaveCSS('outline-width', '3px');
+  await addCash(page);
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await page.getByRole('button', { name: '이미 다 매수한 상태에요', exact: true }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
