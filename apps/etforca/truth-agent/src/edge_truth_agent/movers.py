@@ -28,7 +28,7 @@ LEASE_KEY = "state/lease-movers.json"
 CORP_KEY = "state/dart-corp-codes.json"
 LOGO_TRIED_KEY = "state/logo-tried.json"
 MIN_CHANGE = 10.0       # 급등 기준: 전일 대비 상승률(%)
-MIN_TRADE_VALUE = 30.0  # 거래대금 하한(억원, 현재가 × 누적거래량 근사) — 몇 주 체결로 뛴 종목은 해석할 사건이 아니다
+MIN_TRADE_VALUE = 30.0  # 거래대금 하한(억원, 누적 거래대금) — 몇 주 체결로 뛴 종목은 해석할 사건이 아니다
 MAX_MOVERS = 15         # 화면에 싣는 종목 수
 NEW_SESSIONS = 5        # 한 실행에서 새로 판정하는 종목 수(나머지는 다음 정각에)
 PARALLEL = 3            # 판정 세션 동시 실행
@@ -107,6 +107,12 @@ def run_movers(cfg, *, quotes: Quotes | None = None, dart: Dart | None = None, s
         raw, _ = store.get(f"movers/{today}.json")
         prior = {i["code"]: i for i in (json.loads(raw)["items"] if raw else [])}
 
+        # 0. 휴장일(그날 체결 없음)에는 게시하지 않는다 — 순위는 전 거래일 값을 그대로 준다
+        if quotes.session_day() != ymd:
+            report["skipped"] = "그날 체결이 없습니다(휴장일 또는 장 시작 전)."
+            log.info(json.dumps({"event": "movers_skipped", "reason": report["skipped"]}, ensure_ascii=False))
+            return report
+
         # 1. 급등 목록 (코드)
         risers = sorted((m for market in ("KOSPI", "KOSDAQ") for m in quotes.risers(market, MIN_CHANGE)
                          if m.change_pct >= MIN_CHANGE and m.trade_value >= MIN_TRADE_VALUE),
@@ -118,19 +124,10 @@ def run_movers(cfg, *, quotes: Quotes | None = None, dart: Dart | None = None, s
             except Exception as error:  # noqa: BLE001 - 한 종목의 시세 실패로 전체를 멈추지 않는다(빈 그래프로 싣는다)
                 log.warning(json.dumps({"event": "series_failed", "code": m.code, "error": str(error)[:200]}, ensure_ascii=False))
                 series[m.code], series_errors = [], series_errors + 1
-        # 급등 종목이 없어도 그날 장이 열렸는지는 대표 종목 분봉으로 본다 — 휴장일의 빈 목록을 '오늘 급등 없음'으로 게시하지 않는다
-        if not risers and not quotes.series("005930", "KOSPI", ymd):
-            report["skipped"] = "그날 분봉이 없습니다(휴장일 또는 장 시작 전)."
-            log.info(json.dumps({"event": "movers_skipped", "reason": report["skipped"]}, ensure_ascii=False))
-            return report
         if risers and series_errors == len(risers):  # 시세 장애를 휴장으로 보고하지 않는다 — 실패로 끝내 태스크 상태에 남긴다
             report["skipped"] = "5분 시세 조회가 모두 실패했습니다."
             report["failed"].append("series")
             log.warning(json.dumps({"event": "movers_skipped", "reason": report["skipped"]}, ensure_ascii=False))
-            return report
-        if risers and not any(series.values()):
-            report["skipped"] = "그날 분봉이 없습니다(휴장일 또는 장 시작 전)."
-            log.info(json.dumps({"event": "movers_skipped", "reason": report["skipped"]}, ensure_ascii=False))
             return report
 
         # 2. 재료 (코드)

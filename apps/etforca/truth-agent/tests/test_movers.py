@@ -21,6 +21,9 @@ class FakeQuotes:
     def __init__(self, movers_by_market, *, traded=True):
         self.by_market, self.traded = movers_by_market, traded
 
+    def session_day(self, market="KOSPI"):
+        return "20261022" if self.traded else "20261021"
+
     def risers(self, market, min_change=0.0):
         return self.by_market.get(market, [])
 
@@ -113,7 +116,7 @@ def test_same_day_rerun_keeps_verdicts_and_skips_judged(cfg):
 
 
 def test_market_closed_day_is_not_published(cfg):
-    # 휴장일에 순위는 전 거래일 값을 준다 — 그날 분봉이 없으면 오늘 결과로 게시하지 않는다.
+    # 휴장일에 순위는 전 거래일 값을 준다 — 그날 체결이 없으면 오늘 결과로 게시하지 않는다.
     src = FakeQuotes({"KOSPI": [_m("900010", "가나다전자", 29.9, "KOSPI")]}, traded=False)
     report = movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=_judging({}), now=NOW)
     assert not report["published"] and LocalStore(cfg.publish).get("movers/latest.json")[0] is None
@@ -253,6 +256,25 @@ def test_risers_keep_common_stocks_and_stop_below_threshold(monkeypatch):
     assert [(m.code, m.prev_close, m.trade_value) for m in got] == [("005930", 10000.0, 55.0), ("0158S0", 10000.0, 55.0)]
     assert seen == [1, 2]
     assert is_common_stock("005930", "삼성전자") and not is_common_stock("005935", "삼성전자우")
+
+
+def test_changed_ranking_format_fails_instead_of_publishing_nothing(monkeypatch):
+    # 응답 형식이 바뀌어 행이 다 걸러지면 장중에 '오늘 급등 없음'이 게시된다 — 형식이 다르면 실패로 올린다.
+    client = quotes_mod.Quotes()
+    monkeypatch.setattr(client, "_get", lambda url: {"items": [{"code": "005930"}]})
+    with pytest.raises(quotes_mod.QuoteError):
+        client.risers("KOSPI", 10.0)
+    with pytest.raises(quotes_mod.QuoteError):
+        client.session_day()
+
+
+def test_trading_day_comes_from_ranking_trades_not_chart(monkeypatch):
+    # 거래일은 순위의 체결 시각으로 본다(5분 시세는 지연이 있으면 09:00 실행을 휴장으로 빠뜨린다). 거래정지 종목의 옛 체결일에 끌리지 않게 가장 최근 날짜.
+    rows = [{"itemCode": "005930", "fluctuationsRatio": "12.0", "localTradedAt": "2026-10-20T15:30:00+09:00"},
+            {"itemCode": "000660", "fluctuationsRatio": "11.0", "localTradedAt": "2026-10-22T08:55:01+09:00"}]
+    client = quotes_mod.Quotes()
+    monkeypatch.setattr(client, "_get", lambda url: {"stocks": rows})
+    assert client.session_day() == "20261022"
 
 
 def _ws(tmp_path, inbox=()):

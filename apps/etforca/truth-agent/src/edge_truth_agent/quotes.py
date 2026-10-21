@@ -1,6 +1,7 @@
 """시세 — 키 없는 공개 시세. 포트폴리오 서비스와 같은 출처를 쓴다(Yahoo 차트 · Naver 증권).
 
-- 상승률 순위: Naver 증권 `m.stock.naver.com/api/stocks/up/{KOSPI|KOSDAQ}` (상승률 내림차순, 실제 누적 거래대금 포함)
+- 상승률 순위: Naver 증권 `m.stock.naver.com/api/stocks/up/{KOSPI|KOSDAQ}` (상승률 내림차순, 실제 누적 거래대금 포함).
+  현재가는 넥스트레이드(NXT) 체결을 포함한다 — 장 전(08:00~)·장 뒤(~20:00)에는 KRX 정규장 가격과 다를 수 있다.
 - 당일 5분 시세: Yahoo 차트 `v8/finance/chart/{code}.KS|.KQ?interval=5m&range=1d` (봉 시각 = 구간 시작)
 """
 from __future__ import annotations
@@ -14,7 +15,7 @@ import urllib.parse
 import urllib.request
 
 KST = timezone(timedelta(hours=9))
-NAVER_UP = "https://m.stock.naver.com/api/stocks/up/{market}?page={page}&pageSize=100"
+NAVER_UP = "https://m.stock.naver.com/api/stocks/up/{market}?page={page}&pageSize={size}"
 YAHOO_CHART = "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=5m&range=1d"
 SUFFIX = {"KOSPI": "KS", "KOSDAQ": "KQ"}
 _HEADERS = {"user-agent": "Mozilla/5.0 (compatible; etforca-truth/1.0)", "accept": "application/json"}
@@ -68,12 +69,27 @@ class Quotes:
                 raise QuoteError(f"{urllib.parse.urlsplit(url).netloc} 연결 실패: {error}") from error
         raise QuoteError("시세 호출 실패")  # 도달하지 않는다
 
+    def _up(self, market: str, page: int, size: int = 100) -> list[dict]:
+        """상승률 순위 한 쪽. 첫 쪽이 비었거나 필드가 없으면 실패로 올린다 — 응답 형식이 바뀐 것을 '오늘 급등 없음'으로 게시하지 않는다."""
+        rows = self._get(NAVER_UP.format(market=market, page=page, size=size)).get("stocks") or []
+        if page == 1 and not (rows and all(r.get("itemCode") and r.get("fluctuationsRatio") is not None for r in rows)):
+            raise QuoteError(f"Naver {market} 상승률 순위 응답이 비었거나 형식이 다릅니다.")
+        return rows
+
+    def session_day(self, market: str = "KOSPI") -> str:
+        """가장 최근 거래일(YYYYMMDD) — 순위 응답의 체결 시각으로 본다. 휴장일에는 전 거래일이 나온다.
+        5분 시세로 보지 않는다: 시세 지연이 있으면 09:00 실행이 매일 휴장으로 빠진다."""
+        days = [str(r.get("localTradedAt", ""))[:10].replace("-", "") for r in self._up(market, 1, 20)]
+        if not any(days):
+            raise QuoteError("Naver 순위 응답에 체결 시각이 없습니다.")
+        return max(days)
+
     # ── 상승률 순위 ──
     def risers(self, market: str, min_change: float = 0.0, pages: int = 3) -> list[Mover]:
         """시장별 상승률 상위 보통주. 상승률이 min_change 아래로 내려가면 다음 쪽을 받지 않는다(ETF 가 절반쯤 섞여 있다)."""
         out: list[Mover] = []
         for page in range(1, pages + 1):
-            rows = self._get(NAVER_UP.format(market=market, page=page)).get("stocks") or []
+            rows = self._up(market, page)
             for row in rows:
                 code, name = str(row.get("itemCode", "")).strip(), str(row.get("stockName", "")).strip()
                 price, diff, pct = _num(row.get("closePriceRaw")), _num(row.get("compareToPreviousClosePriceRaw")), _num(row.get("fluctuationsRatio"))
@@ -97,7 +113,7 @@ class Quotes:
         out = []
         for ts, price in zip(result.get("timestamp") or [], closes):
             at = datetime.fromtimestamp(ts, KST)
-            if price is None or at.strftime("%Y%m%d") != day_ymd or not "0900" <= at.strftime("%H%M") <= "1530":
+            if price is None or at.strftime("%Y%m%d") != day_ymd or not "0900" <= at.strftime("%H%M") < "1530":
                 continue
             end = at + timedelta(minutes=5)
             out.append([end.strftime("%H:%M"), round(float(price), 2)])
