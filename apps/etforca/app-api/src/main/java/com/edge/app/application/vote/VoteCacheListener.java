@@ -1,6 +1,6 @@
 package com.edge.app.application.vote;
 
-import com.edge.app.adapter.persistence.vote.VoteCountRepository;
+import com.edge.app.application.vote.required.VoteCountStore;
 import com.edge.app.application.vote.required.VoteRepository;
 import com.edge.app.domain.vote.VotesRemoved;
 
@@ -13,7 +13,7 @@ import org.springframework.transaction.event.TransactionalEventListener;
 @Component
 @RequiredArgsConstructor
 public class VoteCacheListener {
-    private final VoteCountRepository voteCountRepository;
+    private final VoteCountStore voteCountStore;
     private final VoteRepository voteRepository;
 
     // 남은 표 기준의 집계 교체
@@ -22,7 +22,7 @@ public class VoteCacheListener {
     public void replaceInCache(VotesRemoved event) {
         for (String etfCode : event.etfCodes()) {
             try {
-                voteCountRepository.replace(etfCode, voteRepository.findByEtfCode(etfCode));
+                voteCountStore.replace(etfCode, voteRepository.findByEtfCode(etfCode));
             } catch (Exception ex) {
                 log.warn("Vote cache replace failed etf={}", etfCode, ex);
             }

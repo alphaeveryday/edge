@@ -1,4 +1,4 @@
-package com.edge.app.adapter.persistence.vote;
+package com.edge.app.application.vote.required;
 
 public record VoteReconcileResult(long buyDelta, long waitDelta, long sellDelta) {
 

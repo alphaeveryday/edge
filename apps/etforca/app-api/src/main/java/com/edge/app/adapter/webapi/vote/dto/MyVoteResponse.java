@@ -1,4 +1,4 @@
-package com.edge.app.application.vote.provided;
+package com.edge.app.adapter.webapi.vote.dto;
 
 import com.edge.app.domain.vote.VoteChoice;
 import com.fasterxml.jackson.annotation.JsonInclude;

@@ -1,6 +1,8 @@
 package com.edge.app.adapter.persistence.vote;
 
 import com.edge.app.adapter.persistence.redis.RedisCircuit;
+import com.edge.app.application.vote.required.VoteCountStore;
+import com.edge.app.application.vote.required.VoteReconcileResult;
 import com.edge.app.domain.vote.Vote;
 import com.edge.app.domain.vote.VoteChoice;
 import com.edge.app.domain.vote.VoteCounts;
@@ -20,7 +22,7 @@ import java.util.Map;
 @Slf4j
 @Repository
 @RequiredArgsConstructor
-public class VoteCountRepository {
+public class VoteCountRepository implements VoteCountStore {
     private final StringRedisTemplate redisTemplate;
     private final MeterRegistry meterRegistry;
     private final RedisCircuit circuit;
@@ -33,6 +35,7 @@ public class VoteCountRepository {
 
     // 열린 서킷이 DB 저장을 막지 않도록 Redis 호출에만 거는 쓰기 서킷
     // 열린 서킷의 재조정 차단을 막는 복구 경로 replace() 의 서킷 제외
+    @Override
     public void vote(String etfCode, Long memberId, VoteChoice choice) {
         try {
             // StringRedisTemplate 의 스크립트 인자 String 직렬화
@@ -47,6 +50,7 @@ public class VoteCountRepository {
 
     // 이전 선택 카운터의 차감과 회원 선택 삭제
     // 투표 기록 없는 철회의 no-op
+    @Override
     public void withdraw(String etfCode, Long memberId) {
         try {
             circuit.of(etfCode).executeRunnable(
@@ -57,12 +61,18 @@ public class VoteCountRepository {
         }
     }
 
+    // 열린 서킷 예외의 무래핑 전파
+    // 폴백과 실패 로그는 호출 계층 담당
+    @Override
     public VoteCounts counts(String etfCode) {
-        Map<Object, Object> values = redisTemplate.opsForHash().entries(generateKeys(etfCode).get(1));
-        return new VoteCounts(count(values, VoteChoice.BUY), count(values, VoteChoice.WAIT),
-                count(values, VoteChoice.SELL));
+        return circuit.of(etfCode).executeSupplier(() -> {
+            Map<Object, Object> values = redisTemplate.opsForHash().entries(generateKeys(etfCode).get(1));
+            return new VoteCounts(count(values, VoteChoice.BUY), count(values, VoteChoice.WAIT),
+                    count(values, VoteChoice.SELL));
+        });
     }
 
+    @Override
     public VoteReconcileResult replace(String etfCode, List<Vote> votes) {
         List<String> args = new ArrayList<>();
         for (VoteChoice choice : VoteChoice.values()) {

@@ -1,6 +1,7 @@
 package com.edge.app.application.vote;
 
-import com.edge.app.adapter.persistence.vote.VoteCountRepository;
+import com.edge.app.application.vote.provided.VoteReconcileRequester;
+import com.edge.app.application.vote.required.VoteCountStore;
 import com.edge.app.application.vote.required.VoteRepository;
 import com.edge.app.domain.vote.Vote;
 
@@ -27,9 +28,9 @@ import java.util.stream.Collectors;
 @Slf4j
 @Component
 @RequiredArgsConstructor
-public class VoteReconciler {
+public class VoteReconciler implements VoteReconcileRequester {
     private final VoteRepository voteRepository;
-    private final VoteCountRepository voteCountRepository;
+    private final VoteCountStore voteCountStore;
     private final MeterRegistry meterRegistry;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean running = new AtomicBoolean();
@@ -51,6 +52,7 @@ public class VoteReconciler {
 
     // 겹친 트리거 병합
     // 블로킹 작업을 막는 Lettuce 이벤트 스레드의 제출 한정
+    @Override
     public boolean request() {
         if (!running.compareAndSet(false, true)) {
             return false;
@@ -70,7 +72,7 @@ public class VoteReconciler {
             int failed = 0;
             for (var entry : byEtf.entrySet()) {
                 try {
-                    var delta = voteCountRepository.replace(entry.getKey(), entry.getValue());
+                    var delta = voteCountStore.replace(entry.getKey(), entry.getValue());
                     meterRegistry.counter("vote.reconcile.missing").increment(delta.missing());
                     meterRegistry.counter("vote.reconcile.excess").increment(delta.excess());
                     log.info("Reconciled etf={} dbVotes={} buyDelta={} waitDelta={} sellDelta={}",
