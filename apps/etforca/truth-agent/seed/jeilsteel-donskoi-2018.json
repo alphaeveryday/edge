@@ -48,8 +48,8 @@
   },
   "impact": 50,
   "impactReason": "보물선 홍보와 상장사 인수 계약이 겹치면서 제일제강 주가가 보름 남짓 사이 급등락했고, 테마주 투자자가 그 위험을 떠안았습니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/eFj2PxEo0ow/hqdefault.jpg",
+  "video": {"youtube": "eFj2PxEo0ow", "title": "금감원 보물선 주가조작 조사…신일그룹 연락두절 / 연합뉴스TV (YonhapnewsTV)"},
   "body": [
     { "h": "코인 투자 사기와 상장사 주식 사건은 따로 봅니다" },
     {

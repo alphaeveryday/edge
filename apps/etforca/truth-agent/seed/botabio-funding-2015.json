@@ -43,8 +43,8 @@
   "beneficiary": "검찰은 이 전 이사가 유상증자로 받은 주식을 팔아 약 23억여원의 차익을 얻었다고 기소했습니다. 법원이 확정한 금액은 아닙니다.",
   "impact": 55,
   "impactReason": "최대주주 측 자금이 자기 돈인지 빌린 돈인지는 지배력 유지 능력과 매도 압력을 판단하는 정보입니다. 회사는 2018년 상장폐지됐습니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/8NW2ZeWOWF0/hqdefault.jpg",
+  "video": {"youtube": "8NW2ZeWOWF0", "title": "대법, 견미리 남편 주가조작 무죄 파기…\"중요사항 거짓 기재\" / JTBC News"},
   "body": [
     { "h": "자기 돈인지 빌린 돈인지가 쟁점입니다" },
     {

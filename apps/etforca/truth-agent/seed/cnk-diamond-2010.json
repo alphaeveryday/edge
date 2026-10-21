@@ -53,8 +53,8 @@
   },
   "impact": 70,
   "impactReason": "보도자료 이후 한 달여 동안 주가가 약 5배 올랐다는 보도가 있습니다. 확정된 피해액은 아닙니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/D40_FVcM0p0/hqdefault.jpg",
+  "video": {"youtube": "D40_FVcM0p0", "title": "'다이아는 없었다'...대국민 사기극으로 끝난 'CNK 사건'"},
   "body": [
     { "h": "법원이 인정한 것과 인정하지 않은 것이 나뉩니다" },
     {

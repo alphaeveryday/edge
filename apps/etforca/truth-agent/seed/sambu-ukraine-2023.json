@@ -52,8 +52,8 @@
   "beneficiary": "특검은 피고인들이 공모해 약 369억원의 부당이득을 얻었다고 봅니다. 수사기관 산정이며 법원이 인정한 금액이 아닙니다.",
   "impact": 85,
   "impactReason": "재건 사업 홍보 뒤 두 달 새 주가가 1000원대에서 5500원까지 오른 사건에 대한 공소이고, 특검이 수사한 사건으로 사회적 관심이 큽니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/TV4COp9oF-U/hqdefault.jpg",
+  "video": {"youtube": "TV4COp9oF-U", "title": "김건희 특검, '삼부토건 주가조작' 이응근·이일준 기소 / 연합뉴스TV (YonhapnewsTV)"},
   "body": [
     { "h": "MOU가 있었다는 사실과 사업 능력은 다른 질문입니다" },
     {

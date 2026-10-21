@@ -42,8 +42,8 @@
   },
   "impact": 70,
   "impactReason": "주요 고객과의 대형 계약이 사실상 소멸한 시점과 1,281억원 자사주 처분 시점이 겹쳐 주주 가치 판단에 직접 연결됩니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/JJEuN2eGzeo/hqdefault.jpg",
+  "video": {"youtube": "JJEuN2eGzeo", "title": "금감원, 엘앤에프 정정공시 관련 거래소 압수수색 / 연합뉴스TV (YonhapnewsTV)"},
   "body": [
     { "h": "계약이 줄어든 사실과 매각 때 알았는지는 다른 질문입니다" },
     {

@@ -43,8 +43,8 @@
   "beneficiary": "특검은 구 전 대표 등 3명이 89억여원, 양 회장과 박 부회장이 212억여원을 취했다고 봤습니다. 공소사실상 금액이며 법원이 인정한 금액이 아닙니다.",
   "impact": 65,
   "impactReason": "테마 편입을 이끈 사업 발표의 진위와 전환사채 매각 이익의 귀속이 웰바이오텍 투자 판단과 경영진 신뢰에 직접 연결됩니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/2AnfS96ZTgA/hqdefault.jpg",
+  "video": {"youtube": "2AnfS96ZTgA", "title": "특검, '웰바이오텍 주가조작' 양남희·이기훈 기소 / YTN"},
   "body": [
     { "h": "사업이 있었는지와 홍보가 사실을 넘었는지는 다른 질문입니다" },
     {

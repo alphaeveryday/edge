@@ -42,8 +42,8 @@
   },
   "impact": 55,
   "impactReason": "FDA 절차의 의미를 어떻게 설명하느냐에 따라 경구용 세마글루타이드 사업 가치가 달리 읽히고, 7월 답변서 소식에 주가가 상한가로 움직였습니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/wpFpntT630k/hqdefault.jpg",
+  "video": {"youtube": "wpFpntT630k", "title": "삼천당제약, 의구심 더 커졌다…미 FDA 문서 정체는 [팩트체크] / 한국경제TV뉴스"},
   "body": [
     { "h": "미팅 확정과 허가 요건 충족은 다른 단계입니다" },
     {

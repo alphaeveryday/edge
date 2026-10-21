@@ -48,8 +48,8 @@
   },
   "impact": 75,
   "impactReason": "퇴출 직전 시가총액 4,000억원대(코스닥 27위) 종목이 감사의견 거절로 상장폐지돼 개인 투자자 7,000여명이 손실을 입었다고 보도됐습니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/P-Fqn0ZTSO8/hqdefault.jpg",
+  "video": {"youtube": "P-Fqn0ZTSO8", "title": "분식회계 '네오세미테크' 전 대표, 징역 15년·벌금 520억 선고"},
   "body": [
     { "h": "공시된 흑자와 감사 결과가 한 달 사이에 갈렸습니다" },
     {

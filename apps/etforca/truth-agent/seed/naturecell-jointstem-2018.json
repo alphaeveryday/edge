@@ -47,8 +47,8 @@
   },
   "impact": 40,
   "impactReason": "허가 실패 뒤 주가 하락을 당시 허위로 소급하지 않는 기준 사례입니다. 무죄 확정 사건이라 조사 우선순위는 낮습니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/s7JILgc4ldk/hqdefault.jpg",
+  "video": {"youtube": "s7JILgc4ldk", "title": "'주가조작 의혹' 네이처셀 라정찬 회장 무죄 확정 / 연합뉴스TV (YonhapnewsTV)"},
   "body": [
     { "h": "무엇이 무죄인지" },
     {
