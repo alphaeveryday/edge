@@ -291,9 +291,10 @@ HOT=failed FAULT=kill python3 run-cluster.py C4    # Cluster: C1~C4 (docker-comp
 ## 코드 구조
 
 헥사고날 아키텍처를 따른다.
-controller는 provided 포트만 호출한다.
+controller는 application의 provided 패키지(포트와 그 입출력 타입)만 의존한다.
 서비스는 저장소와 외부 연동을 required 포트를 통해 호출한다.
 같은 application 안의 호출은 허용한다(`VoteFacade` → `VoteService`, `MemberModifyService` → `MemberFinder`).
+계층 방향(domain ← application ← adapter)과 슬라이스 순환 금지는 `HexagonalArchitectureTest`(ArchUnit)가 빌드에서 강제한다.
 
 ```
 app-api/
