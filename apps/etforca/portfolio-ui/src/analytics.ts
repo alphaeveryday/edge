@@ -55,10 +55,7 @@ function initialize() {
         capture_pageview: false, capture_pageleave: false, autocapture: false,
         disable_session_recording: false, disable_surveys: true, capture_performance: false, enable_recording_console_log: false,
         session_recording: {
-          maskAllInputs: true, maskTextSelector: '*',
-          blockSelector: 'svg, canvas, img, video, iframe, .dividend-plot, .gain, .loss, .step .chips, .tax-dialog, input[type="hidden"], input[type="file"], .ph-no-capture',
-          // rrweb's _cssText contains the public stylesheet needed to reconstruct the layout.
-          maskAttributeFn: (name, value) => name === 'class' ? value.replace(/\b(gain|loss)\b/g, 'financial-value') : ['style', '_cssText', 'type', 'role', 'width', 'height', 'aria-expanded', 'aria-pressed', 'data-variant', 'data-tone'].includes(name) || name === 'id' && ['root', 'report'].includes(value) ? value : '',
+          maskAllInputs: false, maskTextSelector: '', blockSelector: '.ph-no-capture',
           recordHeaders: false, recordBody: false, recordCrossOriginIframes: false,
           maskCapturedNetworkRequestFn: data => Object.keys(data).length === 1 ? { ...data, name: 'https://etforca.com/portfolio/' } : null,
         },
