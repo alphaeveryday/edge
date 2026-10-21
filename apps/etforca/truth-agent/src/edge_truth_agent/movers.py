@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 LEASE_KEY = "state/lease-movers.json"
 CORP_KEY = "state/dart-corp-codes.json"
 LOGO_TRIED_KEY = "state/logo-tried.json"
+DATES_KEY = "movers/dates.json"  # 공개: 게시한 날짜 목록(화면의 날짜 선택)
 MIN_CHANGE = 10.0       # 급등 기준: 전일 대비 상승률(%)
 MIN_TRADE_VALUE = 30.0  # 거래대금 하한(억원, 누적 거래대금) — 몇 주 체결로 뛴 종목은 해석할 사건이 아니다
 MAX_MOVERS = 15         # 화면에 싣는 종목 수
@@ -226,6 +227,10 @@ def run_movers(cfg, *, quotes: Quotes | None = None, dart: Dart | None = None, s
         store.put(f"movers/{today}.json", body)
         public.put("movers/latest.json", body, cache_control="no-cache")
         public.put(f"movers/{today}.json", body, cache_control="no-cache")
+        # 화면의 날짜 선택용 목록(최신순). 게시한 날만 담긴다
+        raw, _ = public.get(DATES_KEY)
+        dates = sorted(set(json.loads(raw) if raw else []) | {today}, reverse=True)
+        public.put(DATES_KEY, _json(dates), cache_control="no-cache")
         store.put(seen_key, _json(seen))  # 게시 뒤에 — 게시 전에 죽으면 근거를 '본 것'으로 남기지 않고 다음 정각에 다시 판정한다
         report.update(published=True, movers=[i["code"] for i in items])
     store.put(f"runs/{today}/{run_id}.json", _json(report))

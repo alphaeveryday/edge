@@ -30,7 +30,7 @@ etforca.com/truth/today. 오늘 급등한 국내 주식마다 **급등을 일으
    - 판정은 세션 안에서 게시 형식(스키마)을 검사한다. 시세 조회가 전부 실패하면 휴장이 아니라 실패로 끝낸다.
    - 공시를 조회하지 못한 종목(키 없음·고유번호 없음·DART 오류)은 판정하지 않고 보류로 싣는다. '최근 공시 없음'으로 넘기지 않는다.
    - 유망주는 원문(DART 공시, 또는 웹에서 받은 공식·공시 원문)으로만 붙인다. 보도만으로는 붙이지 않는다.
-4. **게시 (코드):** `truth/data/movers/latest.json` 과 `truth/data/movers/<날짜>.json`.
+4. **게시 (코드):** `truth/data/movers/latest.json` 과 `truth/data/movers/<날짜>.json`, 게시한 날짜 목록 `truth/data/movers/dates.json`(최신순, 화면의 날짜 선택).
 
 ## 3. 순위 (파급력 근사)
 

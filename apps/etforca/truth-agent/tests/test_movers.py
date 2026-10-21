@@ -115,6 +115,17 @@ def test_same_day_rerun_keeps_verdicts_and_skips_judged(cfg):
     assert again.calls == [] and doc["items"][0]["tag"] == "false"
 
 
+def test_published_dates_accumulate_newest_first(cfg):
+    # 화면은 이 목록으로 지난 날짜를 고른다 — 다음 날 게시가 앞선 날을 지우면 그날 판정을 다시 볼 길이 없다.
+    _seed_news(cfg)
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
+    movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW)
+    movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW + timedelta(hours=1))
+    nxt = type("Next", (FakeQuotes,), {"session_day": lambda self, market="KOSPI": "20261023"})(src.by_market)
+    movers.run_movers(cfg, quotes=nxt, dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW + timedelta(days=1))
+    assert json.loads(LocalStore(cfg.publish).get("movers/dates.json")[0]) == ["2026-10-23", "2026-10-22"]
+
+
 def test_market_closed_day_is_not_published(cfg):
     # 휴장일에 순위는 전 거래일 값을 준다 — 그날 체결이 없으면 오늘 결과로 게시하지 않는다.
     src = FakeQuotes({"KOSPI": [_m("900010", "가나다전자", 29.9, "KOSPI")]}, traded=False)
