@@ -4,7 +4,7 @@ import type { Catalog, Instrument } from './api';
 import { trackAction } from './analytics';
 
 export const cashInstrument: Instrument = { id: 'CASH:KRW', market: 'CASH', ticker: 'KRW', code: 'KRW', name: '현금', kind: 'cash' };
-export function InstrumentSearch({ account, catalog, onAdd }: { account: string; catalog: Catalog | null; onAdd: (item: Instrument) => string | void }) {
+export function InstrumentSearch({ account, catalog, onAdd, onOpen }: { account: string; catalog: Catalog | null; onAdd: (item: Instrument) => string | void; onOpen?: () => void }) {
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
@@ -30,7 +30,7 @@ export function InstrumentSearch({ account, catalog, onAdd }: { account: string;
   }, [active, open, id]);
   function choose(item: Instrument) { const rejected = onAdd(item); if (rejected) { setError(rejected); return; } setError(''); setQuery(''); setOpen(false); setActive(0); }
   return <div className="find instrument-search"><Button type="button" className="find__plus" aria-label={account + ' ETF 또는 현금 찾기'} onClick={() => { setOpen(!open); document.getElementById(id)?.focus(); }}>+</Button>
-    <TextInput id={id} className="field" role="combobox" aria-label={account + '에 담은 ETF 찾기'} aria-autocomplete="list" aria-expanded={open} aria-controls={id + '-list'} aria-activedescendant={open && options[active] ? id + '-' + active : undefined} autoComplete="off" placeholder="ETF 추가하기" value={query} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onChange={e => { setQuery(e.target.value); setError(''); setOpen(true); setActive(0); }} onKeyDown={e => {
+    <TextInput id={id} className="field" role="combobox" aria-label={account + '에 담은 ETF 찾기'} aria-autocomplete="list" aria-expanded={open} aria-controls={id + '-list'} aria-activedescendant={open && options[active] ? id + '-' + active : undefined} autoComplete="off" placeholder="ETF 추가하기" value={query} onFocus={() => { setOpen(true); onOpen?.(); }} onBlur={() => setOpen(false)} onChange={e => { setQuery(e.target.value); setError(''); setOpen(true); setActive(0); }} onKeyDown={e => {
       if (e.key === 'Escape') setOpen(false);
       if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setActive(Math.max(0, Math.min(active + 1, options.length - 1))); }
       if (e.key === 'ArrowUp') { e.preventDefault(); setActive(Math.max(0, active - 1)); }
