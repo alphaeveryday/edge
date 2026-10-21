@@ -2,9 +2,11 @@ import { chartPalette } from './design-system/components';
 import type { Holding } from './api';
 
 const colors = chartPalette;
-// The donut centre is narrow: whole 만, or 억 with one decimal once the total reaches 1억.
-const short = (n: number) => n >= 1e8 ? `${(n / 1e8).toLocaleString('ko-KR', { maximumFractionDigits: 1 })}억` : `${Math.round(n / 1e4).toLocaleString('ko-KR')}만`;
-const won = (n: number) => n >= 10000 ? `${(n / 10000).toLocaleString('ko-KR', { maximumFractionDigits: 1 })}만 원` : `${n.toLocaleString('ko-KR')}원`;
+// Round to 만 first so 9,999.5만 원 reads as 1억, not 10,000만.
+const eok = (n: number) => Math.round(n / 1e4) >= 1e4;
+// The donut centre is narrow: whole 만, or 억 with one decimal.
+const short = (n: number) => eok(n) ? `${(n / 1e8).toLocaleString('ko-KR', { maximumFractionDigits: 1 })}억` : `${Math.round(n / 1e4).toLocaleString('ko-KR')}만`;
+const won = (n: number) => eok(n) ? `${short(n)} 원` : n >= 1e4 ? `${(n / 1e4).toLocaleString('ko-KR', { maximumFractionDigits: 1 })}만 원` : `${n.toLocaleString('ko-KR')}원`;
 export function PortfolioPreview({ holdings, mode }: { holdings: Holding[]; mode: string }) {
   if (!holdings.length) return null;
   const total = holdings.reduce((sum, h) => sum + Number(h.amount_krw), 0);

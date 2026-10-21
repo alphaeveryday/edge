@@ -6459,6 +6459,7 @@ to {
   .holdings-input .row > .x { grid-column: 2; grid-row: 1; }
   .holdings-input .num { grid-column: 1 / -1; justify-content: flex-end; }
   .holdings-input .num input { width: 100%; min-width: 0; }
+  .holdings-input .num[data-unit] input { width: 100%; }
 }
 
 .holdings-table tr[data-needs-input=true] { outline: 2px solid var(--color-primary); outline-offset: -2px; }

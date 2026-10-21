@@ -49,5 +49,22 @@ for (const mode of ['amount', 'percent'] as const) test(`a ${mode}-mode draft sa
 test('a pasted decimal amount keeps its won value instead of shifting 100x', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
   await addCash(page, '1,234,567.89');
-  await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('1,234,567');
+  const amount = page.getByLabel('현금 금액', { exact: true });
+  await expect(amount).toHaveValue('1,234,567');
+  // A stray dot from a numeric keypad or a 1.234.567-style paste must not erase the digits after it.
+  await amount.fill('1.234.567');
+  await expect(amount).toHaveValue('1,234,567');
+  await amount.fill('1.,234,567');
+  await expect(amount).toHaveValue('1,234,567');
+});
+
+test('the preview legend keeps small and large amounts readable instead of rounding them away', async ({ page }) => {
+  await page.goto('/portfolio/?preview=input');
+  await addCash(page, '15000');
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).fill('VOO');
+  await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
+  // VOO is still empty, so the legend shows amounts rather than weights.
+  await expect(page.locator('.portfolio-preview li').filter({ hasText: '현금' })).toContainText('1.5만 원');
+  await page.getByLabel('현금 금액', { exact: true }).fill('99999999');
+  await expect(page.locator('.portfolio-preview li').filter({ hasText: '현금' })).toContainText('1억 원');
 });
