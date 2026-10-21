@@ -9,7 +9,7 @@ import shutil
 
 import pytest
 
-from conftest import SEED, WEB, needs_chromium, seed
+from conftest import flow_seed, WEB, needs_chromium, seed
 from edge_truth_agent import news, runner, tools
 from edge_truth_agent.config import Config
 from edge_truth_agent.session import SessionResult
@@ -115,7 +115,7 @@ def _editing_session(text: str):
 
 @needs_chromium
 def test_hourly_run_adds_related_news_and_publishes_accepted_edit(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "SEED_DIR", SEED)
+    monkeypatch.setattr(runner, "SEED_DIR", flow_seed(tmp_path))
     report = runner.run(_cfg(tmp_path), "hourly", lake=_lake_with_indictment(),
                         session_runner=_planned(_editing_session("검찰 기소(2026-10-21). 재판 진행")), now=NOW)
     assert report["changed"] == ["hybe-ipo-2019"] and report["reverted"] == []
@@ -132,7 +132,7 @@ def test_hourly_run_adds_related_news_and_publishes_accepted_edit(tmp_path, monk
 @needs_chromium
 def test_session_that_breaks_the_contract_is_not_published(tmp_path, monkeypatch):
     # 검사를 통과하지 못한 세션 결과는 버리고, 관련 보도 추가(코드 몫)만 남는다.
-    monkeypatch.setattr(runner, "SEED_DIR", SEED)
+    monkeypatch.setattr(runner, "SEED_DIR", flow_seed(tmp_path))
 
     def breaking(cfg, ws, **kw):
         case = ws.case()
@@ -194,7 +194,7 @@ def _failing_session(cfg, ws, **kw):
 @needs_chromium
 def test_failed_session_keeps_trigger_articles_for_the_next_run(tmp_path, monkeypatch):
     # 장애 시간에 들어온 '기소' 기사를 말뭉치에만 넣고 버리면 다시는 세션이 열리지 않는다.
-    monkeypatch.setattr(runner, "SEED_DIR", SEED)
+    monkeypatch.setattr(runner, "SEED_DIR", flow_seed(tmp_path))
     lake = _lake_with_indictment()
     first = runner.run(_cfg(tmp_path), "hourly", lake=lake, session_runner=_planned(_failing_session), now=NOW)
     assert first["failed"] == ["hybe-ipo-2019"]
@@ -208,7 +208,7 @@ def test_failed_session_keeps_trigger_articles_for_the_next_run(tmp_path, monkey
 @needs_chromium
 def test_trigger_is_dropped_and_reported_after_repeated_failures(tmp_path, monkeypatch):
     # 계속 실패하는 사건을 매시 영원히 다시 부르면 비용만 든다 — 정해진 횟수 뒤 버리고 보고한다.
-    monkeypatch.setattr(runner, "SEED_DIR", SEED)
+    monkeypatch.setattr(runner, "SEED_DIR", flow_seed(tmp_path))
     lake = _lake_with_indictment()
     reports = [runner.run(_cfg(tmp_path), "hourly", lake=lake, session_runner=_planned(_failing_session), now=NOW + timedelta(hours=i))
                for i in range(runner.PENDING_TRIES + 1)]
@@ -217,7 +217,7 @@ def test_trigger_is_dropped_and_reported_after_repeated_failures(tmp_path, monke
 
 def test_discover_does_not_consume_new_articles(tmp_path, monkeypatch):
     # 하루 한 번 도는 discover 가 새 기사를 말뭉치에 넣으면 매시 실행이 그 기사를 배정하지 못한다.
-    monkeypatch.setattr(runner, "SEED_DIR", SEED)
+    monkeypatch.setattr(runner, "SEED_DIR", flow_seed(tmp_path))
     lake = _lake_with_indictment()
     report = runner.run(_cfg(tmp_path), "discover", lake=lake, session_runner=_failing_session, now=NOW)
     assert report["newArticles"] == 0 and lake.reads == []
@@ -263,7 +263,7 @@ def test_image_installs_exactly_the_workspace_lock_versions():
 
 def test_cases_beyond_the_session_cap_are_not_dropped_untried(tmp_path, monkeypatch):
     # 세션 상한에 밀려 한 번도 돌지 못한 사건을 '실패'로 세어 버리면 기사가 시도 없이 사라진다.
-    monkeypatch.setattr(runner, "SEED_DIR", SEED)
+    monkeypatch.setattr(runner, "SEED_DIR", flow_seed(tmp_path))
     cfg = replace(_cfg(tmp_path), max_sessions=0)
     lake = _lake_with_indictment()
     for hour in range(runner.PENDING_TRIES + 2):
@@ -290,7 +290,7 @@ def test_seed_topics_and_title_win_over_stored(tmp_path):
 
 def _discover_setup(tmp_path, monkeypatch):
     """새 사건 후보 기사 하나가 말뭉치에 있고, 렌더·세션 검사는 통과로 둔다(여기서 보는 것은 세션 순서와 상한)."""
-    monkeypatch.setattr(runner, "SEED_DIR", SEED)
+    monkeypatch.setattr(runner, "SEED_DIR", flow_seed(tmp_path))
     monkeypatch.setattr(runner, "session_problems", lambda ws: [])
     monkeypatch.setattr(runner, "render", lambda cases, web, focus: {k: {"errors": [], "warnings": []} for k in [*focus, "index"]})
     article = news.from_bigkinds(bk("알파전자 대표 검찰 기소", "검찰이 알파전자 대표를 자본시장법 위반 혐의로 기소했다.",
