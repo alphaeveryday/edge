@@ -180,3 +180,13 @@ def test_hourly_run_leaves_locked_cases_media_to_people(tmp_path, monkeypatch):
     assert report["changed"] == []
     public = json.loads((tmp_path / "public" / "cases" / "geumyang-monlaa.json").read_text(encoding="utf-8"))
     assert public["cover"] is None
+
+
+def test_hourly_run_reports_when_the_media_budget_runs_out(tmp_path, monkeypatch, caplog):
+    # 시간 상한에 걸리면 사진이 왜 안 붙는지 실행 로그에서 보여야 한다(조용히 건너뛰지 않는다).
+    monkeypatch.setattr(runner, "SEED_DIR", SEED)
+    monkeypatch.setattr(runner, "render", lambda cases, web, focus: {k: {"errors": [], "warnings": []} for k in [*focus, "index"]})
+    monkeypatch.setattr(media, "RUN_SECONDS", 0)
+    with caplog.at_level("WARNING", logger=runner.__name__):
+        runner.run(_cfg(tmp_path), "hourly", now=NOW)
+    assert "media_deadline" in caplog.text
