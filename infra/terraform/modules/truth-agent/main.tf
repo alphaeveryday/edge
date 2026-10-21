@@ -151,7 +151,7 @@ resource "aws_vpc_security_group_egress_rule" "https" {
 }
 
 # ── 태스크 정의 ─────────────────────────────────────────
-# 1 vCPU·3GB: 세션 3개 동시(pi Node 3개 + 도구 Python) 뒤에 Chromium 렌더 한 번. 로컬 실측 세션 하나 수 분.
+# 1 vCPU·3GB: 세션은 하나씩(pi Node + 도구 Python), 끝에 Chromium 렌더 한 번. 로컬 실측 세션 하나 수 분.
 resource "aws_ecs_task_definition" "this" {
   family                   = var.name
   requires_compatibilities = ["FARGATE"]
