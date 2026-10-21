@@ -56,6 +56,7 @@ jobs:
           aws s3 cp style.css "s3://${BUCKET}/truth/style.css" --content-type "text/css; charset=utf-8" --cache-control "no-cache"
           aws s3 cp common.js "s3://${BUCKET}/truth/common.js" --content-type "text/javascript; charset=utf-8" --cache-control "no-cache"
           aws s3 cp intro.js "s3://${BUCKET}/truth/intro.js" --content-type "text/javascript; charset=utf-8" --cache-control "no-cache"
+          aws s3 cp analytics.js "s3://${BUCKET}/truth/analytics.js" --content-type "text/javascript; charset=utf-8" --cache-control "no-cache"
           aws s3 cp logo.png "s3://${BUCKET}/truth/logo.png" --content-type "image/png" --cache-control "public,max-age=86400"
           # CloudFront default_root_object 는 / 에만 적용된다 — /truth/ 가 열리게 같은 내용을 'truth/' 키에도 둔다.
           aws s3api put-object --bucket "$BUCKET" --key 'truth/' --body index.html \

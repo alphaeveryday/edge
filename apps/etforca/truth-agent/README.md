@@ -7,7 +7,7 @@
 ```bash
 uv run --package edge-truth-agent python -m edge_truth_agent validate apps/etforca/truth-agent/seed
 uv run --package edge-truth-agent python -m edge_truth_agent run hourly     # 매시: 새 기사 → 해당 사건만 갱신
-uv run --package edge-truth-agent python -m edge_truth_agent run discover   # 하루 한 번: 새 사건 후보
+uv run --package edge-truth-agent python -m edge_truth_agent run discover   # 하루 한 번: 새 사건 후보(최대 3건)
 ```
 
 `tool <이름>`·`tool-specs` 는 pi 확장(`pi/extension.ts`)이 부르는 내부 명령이다.
@@ -23,7 +23,7 @@ uv run --package edge-truth-agent python -m edge_truth_agent run discover   # �
 | `TRUTH_LAKE_BUCKET` | | 뉴스 레이크 버킷. 없으면 뉴스 수집을 건너뛴다 |
 | `TRUTH_MODEL` · `TRUTH_THINKING` | | 기본 `deepseek/deepseek-flash` · `medium` |
 | `TRUTH_MAX_SESSIONS` · `TRUTH_PARALLEL` | | 한 실행의 세션 수 상한(8)·동시 실행 수(3) |
-| `TRUTH_SESSION_TIMEOUT` · `TRUTH_MAX_TOOL_CALLS` | | 세션 하나의 시간(420초)·도구 호출(30회) 상한 |
+| `TRUTH_SESSION_TIMEOUT` · `TRUTH_MAX_TOOL_CALLS` | | 세션 하나의 시간(600초)·도구 호출(70회) 상한 |
 
 컨테이너는 `TRUTH_PI_DIR`·`TRUTH_WEB_DIR`·`TRUTH_SEED_DIR` 를 이미지 안 경로로 덮는다. 저장소에서 돌릴 때는 기본값(저장소 배치)을 쓴다.
 
