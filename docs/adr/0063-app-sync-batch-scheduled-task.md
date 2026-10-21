@@ -16,7 +16,7 @@ app-api 는 파이프라인 RDS 발행본을 앱 DB 로 옮기는 동기화를 A
 - **실행 형태:** EventBridge Scheduler 가 ECS RunTask 로 Fargate 태스크 1개를 띄운다. 태스크는 잡을 한 번 실행하고 종료한다. 상주 프로세스는 없다.
 - **주기:** `rate(10 minutes)`. 기존 app-api 동기화 주기를 그대로 옮긴다. 원천별 갱신 주기에 맞춘 조정은 별도로 정한다.
 - **클러스터:** worker 클러스터(`edge-dev-worker`). 0.5 vCPU·1GB(app-api 와 같은 JVM 크기).
-- **이미지 리비전:** 배포 워크플로(`deploy-app-batch.yml`)가 새 이미지로 task 정의 리비전만 등록한다. 스케줄은 task 정의를 패밀리 이름으로 불러 RunTask 의 "리비전 미지정 시 최신 ACTIVE" 규칙으로 배포본을 실행한다. Terraform 은 컨테이너 정의 변경을 무시하고, baseline 이미지는 배포가 매번 옮기는 `latest` 태그다(ECR 수명 주기 보존).
+- **이미지 리비전:** 배포 워크플로(`deploy-app-batch.yml`)가 새 이미지로 task 정의 리비전만 등록한다. 스케줄은 task 정의를 패밀리 이름으로 불러 RunTask 의 "리비전 미지정 시 최신 ACTIVE" 규칙으로 배포본을 실행한다. Terraform 의 baseline 이미지는 배포가 매번 옮기는 `latest` 태그다(ECR 수명 주기 보존). env·시크릿 변경은 TF 가 새 리비전으로 반영하고 이후 배포가 그 리비전을 복제한다.
 - **잠금:** ShedLock 을 쓰지 않는다. 실행마다 새 JobInstance(`RunIdIncrementer`)이고, 중복 실행은 쓰기의 멱등성에 맡긴다.
 - **메타 테이블:** `BATCH_*` 는 앱 DB 스키마 소유자인 app-api Flyway(V22)가 만든다. batch 는 스키마를 만들지 않는다.
 - **실패 신호:**
@@ -33,7 +33,7 @@ app-api 는 파이프라인 RDS 발행본을 앱 DB 로 옮기는 동기화를 A
 ## 결과
 - **비용:** 실행할 때만 과금된다. 실행마다 JVM 기동 시간이 든다(실측은 첫 dev 실행에서).
 - **중복 실행:** 순차 중복은 결과를 바꾸지 않는다. 모든 쓰기가 "바뀐 행 한정 upsert"와 "원천 밖 행 삭제"이기 때문이다(`SyncJobTest` 재실행 단언). 두 실행이 겹쳐 순위 단계에 동시에 들어가면, 늦은 쪽이 `etf_rank` PK 충돌로 실패해 알람이 오탐될 수 있다. 데이터는 먼저 커밋한 쪽의 결과로 온전하다.
-- **TF 소유 속성 변경:** cpu·memory·역할을 바꾸면 TF 가 baseline(`latest`)으로 새 리비전을 만들어 최신 ACTIVE 가 된다. `latest` 가 마지막 배포 이미지라 실행 이미지는 그대로다.
+- **TF 소유 설정 변경:** env·시크릿·cpu·memory·역할을 바꾸면 TF 가 baseline(`latest`)으로 새 리비전을 만들어 최신 ACTIVE 가 된다. `latest` 가 마지막 배포 이미지라 실행 이미지는 그대로다.
 - **롤아웃 순서:**
   1. foundation apply(`edge/app-batch` ECR)
   2. 머지와 dev apply(스케줄 DISABLED, app-api task 정의의 파이프라인 env 제거)

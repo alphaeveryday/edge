@@ -105,14 +105,12 @@ resource "aws_ecs_task_definition" "this" {
 
   container_definitions = jsonencode([local.container])
 
-  # 배포 워크플로가 새 이미지로 새 리비전을 등록하므로 TF 는 컨테이너 정의 변경을 무시한다.
-  # ⚠️ cpu·memory·역할처럼 TF 가 소유한 속성이 바뀌면 TF 가 baseline 이미지로 새 리비전을 만들어
-  # 최신 ACTIVE 가 된다 — 그 뒤 첫 배포 전까지 스케줄은 baseline 이미지를 실행한다.
-  # 그래서 baseline 은 배포가 매번 옮기고 ECR 수명 주기가 보존하는 움직이는 태그여야 한다
-  # (없는·만료된 태그면 그 사이 실행이 전부 pull 실패).
-  lifecycle {
-    ignore_changes = [container_definitions]
-  }
+  # 배포 워크플로는 이 리비전을 복제해 이미지만 바꾼 새 리비전을 따로 등록한다. TF 는 자기 리비전만
+  # 추적하고 baseline 이미지가 고정 문자열(latest)이라 드리프트가 없어 ignore_changes 를 두지 않는다.
+  # env·시크릿 변경은 TF 가 latest 이미지로 새 리비전을 만들어 최신 ACTIVE 가 되고, 이후 배포도
+  # 그 리비전을 복제하므로 새 설정이 이어진다.
+  # ⚠️ baseline 은 배포가 매번 옮기고 ECR 수명 주기가 보존하는 움직이는 태그여야 한다
+  # (없는·만료된 태그면 TF 리비전이 최신이 된 뒤의 실행이 전부 pull 실패).
 }
 
 # ── 스케줄 ──────────────────────────────────────────────
