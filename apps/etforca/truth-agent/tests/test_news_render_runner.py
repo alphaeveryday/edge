@@ -273,19 +273,22 @@ def test_cases_beyond_the_session_cap_are_not_dropped_untried(tmp_path, monkeypa
     assert state["pending"]["hybe-ipo-2019"]["tries"] == 0
 
 
-def test_seed_topics_and_title_win_over_stored(tmp_path):
+def test_seed_owned_fields_win_over_stored(tmp_path):
     # 주제어는 사람이 정한 배정 설정이라 seed 를 좁히면 저장본도 따라가야 한다. 제목도 사람이 검토한 공개 문구라
     # seed 를 고치면(예: 과장된 '확정' 표현을 바로잡으면) 저장본이 따라가야 한다.
     store, seeds = LocalStore(tmp_path / "store"), tmp_path / "seed"
     seeds.mkdir()
     case = seed("hybe-ipo-2019")
-    stored = case | {"topics": ["상장"], "title": "하이브, 에이전트가 고친 제목"}
+    # 대표 이미지·영상도 사람이 고른 것을 나중에 seed 에 채우면 저장본이 따라가야 한다. seed 가 비어 있으면 저장본(에이전트가 넣은 값)을 둔다.
+    agent_video = {"youtube": "AAAAAAAAAAA", "title": "에이전트가 넣은 영상"}
+    stored = case | {"topics": ["상장"], "title": "하이브, 에이전트가 고친 제목", "cover": None, "video": agent_video}
     etag = store.put("cases/hybe-ipo-2019.json", json.dumps(stored, ensure_ascii=False).encode())
-    (seeds / "hybe-ipo-2019.json").write_text(json.dumps(case, ensure_ascii=False), encoding="utf-8")
+    (seeds / "hybe-ipo-2019.json").write_text(json.dumps(case | {"video": None}, ensure_ascii=False), encoding="utf-8")
     loaded = {"hybe-ipo-2019": (stored, etag)}
     assert runner.sync_seed(store, loaded, seeds, date(2026, 10, 21)) == ["hybe-ipo-2019"]
     synced = loaded["hybe-ipo-2019"][0]
     assert synced["topics"] == case["topics"] and synced["title"] == case["title"]
+    assert synced["cover"] == case["cover"] and synced["video"] == agent_video
 
 
 def _discover_setup(tmp_path, monkeypatch):
@@ -347,3 +350,24 @@ def test_render_server_answers_extensionless_urls_like_the_site(tmp_path):
     with _serve(tmp_path) as base:
         body = urllib.request.urlopen(base + "issue?id=hybe-ipo-2019").read().decode("utf-8")
     assert "<title>issue</title>" in body
+
+
+def test_render_counts_only_our_console_errors():
+    # 유튜브 iframe 경고(권한 정책 등)를 세면 영상이 붙은 사건 갱신이 간헐적으로 되돌려진다. 우리 화면 코드 오류는 계속 잡아야 한다.
+    from types import SimpleNamespace
+    from edge_truth_agent.render import _watch
+    handlers, errors, warnings = {}, [], []
+    _watch(SimpleNamespace(on=lambda ev, fn: handlers.__setitem__(ev, fn)), errors, warnings, "http://127.0.0.1:9/truth/")
+    say = lambda text, url: handlers["console"](SimpleNamespace(type="error", text=text, location={"url": url}))
+    say("Permissions policy violation: compute-pressure is not allowed in this document.", "")
+    say("No available adapters.", "https://www.youtube-nocookie.com/embed/unQJmn2GVmc")
+    say("TypeError: x is undefined", "http://127.0.0.1:9/truth/common.js")
+    assert errors == ["콘솔 오류: TypeError: x is undefined"]
+
+
+def test_missing_case_check_matches_the_issue_page_link():
+    # 사건 데이터가 없을 때 상세 화면은 '홈으로' 링크를 띄운다. 렌더 검사의 판별 선택자가 그 링크와 어긋나면 빠진 사건을 못 잡는다.
+    import re
+    from edge_truth_agent import render as render_module
+    fail = re.search(r"const fail = .*?<a href=\"([^\"]+)\">홈으로", (WEB / "issue.html").read_text(encoding="utf-8")).group(1)
+    assert f'.vcap a[href="{fail}"]' in Path(render_module.__file__).read_text(encoding="utf-8")

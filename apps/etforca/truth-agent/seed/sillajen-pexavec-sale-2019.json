@@ -47,8 +47,8 @@
   },
   "impact": 35,
   "impactReason": "악재 공시 전 임원 매도만으로 사전 인지를 단정하지 않는 기준 사례입니다. 무죄 확정 사건이라 조사 우선순위는 낮습니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/mwLAvq76sw4/hqdefault.jpg",
+  "video": {"youtube": "mwLAvq76sw4", "title": "'악재 공시 전에 주식 매도' 신라젠 전 대표 무죄 / 연합뉴스TV (YonhapnewsTV)"},
   "body": [
     { "h": "무엇이 무죄인지" },
     {

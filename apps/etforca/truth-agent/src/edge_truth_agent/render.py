@@ -67,7 +67,7 @@ def render(cases: list[dict], web_dir: Path, focus: list[str], *, timeout_ms: in
                     errors: list[str] = []
                     warnings: list[str] = []
                     page = browser.new_page()
-                    _watch(page, errors, warnings)
+                    _watch(page, errors, warnings, base)
                     try:
                         page.goto(url, wait_until="load", timeout=timeout_ms)
                         if key == "index":
@@ -91,15 +91,21 @@ def render(cases: list[dict], web_dir: Path, focus: list[str], *, timeout_ms: in
     return result
 
 
-def _watch(page, errors: list[str], warnings: list[str]) -> None:
+def _watch(page, errors: list[str], warnings: list[str], origin: str) -> None:
     """페이지 이벤트를 오류·경고 목록에 모은다. 외부 글꼴 등 자원 로드 실패는 화면 오류로 치지 않는다."""
 
     def on_page_error(error) -> None:
         errors.append(f"스크립트 오류: {error}")
 
     def on_console(message) -> None:
-        if message.type == "error" and "Failed to load resource" not in message.text:
-            errors.append(f"콘솔 오류: {message.text}")
+        if message.type != "error" or "Failed to load resource" in message.text:
+            return
+        # 퍼가기 영상(유튜브 iframe)이 남기는 오류와 브라우저 권한 정책 경고는 우리 화면 코드의 결함이 아니다 —
+        # 세면 영상이 붙은 사건의 갱신이 간헐적으로 되돌려진다. 우리 주소에서 난 오류만 센다.
+        where = (message.location or {}).get("url", "")
+        if (where and not where.startswith(origin)) or message.text.startswith("Permissions policy violation"):
+            return
+        errors.append(f"콘솔 오류: {message.text}")
 
     def on_response(response) -> None:
         if response.request.resource_type == "image" and response.status >= 400:
@@ -118,7 +124,7 @@ def _watch(page, errors: list[str], warnings: list[str]) -> None:
 def _issue_problems(page, case: dict) -> list[str]:
     """상세 화면이 사건 내용을 빠짐없이 그렸는가."""
     shown = page.evaluate("""() => ({
-        missing: !!document.querySelector('#article .vcap a[href="index.html"]'),
+        missing: !!document.querySelector('#article .vcap a[href="./"]'),
         h1: document.querySelector('#article h1')?.textContent.trim() || '',
         sections: document.querySelectorAll('#article .sec').length,
         sources: document.querySelectorAll('#article .sources li[id^="src-"]').length,

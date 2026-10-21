@@ -48,8 +48,8 @@
   "beneficiary": "보도에 따르면 원고 186명에게 14억5000여만원 지급이 확정됐고 판결 효력은 4,972명에게 미칩니다. 책임 비율은 10%로 제한됐습니다.",
   "impact": 55,
   "impactReason": "증자 두 달 뒤 의견거절과 매매거래정지로 증자 참여자 손실이 커졌다는 보도가 있으며, 증권집단소송 첫 대법원 판단입니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/LLUvtwHMWMU/hqdefault.jpg",
+  "video": {"youtube": "LLUvtwHMWMU", "title": "씨모텍 주주 최종 승소…대법 증권집단소송 첫 판단 / 연합뉴스TV (YonhapnewsTV)"},
   "body": [
     { "h": "쟁점은 최대주주의 인수 자금 구조를 어떻게 적었는가입니다" },
     {

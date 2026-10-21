@@ -49,8 +49,8 @@
   "beneficiary": "검찰은 2021년 5월~2022년 3월 주가 부양으로 약 1,621억원의 부당이득을 얻었다고 기소했습니다. 1심이 인정한 이익액은 확인하지 못했습니다.",
   "impact": 80,
   "impactReason": "쌍용차 인수 국면의 실적 공시와 언론 보도는 1심 재판부가 투자자에게 사실상 유일한 정보 수단이었다고 지적한 정보입니다. 검찰 추정 피해 투자자는 약 12만5,000명입니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/9a3J0yfawio/hqdefault.jpg",
+  "video": {"youtube": "9a3J0yfawio", "title": "'쌍용차 호재 먹튀' 에디슨모터스 전 회장 실형 / 연합뉴스TV (YonhapnewsTV)"},
   "body": [
     { "h": "인수 추진과 실적 공시는 따로 판단됐습니다" },
     {

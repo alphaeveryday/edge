@@ -48,8 +48,8 @@
   },
   "impact": 70,
   "impactReason": "악재 공시로 주가를 낮춘 뒤 지배주주 측이 싼 값에 지분을 늘리려 했다는 혐의는 소액주주 지분 가치에 직접 연결됩니다. 회사는 2017년 상장폐지가 결정됐습니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/HCzqENsjqzc/hqdefault.jpg",
+  "video": {"youtube": "HCzqENsjqzc", "title": "금융당국, '허위공시' 중국원양자원 주가조작 의혹 조사"},
   "body": [
     { "h": "좋은 소식만 기만이 되는 것은 아닙니다" },
     {

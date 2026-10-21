@@ -42,8 +42,8 @@
   },
   "impact": 55,
   "impactReason": "기술특례 상장 직후 핵심 계약이 해지되며 주가가 하루 25.9% 떨어졌습니다. 상장 전 인지·고지 여부가 공모 투자 판단과 기술특례 심사 신뢰에 연결됩니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/ehpnExzgkT4/hqdefault.jpg",
+  "video": {"youtube": "ehpnExzgkT4", "title": "인투셀, '기술계약 해지' 특허 이슈가 뭐길래"},
   "body": [
     { "h": "상장 전에 안 사실을 알렸는지가 쟁점입니다" },
     {

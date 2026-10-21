@@ -67,8 +67,8 @@
   },
   "impact": 65,
   "impactReason": "전날 호재 공시로 5.5% 오른 가격에 출발한 주가가 악재 공시 뒤 18.1% 떨어진 채 마감했고, 상장사 지연공시의 배상 책임을 다툰 사례입니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/ZbRck1dmRZo/hqdefault.jpg",
+  "video": {"youtube": "ZbRck1dmRZo", "title": "한미약품 투자자 최대 24% 손실…거래소 조사착수"},
   "body": [
     {
       "h": "공시 내용보다 공시 시점이 쟁점입니다"

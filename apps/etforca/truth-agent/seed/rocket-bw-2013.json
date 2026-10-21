@@ -42,8 +42,8 @@
   },
   "impact": 40,
   "impactReason": "운영자금 조달 공시는 경영난 기업의 존속 판단에 직접 쓰입니다. 보도된 부당이득 혐의액은 약 12억원입니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/unQJmn2GVmc/hqdefault.jpg",
+  "video": {"youtube": "unQJmn2GVmc", "title": "'허위공시 주가조작' 로케트전기 차남 징역 2년 확정 / 연합뉴스TV (YonhapnewsTV)"},
   "body": [
     { "h": "자금이 들어왔다는 공시와 곧바로 나간 돈이 충돌합니다" },
     {

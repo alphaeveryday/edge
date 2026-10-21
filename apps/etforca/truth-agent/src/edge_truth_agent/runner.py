@@ -31,7 +31,7 @@ KST = timezone(timedelta(hours=9))
 STATE_KEY = "state/state.json"
 LEASE_KEY = "state/lease.json"
 LEASE_MINUTES = 55
-SEED_OWNED = ("topics", "title")  # seed 사건에서는 사람이 정한 값이 항상 이긴다: 배정 주제어, 그리고 사람이 검토한 공개 제목
+SEED_OWNED = ("topics", "title", "cover", "video")  # seed 사건에서는 사람이 정한 값이 항상 이긴다: 배정 주제어·공개 제목·대표 이미지·영상(seed 에 값이 있을 때만)
 DISCOVER_LIMIT = 3  # 하루(새 사건 찾기 한 번)에 등록하는 새 사건 상한
 PENDING_KEEP = 20  # 사건 하나에 쌓아 두는 배정 기사 수(최신만)
 PLAN_TOOL_CALLS = 8  # 계획 세션 도구 예산: 기사 몇 건을 훑고 set_plan·finish
