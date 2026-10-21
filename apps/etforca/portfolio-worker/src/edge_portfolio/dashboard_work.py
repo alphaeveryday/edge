@@ -176,7 +176,8 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
                       if positive_price(a) and positive_price(b)]
             anchored = len(ratios) == len(priced) and len(ratios) >= 2
             anchored = anchored and record.get('return_basis') != 'price' and all(math.isclose(ratio, ratios[0], rel_tol=1e-6) for ratio in ratios)
-            action_dates = record['frame'].index[record['frame'].index <= saved['frame'].index.max()]
+            action_dates = record['frame'].index[(record['frame'].index >= saved['frame'].index.min()) &
+                                                (record['frame'].index <= saved['frame'].index.max())]
             for column in ('Dividends', 'Stock Splits'):
                 if column in record['frame']:
                     previous = saved['frame'].get(column, pd.Series(dtype=float)).reindex(action_dates).fillna(0)
@@ -281,7 +282,7 @@ async def records_for(ids, day, *, valuation_since=None, include_fx=True, collec
                         try:
                             budget = 200 / max(1, len(keys))
                             record = await fetch_prices(symbol, end, on_raw=capture, on_primary=capture, provider_timeout=budget * .45,
-                                                        repair_since=since, **({'history_start': min(since or end, end - timedelta(days=35))} if valuation_since is not None else {}))
+                                                        repair_since=since, **({'history_start': min(since or end, end - timedelta(days=35) if key == 'FX' else year_before(end) - timedelta(days=7))} if valuation_since is not None else {}))
                             record = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat(), 'requested_at': requested_at}
                         except TimeoutError:
                             if key not in records:
