@@ -124,6 +124,12 @@ def view_news(ws: Workspace, args: dict) -> str:
         text = snap.get("text", "")
         tail = f"\n(전체 {len(text)}자 중 앞 {SHOW_CHARS}자)" if len(text) > SHOW_CHARS else ""
         return f"{sid}\n제목: {snap.get('title')}\n주소: {snap['url']}\n종류: {snap['kind']}\n발행: {snap.get('publishedDate') or '미상'}\n\n{text[:SHOW_CHARS]}{tail}"
+    registered = next((s for s in (ws.case() or {}).get("sources", []) if s["id"] == sid), None)
+    if registered is not None and not sid.startswith("web-"):
+        # 이미 등록된 출처(지난 세션·사람이 넣은 것)는 본문을 보관하지 않는다 — 정보와 주소를 주고 원문은 web_fetch 로 읽게 한다
+        return (f"{sid} (이미 등록된 출처)\n종류: {registered['kind']}\n발행: {registered['publisher']} · {registered['publishedAt']}\n"
+                f"제목: {registered['title']}\n주소: {registered['url']}\n"
+                "본문은 보관돼 있지 않습니다. 원문 문장을 확인하려면 web_fetch 로 이 주소를 여세요.")
     article = next((a for a in ws.inbox() if f"news-{a['id'][:16]}" == sid or a["id"] == sid), None)
     if article is None:
         found = corpus.find(_corpus_path(), sid)

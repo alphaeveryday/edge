@@ -157,3 +157,12 @@ def test_session_can_finish_after_adding_a_source_dated_today(tmp_path):
     edited["sources"].append({**edited["sources"][0], "id": "news-today-0001", "publishedAt": "2026-10-21", "accessedAt": "2026-10-21"})
     ws.save_case(edited)
     assert not [p for p in tools.session_problems(ws) if p.startswith("updatedAt")]
+
+
+def test_registered_source_can_be_looked_up_by_id(tmp_path):
+    # 노트의 '다음에 찾아볼 것'은 기존 출처를 가리키는 일이 많다. 그 id 로 못 열면 세션이 원문 주소를 찾느라 예산을 쓴다.
+    case = seed("geumyang-monlaa")
+    ws = Workspace.prepare(tmp_path / "u", mode="update", case=case, inbox=[], index=[], today="2026-10-21",
+                           now=NOW.isoformat(), notes=notes.template(case))
+    shown = tools.view_news(ws, {"id": "official-fsc-87894"})
+    assert "https://www.fsc.go.kr/no010101/87894" in shown and "web_fetch" in shown
