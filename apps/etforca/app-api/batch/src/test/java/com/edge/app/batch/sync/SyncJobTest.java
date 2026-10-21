@@ -167,6 +167,49 @@ class SyncJobTest {
                 .as("반영 없는 순위·지수 갱신 생략").containsExactly("cleanupStep", "etfStep");
     }
 
+    @Test
+    void jobFailsWhenEveryEtfIsFilteredOut() throws Exception {
+        JdbcTemplate pipeline = pipelineDatabase.jdbc();
+        pipeline.update("update instrument set ticker = 'x' || ticker where instrument_type = 'ETF'");
+        JobExecution execution;
+        try {
+            execution = jobOperator.start(syncJob, new JobParameters());
+        } finally {
+            pipeline.update("update instrument set ticker = substr(ticker, 2) where instrument_type = 'ETF'");
+        }
+
+        assertThat(execution.getStatus()).as("원천에 선별 ETF 가 하나도 없어 반영 0건이면 잡 실패").isEqualTo(BatchStatus.FAILED);
+    }
+
+    @Test
+    void indexFailureFailsJobAfterTryingEveryIndexAndKeepsEtfs() throws Exception {
+        run();
+        JdbcTemplate pipeline = pipelineDatabase.jdbc();
+        // 이번 실행의 ETF 반영 확인용 원천 종가 변경
+        // 앱 컬럼 범위를 넘는 코스피 종가로 첫 지수만 실패, 데이터를 넣은 코스닥은 이어서 갱신
+        pipeline.update("update price_daily set close_price = 150000 where instrument_id = 'i-etf' and trade_date = current_date - 1");
+        pipeline.update("update market_series_daily set close_value = 1000000000000 where market_series_id = 's-kospi' and trade_date = current_date - 1");
+        pipeline.update("insert into market_series_daily values ('s-kosdaq', current_date - 2, 800), ('s-kosdaq', current_date - 1, 808)");
+        JobExecution execution;
+        BigDecimal kosdaq;
+        try {
+            execution = jobOperator.start(syncJob, new JobParameters());
+            kosdaq = jdbc.queryForObject("select price from market_index where code = '2001'", BigDecimal.class);
+        } finally {
+            pipeline.update("update price_daily set close_price = 142700 where instrument_id = 'i-etf' and trade_date = current_date - 1");
+            pipeline.update("update market_series_daily set close_value = 2525 where market_series_id = 's-kospi' and trade_date = current_date - 1");
+            pipeline.update("delete from market_series_daily where market_series_id = 's-kosdaq'");
+            jdbc.update("delete from market_index where code = '2001'");
+        }
+
+        assertThat(execution.getStatus()).as("지수 갱신 실패의 잡 실패 노출").isEqualTo(BatchStatus.FAILED);
+        assertThat(execution.getStepExecutions().stream().filter(s -> s.getStepName().equals("indexStep")).findFirst().orElseThrow().getStatus())
+                .isEqualTo(BatchStatus.FAILED);
+        assertThat(jdbc.queryForObject("select price from etf_quote where etf_code = '091160'", BigDecimal.class))
+                .as("앞 단계에서 커밋된 이번 실행의 ETF 반영 유지").isEqualByComparingTo("150000");
+        assertThat(kosdaq).as("실패한 지수 뒤의 지수도 갱신").isEqualByComparingTo("808");
+    }
+
     // 실행마다 새 인스턴스라 인자 없는 재실행도 완료
     @Test
     void rerunWithUnchangedSourceWritesNothing() throws Exception {
