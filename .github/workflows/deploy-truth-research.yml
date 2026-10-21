@@ -1,0 +1,73 @@
+# truth-research 이미지 배포 — 오늘 오른 종목 조사 배치(pi 하네스 + DeepSeek) 이미지를 ECR 에 push 한다.
+# 스케줄러가 매 실행 edge/pipeline:truth-research-latest 를 새로 pull 하므로, push 다음 실행부터 새 이미지가 돈다.
+# 이미지에 truth-agent 패키지가 함께 들어간다(저장소·뉴스 말뭉치·웹 도구·작업 폴더를 그대로 쓴다) — 그래서 그쪽 변경에도 다시 굽는다.
+name: deploy-truth-research
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - "apps/etforca/truth-research/**"
+      - "apps/etforca/truth-agent/src/**"
+      - "apps/etforca/truth-agent/pyproject.toml"
+      - "apps/engine/data-pipeline/**" # truth-agent 가 레이크 키 규약·뉴스 정체성을 이 패키지에서 가져온다
+      - "libs/ontology/**"
+      - "pyproject.toml"
+      - ".dockerignore"
+      - ".github/workflows/deploy-truth-research.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-truth-research
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: |
+          docker build --platform linux/amd64 \
+            --build-arg "GIT_SHA=${GITHUB_SHA}" \
+            -f apps/etforca/truth-research/Dockerfile -t truth-research:ci .
+
+      # push 전에 이미지 안에서 두 런타임이 실제로 도는지 본다 — pi 버전 섞임·패키지 누락은 빌드가 성공해도
+      # 첫 장중 실행에서야 드러난다. 도구 목록은 pi 확장이 기동할 때 부르는 경로 그대로다.
+      - name: Smoke test image
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint node truth-research:ci \
+            /opt/truth/pi/node_modules/@earendil-works/pi-coding-agent/dist/cli.js --version
+          docker run --rm truth-research:ci tool-specs --web 1 | python3 -c '
+          import json, sys
+          names = [t["name"] for t in json.load(sys.stdin)]
+          print(names)
+          raise SystemExit(0 if {"read_disclosure", "set_hypotheses", "add_evidence", "set_verdict", "finish"} <= set(names) else 1)'
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Push image
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          repo="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/edge/pipeline"
+          for tag in "truth-research-${GITHUB_SHA}" "truth-research-latest"; do
+            docker tag truth-research:ci "${repo}:${tag}"
+            docker push "${repo}:${tag}"
+          done

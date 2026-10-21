@@ -2,7 +2,7 @@
 
     python -m edge_truth_agent validate <사건 폴더>
     python -m edge_truth_agent build-site --cases <사건 폴더> --out <출력 폴더>
-    python -m edge_truth_agent run hourly|discover|movers   # 환경변수 설정은 config.py
+    python -m edge_truth_agent run hourly|discover          # 환경변수 설정은 config.py
     python -m edge_truth_agent tool <이름>                  # pi 확장이 부른다: 표준입력 JSON → 표준출력 글
     python -m edge_truth_agent tool-specs --mode update --web 1
 """
@@ -45,7 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--cases", type=Path, required=True)
     build.add_argument("--out", type=Path, required=True)
     once = sub.add_parser("run", help="사건 갱신 실행")
-    once.add_argument("mode", choices=["hourly", "discover", "movers"])
+    once.add_argument("mode", choices=["hourly", "discover"])
     tool = sub.add_parser("tool", help="에이전트 도구 하나 실행 (pi 확장용)")
     tool.add_argument("name")
     spec = sub.add_parser("tool-specs", help="도구 목록 JSON (pi 확장용)")
@@ -65,10 +65,6 @@ def main(argv: list[str] | None = None) -> int:
         from .runner import RunBusy, run
         logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
         try:
-            if args.mode == "movers":
-                from .movers import run_movers
-                report = run_movers(Config.from_env())
-                return 1 if report["failed"] else 0
             report = run(Config.from_env(), args.mode)
         except RunBusy as busy:
             logging.info(json.dumps({"event": "run_skipped", "reason": str(busy)}, ensure_ascii=False))

@@ -1,18 +1,24 @@
 # 오늘의 급등주 해석 (truth-movers)
 
-etforca.com/truth/today. 오늘 급등한 국내 주식마다 **급등을 일으킨 사건**을 찾고, 그 사건을 내세운 회사·기관의 주장이 원문으로 확인되는지 판정해 공개한다. 목적은 투자자가 기관·회사의 과장·허위 설명에 당하지 않게 하는 것이다. 기존 기만 사건 검증([truth-service.md](truth-service.md))과 같은 서비스(truth-agent·truth-web)에서 돈다.
+etforca.com/truth/today. 오늘 급등한 국내 주식마다 **왜 올랐는지**를 공시·보도와 대조해(경쟁가설 분석, ACH) 판정하고 공개한다. 목적은 투자자가 기관·회사의 과장이나 근거 없는 테마에 당하지 않게 하는 것이다.
+
+조사 에이전트 `apps/etforca/truth-research` 가 돈다. 기만 사건 검증 에이전트 `truth-agent`([truth-service.md](truth-service.md))와 같은 구조다(pi 하네스 + DeepSeek, 종목당 세션 하나, ECS Fargate 단발 태스크). 이미지·태스크·스케줄은 따로이고, 저장소 버킷·실행 키(DeepSeek·Exa)·뉴스 말뭉치·웹 도구는 truth-agent 것을 함께 쓴다. 화면은 truth-web `today.html`.
 
 ## 1. 판정 태그
 
 | 태그 | 값 | 기준 |
 |---|---|---|
-| 유망주 | `promising` | 급등 사건(공시·실적·계약·정책)이 원문으로 확인되고, 주장과 원문이 맞는다 |
-| 허위매물 | `false` | 사건을 내세운 주장이 원문과 어긋나거나, 원문 근거가 없는 테마·풍문으로만 올랐다 |
-| 판단 보류 | `pending` | 자료가 모자라 어느 쪽도 원문으로 세우지 못했다 |
+| 유망주 | `promising` | 실제 회사 사건 가설이 남고, 읽은 공시 본문·공식 원문 또는 서로 다른 매체 두 곳 이상으로 확인된다 |
+| 허위매물 | `false` | 사건은 있으나 주장이 원문보다 부풀려진 가설이 남았다. 또는 회사 근거 없는 테마·풍문 가설이 다른 설명보다 뚜렷이(차이 2 이상) 덜 어긋난다 |
+| 판단 보류 | `pending` | 가설이 갈리지 않았거나, 남은 설명이 업종 동반·수급(신규 상장·급락 뒤 반등)이라 주장의 참·거짓이 아니다 |
+
+태그는 모델이 고르지 않는다. 모델이 가설(3~6개)과 증거(가설마다 일치 C·어긋남 I·무관 N, 무게 high 공시·공식 원문 / mid 구체적 보도 / low 단일·불분명 보도)를 채우면, 코드(`ach.py`)가 어긋나는 증거 무게가 가장 적은 가설을 고르고 위 표대로 태그·확신도를 정한다. 표는 비공개 상태에만 남는다.
 
 태그마다 판정 이유(최대 3줄)와 출처를 함께 싣는다. 화면에는 "AI 판단이며 투자 권유가 아니다"를 고지한다.
 
-## 2. 실행 (매시 정각, 장중)
+## 2. 실행 (장중 매시 :35)
+
+평일 9~15시 매시 35분(`cron(35 9-15 ? * MON-FRI *)`, Asia/Seoul). truth-agent 사건 갱신(:05)과 30분 어긋나고, 15:35 실행이 장 마감 종가를 잡는다.
 
 1. **급등 목록 (코드):** Naver 증권 상승률 순위(`m.stock.naver.com/api/stocks/up/{KOSPI|KOSDAQ}`)로 전체 시장 상승률 상위를 받는다. ETF·ETN·스팩·우선주는 뺀다. 상승률 10% 이상, 누적 거래대금 30억원 이상만 남긴다.
    - 시세는 키 없는 공개 시세로, 포트폴리오 서비스와 같은 출처(Yahoo 차트·Naver)다.
@@ -21,15 +27,15 @@ etforca.com/truth/today. 오늘 급등한 국내 주식마다 **급등을 일으
    - 순위 응답이 비었거나 형식이 다르면 실패로 끝낸다('오늘 급등 없음'으로 게시하지 않는다).
 2. **재료 모으기 (코드):** 종목마다 다음을 모은다.
    - 장중 5분 시세: Yahoo 차트(`<code>.KS|.KQ`, `interval=5m`). 그날 봉만 쓰고 라벨은 구간 끝 시각
-   - 최근 공시 목록·원문: DART OpenAPI
+   - 최근 14일 공시·시장조치 목록과 원문: 한국거래소 KIND(키 없음, 종목코드로 조회. 시장감시위원회의 투자주의·경고도 함께 나온다)
    - 관련 보도: 뉴스 레이크 말뭉치
-   - 회사 로고: DART 기업개황의 홈페이지에서 아이콘을 받아 랜딩 버킷 `truth/data/logos/<code>.<확장자>` 에 저장(PNG·JPG·ICO·WebP 만, SVG 는 스크립트를 담을 수 있어 받지 않는다)
-3. **판정 (모델):** 종목마다 세션 하나를 연다. 공시·보도·웹 원문을 오가며 급등 사건과 주장을 찾고 `set_mover_verdict` 로 태그·확신도·이유·출처를 남긴다.
+   - 회사 로고: KIND 회사 개요의 홈페이지에서 아이콘을 받아 랜딩 버킷 `truth/data/logos/<code>.<확장자>` 에 저장(PNG·JPG·ICO·WebP 만, SVG 는 스크립트를 담을 수 있어 받지 않는다)
+3. **조사 (모델, ACH):** 종목마다 세션 하나를 연다(동시 3개, 한 실행 5종목, 세션당 도구 40회·웹 10회·공시 원문 8회). 도구: `read_disclosure`·`view_news`·`search_news`·`web_search`·`web_fetch` 로 증거를 모으고, `set_hypotheses`·`add_evidence` 로 표를 채우고, `set_verdict`(코드가 태그 결정)·`finish`.
    - 그날 이미 판정한 종목은 판정 때 보지 못한 공시가 나오면 다시 연다(태그 무관). 새 보도만으로는 보류였던 종목만 다시 연다 — 특징주 기사가 매시 붙어 확정 판정까지 열면 세션 예산을 다 쓴다.
    - 판정과 그때 본 근거 id 는 비공개 상태(`state/movers-seen/<날짜>.json`)에 둔다. 목록에서 빠졌다 돌아온 종목도 그날 판정을 이어 쓴다.
    - 판정은 세션 안에서 게시 형식(스키마)을 검사한다. 시세 조회가 전부 실패하면 휴장이 아니라 실패로 끝낸다.
-   - 공시를 조회하지 못한 종목(키 없음·고유번호 없음·DART 오류)은 판정하지 않고 보류로 싣는다. '최근 공시 없음'으로 넘기지 않는다.
-   - 유망주는 원문(DART 공시, 또는 웹에서 받은 공식·공시 원문)으로만 붙인다. 보도만으로는 붙이지 않는다.
+   - 공시를 조회하지 못한 종목(KIND 오류)은 조사하지 않고 보류로 싣는다. '최근 공시 없음'으로 넘기지 않는다.
+   - 증거·출처는 그 세션에서 읽은 것(news-·web-·kind-)과 공시 목록 자체(kind-list, '없음'의 근거)만 쓴다. 공개 글에는 가설 번호를 쓰지 않는다.
 4. **게시 (코드):** `truth/data/movers/latest.json` 과 `truth/data/movers/<날짜>.json`, 게시한 날짜 목록 `truth/data/movers/dates.json`(최신순, 화면의 날짜 선택).
 
 ## 3. 순위 (파급력 근사)
@@ -42,7 +48,7 @@ etforca.com/truth/today. 오늘 급등한 국내 주식마다 **급등을 일으
 
 ## 4. 공개 데이터 형식
 
-`truth/data/movers/latest.json` (스키마: `apps/etforca/truth-agent/src/edge_truth_agent/movers.schema.json`)
+`truth/data/movers/latest.json` (스키마: `apps/etforca/truth-research/src/edge_truth_research/movers.schema.json`)
 
 ```json
 {
@@ -70,5 +76,4 @@ etforca.com/truth/today. 오늘 급등한 국내 주식마다 **급등을 일으
 
 ## 5. 비밀값
 
-truth 전용 키는 `edge-dev-truth-agent/runtime` 시크릿에 둔다. 데이터 파이프라인 키와 섞지 않는다.
-- `TRUTH_DART_API_KEY`: OpenDART
+따로 두는 키가 없다. truth-agent 의 `edge-dev-truth-agent/runtime` 시크릿(`DEEPSEEK_RESIST_NEWS_API_KEY`·`EXA_API_KEY`)을 같이 읽는다. 시세(Naver·Yahoo)와 공시(KIND)는 키가 없다.

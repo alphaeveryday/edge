@@ -48,12 +48,6 @@ variable "landing_bucket_arn" {
   type        = string
 }
 
-variable "movers_schedule_expression" {
-  description = "오늘의 급등주 해석 시각 (Asia/Seoul). 장중 매시 정각."
-  type        = string
-  default     = "cron(0 9-15 ? * MON-FRI *)"
-}
-
 variable "hourly_schedule_expression" {
   description = "사건 갱신 시각 (Asia/Seoul). 정시 직후 1분 수집분이 레이크에 쌓인 뒤로 둔다."
   type        = string
