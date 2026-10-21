@@ -1,4 +1,4 @@
-"""오늘의 급등주: 코드가 맡은 목록·시세·게시·판정 규칙. KIS·DART·모델은 가짜로 바꾼다."""
+"""오늘의 급등주: 코드가 맡은 목록·시세·게시·판정 규칙. 시세·DART·모델은 가짜로 바꾼다."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
@@ -7,8 +7,8 @@ import json
 import pytest
 
 from conftest import article
-from edge_truth_agent import corpus, kis as kis_mod, logos, movers, tools
-from edge_truth_agent.kis import Mover, five_minute, is_common_stock
+from edge_truth_agent import corpus, logos, movers, quotes as quotes_mod, tools
+from edge_truth_agent.quotes import Mover, is_common_stock
 from edge_truth_agent.session import SessionResult
 from edge_truth_agent.store import LocalStore
 from edge_truth_agent.workspace import Workspace
@@ -17,14 +17,14 @@ KST = timezone(timedelta(hours=9))
 NOW = datetime(2026, 10, 22, 11, 0, tzinfo=KST)
 
 
-class FakeKis:
+class FakeQuotes:
     def __init__(self, movers_by_market, *, traded=True):
         self.by_market, self.traded = movers_by_market, traded
 
-    def risers(self, market, limit=30):
+    def risers(self, market, min_change=0.0):
         return self.by_market.get(market, [])
 
-    def series(self, code, until, day):
+    def series(self, code, market, day):
         return [["09:00", 1000.0], ["09:05", 1100.0], ["10:55", 1300.0]] if self.traded else []
 
 
@@ -49,8 +49,8 @@ class FakeDart:
         return None
 
 
-def _m(code, name, pct, market="KOSDAQ", volume=10_000_000):
-    return Mover(code=code, name=name, market=market, price=1300.0, prev_close=1300 / (1 + pct / 100), change_pct=pct, volume=volume)
+def _m(code, name, pct, market="KOSDAQ", trade_value=130.0):
+    return Mover(code=code, name=name, market=market, price=1300.0, prev_close=1300 / (1 + pct / 100), change_pct=pct, trade_value=trade_value)
 
 
 @pytest.fixture
@@ -90,10 +90,10 @@ def _seed_news(cfg):
 def test_publishes_contract_valid_ranking_with_false_first(cfg):
     # 화면 계약(스키마)을 지키고, '우리 판단이 맞을 때 되돌려질 폭'(상승률 × 확신도)이 큰 허위매물이 위로 와야 한다.
     _seed_news(cfg)
-    kis = FakeKis({"KOSDAQ": [_m("900010", "가나다전자", 29.9), _m("900020", "라마바바이오", 15.0), _m("900030", "소폭상승", 4.0),
-                              _m("900040", "몇주체결", 29.0, volume=100)]})
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9), _m("900020", "라마바바이오", 15.0), _m("900030", "소폭상승", 4.0),
+                              _m("900040", "몇주체결", 29.0, trade_value=0.1)]})
     runner = _judging({"900010": "false", "900020": "pending"})
-    report = movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=runner, now=NOW)
+    report = movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=runner, now=NOW)
     doc = json.loads((LocalStore(cfg.publish).get("movers/latest.json")[0]))
     assert [i["code"] for i in doc["items"]] == ["900010", "900020"]  # 상승률 10%·거래대금 30억 미달은 뺀다
     top = doc["items"][0]
@@ -104,61 +104,61 @@ def test_publishes_contract_valid_ranking_with_false_first(cfg):
 def test_same_day_rerun_keeps_verdicts_and_skips_judged(cfg):
     # 매시 같은 종목을 다시 판정하면 비용만 든다. 이미 판정한 종목은 시세만 새로 싣는다.
     _seed_news(cfg)
-    kis = FakeKis({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
-    movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW)
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
+    movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW)
     again = _judging({"900010": "promising"})
-    movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=again, now=NOW + timedelta(hours=1))
+    movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=again, now=NOW + timedelta(hours=1))
     doc = json.loads(LocalStore(cfg.publish).get("movers/latest.json")[0])
     assert again.calls == [] and doc["items"][0]["tag"] == "false"
 
 
 def test_market_closed_day_is_not_published(cfg):
-    # 휴장일에 KIS 순위는 전 거래일 값을 준다 — 그날 분봉이 없으면 오늘 결과로 게시하지 않는다.
-    kis = FakeKis({"KOSPI": [_m("900010", "가나다전자", 29.9, "KOSPI")]}, traded=False)
-    report = movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=_judging({}), now=NOW)
+    # 휴장일에 순위는 전 거래일 값을 준다 — 그날 분봉이 없으면 오늘 결과로 게시하지 않는다.
+    src = FakeQuotes({"KOSPI": [_m("900010", "가나다전자", 29.9, "KOSPI")]}, traded=False)
+    report = movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=_judging({}), now=NOW)
     assert not report["published"] and LocalStore(cfg.publish).get("movers/latest.json")[0] is None
 
 
 def test_empty_ranking_on_closed_day_is_not_published(cfg):
     # 휴장일에 순위가 비어 오면 '오늘 급등 없음'으로 덮어쓰지 않는다. 장이 열린 날의 빈 목록은 게시한다.
-    report = movers.run_movers(cfg, kis=FakeKis({}, traded=False), dart=FakeDart(), session_runner=_judging({}), now=NOW)
+    report = movers.run_movers(cfg, quotes=FakeQuotes({}, traded=False), dart=FakeDart(), session_runner=_judging({}), now=NOW)
     assert not report["published"] and LocalStore(cfg.publish).get("movers/latest.json")[0] is None
-    assert movers.run_movers(cfg, kis=FakeKis({}), dart=FakeDart(), session_runner=_judging({}), now=NOW)["published"]
+    assert movers.run_movers(cfg, quotes=FakeQuotes({}), dart=FakeDart(), session_runner=_judging({}), now=NOW)["published"]
 
 
 def test_unjudged_movers_are_retried_next_hour(cfg):
     # 세션이 실패했거나 한 실행의 세션 수를 넘친 종목은 보류로 싣고, 다음 정각에 다시 판정해야 한다(영영 보류로 남지 않게).
     _seed_news(cfg)
     many = [_m(f"9001{i:02d}", f"종목{i}", 20.0 + i) for i in range(movers.NEW_SESSIONS)]
-    kis = FakeKis({"KOSDAQ": [_m("900010", "가나다전자", 29.9), *many]})
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9), *many]})
     first = _judging({"900010": None} | {m.code: "pending" for m in many})
-    movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=first, now=NOW)
+    movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=first, now=NOW)
     assert len(first.calls) == movers.NEW_SESSIONS
     doc = json.loads(LocalStore(cfg.publish).get("movers/latest.json")[0])
     skipped = {i["code"] for i in doc["items"] if i["judgedAt"] is None}
     assert "900010" in skipped and len(skipped) == 2  # 실패 1 + 넘침 1
     again = _judging({"900010": "false"} | {m.code: "pending" for m in many})
-    movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=again, now=NOW + timedelta(hours=1))
+    movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=again, now=NOW + timedelta(hours=1))
     assert set(again.calls) == skipped
 
 
 def test_dart_failure_defers_instead_of_judging_without_filings(cfg):
     # 공시를 못 봤는데 '최근 공시 없음'으로 판정하면 실제 공시가 있는 급등을 풍문으로 몰 수 있다 — 판정하지 않고 보류로 싣는다.
     _seed_news(cfg)
-    kis = FakeKis({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
     runner = _judging({"900010": "false"})
-    movers.run_movers(cfg, kis=kis, dart=FakeDart(fail={"00000001"}), session_runner=runner, now=NOW)
+    movers.run_movers(cfg, quotes=src, dart=FakeDart(fail={"00000001"}), session_runner=runner, now=NOW)
     item = json.loads(LocalStore(cfg.publish).get("movers/latest.json")[0])["items"][0]
     assert runner.calls == [] and item["tag"] == "pending" and "공시를 조회하지 못해" in item["finding"]
     # 전 종목이 공시를 못 보면 보류만 게시하고 성공으로 끝내지 않는다(태스크 상태에 남긴다)
-    report = movers.run_movers(cfg, kis=kis, dart=None, session_runner=runner, now=NOW + timedelta(hours=1))
+    report = movers.run_movers(cfg, quotes=src, dart=None, session_runner=runner, now=NOW + timedelta(hours=1))
     assert report["deferred"] == ["900010"] and "dart" in report["failed"] and report["published"]
 
 
 def test_verdict_evidence_is_recorded_only_after_publishing(cfg, monkeypatch):
     # 게시 전에 죽었는데 근거를 '본 것'으로 남기면 새 판정은 사라지고 다음 정각에도 다시 보지 않는다.
     _seed_news(cfg)
-    kis = FakeKis({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
     real = LocalStore.put
 
     def broken(self, key, *a, **kw):
@@ -167,20 +167,20 @@ def test_verdict_evidence_is_recorded_only_after_publishing(cfg, monkeypatch):
         return real(self, key, *a, **kw)
     monkeypatch.setattr(LocalStore, "put", broken)
     with pytest.raises(OSError):
-        movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW)
+        movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW)
     monkeypatch.setattr(LocalStore, "put", real)
     again = _judging({"900010": "false"})
-    movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=again, now=NOW + timedelta(hours=1))
+    movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=again, now=NOW + timedelta(hours=1))
     assert again.calls == ["900010"]
 
 
 def test_new_filing_reopens_a_settled_verdict(cfg):
     # 허위매물로 본 뒤 회사가 정정·확인 공시를 내면 판정이 뒤집힐 수 있다 — 태그와 무관하게 새 근거가 나오면 다시 연다.
     _seed_news(cfg)
-    kis = FakeKis({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
-    movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW)
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
+    movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW)
     again = _judging({"900010": "false"})
-    movers.run_movers(cfg, kis=kis, dart=FakeDart(extra=["20261022000099"]), session_runner=again, now=NOW + timedelta(hours=1))
+    movers.run_movers(cfg, quotes=src, dart=FakeDart(extra=["20261022000099"]), session_runner=again, now=NOW + timedelta(hours=1))
     assert again.calls == ["900010"]
 
 
@@ -188,11 +188,11 @@ def test_mover_that_drops_out_and_returns_keeps_its_verdict(cfg):
     # 15위·거래대금 경계를 오가는 종목을 돌아올 때마다 새로 판정하면 세션을 낭비하고 판정이 시간마다 뒤집힌다.
     _seed_news(cfg)
     hot = _m("900010", "가나다전자", 29.9)
-    movers.run_movers(cfg, kis=FakeKis({"KOSDAQ": [hot]}), dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW)
-    movers.run_movers(cfg, kis=FakeKis({"KOSDAQ": [_m("900020", "라마바바이오", 15.0)]}), dart=FakeDart(),
+    movers.run_movers(cfg, quotes=FakeQuotes({"KOSDAQ": [hot]}), dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW)
+    movers.run_movers(cfg, quotes=FakeQuotes({"KOSDAQ": [_m("900020", "라마바바이오", 15.0)]}), dart=FakeDart(),
                       session_runner=_judging({"900020": "pending"}), now=NOW + timedelta(hours=1))
     back = _judging({"900010": "promising"})
-    movers.run_movers(cfg, kis=FakeKis({"KOSDAQ": [hot]}), dart=FakeDart(), session_runner=back, now=NOW + timedelta(hours=2))
+    movers.run_movers(cfg, quotes=FakeQuotes({"KOSDAQ": [hot]}), dart=FakeDart(), session_runner=back, now=NOW + timedelta(hours=2))
     item = json.loads(LocalStore(cfg.publish).get("movers/latest.json")[0])["items"][0]
     assert back.calls == [] and item["tag"] == "false"
 
@@ -200,59 +200,59 @@ def test_mover_that_drops_out_and_returns_keeps_its_verdict(cfg):
 def test_new_news_reopens_only_pending(cfg):
     # 급등주마다 특징주 기사가 매시 붙는다 — 새 보도만으로 확정 판정을 다시 열면 매 정각 세션 예산을 다 쓴다. 보류는 새 보도로 다시 본다.
     _seed_news(cfg)
-    kis = FakeKis({"KOSDAQ": [_m("900010", "가나다전자", 29.9), _m("900020", "가나다전자우리", 15.0)]})
-    movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=_judging({"900010": "false", "900020": "pending"}), now=NOW)
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9), _m("900020", "가나다전자우리", 15.0)]})
+    movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=_judging({"900010": "false", "900020": "pending"}), now=NOW)
     more = article("가나다전자우리·가나다전자 동반 상한가", "두 종목이 함께 올랐다", aid="d" * 64, published="2026-10-22 11:30:00")
     texts = corpus.load(LocalStore(cfg.store))
     corpus.save(LocalStore(cfg.store), texts | {more.id: more})
     again = _judging({"900010": "false", "900020": "pending"})
-    movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=again, now=NOW + timedelta(hours=1))
+    movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=again, now=NOW + timedelta(hours=1))
     assert again.calls == ["900020"]
 
 
-def test_kis_outage_is_a_failure_not_a_holiday(cfg):
+def test_quote_outage_is_a_failure_not_a_holiday(cfg):
     # 시세가 전부 실패한 것을 휴장으로 보고하면 화면이 조용히 한 시간 묵고 원인도 틀리게 남는다.
-    class Down(FakeKis):
-        def series(self, code, until, day):
-            raise RuntimeError("KIS 503")
-    report = movers.run_movers(cfg, kis=Down({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), dart=FakeDart(),
+    class Down(FakeQuotes):
+        def series(self, code, market, day):
+            raise RuntimeError("Yahoo 503")
+    report = movers.run_movers(cfg, quotes=Down({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), dart=FakeDart(),
                                session_runner=_judging({}), now=NOW)
-    assert not report["published"] and report["failed"] == ["kis-series"] and "휴장" not in report["skipped"]
+    assert not report["published"] and report["failed"] == ["series"] and "휴장" not in report["skipped"]
 
 
-def test_series_walks_back_through_calls_until_open(monkeypatch):
-    # 한 콜은 30분치다. 개장까지 거슬러 받아야 아침 급등이 그래프에서 빠지지 않고, 전 거래일 행은 섞이지 않아야 한다.
-    calls = []
+def test_series_keeps_only_that_day_labelled_by_interval_end(monkeypatch):
+    # 휴장일·장 전에는 Yahoo 가 전 거래일 봉을 준다 — 섞이면 어제 그래프가 오늘 것처럼 보인다.
+    # 봉 시각은 구간 시작이라 끝 시각으로 옮긴다(시작 시각을 달면 그래프가 5분 앞서 보인다). 빈 봉(null)은 버린다.
+    day = int(datetime(2026, 10, 22, 9, 0, tzinfo=KST).timestamp())
+    ts = [day - 86400 + 6 * 3600, day, day + 300, day + 600]
+    chart = {"chart": {"result": [{"timestamp": ts, "indicators": {"quote": [{"close": [1.0, 1000.0, None, 1100.0]}]}}]}}
+    client = quotes_mod.Quotes()
+    urls = []
+    monkeypatch.setattr(client, "_get", lambda url: urls.append(url) or chart)
+    assert client.series("900010", "KOSDAQ", "20261022") == [["09:05", 1000.0], ["09:15", 1100.0]]
+    assert urls[0].endswith("/900010.KQ?interval=5m&range=1d")
 
-    def fake_get(path, tr, params):
-        hour = params["FID_INPUT_HOUR_1"]
-        calls.append(hour)
-        start = {"100000": ["0959", "0930"], "093000": ["0929", "0900"]}.get(hour, [])
-        rows = [{"stck_cntg_hour": f"{t}00", "stck_prpr": str(1000 + int(t)), "stck_bsop_date": "20261022"} for t in start]
-        if hour == "093000":
-            rows.append({"stck_cntg_hour": "092800", "stck_prpr": "1", "stck_bsop_date": "20261021"})
-        return {"output2": rows}
-    client = kis_mod.Kis("k", "s")
+
+def test_risers_keep_common_stocks_and_stop_below_threshold(monkeypatch):
+    # 순위의 절반쯤은 ETF·ETN 이다. 보통주만 남기고, 기준 상승률 아래로 내려가면 다음 쪽을 받지 않는다(호출 낭비).
+    def row(code, name, pct, end="stock"):
+        return {"itemCode": code, "stockName": name, "closePriceRaw": "11000", "compareToPreviousClosePriceRaw": "1000",
+                "fluctuationsRatio": str(pct), "accumulatedTradingValueRaw": "5500000000", "stockEndType": end}
+    pages = {1: [row("005930", "삼성전자", 12.0), row("069500", "KODEX 200", 11.5, "etf"), row("005935", "삼성전자우", 11.0),
+                 row("900120", "가나다스팩1호", 10.5), row("0158S0", "새상장", 10.2)],
+             2: [row("000660", "SK하이닉스", 9.0)]}
+    client = quotes_mod.Quotes()
+    seen = []
+
+    def fake_get(url):
+        page = int(url.split("page=")[1].split("&")[0])
+        seen.append(page)
+        return {"stocks": pages.get(page, [])}
     monkeypatch.setattr(client, "_get", fake_get)
-    got = client.series("900010", "10:00", "20261022")
-    assert calls == ["100000", "093000"]
-    assert got[0] == ["09:05", 1900.0] and got[-1] == ["10:00", 1959.0] and all(p > 1 for _, p in got)
-
-
-def test_common_stock_filter_and_five_minute_buckets():
+    got = client.risers("KOSPI", 10.0)
+    assert [(m.code, m.prev_close, m.trade_value) for m in got] == [("005930", 10000.0, 55.0), ("0158S0", 10000.0, 55.0)]
+    assert seen == [1, 2]
     assert is_common_stock("005930", "삼성전자") and not is_common_stock("005935", "삼성전자우")
-    assert not is_common_stock("069500", "KODEX 200") and not is_common_stock("900120", "가나다스팩1호")
-    # 라벨은 구간 끝 — 09:00~09:04 의 마지막 가격은 09:05 시점 가격이다(시작 시각을 달면 그래프가 5분 앞서 보인다)
-    assert five_minute({"0900": 10, "0904": 11, "0905": 12, "0909": 13}) == [["09:05", 11], ["09:10", 13]]
-
-
-def test_risers_parse_vendor_rows(monkeypatch):
-    rows = [{"stck_shrn_iscd": "005930", "hts_kor_isnm": "삼성전자", "stck_prpr": "70,000", "prdy_vrss": "7000", "prdy_ctrt": "11.11", "acml_vol": "100"},
-            {"stck_shrn_iscd": "005935", "hts_kor_isnm": "삼성전자우", "stck_prpr": "60000", "prdy_vrss": "6000", "prdy_ctrt": "11.1", "acml_vol": "5"}]
-    client = kis_mod.Kis("k", "s")
-    monkeypatch.setattr(client, "_get", lambda path, tr, params: {"output": rows})
-    got = client.risers("KOSPI")
-    assert [(m.code, m.prev_close, m.change_pct) for m in got] == [("005930", 63000.0, 11.11)]
 
 
 def _ws(tmp_path, inbox=()):

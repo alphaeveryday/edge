@@ -66,7 +66,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "store" {
 
 # ── 키: TF 는 그릇만 만든다. 값은 TF 밖에서 넣는다(state 에 평문을 남기지 않는다) ──
 # aws secretsmanager put-secret-value --secret-id <name> \
-#   --secret-string '{"DEEPSEEK_RESIST_NEWS_API_KEY":"...","EXA_API_KEY":"...","TRUTH_KIS_APP_KEY":"...","TRUTH_KIS_APP_SECRET":"...","TRUTH_DART_API_KEY":"..."}'
+#   --secret-string '{"DEEPSEEK_RESIST_NEWS_API_KEY":"...","EXA_API_KEY":"...","TRUTH_DART_API_KEY":"..."}'
 # 값이 없으면 태스크가 시작하지 못하고(TaskFailedToStart) ECS 태스크 상태(stopCode)와 로그에 남는다(알림은 보내지 않는다).
 resource "aws_secretsmanager_secret" "runtime" {
   name        = "${var.name}/runtime"
@@ -177,7 +177,7 @@ resource "aws_ecs_task_definition" "this" {
       TRUTH_LAKE_BUCKET = var.lake_bucket_name
     } : { name = k, value = v }]
     # 시크릿 JSON 에 키가 없으면 태스크가 시작하지 못한다 — 키를 추가할 때는 시크릿에 값(비어 있어도)을 먼저 넣고 적용한다.
-    secrets = [for key in ["DEEPSEEK_RESIST_NEWS_API_KEY", "EXA_API_KEY", "TRUTH_KIS_APP_KEY", "TRUTH_KIS_APP_SECRET", "TRUTH_DART_API_KEY"] : {
+    secrets = [for key in ["DEEPSEEK_RESIST_NEWS_API_KEY", "EXA_API_KEY", "TRUTH_DART_API_KEY"] : {
       name = key, valueFrom = "${aws_secretsmanager_secret.runtime.arn}:${key}::"
     }]
     logConfiguration = {
