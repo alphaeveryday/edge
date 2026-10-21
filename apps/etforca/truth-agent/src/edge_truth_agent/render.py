@@ -16,7 +16,7 @@ import threading
 
 from . import site
 
-WEB_FILES = ("index.html", "issue.html", "list.html", "common.js", "intro.js", "style.css", "logo.png")
+WEB_FILES = ("index.html", "issue.html", "list.html", "common.js", "intro.js", "analytics.js", "style.css", "logo.png")
 
 
 class _Quiet(SimpleHTTPRequestHandler):

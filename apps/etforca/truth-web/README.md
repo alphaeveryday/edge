@@ -16,3 +16,7 @@ python -m http.server 8010 --directory /tmp/truth-preview   # http://127.0.0.1:8
 ```
 
 `file://` 로 열면 데이터 요청이 막힌다. 위처럼 HTTP 로 연다.
+
+## 방문 분석
+
+`analytics.js` 가 PostHog 를 붙인다. 프로젝트·키·쿠키 없는 모드는 랜딩과 같다([app-landing README](../app-landing/README.md#방문-분석-posthog)). 자동화 브라우저(`navigator.webdriver`, 게시 전 렌더 검사·CI)에서는 보내지 않는다.

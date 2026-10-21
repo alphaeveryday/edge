@@ -1,12 +1,13 @@
 """실행 흐름. 판단은 세션(모델)이 하고, 나머지(조회·배정·검사·저장·게시)는 여기 코드가 한다.
 
 hourly: 새 기사 수집 → 사건 배정·관련 보도 추가 → 절차 단서가 붙은 사건만 세션 → 검사·렌더 → 저장·게시
-discover: 사건에 배정되지 않은 최근 기사 중 절차 단서가 있는 것을 후보로 새 사건 세션 (하루 한 번)
+discover: 사건에 배정되지 않은 최근 기사 중 절차 단서가 있는 것을 후보로 새 사건 세션 (하루 한 번, 최대 3건을 차례로)
 """
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
+from functools import partial
 from datetime import date, datetime, timedelta, timezone
 import json
 import logging
@@ -29,6 +30,7 @@ LEASE_KEY = "state/lease.json"
 LEASE_MINUTES = 55
 SEED_OWNED = ("topics",)  # seed 사건에서는 사람이 정한 배정 설정이 항상 이긴다(주제어를 좁히면 저장본도 따라간다)
 BACKFILL = ("title",)     # 나중에 생긴 칸: 저장본이 비어 있을 때만 seed 값으로 채운다(에이전트가 고친 제목은 두다)
+DISCOVER_LIMIT = 3  # 하루(새 사건 찾기 한 번)에 등록하는 새 사건 상한
 PENDING_TRIES = 3  # 반영되지 못한 배정 기사를 다시 시도하는 실행 수. 넘기면 버리고 보고에 남긴다
 SEED_DIR = Path(os.environ.get("TRUTH_SEED_DIR", Path(__file__).resolve().parents[2] / "seed"))
 
@@ -138,9 +140,19 @@ def _prompt_update(case: dict, articles: list[news.Article]) -> str:
             "update-case 절차대로 확인하세요. 사건을 바꿀 근거가 없으면 고치지 말고 finish 로 끝내세요.")
 
 
-def _prompt_discover(candidates: list[news.Article]) -> str:
+def _discover_candidates(texts: dict[str, news.Article], cases: list[dict], today: date) -> list[news.Article]:
+    """기존 사건에 배정되지 않은 최근 이틀 기사 중 절차 단서가 있는 것 (최신 80건)."""
+    routed_ids = {a.id for arts in routing.route(list(texts.values()), cases).values() for a in arts}
+    since = (today - timedelta(days=2)).isoformat()
+    return sorted((a for a in texts.values() if a.published[:10] >= since and a.id not in routed_ids
+                   and routing.needs_session([a])), key=lambda a: a.published, reverse=True)[:80]
+
+
+def _prompt_discover(candidates: list[news.Article], max_calls: int, registered: int) -> str:
     lines = "\n".join(f"- {a.source_id} | {a.published[:16]} | {a.publisher} | {a.title}" for a in candidates)
-    return (f"기존 사건에 배정되지 않은 최근 기사 중 절차·대응 단서가 있는 기사 {len(candidates)}건입니다.\n{lines}\n\n"
+    already = f"이번 실행에서 이미 새 사건 {registered}건을 등록했습니다. list_cases 로 확인하고 같은 사건을 다시 만들지 마세요.\n" if registered else ""
+    return (f"기존 사건에 배정되지 않은 최근 기사 중 절차·대응 단서가 있는 기사 {len(candidates)}건입니다.\n{lines}\n\n{already}"
+            f"도구는 {max_calls}회까지 쓸 수 있습니다. 조사는 절반 안에서 끝내고 남은 호출로 사건을 채우세요.\n"
             "discover-cases 절차대로 조사 후보 조건을 모두 만족하는 사건이 있을 때만 하나 등록하세요. 없으면 그대로 finish 로 끝내세요.")
 
 
@@ -238,19 +250,26 @@ def run(cfg, mode: str, *, lake=None, session_runner=session.run, now: datetime 
             targets, capped = wanted[:cfg.max_sessions], set(wanted[cfg.max_sessions:])
             for cid in targets:
                 jobs.append(dict(key=cid, mode="update", case=cases[cid], inbox=routed[cid], prompt=_prompt_update(cases[cid], routed[cid])))
+        start = partial(_run_session, cfg, run_dir, corpus_path=corpus_path, cases_dir=cases_dir, now=now, session_runner=session_runner)
+        if mode == "hourly":
+            index = summaries(list(cases.values()))
+            with ThreadPoolExecutor(max_workers=max(1, cfg.parallel)) as pool:
+                futures = [pool.submit(start, index=index, **job) for job in jobs]
+                outcomes = [f.result() for f in futures]
         else:
-            routed_ids = {a.id for arts in routing.route(list(texts.values()), list(cases.values())).values() for a in arts}
-            since = (today - timedelta(days=2)).isoformat()
-            candidates = sorted((a for a in texts.values() if a.published[:10] >= since and a.id not in routed_ids
-                                 and routing.needs_session([a])), key=lambda a: a.published, reverse=True)[:80]
-            if candidates:
-                jobs.append(dict(key=f"new-{now.strftime('%Y%m%d')}", mode="discover", case=None, inbox=candidates,
-                                 prompt=_prompt_discover(candidates)))
-        index = summaries(list(cases.values()))
-        with ThreadPoolExecutor(max_workers=max(1, cfg.parallel)) as pool:
-            futures = [pool.submit(_run_session, cfg, run_dir, index=index, corpus_path=corpus_path, cases_dir=cases_dir, now=now,
-                                   session_runner=session_runner, **job) for job in jobs]
-            outcomes = [f.result() for f in futures]
+            # 새 사건은 차례로 찾는다 — 앞 세션이 등록한 사건이 다음 세션의 목록·후보 제외에 들어가야 같은 사건이 두 번 안 생긴다.
+            outcomes, found = [], dict(cases)
+            for n in range(1, DISCOVER_LIMIT + 1):
+                if not (candidates := _discover_candidates(texts, list(found.values()), today)):
+                    break
+                result, ws = start(key=f"new-{now.strftime('%Y%m%d')}-{n}", mode="discover", case=None,
+                                   inbox=candidates, index=summaries(list(found.values())),
+                                   prompt=_prompt_discover(candidates, cfg.max_tool_calls, n - 1))
+                outcomes.append((result, ws))
+                new = ws.case()
+                if not (result.done and new is not None and not session_problems(ws)):
+                    break  # 등록할 후보가 없다고 끝냈거나 실패했다 — 같은 후보로 다시 돌지 않는다
+                found[new["id"]] = new
 
         edited: dict[str, dict] = {}
         landed: set[str] = set()

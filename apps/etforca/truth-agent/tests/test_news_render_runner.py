@@ -270,3 +270,53 @@ def test_seed_topics_win_but_agent_title_is_kept(tmp_path):
     assert runner.sync_seed(store, loaded, seeds, date(2026, 10, 21)) == ["hybe-ipo-2019"]
     synced = loaded["hybe-ipo-2019"][0]
     assert synced["topics"] == case["topics"] and synced["title"] == "하이브, 에이전트가 고친 제목"
+
+
+def _discover_setup(tmp_path, monkeypatch):
+    """새 사건 후보 기사 하나가 말뭉치에 있고, 렌더·세션 검사는 통과로 둔다(여기서 보는 것은 세션 순서와 상한)."""
+    monkeypatch.setattr(runner, "SEED_DIR", SEED)
+    monkeypatch.setattr(runner, "session_problems", lambda ws: [])
+    monkeypatch.setattr(runner, "render", lambda cases, web, focus: {k: {"errors": [], "warnings": []} for k in [*focus, "index"]})
+    article = news.from_bigkinds(bk("알파전자 대표 검찰 기소", "검찰이 알파전자 대표를 자본시장법 위반 혐의로 기소했다.",
+                                    "https://www.yna.co.kr/view/AKR20261021000200001", "01100101.20261021093000002"))
+    from edge_truth_agent import corpus
+    corpus.save(LocalStore(tmp_path / "store"), {article.id: article})
+
+
+def test_discover_registers_up_to_the_daily_limit_in_turn(tmp_path, monkeypatch):
+    # 새 사건은 하루 최대 DISCOVER_LIMIT 건. 차례로 돌아야 뒤 세션이 앞 세션이 만든 사건을 보고 같은 사건을 다시 만들지 않는다.
+    _discover_setup(tmp_path, monkeypatch)
+    seen = []
+
+    def creating(cfg, ws, *, case_id, prompt, **kw):
+        seen.append(([c["id"] for c in ws.index()], prompt))
+        case = seed("geumyang-monlaa")
+        case["id"] = f"agent-case-{len(seen)}"
+        ws.save_case(case)
+        state = ws.state
+        state["done"] = True
+        ws.save_state(state)
+        return SessionResult(case_id=case_id, done=True)
+
+    report = runner.run(_cfg(tmp_path), "discover", session_runner=creating, now=NOW)
+    assert len(seen) == runner.DISCOVER_LIMIT
+    assert "agent-case-1" in seen[1][0] and "agent-case-2" in seen[2][0]
+    assert "이미 새 사건 2건" in seen[2][1] and "이미" not in seen[0][1]
+    assert sorted(report["changed"]) == [f"agent-case-{n}" for n in range(1, runner.DISCOVER_LIMIT + 1)]
+    assert report["failed"] == []
+
+
+def test_discover_stops_when_a_session_registers_nothing(tmp_path, monkeypatch):
+    # 등록할 후보가 없다고 끝낸 뒤 같은 후보로 세션을 또 열면 비용만 든다.
+    _discover_setup(tmp_path, monkeypatch)
+    calls = []
+
+    def nothing(cfg, ws, *, case_id, **kw):
+        calls.append(case_id)
+        state = ws.state
+        state["done"] = True
+        ws.save_state(state)
+        return SessionResult(case_id=case_id, done=True)
+
+    report = runner.run(_cfg(tmp_path), "discover", session_runner=nothing, now=NOW)
+    assert calls == ["new-20261021-1"] and report["failed"] == [] and report["changed"] == []
