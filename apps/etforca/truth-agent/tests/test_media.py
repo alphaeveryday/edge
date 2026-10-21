@@ -1,7 +1,9 @@
 """대표 사진·영상. 모델이 지어낸 주소가 공개 화면에 실리지 않게, 코드가 등록된 출처에서만 채우는지 본다."""
 from __future__ import annotations
 
+import http.client
 import io
+import time
 import urllib.error
 
 import pytest
@@ -12,13 +14,13 @@ from edge_truth_agent.tools import ToolError
 from test_news_render_runner import NOW, _cfg
 from test_tools import ws  # noqa: F401 - 도구 시험 픽스처 재사용
 
-REAL_OG_IMAGE = media.og_image
+REAL_OG_IMAGE, REAL_IMAGE_OK, REAL_VIDEO_OK = media.og_image, media.image_ok, media.video_ok
 
 
 class _Page(io.BytesIO):
-    def __init__(self, body: str, content_type: str = "text/html; charset=utf-8"):
+    def __init__(self, body: str, content_type: str = "text/html; charset=utf-8", status: int = 200):
         super().__init__(body.encode("utf-8"))
-        self.headers = {"Content-Type": content_type}
+        self.headers, self.status = {"Content-Type": content_type}, status
 
     def __enter__(self):
         return self
@@ -51,6 +53,24 @@ def test_og_image_never_raises_on_unreachable_or_non_html_pages(monkeypatch):
     assert REAL_OG_IMAGE("https://www.yna.co.kr/view/AKR1") is None
 
 
+def test_image_ok_requires_an_image_response(monkeypatch):
+    # 기사 페이지가 준 사진 주소가 HTML 오류 페이지면 싣지 않는다.
+    monkeypatch.setattr(media.urllib.request, "urlopen", lambda req, timeout: _Page("", "image/jpeg"))
+    assert REAL_IMAGE_OK("https://img.yna.co.kr/a.jpg")
+    monkeypatch.setattr(media.urllib.request, "urlopen", lambda req, timeout: _Page("<html>404</html>"))
+    assert not REAL_IMAGE_OK("https://img.yna.co.kr/a.jpg")
+
+
+def test_video_check_failure_never_stops_the_run(monkeypatch):
+    # 응답을 읽다 끊기는 오류(URLError 가 아닌 것)도 '확인 못 함'일 뿐, 매시 실행 전체를 멈추면 안 된다.
+    def cut(video_id):
+        raise http.client.IncompleteRead(b"")
+    monkeypatch.setattr(media, "_check_video", cut)
+    assert REAL_VIDEO_OK("eGnCRa5nd58") is False
+    monkeypatch.setattr(media, "_check_video", lambda video_id: (_ for _ in ()).throw(ConnectionResetError()))
+    assert REAL_VIDEO_OK("eGnCRa5nd58") is False
+
+
 def test_youtube_id_ignores_other_sites_that_mention_youtube():
     assert media.youtube_id("https://www.youtube.com/watch?v=eGnCRa5nd58&t=3") == "eGnCRa5nd58"
     assert media.youtube_id("https://youtu.be/eGnCRa5nd58") == "eGnCRa5nd58"
@@ -60,6 +80,7 @@ def test_youtube_id_ignores_other_sites_that_mention_youtube():
 def test_fill_uses_news_sources_only_and_keeps_existing_media(monkeypatch):
     asked = []
     monkeypatch.setattr(media, "og_image", lambda url: asked.append(url) or ("https://img.yna.co.kr/x.jpg" if "yna" in url else None))
+    monkeypatch.setattr(media, "image_ok", lambda url: True)
     case = seed("geumyang-monlaa")
     case["sources"] = [{"id": "web-1", "kind": "web", "url": "https://blog.example.com/post", "title": "블로그"},
                        {"id": "news-1", "kind": "news", "url": "https://www.yna.co.kr/view/AKR1", "title": "연합"}]
@@ -69,6 +90,22 @@ def test_fill_uses_news_sources_only_and_keeps_existing_media(monkeypatch):
     assert asked == ["https://www.yna.co.kr/view/AKR1"]
     asked.clear()
     assert not media.fill(case) and asked == []  # 이미 있는 사진은 다시 찾지 않는다
+
+
+def test_a_broken_image_is_not_attached_so_a_cleared_cover_stays_clear(monkeypatch):
+    # 모델이 깨진 사진을 null 로 비운 뒤, 다음 실행이 같은 깨진 사진을 다시 붙이면 비운 의미가 없다.
+    monkeypatch.setattr(media, "og_image", lambda url: "https://img.yna.co.kr/broken.jpg")
+    case = seed("geumyang-monlaa")
+    case["cover"] = None
+    assert not media.fill(case) and case["cover"] is None
+
+
+def test_fill_stops_looking_once_the_run_budget_is_spent(monkeypatch):
+    asked = []
+    monkeypatch.setattr(media, "og_image", lambda url: asked.append(url))
+    case = seed("geumyang-monlaa")
+    case["cover"] = None
+    assert not media.fill(case, deadline=time.monotonic() - 1) and asked == []
 
 
 def test_fill_takes_video_only_from_a_youtube_source_that_is_public(monkeypatch):
@@ -96,6 +133,7 @@ def test_hourly_run_fills_cover_from_sources_and_publishes_it(tmp_path, monkeypa
     monkeypatch.setattr(runner, "SEED_DIR", SEED)
     monkeypatch.setattr(runner, "render", lambda cases, web, focus: {k: {"errors": [], "warnings": []} for k in [*focus, "index"]})
     monkeypatch.setattr(media, "og_image", lambda url: "https://img.yna.co.kr/cover.jpg")
+    monkeypatch.setattr(media, "image_ok", lambda url: True)
     report = runner.run(_cfg(tmp_path), "hourly", now=NOW)
     # hybe 는 사람이 넣은 사진이 이미 있어 그대로, 나머지 seed 는 출처 기사 사진으로 채운다.
     assert "hybe-ipo-2019" not in report["changed"] and "geumyang-monlaa" in report["changed"]

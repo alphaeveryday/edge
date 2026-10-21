@@ -15,6 +15,7 @@ from edge_truth_agent import media
 def no_media_network(monkeypatch):
     """시험은 기사·YouTube 서버에 접속하지 않는다. 사진·영상을 보는 시험은 이 두 함수를 따로 바꾼다."""
     monkeypatch.setattr(media, "og_image", lambda url: None)
+    monkeypatch.setattr(media, "image_ok", lambda url: False)
     monkeypatch.setattr(media, "video_ok", lambda video_id: False)
 
 ROOT = Path(__file__).resolve().parents[1]

@@ -8,14 +8,20 @@ from __future__ import annotations
 
 from html.parser import HTMLParser
 import http.client
+import json
+import logging
 import re
+import time
 import urllib.request
 
 from .cases import host_of
 from .tools import _check_video
 from .web import kind_of
 
-SOURCES_PER_CASE = 3  # 사건 하나에서 사진을 찾아볼 언론 출처 수(매시 실행마다 다시 찾으므로 작게 둔다)
+log = logging.getLogger(__name__)
+SOURCES_PER_CASE = 3  # 사건 하나에서 사진·영상을 찾아볼 출처 수(매시 실행마다 다시 찾으므로 작게 둔다)
+RUN_SECONDS = 120     # 한 실행에서 사진·영상 찾기에 쓰는 시간 상한. 넘으면 남은 사건은 다음 실행이 찾는다
+NETWORK_ERRORS = (OSError, ValueError, http.client.HTTPException)  # URLError·시간 초과·연결 끊김·불완전 응답
 PAGE_BYTES = 512_000  # og:image 는 <head> 에 있다 — 본문 전체를 받지 않는다
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
 _YOUTUBE_ID = re.compile(r"(?:[?&]v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])")
@@ -43,7 +49,7 @@ def og_image(url: str) -> str | None:
             if "html" not in res.headers.get("Content-Type", ""):
                 return None
             raw = res.read(PAGE_BYTES)
-    except (OSError, ValueError, http.client.HTTPException):
+    except NETWORK_ERRORS:
         return None
     parser = _OgImage()
     parser.feed(raw.decode("utf-8", "replace"))  # 주소는 ASCII 라 문자셋이 달라도 깨지지 않는다
@@ -51,6 +57,16 @@ def og_image(url: str) -> str | None:
     if image and image.startswith("//"):
         image = "https:" + image
     return image if image and _HTTPS_URL.fullmatch(image) else None
+
+
+def image_ok(url: str) -> bool:
+    """사진 주소가 실제 이미지로 응답하는가. 깨진 사진을 넣지 않아야, 모델이 비운 사진이 다음 실행에 다시 붙지 않는다."""
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; etforca-truth/1.0)"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as res:
+            return res.status == 200 and res.headers.get("Content-Type", "").startswith("image/")
+    except NETWORK_ERRORS:
+        return False
 
 
 def youtube_id(url: str) -> str | None:
@@ -62,24 +78,39 @@ def youtube_id(url: str) -> str | None:
 
 
 def video_ok(video_id: str) -> bool:
-    """공개 영상인가 (기존 check 도구와 같은 oEmbed 확인)."""
-    return not _check_video(video_id)
+    """공개 영상인가 (기존 check 도구와 같은 oEmbed 확인). 응답을 읽다 끊겨도 실행을 멈추지 않는다."""
+    try:
+        return not _check_video(video_id)
+    except NETWORK_ERRORS:
+        return False
 
 
-def fill(case: dict) -> bool:
-    """비어 있는 cover·video 를 사건의 출처에서 채운다. 바꿨으면 True."""
+def fill(case: dict, deadline: float | None = None) -> bool:
+    """비어 있는 cover·video 를 사건의 출처에서 채운다. 바꿨으면 True. deadline(time.monotonic) 이 지나면 더 찾지 않는다."""
+    def time_left() -> bool:
+        return deadline is None or time.monotonic() < deadline
+
     changed = False
-    sources = case.get("sources", [])
+    sources = [s for s in case.get("sources", []) if isinstance(s.get("url"), str)]
     if case.get("cover") is None:
-        news = [s["url"] for s in sources if kind_of(s["url"]) == "news" and s["url"].startswith("https://")]
-        # ponytail: 사진이 없는 사건은 매시 실행마다 최대 SOURCES_PER_CASE 번 다시 요청한다. 사건이 많아지면 '찾아봤음' 기록을 둔다.
-        for url in news[:SOURCES_PER_CASE]:
-            if image := og_image(url):
+        news = [s["url"] for s in sources if kind_of(s["url"]) == "news" and s["url"].startswith("https://")][:SOURCES_PER_CASE]
+        # ponytail: 사진이 없는 사건은 매시 실행마다 다시 요청한다(RUN_SECONDS 안에서). 사건이 많아지면 '찾아봤음' 기록을 둔다.
+        for url in news:
+            if not time_left():
+                break
+            if (image := og_image(url)) and image_ok(image):
                 case["cover"], changed = image, True
                 break
+        if case.get("cover") is None and news:
+            log.info(json.dumps({"event": "media_miss", "case": case.get("id"), "field": "cover", "sources": len(news)}, ensure_ascii=False))
     if case.get("video") is None:
-        for s in sources:
-            if (vid := youtube_id(s["url"])) and video_ok(vid):
+        videos = [(vid, s) for s in sources if (vid := youtube_id(s["url"]))][:SOURCES_PER_CASE]
+        for vid, s in videos:
+            if not time_left():
+                break
+            if video_ok(vid):
                 case["video"], changed = {"youtube": vid, "title": s.get("title") or case.get("subject") or vid}, True
                 break
+        if case.get("video") is None and videos:
+            log.info(json.dumps({"event": "media_miss", "case": case.get("id"), "field": "video", "sources": len(videos)}, ensure_ascii=False))
     return changed
