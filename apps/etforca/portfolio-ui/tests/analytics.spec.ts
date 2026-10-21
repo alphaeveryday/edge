@@ -545,8 +545,19 @@ test('focus moved by the form itself is not counted as the visitor opening the s
   await page.getByLabel('일반 계좌 · 종목 코드와 금액(원)').fill('VOO 1000000');
   await page.getByRole('button', { name: '목록에 추가' }).click();
   await page.getByRole('textbox', { name: 'VOO 금액' }).press('Enter');
-  await expect(page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' })).toBeFocused();
+  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
+  await expect(search).toBeFocused();
+  // 뒤에 일어난 행동이 도착한 걸 확인한 뒤에 부재를 본다 — 이벤트는 묶음으로 보내져 늦게 올 수 있다.
+  await page.keyboard.press('Escape'); // 포커스된 검색창의 후보 목록이 아래 '여러 종목' 토글을 덮는다
+  await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
+  await expect(page.locator('details.bulk-entry')).not.toHaveAttribute('open', '');
+  await page.waitForTimeout(100); // toggle 이벤트는 비동기라, 닫힘이 처리되기 전에 다시 열면 한 번으로 합쳐진다
+  await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
   const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
-  await expect.poll(actions).toContain('bulk_entry_added');
+  await expect.poll(() => actions().filter(a => a === 'bulk_entry_opened').length).toBe(2);
   expect(actions()).not.toContain('input_search_opened');
+  // 코드가 옮긴 검색창에 방문자가 바로 입력하면 그때는 방문자의 첫 검색이다.
+  await search.focus();
+  await page.keyboard.type('V');
+  await expect.poll(actions).toContain('input_search_opened');
 });
