@@ -5,7 +5,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt
 const safeUrl = u => /^https?:\/\//i.test(u || '') ? esc(u) : '#';
 const img = u => u ? `<img src="${safeUrl(u)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()">` : '';
 const ext = u => `href="${safeUrl(u)}" target="_blank" rel="noopener noreferrer"`;
-const issueHref = c => `issue.html?id=${encodeURIComponent(c.id)}`;
+const issueHref = c => `issue?id=${encodeURIComponent(c.id)}`;  // 확장자 없는 주소(배포가 확장자 없는 사본도 올린다)
 /* 훑어 읽는 자리(목록·카드·히어로)의 이름: 짧은 제목, 없으면 공개 첫 문장 */
 const titleOf = c => c.title || c.headline[0];
 
@@ -77,7 +77,7 @@ const resolvedRow = (c, i) => `
 /* 최상단 바: 로고·슬로건 | 다른 서비스 버튼. 세 페이지 공용 */
 document.querySelector('.window').insertAdjacentHTML('beforebegin', `
   <header class="topbar">
-    <a class="logo" href="index.html">
+    <a class="logo" href="./">
       <img src="logo.png" alt="로고">
       <b>국장 세력 판, 언제까지 당할래?</b><small>진짜와 가짜, 우리가 검증해 줄게.</small>
     </a>
