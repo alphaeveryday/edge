@@ -14,15 +14,6 @@ import { pendingKey } from './preview';
 
 const accounts = ['일반 계좌', 'ISA', '연금저축', 'IRP'];
 const hints = ['월 적립 계획까지 추천', '배당 얼마를 원해', '모은 돈이 있어', '목돈 넣는 방법', '대출이 있어', '레버리지는 빼줘', '개수는 적게'];
-// 포커스를 옮긴 칸이 하단 고정 버튼 뒤에 숨지 않게 직접 맞춘다. focus() 는 반쯤 보이는 칸을 다시 스크롤하지 않고,
-// 안내 문구가 막 생겨 버튼이 커진 순간에는 높이 변수(--input-cta-height)가 한 프레임 늦다 — 그래서 버튼 위치를 그때 잰다.
-function reveal(element: HTMLElement | null | undefined) {
-  if (!element) return;
-  element.focus({ preventScroll: true });
-  const box = element.getBoundingClientRect(), limit = (document.querySelector('.bar')?.getBoundingClientRect().top ?? innerHeight) - 8;
-  if (box.bottom > limit) window.scrollBy(0, box.bottom - limit);
-  else if (box.top < 8) window.scrollBy(0, box.top - 8);
-}
 export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: Input) => void; busy: boolean; initialInput?: Input | null }) {
   const [initial] = useState(() => initialInput ? inputDraftFromInput(initialInput) : readInputDraft());
   const { ask, confirmation, restoreFocus } = useConfirmation();
@@ -90,8 +81,21 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
     return () => { stopped = true; };
   }, []);
   const searchOpened = useRef(false);
+  const revealing = useRef(false);
+  // 포커스를 옮긴 칸이 하단 고정 버튼·화면 밖·모바일 키보드 뒤에 숨지 않게 직접 맞춘다. focus() 는 반쯤 보이는 칸을 다시
+  // 스크롤하지 않고, 안내 문구가 막 생겨 버튼이 커진 순간에는 높이 변수(--input-cta-height)가 한 프레임 늦다 — 그래서 그때 잰다.
+  function reveal(element: HTMLElement | null | undefined) {
+    if (!element) return;
+    revealing.current = true; // 코드가 옮긴 포커스는 방문자가 검색을 연 것이 아니다
+    element.focus({ preventScroll: true });
+    revealing.current = false;
+    const view = window.visualViewport, viewBottom = view ? view.offsetTop + view.height : innerHeight;
+    const box = element.getBoundingClientRect(), limit = Math.min(bar.current?.getBoundingClientRect().top ?? viewBottom, viewBottom) - 8;
+    if (box.bottom > limit) window.scrollBy(0, box.bottom - limit);
+    else if (box.top < 8) window.scrollBy(0, box.top - 8);
+  }
   function openedSearch() {
-    if (searchOpened.current) return;
+    if (searchOpened.current || revealing.current) return;
     searchOpened.current = true;
     trackAction('input_search_opened');
   }

@@ -36,7 +36,7 @@ test('a visitor with saved holdings still gets the import shortcut', async ({ pa
   await expect(page.getByRole('button', { name: '저장된 보유 종목 불러오기' })).toBeVisible();
 });
 
-for (const [width, height] of [[390, 844], [360, 640]]) test(`keyboard entry never hides the next field behind the fixed button at ${width}x${height}`, async ({ page }) => {
+for (const [width, height] of [[390, 844], [360, 640], [320, 568]]) test(`keyboard entry never hides the next field behind the fixed button at ${width}x${height}`, async ({ page }) => {
   await page.setViewportSize({ width, height });
   const search = await open(page);
   for (const query of ['VOO', 'QQQM', '069500', '360750']) {
@@ -50,4 +50,7 @@ for (const [width, height] of [[390, 844], [360, 640]]) test(`keyboard entry nev
   }
   // 모바일 미리보기는 3줄까지만 — 나머지는 아래 계좌 카드에 있다.
   await expect(page.locator('.portfolio-preview li.more')).toHaveText('외 1개');
+  // 작은 도넛 옆 범례에서도 종목명이 한 글자씩 꺾이지 않을 폭을 남긴다(320px 회귀).
+  const nameWidths = await page.locator('.portfolio-preview li:not(.more) > span').evaluateAll(spans => spans.filter(s => (s as HTMLElement).offsetParent).map(s => s.getBoundingClientRect().width));
+  expect(Math.min(...nameWidths)).toBeGreaterThan(72);
 });
