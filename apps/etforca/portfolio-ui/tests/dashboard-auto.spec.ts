@@ -407,8 +407,9 @@ test('latest analysis is recovered from the server even without the local result
   await page.goto('/portfolio/?view=dashboard');
   await page.getByRole('button', { name: 'AI 포폴 분석', exact: true }).click();
   await expect(page.locator('.research-motion svg')).toBeVisible();
-  await expect(page.locator('.progress-steps li')).toHaveCount(4);
-  await expect(page.locator('.progress-steps li[aria-current=step]')).toHaveCount(1);
+  await expect(page.locator('.progress-steps')).toHaveCount(0);
+  await expect(page.locator('.research-motion g.active')).toHaveCount(1);
+  await expect(page.getByRole('list', { name: '분석 역할과 검토 흐름' })).toBeVisible();
 });
 
 for (const [profit, value, expected] of [[100000, 500000, '+100,000원 (+25.00%)'], [-100000, 300000, '-100,000원 (-25.00%)'], [0, 400000, '0원 (0.00%)'], [null, 400000, '—'], [100000, 100000, '+100,000원']] as const) {
