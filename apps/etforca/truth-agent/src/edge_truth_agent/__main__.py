@@ -16,6 +16,8 @@ import os
 from pathlib import Path
 import sys
 
+from .session import SKILLS  # 도구 목록을 낼 수 있는 세션 종류 = 지침 파일이 있는 종류
+
 
 def _tool(name: str) -> int:
     """도구 하나. 도구 오류는 종료 코드 2, 내부 오류는 3 — 확장이 그 글을 모델에게 오류로 보여준다."""
@@ -47,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     tool = sub.add_parser("tool", help="에이전트 도구 하나 실행 (pi 확장용)")
     tool.add_argument("name")
     spec = sub.add_parser("tool-specs", help="도구 목록 JSON (pi 확장용)")
-    spec.add_argument("--mode", choices=["update", "discover"], required=True)
+    spec.add_argument("--mode", choices=sorted(SKILLS), required=True)
     spec.add_argument("--web", choices=["0", "1"], default="0")
     args = parser.parse_args(argv)
 

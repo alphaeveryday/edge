@@ -33,7 +33,6 @@ class Config:
     pi_dir: Path
     python: str
     max_sessions: int
-    parallel: int
     session_timeout: int
     max_tool_calls: int
     corpus_days: int
@@ -55,8 +54,7 @@ class Config:
             web_dir=Path(os.environ.get("TRUTH_WEB_DIR", default_web)),
             pi_dir=Path(os.environ.get("TRUTH_PI_DIR", here.parents[2] / "pi")),
             python=os.environ.get("TRUTH_PYTHON", sys.executable),
-            max_sessions=int(os.environ.get("TRUTH_MAX_SESSIONS", "8")),
-            parallel=int(os.environ.get("TRUTH_PARALLEL", "3")),
+            max_sessions=int(os.environ.get("TRUTH_MAX_SESSIONS", "4")),  # 사건 세션은 하나씩 돈다: 4 × 600초 + 계획이 잠금(55분) 안에 든다
             session_timeout=int(os.environ.get("TRUTH_SESSION_TIMEOUT", "600")),
             max_tool_calls=int(os.environ.get("TRUTH_MAX_TOOL_CALLS", "50")),
             corpus_days=int(os.environ.get("TRUTH_CORPUS_DAYS", "21")),
