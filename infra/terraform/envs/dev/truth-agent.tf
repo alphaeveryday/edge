@@ -1,5 +1,5 @@
 # ── 투자정보 기만 검증 에이전트 (ADR-0062) ─────────────────
-# 매시 사건 갱신 + 하루 한 번 새 사건 찾기. 결과는 etforca.com/truth/ 의 공개 데이터(랜딩 버킷 truth/data/)로 게시된다.
+# 매시 사건 갱신(새 사건 찾기는 일정에 없다). 결과는 etforca.com/truth/ 의 공개 데이터(랜딩 버킷 truth/data/)로 게시된다.
 # 이미지는 deploy-truth-agent.yml 이 edge/pipeline:truth-agent-latest 로 올린다(이 PR 보다 먼저 머지돼야 첫 실행이 뜬다).
 # 키 값은 apply 뒤 TF 밖에서 넣는다 — 모듈 main.tf 의 시크릿 주석.
 module "truth_agent" {

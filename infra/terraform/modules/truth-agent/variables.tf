@@ -64,12 +64,6 @@ variable "hourly_schedule_expression" {
   default     = "cron(5 * * * ? *)"
 }
 
-variable "discover_schedule_expression" {
-  description = "새 사건 찾기 시각 (Asia/Seoul). 아침 정제본(08:10) 적재 뒤, 매시 실행(:05)과 겹치지 않는 시각."
-  type        = string
-  default     = "cron(40 8 * * ? *)"
-}
-
 variable "schedule_state" {
   description = "ENABLED 또는 DISABLED. 키를 넣기 전·장애 대응 중에는 DISABLED 로 멈춘다."
   type        = string

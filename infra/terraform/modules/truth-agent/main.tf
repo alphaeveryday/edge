@@ -1,4 +1,5 @@
-# 투자정보 기만 검증 에이전트(ADR-0062) — 매시 사건 갱신과 하루 한 번 새 사건 찾기를 ECS Fargate 단발 태스크로 돌린다.
+# 투자정보 기만 검증 에이전트(ADR-0062) — 매시 사건 갱신을 ECS Fargate 단발 태스크로 돌린다.
+# 새 사건 찾기(discover)는 일정에 두지 않는다 — 모델은 기존 사건 관리에만 쓴다. 새 사건은 사람이 seed 로 넣는다.
 #
 # 스케줄러 → ecs:RunTask(worker 클러스터). 태스크는 레이크의 뉴스를 읽고, 바뀐 사건만 모델 세션을 연 뒤,
 # 검사를 통과한 결과를 비공개 버킷에 저장하고 랜딩 버킷 truth/data/ 에 게시한다. 상시 서비스는 없다.
@@ -209,8 +210,7 @@ resource "aws_iam_role_policy" "scheduler" {
 
 locals {
   schedules = {
-    hourly   = var.hourly_schedule_expression
-    discover = var.discover_schedule_expression
+    hourly = var.hourly_schedule_expression
   }
 }
 
