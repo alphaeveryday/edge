@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from conftest import SEED, seed
+from conftest import flow_seed, seed
 from edge_truth_agent import news, notes, runner, tools
 from edge_truth_agent.session import SessionResult
 from edge_truth_agent.store import LocalStore
@@ -59,7 +59,7 @@ def _lake():
 
 @pytest.fixture
 def flow(tmp_path, monkeypatch):
-    monkeypatch.setattr(runner, "SEED_DIR", SEED)
+    monkeypatch.setattr(runner, "SEED_DIR", flow_seed(tmp_path))
     monkeypatch.setattr(runner, "render", lambda cases, web, focus: {k: {"errors": [], "warnings": []} for k in [*focus, "index"]})
     from test_news_render_runner import _cfg
     return _cfg(tmp_path), LocalStore(tmp_path / "store")
