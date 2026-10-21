@@ -1,9 +1,8 @@
 package com.edge.app.application.vote;
 
-import com.edge.app.adapter.persistence.redis.RedisCircuit;
-import com.edge.app.adapter.persistence.vote.VoteCountRepository;
-import com.edge.app.application.vote.provided.MyVoteResponse;
 import com.edge.app.application.vote.provided.VoteCountResponse;
+import com.edge.app.application.vote.provided.VoteFinder;
+import com.edge.app.application.vote.required.VoteCountStore;
 import com.edge.app.application.vote.required.VoteRepository;
 import com.edge.app.domain.vote.Vote;
 import com.edge.app.domain.vote.VoteChoice;
@@ -17,15 +16,15 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.Optional;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class VoteService {
+public class VoteService implements VoteFinder {
     private final VoteRepository voteRepository;
-    private final VoteCountRepository voteCountRepository;
+    private final VoteCountStore voteCountStore;
     private final MeterRegistry meterRegistry;
-    private final RedisCircuit circuit;
 
     @Transactional
     public void vote(String etfCode, Long memberId, VoteChoice choice) {
@@ -35,7 +34,7 @@ public class VoteService {
     // 트랜잭션 없는 Redis 반영
     // 갱신 실패의 repository 폴백 흡수
     public void updateCount(String etfCode, Long memberId, VoteChoice choice) {
-        voteCountRepository.vote(etfCode, memberId, choice);
+        voteCountStore.vote(etfCode, memberId, choice);
     }
 
     @Transactional
@@ -44,23 +43,23 @@ public class VoteService {
     }
 
     public void removeFromCount(String etfCode, Long memberId) {
-        voteCountRepository.withdraw(etfCode, memberId);
+        voteCountStore.withdraw(etfCode, memberId);
     }
 
     // 읽은 경로를 나타내는 source 표식
     // 폴백 정책을 아는 이 계층의 표식 부착
+    @Override
     public VoteCountResponse counts(String etfCode) {
         try {
-            return circuit.of(etfCode).executeSupplier(
-                    () -> VoteCountResponse.from(voteCountRepository.counts(etfCode), "redis"));
+            return VoteCountResponse.from(voteCountStore.counts(etfCode), "redis");
         } catch (Exception ex) {
             return countsFromDb(etfCode, ex);
         }
     }
 
-    public MyVoteResponse myVote(String etfCode, Long memberId) {
-        return new MyVoteResponse(voteRepository.findByEtfCodeAndMemberId(etfCode, memberId)
-                .map(Vote::getChoice).orElse(null));
+    @Override
+    public Optional<VoteChoice> myVote(String etfCode, Long memberId) {
+        return voteRepository.findByEtfCodeAndMemberId(etfCode, memberId).map(Vote::getChoice);
     }
 
     private VoteCountResponse countsFromDb(String etfCode, Throwable ex) {

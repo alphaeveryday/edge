@@ -69,7 +69,7 @@ GET count ─▶ VoteService.counts()  Redis, 실패 시 DB 집계로 폴백 (so
 
 **서킷 브레이커 (Resilience4j).**
 - 쓰기 서킷은 `VoteCountRepository.vote()` 에 있다. 열려도 DB 저장은 막지 않고 폴백이 실패를 삼킨다(메트릭+로그).
-- 읽기 서킷은 `VoteService.counts()` 에 있고 폴백이 DB 집계로 대체한다.
+- 읽기 서킷은 `VoteCountRepository.counts()` 에 있다. 열린 서킷의 예외를 받은 `VoteService.counts()` 가 DB 집계로 대체한다.
 - 재조정 `replace()` 는 복구 경로라 서킷 밖이다.
 - 서킷은 REJECT 가 못 잡는 "연결은 살아 있는데 응답이 없는" 장애(pause·네트워크 분리)에서 500ms 대기를 반복하지 않게 막는다.
 

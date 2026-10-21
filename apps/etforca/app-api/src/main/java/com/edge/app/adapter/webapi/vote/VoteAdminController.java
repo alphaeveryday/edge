@@ -1,6 +1,6 @@
 package com.edge.app.adapter.webapi.vote;
 
-import com.edge.app.application.vote.VoteReconciler;
+import com.edge.app.application.vote.provided.VoteReconcileRequester;
 import com.edge.common.apipayload.ApiResponse;
 import com.edge.common.apipayload.code.status.ErrorStatus;
 import com.edge.common.exception.GeneralException;
@@ -17,7 +17,7 @@ import java.security.MessageDigest;
 @RestController
 @RequiredArgsConstructor
 public class VoteAdminController {
-    private final VoteReconciler voteReconciler;
+    private final VoteReconcileRequester voteReconcileRequester;
 
     @Value("${vote.admin-token:}")
     private String adminToken;
@@ -28,6 +28,6 @@ public class VoteAdminController {
                 adminToken.getBytes(StandardCharsets.UTF_8), token.getBytes(StandardCharsets.UTF_8))) {
             throw new GeneralException(ErrorStatus._FORBIDDEN);
         }
-        return ApiResponse.onSuccess(voteReconciler.request());
+        return ApiResponse.onSuccess(voteReconcileRequester.request());
     }
 }
