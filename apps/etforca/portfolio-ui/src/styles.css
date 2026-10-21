@@ -6461,6 +6461,12 @@ html { scroll-padding-bottom: var(--input-cta-height, 0px); }
 }
 @media (max-width: 340px) { .portfolio-preview .donut.md { width: 80px; height: 80px; } }
 .reuse-link { align-self: flex-start; font-size: var(--text-label); }
+/* 요청사항은 선택이라 접어 둘 수 있다. 펼친 뒤에는 위 '요청사항' 제목과 겹치므로 접기 줄을 감춘다. */
+.askbox > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-size: var(--text-label); font-weight: 600; color: var(--t1); }
+.askbox:not([open]) { padding-block: var(--space-2); }
+.askbox[open] > summary { display: none; }
+/* details 안의 내용은 별도 상자에 담겨 .askbox 의 flex 간격을 받지 못한다 — 안쪽 상자가 같은 간격을 맡는다. */
+.askbox__body { display: flex; flex-direction: column; gap: 8px; }
 .holdings-input .row__name { overflow-wrap: anywhere; }
 .holdings-input .instrument-search .field { background: var(--color-surface); }
 @media (max-width: 1099px) {

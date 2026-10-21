@@ -563,3 +563,25 @@ test('focus moved by the form itself is not counted as the visitor opening the s
   await page.keyboard.type('V');
   await expect.poll(actions).toContain('input_search_opened');
 });
+
+test('opening the folded request box is counted so its use can be judged', async ({ page, baseURL }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const events = await instrument(page, baseURL!);
+  await page.goto('https://etforca.com/portfolio/');
+  await page.getByText('요청사항 적기 · 선택', { exact: true }).click();
+  await page.getByLabel('요청사항', { exact: true }).fill('private-request-text');
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action)).toContain('request_box_opened');
+  expect(JSON.stringify(events)).not.toContain('private-request-text');
+});
+
+test('a request box that starts open on desktop is not reported as opened by the visitor', async ({ page, baseURL }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const events = await instrument(page, baseURL!);
+  await page.goto('https://etforca.com/portfolio/');
+  await expect(page.getByLabel('요청사항', { exact: true })).toBeVisible();
+  // 뒤 행동이 도착한 걸 확인한 뒤 부재를 본다(이벤트는 묶음으로 늦게 올 수 있다).
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).focus();
+  const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
+  await expect.poll(actions).toContain('input_search_opened');
+  expect(actions()).not.toContain('request_box_opened');
+});

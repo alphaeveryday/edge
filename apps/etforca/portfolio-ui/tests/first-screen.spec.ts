@@ -54,3 +54,35 @@ for (const [width, height] of [[390, 844], [360, 640], [320, 568]]) test(`keyboa
   const nameWidths = await page.locator('.portfolio-preview li:not(.more) > span').evaluateAll(spans => spans.filter(s => (s as HTMLElement).offsetParent).map(s => s.getBoundingClientRect().width));
   expect(Math.min(...nameWidths)).toBeGreaterThan(72);
 });
+
+// 선택 항목(요청사항)은 모바일 첫 화면에서 접어 1단계를 훑는 길이를 줄이되, PC 와 이미 적은 요청은 펼친다.
+test('the optional request box is folded on phones and open on desktop', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page);
+  const request = page.getByLabel('요청사항', { exact: true });
+  await expect(request).toBeHidden();
+  await page.getByText('요청사항 적기 · 선택', { exact: true }).click();
+  await expect(request).toBeVisible();
+  // 펼치면 접기 줄이 사라지므로, 키보드 사용자가 길을 잃지 않게 입력칸으로 포커스를 옮긴다.
+  await expect(request).toBeFocused();
+  // 다음 단계에 갔다 와도 방문자가 연 상자는 열린 채다(적은 요청이 숨지 않게).
+  await request.fill('배당 위주로 바꾸고 싶어요');
+  await addHolding(page);
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await page.getByRole('button', { name: '앞 질문으로' }).click();
+  await expect(page.getByLabel('요청사항', { exact: true })).toBeVisible();
+  // 새로 열어도 이미 적은 요청이 있으면 모바일에서도 펼쳐 보인다.
+  await page.reload();
+  await expect(page.getByLabel('요청사항', { exact: true })).toHaveValue('배당 위주로 바꾸고 싶어요');
+  await expect(page.getByLabel('요청사항', { exact: true })).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.evaluate(() => sessionStorage.clear());
+  await page.reload();
+  await expect(page.getByLabel('요청사항', { exact: true })).toBeVisible();
+});
+
+async function addHolding(page: Page) {
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).fill('VOO');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('1000000');
+}

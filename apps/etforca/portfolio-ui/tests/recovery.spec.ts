@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { openRequest } from './holdings';
 import { readFileSync } from 'node:fs';
 import { bulkHoldings } from '../src/bulkHoldings';
 const catalog = JSON.parse(readFileSync(new URL('../../portfolio-worker/src/edge_portfolio/data/etf_catalog.json', import.meta.url), 'utf8'));
@@ -219,6 +220,7 @@ test('an unidentified saved asset cannot replace and invalidate the current draf
     return route.fulfill({ json: {} });
   });
   await page.goto('/portfolio/');
+  await openRequest(page);
   await page.getByLabel('요청사항', { exact: true }).fill('기존 방향을 유지해 주세요');
   await page.getByRole('button', { name: '저장된 보유 종목 불러오기' }).click();
   await expect(page.getByRole('alert')).toContainText('이전 종목의 종목 코드');

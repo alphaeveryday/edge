@@ -104,6 +104,7 @@ test('empty start, keyboard holding entry, live donut, ETF-only search and direc
   // No invented cash: the visitor starts from their own holdings.
   await expect(page.locator('.rows .row')).toHaveCount(0);
   await expect(page.locator('.portfolio-preview')).toHaveCount(0);
+  // 보유 없이 '종목부터 추천받기'로 가는 방문자도 계좌 전략을 정할 수 있어야 해서 첫 화면부터 보인다.
   await expect(page.getByRole('button', { name: '최적의 ISA, IRP 등 세금 혜택과 투자전략까지 정리해드릴까요?' })).toBeVisible();
   const firstSearch = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
   await firstSearch.fill('VOO');
