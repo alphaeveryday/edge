@@ -61,6 +61,12 @@ def test_image_ok_requires_an_image_response(monkeypatch):
     assert not REAL_IMAGE_OK("https://img.yna.co.kr/a.jpg")
 
 
+def test_malformed_addresses_are_unusable_not_fatal():
+    # 기사 메타데이터의 깨진 주소가 예외로 새면 매시 실행 전체가 게시 없이 끝난다.
+    assert REAL_IMAGE_OK("https://[bad/a.jpg") is False
+    assert REAL_OG_IMAGE("https://[bad/view") is None
+
+
 def test_video_check_failure_never_stops_the_run(monkeypatch):
     # 응답을 읽다 끊기는 오류(URLError 가 아닌 것)도 '확인 못 함'일 뿐, 매시 실행 전체를 멈추면 안 된다.
     def cut(video_id):

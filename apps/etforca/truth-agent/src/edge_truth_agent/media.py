@@ -22,6 +22,7 @@ log = logging.getLogger(__name__)
 SOURCES_PER_CASE = 3  # 사건 하나에서 사진·영상을 찾아볼 출처 수(매시 실행마다 다시 찾으므로 작게 둔다)
 RUN_SECONDS = 120     # 한 실행에서 사진·영상 찾기에 쓰는 시간 상한. 넘으면 남은 사건은 다음 실행이 찾는다
 NETWORK_ERRORS = (OSError, ValueError, http.client.HTTPException)  # URLError·시간 초과·연결 끊김·불완전 응답
+HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; etforca-truth/1.0)"}
 PAGE_BYTES = 512_000  # og:image 는 <head> 에 있다 — 본문 전체를 받지 않는다
 YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"}
 _YOUTUBE_ID = re.compile(r"(?:[?&]v=|youtu\.be/|/shorts/|/embed/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])")
@@ -43,8 +44,8 @@ class _OgImage(HTMLParser):
 
 def og_image(url: str) -> str | None:
     """기사 페이지의 og:image(https). 없거나 가져오지 못하면 None — 예외를 올리지 않는다."""
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; etforca-truth/1.0)"})
-    try:
+    try:  # 주소 해석 실패(ValueError)도 여기서 잡는다 — 깨진 출처 하나가 매시 실행을 멈추면 안 된다
+        req = urllib.request.Request(url, headers=HEADERS)
         with urllib.request.urlopen(req, timeout=10) as res:
             if "html" not in res.headers.get("Content-Type", "").lower():
                 return None
@@ -62,8 +63,8 @@ def og_image(url: str) -> str | None:
 
 def image_ok(url: str) -> bool:
     """사진 주소가 실제 이미지로 응답하는가. 깨진 사진을 넣지 않아야, 모델이 비운 사진이 다음 실행에 다시 붙지 않는다."""
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; etforca-truth/1.0)"})
-    try:
+    try:  # og:image 가 'https://[bad' 처럼 깨져 있어도 '못 씀'일 뿐이다
+        req = urllib.request.Request(url, headers=HEADERS)
         with urllib.request.urlopen(req, timeout=10) as res:
             return res.status == 200 and res.headers.get("Content-Type", "").lower().startswith("image/")
     except NETWORK_ERRORS:
