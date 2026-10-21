@@ -598,7 +598,8 @@ module "data_pipeline" {
   disclosure_schedule_state = "ENABLED"
   # 실행 주체(ALPHA-1407·1425). 10-21 전환: 19:30 배치는 Airflow `edge_disclosure` 가 실행한다. AIRFLOW 면 위 스케줄은
   # DISABLED 로 덮이고, 슬롯 대조·dart 창은 위 ENABLED 에서 그대로 파생된다 — 그래서 위 값은 ENABLED 로 둔다.
-  # 롤백은 이 줄을 지우는 PR → apply → edge_disclosure pause(apps/engine/airflow/README.md "공시 보충 배치 레인").
+  # 롤백은 edge_disclosure pause → 종료 확인(queued·running·ECS 0) → 이 줄을 지우는 PR → apply 순서다. apply 를 먼저 하면
+  # 두 주체가 같은 슬롯을 계획한다(apps/engine/airflow/README.md "롤백(Airflow → SFN)", 공시 레인 절).
   disclosure_orchestrator = "AIRFLOW"
   # ops 기대 슬롯과 watermark 활성 환경변수는 이 스케줄 설정에서 파생된다.
   # 주말 활성화의 직전 금요일 거짓 경보는 첫 활성 슬롯 뒤 README 절차로 정리한다(ALPHA-1074).
