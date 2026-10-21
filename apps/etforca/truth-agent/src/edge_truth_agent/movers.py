@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 LEASE_KEY = "state/lease-movers.json"
 CORP_KEY = "state/dart-corp-codes.json"
 LOGO_TRIED_KEY = "state/logo-tried.json"
+DATES_KEY = "movers/dates.json"  # 게시한 날짜 목록(비공개 원본 → 공개 사본, 화면의 날짜 선택)
 MIN_CHANGE = 10.0       # 급등 기준: 전일 대비 상승률(%)
 MIN_TRADE_VALUE = 30.0  # 거래대금 하한(억원, 누적 거래대금) — 몇 주 체결로 뛴 종목은 해석할 사건이 아니다
 MAX_MOVERS = 15         # 화면에 싣는 종목 수
@@ -228,6 +229,16 @@ def run_movers(cfg, *, quotes: Quotes | None = None, dart: Dart | None = None, s
         public.put(f"movers/{today}.json", body, cache_control="no-cache")
         store.put(seen_key, _json(seen))  # 게시 뒤에 — 게시 전에 죽으면 근거를 '본 것'으로 남기지 않고 다음 정각에 다시 판정한다
         report.update(published=True, movers=[i["code"] for i in items])
+        # 화면의 날짜 선택용 목록(최신순). 원본은 비공개 저장소에 둔다(태스크는 공개 버킷을 읽을 권한이 없다).
+        # 마지막에 두고 실패해도 위의 게시·상태는 남긴다 — 실패는 보고에 올려 태스크를 실패로 끝낸다
+        try:
+            raw, _ = store.get(DATES_KEY)
+            dates = sorted(set(json.loads(raw) if raw else []) | {today}, reverse=True)
+            store.put(DATES_KEY, _json(dates))
+            public.put(DATES_KEY, _json(dates), cache_control="no-cache")
+        except Exception as error:  # noqa: BLE001
+            report["failed"].append("dates")
+            log.warning(json.dumps({"event": "movers_dates_failed", "error": str(error)[:200]}, ensure_ascii=False))
     store.put(f"runs/{today}/{run_id}.json", _json(report))
     log.info(json.dumps({"event": "movers_end", "runId": run_id, "movers": len(report["movers"]), "judged": len(report["judged"]),
                          "failed": report["failed"], "cost": round(sum((j.get("usage") or {}).get("cost", 0) for j in report["judged"]), 4)},
