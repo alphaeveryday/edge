@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { addCash } from './holdings';
+import { addCash, openRequest } from './holdings';
 
 test('unit changes preserve independent amounts and percentages through refresh', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
@@ -18,6 +18,7 @@ test('refresh resumes the current step and preview reset cannot erase a customer
   await page.addInitScript(() => sessionStorage.setItem('edge-portfolio-form-v2', 'customer draft'));
   await page.goto('/portfolio/?preview=input');
   await addCash(page);
+  await openRequest(page);
   await page.getByLabel('요청사항', { exact: true }).fill('반도체 테마 유지');
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await page.getByRole('button', { name: '매달 꾸준히', exact: true }).click();

@@ -563,3 +563,13 @@ test('focus moved by the form itself is not counted as the visitor opening the s
   await page.keyboard.type('V');
   await expect.poll(actions).toContain('input_search_opened');
 });
+
+test('opening the folded request box is counted so its use can be judged', async ({ page, baseURL }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const events = await instrument(page, baseURL!);
+  await page.goto('https://etforca.com/portfolio/');
+  await page.getByText('요청사항 적기 · 선택', { exact: true }).click();
+  await page.getByLabel('요청사항', { exact: true }).fill('private-request-text');
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action)).toContain('request_box_opened');
+  expect(JSON.stringify(events)).not.toContain('private-request-text');
+});

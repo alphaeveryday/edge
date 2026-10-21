@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { addCash } from './holdings';
 
 for (const account of ['ISA', 'IRP']) test(`new ${account} eligibility answers require an explicit answer or unknown`, async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
@@ -41,6 +42,7 @@ test('a restored ineligible target cannot silently save as an empty selection', 
 
 test('ineligible ISA choices explain why and clear a prior selection without blocking pension savings', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
+  await addCash(page); // 절세 전략은 보유를 하나 넣은 뒤에 열린다
   await page.getByRole('button', { name: '최적의 ISA, IRP 등 세금 혜택과 투자전략까지 정리해드릴까요?' }).click();
   const dialog = page.getByRole('dialog', { name: '나에게 맞는 절세 전략' });
   const isa = dialog.getByRole('checkbox', { name: 'ISA', exact: true });
@@ -68,6 +70,7 @@ test('ineligible ISA choices explain why and clear a prior selection without blo
 
 test('IRP distinguishes no qualification from retirement benefits and unknown information', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
+  await addCash(page); // 절세 전략은 보유를 하나 넣은 뒤에 열린다
   await page.getByRole('button', { name: '최적의 ISA, IRP 등 세금 혜택과 투자전략까지 정리해드릴까요?' }).click();
   const dialog = page.getByRole('dialog', { name: '나에게 맞는 절세 전략' });
   const irp = dialog.getByRole('checkbox', { name: 'IRP', exact: true });

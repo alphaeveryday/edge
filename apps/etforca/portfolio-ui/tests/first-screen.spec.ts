@@ -54,3 +54,16 @@ for (const [width, height] of [[390, 844], [360, 640], [320, 568]]) test(`keyboa
   const nameWidths = await page.locator('.portfolio-preview li:not(.more) > span').evaluateAll(spans => spans.filter(s => (s as HTMLElement).offsetParent).map(s => s.getBoundingClientRect().width));
   expect(Math.min(...nameWidths)).toBeGreaterThan(72);
 });
+
+// 선택 항목(요청사항)은 모바일 첫 화면에서 접어 1단계를 훑는 길이를 줄이되, PC 와 이미 적은 요청은 펼친다.
+test('the optional request box is folded on phones and open on desktop', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page);
+  const request = page.getByLabel('요청사항', { exact: true });
+  await expect(request).toBeHidden();
+  await page.getByText('요청사항 적기 · 선택', { exact: true }).click();
+  await expect(request).toBeVisible();
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.reload();
+  await expect(page.getByLabel('요청사항', { exact: true })).toBeVisible();
+});
