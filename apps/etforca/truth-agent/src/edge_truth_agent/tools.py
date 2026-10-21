@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 import re
 
+import jsonschema
+
 from . import corpus, paths
 from .cases import REFUTATION_KINDS, RESOLUTION_KINDS, host_kind, host_of, problems
 from .workspace import Workspace
@@ -634,6 +636,11 @@ def set_mover_verdict(ws: Workspace, args: dict) -> str:
                "event": {"title": title, "kind": kind, "at": str(args.get("event_at") or "") or None},
                "claim": claim, "finding": finding, "reasons": reasons,
                "sources": [_mover_source(ws, s) for s in ids[:8]]}
+    # 게시 계약(movers.schema.json)을 여기서 검사한다 — 게시 단계에서 걸러지면 세션은 성공으로 끝나고 종목은 화면에서 빠진다
+    item = json.loads(Path(__file__).with_name("movers.schema.json").read_text(encoding="utf-8"))["$defs"]["item"]["properties"]
+    for key, value in verdict.items():
+        if error := next(jsonschema.Draft202012Validator(item[key]).iter_errors(value), None):
+            raise ToolError(f"판정의 {key} 가 게시 형식에 맞지 않습니다: {error.message[:200]}. 출처를 바꾸거나 고쳐 다시 남기세요.")
     with ws.lock():
         state = ws.state
         state["moverVerdict"] = verdict

@@ -162,6 +162,42 @@ def test_new_filing_reopens_a_settled_verdict(cfg):
     assert again.calls == ["900010"]
 
 
+def test_mover_that_drops_out_and_returns_keeps_its_verdict(cfg):
+    # 15위·거래대금 경계를 오가는 종목을 돌아올 때마다 새로 판정하면 세션을 낭비하고 판정이 시간마다 뒤집힌다.
+    _seed_news(cfg)
+    hot = _m("900010", "가나다전자", 29.9)
+    movers.run_movers(cfg, kis=FakeKis({"KOSDAQ": [hot]}), dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW)
+    movers.run_movers(cfg, kis=FakeKis({"KOSDAQ": [_m("900020", "라마바바이오", 15.0)]}), dart=FakeDart(),
+                      session_runner=_judging({"900020": "pending"}), now=NOW + timedelta(hours=1))
+    back = _judging({"900010": "promising"})
+    movers.run_movers(cfg, kis=FakeKis({"KOSDAQ": [hot]}), dart=FakeDart(), session_runner=back, now=NOW + timedelta(hours=2))
+    item = json.loads(LocalStore(cfg.publish).get("movers/latest.json")[0])["items"][0]
+    assert back.calls == [] and item["tag"] == "false"
+
+
+def test_new_news_reopens_only_pending(cfg):
+    # 급등주마다 특징주 기사가 매시 붙는다 — 새 보도만으로 확정 판정을 다시 열면 매 정각 세션 예산을 다 쓴다. 보류는 새 보도로 다시 본다.
+    _seed_news(cfg)
+    kis = FakeKis({"KOSDAQ": [_m("900010", "가나다전자", 29.9), _m("900020", "가나다전자우리", 15.0)]})
+    movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=_judging({"900010": "false", "900020": "pending"}), now=NOW)
+    more = article("가나다전자우리·가나다전자 동반 상한가", "두 종목이 함께 올랐다", aid="d" * 64, published="2026-10-22 11:30:00")
+    texts = corpus.load(LocalStore(cfg.store))
+    corpus.save(LocalStore(cfg.store), texts | {more.id: more})
+    again = _judging({"900010": "false", "900020": "pending"})
+    movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=again, now=NOW + timedelta(hours=1))
+    assert again.calls == ["900020"]
+
+
+def test_kis_outage_is_a_failure_not_a_holiday(cfg):
+    # 시세가 전부 실패한 것을 휴장으로 보고하면 화면이 조용히 한 시간 묵고 원인도 틀리게 남는다.
+    class Down(FakeKis):
+        def series(self, code, until, day):
+            raise RuntimeError("KIS 503")
+    report = movers.run_movers(cfg, kis=Down({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), dart=FakeDart(),
+                               session_runner=_judging({}), now=NOW)
+    assert not report["published"] and report["failed"] == ["kis-series"] and "휴장" not in report["skipped"]
+
+
 def test_series_walks_back_through_calls_until_open(monkeypatch):
     # 한 콜은 30분치다. 개장까지 거슬러 받아야 아침 급등이 그래프에서 빠지지 않고, 전 거래일 행은 섞이지 않아야 한다.
     calls = []
@@ -235,6 +271,17 @@ def test_news_page_opened_on_the_web_is_not_a_primary_source(tmp_path, monkeypat
         tools.set_mover_verdict(ws, base | {"source_ids": ["web-news1"]})
     assert "저장" in tools.set_mover_verdict(ws, base | {"source_ids": ["web-official1"]})
     assert ws.state["moverVerdict"]["sources"][0]["kind"] == "official"
+
+
+def test_verdict_that_cannot_be_published_is_rejected_in_session(tmp_path, monkeypatch):
+    # 게시 단계에서야 형식 오류가 나면 세션은 성공, 종목은 화면에서 빠진 채 매시 같은 판정을 되풀이한다 — 세션 안에서 고치게 한다.
+    monkeypatch.setenv("TRUTH_CORPUS", str(corpus.build_index({}, tmp_path / "c.sqlite")))
+    a = article("가나다전자 계약", "요약", aid="e" * 64).to_dict() | {"url": ""}
+    ws = _ws(tmp_path, [a])
+    tools.view_news(ws, {"id": a["id"]})
+    with pytest.raises(tools.ToolError, match="게시 형식"):
+        tools.set_mover_verdict(ws, {"tag": "false", "confidence": 0.7, "event_title": "공급계약 공시", "event_kind": "contract",
+                                     "claim": "주장", "finding": "확인한 것", "reasons": ["이유"], "source_ids": ["news-" + "e" * 16]})
 
 
 def test_logo_accepts_only_safe_image_formats():
