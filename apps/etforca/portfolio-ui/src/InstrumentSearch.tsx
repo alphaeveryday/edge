@@ -4,7 +4,7 @@ import type { Catalog, Instrument } from './api';
 import { trackAction } from './analytics';
 
 export const cashInstrument: Instrument = { id: 'CASH:KRW', market: 'CASH', ticker: 'KRW', code: 'KRW', name: '현금', kind: 'cash' };
-export function InstrumentSearch({ account, catalog, onAdd, includeStocks = false }: { account: string; catalog: Catalog | null; onAdd: (item: Instrument) => string | void; includeStocks?: boolean }) {
+export function InstrumentSearch({ account, catalog, onAdd, onOpen, includeStocks = false }: { account: string; catalog: Catalog | null; onAdd: (item: Instrument) => string | void; onOpen?: () => void; includeStocks?: boolean }) {
   const label = includeStocks ? '종목' : 'ETF';
   const [error, setError] = useState('');
   const [query, setQuery] = useState('');
@@ -29,9 +29,9 @@ export function InstrumentSearch({ account, catalog, onAdd, includeStocks = fals
     if (row.top < bounds.top) list.scrollTop -= bounds.top - row.top;
     else if (row.bottom > bounds.bottom) list.scrollTop += row.bottom - bounds.bottom;
   }, [active, open, id]);
-  function choose(item: Instrument) { const rejected = onAdd(item); if (rejected) { setError(rejected); return; } setError(''); setQuery(''); setOpen(false); setActive(0); }
+  function choose(item: Instrument) { onOpen?.(); const rejected = onAdd(item); if (rejected) { setError(rejected); return; } setError(''); setQuery(''); setOpen(false); setActive(0); }
   return <div className="find instrument-search"><Button type="button" className="find__plus" aria-label={account + ` ${label} 또는 현금 찾기`} onClick={() => { setOpen(!open); document.getElementById(id)?.focus(); }}>+</Button>
-    <TextInput id={id} className="field" role="combobox" aria-label={account + `에 담은 ${label} 찾기`} aria-autocomplete="list" aria-expanded={open} aria-controls={id + '-list'} aria-activedescendant={open && options[active] ? id + '-' + active : undefined} autoComplete="off" placeholder={label + ' 추가하기'} value={query} onFocus={() => setOpen(true)} onBlur={() => setOpen(false)} onChange={e => { setQuery(e.target.value); setError(''); setOpen(true); setActive(0); }} onKeyDown={e => {
+    <TextInput id={id} className="field" role="combobox" aria-label={account + `에 담은 ${label} 찾기`} aria-autocomplete="list" aria-expanded={open} aria-controls={id + '-list'} aria-activedescendant={open && options[active] ? id + '-' + active : undefined} autoComplete="off" placeholder={label + ' 추가하기'} value={query} onFocus={() => { setOpen(true); onOpen?.(); }} onBlur={() => setOpen(false)} onChange={e => { onOpen?.(); setQuery(e.target.value); setError(''); setOpen(true); setActive(0); }} onKeyDown={e => {
       if (e.key === 'Escape') setOpen(false);
       if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setActive(Math.max(0, Math.min(active + 1, options.length - 1))); }
       if (e.key === 'ArrowUp') { e.preventDefault(); setActive(Math.max(0, active - 1)); }

@@ -18,9 +18,12 @@ export function setAnalyticsEnabled(enabled: boolean) {
   } else if (enabled) initialize();
   window.dispatchEvent(new Event('orca-analytics-change'));
 }
-export function trackAction(action: 'holding_add_opened' | 'holding_edit_opened' | 'holdings_saved' | 'holdings_save_failed' | 'backtest_requested' | 'backtest_completed' | 'backtest_failed' | 'portfolio_saved' | 'newsletter_requested' | 'instrument_search_empty') {
-  if (!initialize()) return;
-  try { posthog.capture('portfolio_action', { action }); } catch { /* Optional analytics. */ }
+export function trackAction(action: 'holding_add_opened' | 'holding_edit_opened' | 'holdings_saved' | 'holdings_save_failed' | 'backtest_requested' | 'backtest_completed' | 'backtest_failed' | 'portfolio_saved' | 'newsletter_requested' | 'instrument_search_empty' | 'input_search_opened' | 'input_holding_added' | 'bulk_entry_opened' | 'bulk_entry_added' | 'bulk_entry_failed') {
+  const send = () => { try { posthog.capture('portfolio_action', { action }); } catch { /* Optional analytics. */ } };
+  if (initialize()) return send();
+  if (preview || !analyticsEnabled() || !servedHere()) return;
+  // 시험·고객 분류가 끝나기 전에 일어난 첫 행동(입력 화면 첫 검색 등)도 버리지 않는다 — 분류가 끝나면 한 번 다시 보낸다.
+  void ensureVisitorSession().then(() => { if (initialize()) send(); }).catch(() => { /* 분류 실패면 고객 여부를 모르니 보내지 않는다. */ });
 }
 
 export type FeedbackRating = 'good' | 'okay' | 'needs_improvement';
@@ -31,9 +34,10 @@ export function trackFeedback(action: 'shown' | 'dismissed' | 'submitted', ratin
   } catch { /* Analytics must not interrupt reading the report. */ }
 }
 
+const servedHere = () => ['etforca.com', 'www.etforca.com'].includes(location.hostname) && location.pathname === '/portfolio/';
 function initialize() {
   if (preview || !analyticsEnabled()) return false;
-  if (!['etforca.com', 'www.etforca.com'].includes(location.hostname) || location.pathname !== '/portfolio/') return false;
+  if (!servedHere()) return false;
   if (testVisitor === null) {
     if (!classifying) {
       classifying = true;

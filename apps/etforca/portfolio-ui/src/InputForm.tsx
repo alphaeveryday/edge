@@ -4,7 +4,7 @@ import { request, ensureVisitorSession, type Catalog, type Instrument, type Hold
 import { InstrumentSearch } from './InstrumentSearch';
 import { PortfolioPreview } from './PortfolioPreview';
 import { TaxAccounts, type TaxProfile } from './TaxAccounts';
-import { trackScreen } from './analytics';
+import { trackAction, trackScreen } from './analytics';
 
 import { inputDraftKey, legacyDraftKey, readInputDraft, inputDraftFromInput } from './inputDraft';
 import { useConfirmation } from './design-system/confirmation';
@@ -35,7 +35,7 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
   const focusRow = useRef<string | null>(null);
   useEffect(() => {
     if (!focusRow.current) return;
-    document.querySelector<HTMLInputElement>(`[data-holding="${CSS.escape(focusRow.current)}"]`)?.focus();
+    reveal(document.querySelector<HTMLInputElement>(`[data-holding="${CSS.escape(focusRow.current)}"]`));
     focusRow.current = null;
   }, [holdings]);
   const [selected, setSelected] = useState(initial?.selected ?? ['일반 계좌']);
@@ -71,6 +71,34 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
   const previousStep = useRef(step);
   useEffect(() => { if (step !== previousStep.current) { heading.current?.focus({ preventScroll: true }); window.scrollTo(0, 0); previousStep.current = step; } }, [step]);
   const [inputError, setInputError] = useState('');
+  // 불러올 보유가 있는 방문자에게만 '불러오기'를 보인다 — 처음 온 방문자에게는 검색창을 첫 화면 밖으로 미는 빈 버튼이다.
+  const [hasSaved, setHasSaved] = useState(false);
+  useEffect(() => {
+    let stopped = false;
+    void ensureVisitorSession().then(() => request<Saved>('/workbook'))
+      .then(saved => { if (!stopped) setHasSaved(!!saved.workbook?.assets?.length); })
+      .catch(() => { /* 확인하지 못하면 버튼만 숨긴다 — 입력은 그대로 할 수 있다. */ });
+    return () => { stopped = true; };
+  }, []);
+  const searchOpened = useRef(false);
+  const revealing = useRef(false);
+  // 포커스를 옮긴 칸이 하단 고정 버튼·화면 밖·모바일 키보드 뒤에 숨지 않게 직접 맞춘다. focus() 는 반쯤 보이는 칸을 다시
+  // 스크롤하지 않고, 안내 문구가 막 생겨 버튼이 커진 순간에는 높이 변수(--input-cta-height)가 한 프레임 늦다 — 그래서 그때 잰다.
+  function reveal(element: HTMLElement | null | undefined) {
+    if (!element) return;
+    revealing.current = true; // 코드가 옮긴 포커스는 방문자가 검색을 연 것이 아니다
+    element.focus({ preventScroll: true });
+    revealing.current = false;
+    const view = window.visualViewport, viewBottom = view ? view.offsetTop + view.height : innerHeight;
+    const box = element.getBoundingClientRect(), limit = Math.min(bar.current?.getBoundingClientRect().top ?? viewBottom, viewBottom) - 8;
+    if (box.bottom > limit) window.scrollBy(0, box.bottom - limit);
+    else if (box.top < 8) window.scrollBy(0, box.top - 8);
+  }
+  function openedSearch() {
+    if (searchOpened.current || revealing.current) return;
+    searchOpened.current = true;
+    trackAction('input_search_opened');
+  }
   const [bulk, setBulk] = useState('');
   const invalidHolding = holdings.some(h => !(mode === 'amount' ? /^\d+$/ : /^(?:\d+(?:\.\d{0,2})?|\.\d{1,2})$/).test(h.amount_krw || '') || !(Number(h.amount_krw) > 0) || Number(h.amount_krw) > (mode === 'percent' ? 100 : 1e13));
   const percentHundredths = holdings.reduce((n, h) => n + Math.round(Number(h.amount_krw) * 100), 0);
@@ -83,6 +111,7 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
     if (holdings.length >= 20) return '최대 20종목까지 담을 수 있어요. 기존 종목을 빼고 추가해 주세요.';
     focusRow.current = account + '|' + item.id;
     setHoldings([...holdings, { name: item.name, account, amount_krw: '', kind: item.kind, instrument_id: item.id }]);
+    trackAction('input_holding_added');
   }
   // Enter on an amount returns to the account search, so the next holding needs no pointer.
   // Won has no decimals: a trailing '.xx' (pasted cents) is dropped instead of shifting the amount 100x; other dots are separators.
@@ -90,7 +119,7 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
   function nextSearch(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    e.currentTarget.closest('.acct')?.querySelector<HTMLInputElement>('[role=combobox]')?.focus();
+    reveal(e.currentTarget.closest('.acct')?.querySelector<HTMLInputElement>('[role=combobox]'));
   }
   function changeMode(next: 'amount' | 'percent') {
     if (next === mode) return;
@@ -145,7 +174,8 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
     onSubmit({ ...payload(), draft_id: draftId });
   }
   const valid = step === 0 ? holdingsValid || fresh && !holdings.length : step === 1 ? !!how && (how !== '매달 꾸준히' || Number(contribution) > 0) : step === 2 ? !!horizon : true;
-  const guidance = !valid ? step === 0 ? !holdings.length ? '보유 종목을 추가하거나 종목부터 추천받기를 눌러 주세요.' : holdings.some(h => !(Number(h.amount_krw) > 0)) ? mode === 'percent' ? '각 종목의 비중을 입력해 주세요.' : '보유 종목의 금액을 입력해 주세요.' : invalidHolding ? mode === 'percent' ? '비중은 100% 이하, 소수 둘째 자리까지 적어 주세요.' : '금액은 10조 원 이하로 적어 주세요.' : `비중 합계를 100%로 맞춰 주세요. 지금 ${percentSum}%예요.` : step === 1 ? how === '매달 꾸준히' ? '매달 투자할 금액을 입력해 주세요.' : '투자 방법을 골라 주세요.' : '투자 기간을 골라 주세요.' : step === 4 ? '분석에 약 5분이 걸려요' : '';
+  // 종목이 없을 때 안내는 본문 첫 줄이 맡는다 — 하단 고정 영역이 두 줄로 커져 검색창을 가리지 않게 비운다.
+  const guidance = !valid ? step === 0 ? !holdings.length ? '' : holdings.some(h => !(Number(h.amount_krw) > 0)) ? mode === 'percent' ? '각 종목의 비중을 입력해 주세요.' : '보유 종목의 금액을 입력해 주세요.' : invalidHolding ? mode === 'percent' ? '비중은 100% 이하, 소수 둘째 자리까지 적어 주세요.' : '금액은 10조 원 이하로 적어 주세요.' : `비중 합계를 100%로 맞춰 주세요. 지금 ${percentSum}%예요.` : step === 1 ? how === '매달 꾸준히' ? '매달 투자할 금액을 입력해 주세요.' : '투자 방법을 골라 주세요.' : '투자 기간을 골라 주세요.' : step === 4 ? '분석에 약 5분이 걸려요' : '';
   const choices = (values: string[], current: string, change: (v: string) => void, labels = values) => <div className="chips big">{values.map((v, i) => <Button className="chip" key={v} aria-pressed={current === v} onClick={() => change(v)}>{labels[i]}</Button>)}</div>;
   return <>
     <div className="nav"><div className="nav__pill"><Button disabled={!step || saving || busy} className={'nav__back' + (!step ? ' off' : '')} aria-label="앞 질문으로" onClick={() => setStep(step - 1)}>‹</Button><span className="nav__logo">ETF Orca</span><div className="prog"><i style={{ width: `${(step + 1) / 5 * 100}%` }} /></div><span className="nav__n" aria-label={`전체 5단계 중 ${step + 1}단계`}>{step + 1} / 5</span></div></div>
@@ -153,23 +183,24 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
       {storageError && <p role="alert">이 브라우저에서는 입력을 임시 보관할 수 없어요. 완료할 때까지 이 화면을 유지해 주세요.</p>}
       {initial && step === 0 && <div className="draft-resume"><span>입력하던 내용을 이어서 작성해요.</span><Button onClick={async () => { if (await ask('입력한 내용을 지우고 새로 시작할까요?', '새로 시작하기')) { try { sessionStorage.removeItem(inputDraftKey); sessionStorage.removeItem(legacyDraftKey); sessionStorage.removeItem(pendingKey); location.reload(); } catch { setInputError('임시 입력을 지우지 못했어요. 이 브라우저의 저장 설정을 확인해 주세요.'); restoreFocus(); } } }}>새로 작성</Button></div>}
       {inputError && <p role="alert">{inputError}</p>}
-      {step === 0 && <><span className="eyebrow">내 구성 확인</span><h2>내 포트폴리오를<br />더 좋게 바꿔볼까요?</h2><p className="hint">보유 종목을 알려주시면 무엇을 얼마나 바꿀지 정리해 드려요.</p>
-        <Button variant="secondary" disabled={saving} onClick={() => void reuse()}>저장된 보유 종목 불러오기</Button>
+      {step === 0 && <><span className="eyebrow holdings-eyebrow">내 구성 확인</span><h2>내 포트폴리오를<br />더 좋게 바꿔볼까요?</h2><p className="hint">보유 ETF를 검색해 평가금액을 적어 주세요.</p>
+        {hasSaved && <Button className="reuse-link" disabled={saving} onClick={() => void reuse()}>저장된 보유 종목 불러오기</Button>}
         <div className="holdings-layout"><div className="holdings-input">
         <>
-          {!!holdings.length && <div className="unit"><div className="unit__row"><div className="switch" data-u={mode === 'percent' ? 'pct' : 'won'} aria-label="숫자 적는 방법">{(['amount', 'percent'] as const).map((m, i) => <Button key={m} aria-pressed={mode === m} onClick={() => changeMode(m)}>{i ? '비율' : '금액'}</Button>)}</div></div><p className="unit__note">{mode === 'percent' ? `전체 계좌 합계 ${percentSum}% · ${percentHundredths === 10000 ? '100%를 맞췄어요' : percentHundredths < 10000 ? `${percentLeft}% 남았어요` : `${percentLeft.replace('-', '')}% 넘었어요`}` : '증권사 앱의 평가금액을 원 단위 그대로 적어 주세요.'}</p></div>}
+          {!!holdings.length && <div className="unit"><div className="unit__row"><div className="switch" data-u={mode === 'percent' ? 'pct' : 'won'} aria-label="숫자 적는 방법">{(['amount', 'percent'] as const).map((m, i) => <Button key={m} aria-pressed={mode === m} onClick={() => changeMode(m)}>{i ? '비율' : '금액'}</Button>)}</div></div><p className="unit__note" data-mode={mode}>{mode === 'percent' ? `전체 계좌 합계 ${percentSum}% · ${percentHundredths === 10000 ? '100%를 맞췄어요' : percentHundredths < 10000 ? `${percentLeft}% 남았어요` : `${percentLeft.replace('-', '')}% 넘었어요`}` : '증권사 앱의 평가금액을 원 단위 그대로 적어 주세요.'}</p></div>}
           {selected.map(account => <article className="acct" key={account}><div className="acct__head"><h3 className="acct__name">{account}</h3>{account !== '일반 계좌' && <Button className="x" aria-label={account + ' 지우기'} onClick={async () => { if (holdings.some(h => h.account === account) && !await ask(account + '와 담은 종목을 입력에서 지울까요?')) return; setSelected(selected.filter(a => a !== account)); setHoldings(holdings.filter(h => h.account !== account)); setAlternate(alternate.filter(h => h.account !== account)); restoreFocus(heading.current); }}>×</Button>}</div>
             {!!holdings.filter(h => h.account === account).length && <ul className="rows">{holdings.map((h, i) => h.account === account && <li className="row" key={i}><span className="row__name">{h.name}</span><label className="num won" data-unit={mode}>{mode === 'amount'
                 ? <TextInput aria-label={h.name + ' 금액'} data-holding={h.account + '|' + h.instrument_id} inputMode="numeric" autoComplete="off" placeholder="0" value={h.amount_krw ? Number(h.amount_krw).toLocaleString('ko-KR') : ''} onKeyDown={nextSearch} onChange={e => setHoldings(holdings.map((x, n) => n === i ? { ...x, amount_krw: e.target.value.replace(/[^\d.]/g, '').replace(/\.\d{0,2}$/, '').replace(/\D/g, '').replace(/^0+/, '') } : x))} />
                 : <TextInput aria-label={h.name + ' 비율'} data-holding={h.account + '|' + h.instrument_id} inputMode="decimal" type="number" min={0.01} max={100} step={0.01} placeholder="0" value={h.amount_krw || ''} onKeyDown={nextSearch} onChange={e => setHoldings(holdings.map((x, n) => n === i ? { ...x, amount_krw: e.target.value } : x))} />}<span>{mode === 'amount' ? '원' : '%'}</span></label><Button className="x" aria-label={h.name + ' 빼기'} onClick={() => { setHoldings(holdings.filter((_, n) => n !== i)); setAlternate(alternate.filter(a => a.account !== h.account || a.instrument_id !== h.instrument_id)); }}>×</Button></li>)}</ul>}
-            <InstrumentSearch account={account} catalog={catalog} onAdd={item => add(account, item)} />
-            <details className="bulk-entry"><summary>여러 종목 한 번에 넣기</summary><label>{account} · 종목 코드와 {mode === 'amount' ? '금액(원)' : '비중(%)'}<TextArea className="field" value={bulk} onChange={e => setBulk(e.target.value)} placeholder={mode === 'amount' ? '360750 5,000,000\n379810 3,000,000' : '360750 50\n379810 50'} /></label><Button variant="secondary" disabled={!catalog || !bulk.trim()} onClick={() => {
+            <InstrumentSearch account={account} catalog={catalog} onAdd={item => add(account, item)} onOpen={openedSearch} />
+            <details className="bulk-entry" onToggle={e => { if (e.currentTarget.open) trackAction('bulk_entry_opened'); }}><summary>여러 종목 한 번에 넣기</summary><label>{account} · 종목 코드와 {mode === 'amount' ? '금액(원)' : '비중(%)'}<TextArea className="field" value={bulk} onChange={e => setBulk(e.target.value)} placeholder={mode === 'amount' ? '360750 5,000,000\n379810 3,000,000' : '360750 50\n379810 50'} /></label><Button variant="secondary" disabled={!catalog || !bulk.trim()} onClick={() => {
               try {
                 const rows = bulkHoldings(bulk, catalog!, account, mode);
                 if (rows.length + holdings.length > 20) throw new Error('최대 20종목까지 담을 수 있어요.');
                 if (rows.some(row => holdings.some(h => h.account === account && h.instrument_id === row.instrument_id))) throw new Error('이미 담은 종목이 있어요. 기존 금액이나 비중을 수정해 주세요.');
                 setHoldings([...holdings, ...rows]); setBulk(''); setInputError('');
-              } catch (error) { setInputError((error as Error).message); }
+                trackAction('bulk_entry_added');
+              } catch (error) { setInputError((error as Error).message); trackAction('bulk_entry_failed'); }
             }}>목록에 추가</Button></details>
           </article>)}
           <div className="q"><TaxAccounts accounts={selected} value={tax} onSave={async profile => { await save(profile); setTax(profile); }} /><div className="chips">{accounts.filter(a => !selected.includes(a)).map(a => <Button className="chip add" key={a} onClick={() => setSelected([...selected, a])}>{a}</Button>)}</div></div>

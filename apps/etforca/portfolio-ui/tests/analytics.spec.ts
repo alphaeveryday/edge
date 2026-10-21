@@ -509,3 +509,57 @@ for (const alreadyShown of [false, true]) test(`newsletter never covers an activ
   await expect(page.locator('.report-feedback')).toHaveCount(0);
   await expect.poll(() => events.filter(e => e.event === 'portfolio_feedback').map(e => e.properties.action)).toEqual(alreadyShown ? ['shown', 'dismissed'] : []);
 });
+
+test('input funnel steps are counted once per visit without the query or the amount', async ({ page, baseURL }) => {
+  // 보고서의 핵심 지표(입력 화면 → 첫 검색 → 첫 종목 추가)를 재려면 이 이벤트가 있어야 하고, 고객 값은 남지 않아야 한다.
+  const events = await instrument(page, baseURL!);
+  await page.goto('https://etforca.com/portfolio/');
+  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
+  await search.fill('zzqprivate');
+  await search.blur();
+  await search.fill('현금');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('7777777');
+  await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
+  await page.getByLabel('일반 계좌 · 종목 코드와 금액(원)').fill('nope 1');
+  await page.getByRole('button', { name: '목록에 추가' }).click();
+  const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
+  await expect.poll(actions).toEqual(expect.arrayContaining(['input_search_opened', 'input_holding_added', 'bulk_entry_opened', 'bulk_entry_failed']));
+  expect(actions().filter(a => a === 'input_search_opened')).toHaveLength(1);
+  expect(JSON.stringify(events)).not.toMatch(/zzqprivate|7777777|7,777,777|nope/);
+});
+
+test('a first search made before visitor classification finishes is still counted', async ({ page, baseURL }) => {
+  // 첫 검색은 화면이 열리자마자 일어난다. 시험·고객 분류 응답이 늦다고 그 행동을 버리면 퍼널의 첫 단계가 비어 보인다.
+  const events = await instrument(page, baseURL!);
+  await page.route('https://etforca.com/api/portfolio/session', async route => { await new Promise(r => setTimeout(r, 2000)); await route.fulfill({ json: { is_test: false } }); });
+  await page.goto('https://etforca.com/portfolio/');
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).focus();
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action), { timeout: 10000 }).toContain('input_search_opened');
+});
+
+test('focus moved by the form itself is not counted as the visitor opening the search', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await page.route('https://etforca.com/api/portfolio/catalog', route => route.fulfill({ json: { counts: { KR: 0, US: 1 }, instruments: [{ id: 'US:VOO', name: 'VOO', ticker: 'VOO', code: 'VOO', market: 'US', kind: 'etf' }] } }));
+  await page.goto('https://etforca.com/portfolio/');
+  await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
+  await page.getByLabel('일반 계좌 · 종목 코드와 금액(원)').fill('VOO 1000000');
+  await page.getByRole('button', { name: '목록에 추가' }).click();
+  await page.getByRole('textbox', { name: 'VOO 금액' }).press('Enter');
+  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
+  await expect(search).toBeFocused();
+  // 뒤에 일어난 행동이 도착한 걸 확인한 뒤에 부재를 본다 — 이벤트는 묶음으로 보내져 늦게 올 수 있다.
+  await page.keyboard.press('Escape'); // 포커스된 검색창의 후보 목록이 아래 '여러 종목' 토글을 덮는다
+  await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
+  await expect(page.locator('details.bulk-entry')).not.toHaveAttribute('open', '');
+  await page.waitForTimeout(100); // toggle 이벤트는 비동기라, 닫힘이 처리되기 전에 다시 열면 한 번으로 합쳐진다
+  await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
+  const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
+  await expect.poll(() => actions().filter(a => a === 'bulk_entry_opened').length).toBe(2);
+  expect(actions()).not.toContain('input_search_opened');
+  // 코드가 옮긴 검색창에 방문자가 바로 입력하면 그때는 방문자의 첫 검색이다(포커스 이벤트 없이 입력만으로 세야 한다).
+  await page.getByRole('textbox', { name: 'VOO 금액' }).press('Enter');
+  await expect(search).toBeFocused();
+  await page.keyboard.type('V');
+  await expect.poll(actions).toContain('input_search_opened');
+});
