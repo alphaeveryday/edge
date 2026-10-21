@@ -178,6 +178,7 @@ test('tax details and custom interests persist without a dividend step', async (
   await page.getByRole('radio', { name: '아니요', exact: true }).check();
   await page.getByRole('radio', { name: '중개형 · 일반형', exact: true }).check();
   await page.getByRole('checkbox', { name: 'IRP', exact: true }).check();
+  await page.getByRole('group', { name: 'IRP 가입 대상에 해당하나요?', exact: true }).getByRole('radio', { name: '확인 필요', exact: true }).check();
   await page.getByRole('checkbox', { name: 'ISA', exact: true }).check();
   await page.getByRole('checkbox', { name: '연금저축', exact: true }).check();
   await page.getByRole('checkbox', { name: 'ISA', exact: true }).uncheck();

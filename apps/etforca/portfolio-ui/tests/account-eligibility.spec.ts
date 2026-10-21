@@ -1,5 +1,23 @@
 import { test, expect } from '@playwright/test';
 
+for (const account of ['ISA', 'IRP']) test(`new ${account} eligibility answers require an explicit answer or unknown`, async ({ page }) => {
+  await page.goto('/portfolio/?preview=input');
+  await expect.poll(() => page.evaluate(() => sessionStorage.getItem('edge-preview-form-v2'))).not.toBeNull();
+  await page.evaluate(account => {
+    const saved = JSON.parse(sessionStorage.getItem('edge-preview-form-v2')!);
+    saved.tax = { residence: '대한민국 거주자', age: '15~18세', income: '소득 없음', financial_income_tax: '아니요', recommended_accounts: [account], accounts: [] };
+    sessionStorage.setItem('edge-preview-form-v2', JSON.stringify(saved));
+  }, account);
+  await page.reload();
+  await page.locator('.tax-trigger').click();
+  const dialog = page.getByRole('dialog', { name: '나에게 맞는 절세 전략' });
+  await dialog.getByRole('button', { name: '선택한 내용 적용하기' }).click();
+  await expect(dialog.getByRole('alert')).toContainText(account === 'ISA' ? '직전년도 근로소득 여부' : 'IRP 가입 대상');
+  await dialog.getByRole('group', { name: account === 'ISA' ? '직전년도에 과세 대상 근로소득이 있었나요?' : 'IRP 가입 대상에 해당하나요?', exact: true }).getByRole('radio', { name: '확인 필요', exact: true }).check();
+  await dialog.getByRole('button', { name: '선택한 내용 적용하기' }).click();
+  await expect(dialog).not.toBeVisible();
+});
+
 test('a restored ineligible target cannot silently save as an empty selection', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem('edge-preview-form-v2'))).not.toBeNull();

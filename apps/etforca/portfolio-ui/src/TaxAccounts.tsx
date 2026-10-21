@@ -4,7 +4,7 @@ import { accountIneligibleReason } from './accountEligibility';
 
 export type TaxProfile = { residence: string; age: string; income: string; financial_income_tax: string; previous_year_earned_income?: string; irp_qualification?: string; recommended_accounts: string[]; accounts: { account: string; subtype: string; opened: string; remaining_man: string; paid_man: string }[] };
 export function missingTaxAnswers(value: TaxProfile, accounts: string[]) {
-  return [!value.residence && '세법상 거주지', !value.age && '나이 구간', !value.income && '연간 소득 구간', !value.financial_income_tax && '금융소득종합과세 여부', ...accounts.filter(a => a !== '일반 계좌' && !value.accounts.find(v => v.account === a)?.subtype).map(a => a + ' 세부 유형'), !value.recommended_accounts.filter(account => !accountIneligibleReason(account, value)).length && '전략에 포함할 계좌'].filter(Boolean).join(', ');
+  return [!value.residence && '세법상 거주지', !value.age && '나이 구간', !value.income && '연간 소득 구간', !value.financial_income_tax && '금융소득종합과세 여부', value.recommended_accounts.includes('IRP') && !value.irp_qualification && 'IRP 가입 대상', value.recommended_accounts.includes('ISA') && ['15~18세', '19세 미만'].includes(value.age) && !value.previous_year_earned_income && '직전년도 근로소득 여부', ...accounts.filter(a => a !== '일반 계좌' && !value.accounts.find(v => v.account === a)?.subtype).map(a => a + ' 세부 유형'), !value.recommended_accounts.filter(account => !accountIneligibleReason(account, value)).length && '전략에 포함할 계좌'].filter(Boolean).join(', ');
 }
 export function TaxAccounts({ accounts, value, onSave }: { accounts: string[]; value: TaxProfile | null; onSave: (value: TaxProfile) => Promise<void> }) {
   const dialog = useRef<HTMLDialogElement>(null);
