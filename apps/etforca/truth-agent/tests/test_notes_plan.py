@@ -97,15 +97,15 @@ def test_plan_order_is_followed_and_each_session_gets_only_its_own_notes(flow):
     plan_md = store.get(f"plans/2026-10-21/{report['runId']}.md")[0].decode("utf-8")
     assert plan_md.index("geumyang-monlaa") < plan_md.index("hybe-ipo-2019") and "homeplus-short-term-bonds" in plan_md
 
-    # 한 시간 뒤: 방금 조사한 사건은 새 기사도 없고 다시 볼 때가 안 됐다. 고르지 않은 두 사건만 후보로 남는다.
+    # 한 시간 뒤: 조사한 사건은 다시 볼 때가 안 됐고, 고르지 않은 두 사건은 미뤄졌다 — 유료 계획 세션을 부르지 않는다.
     log.clear()
     runner.run(cfg, "hourly", lake=_lake(), session_runner=_sessions([], log), now=NOW + timedelta(hours=1))
-    assert log == [("plan", ["homeplus-short-term-bonds", "koreazinc-offering-2024"])]
+    assert log == []
 
-    # 하루가 지나면 '다음에 찾아볼 것'이 남은 사건이 다시 후보가 된다.
+    # 하루가 지나면 '다음에 찾아볼 것'이 남은 사건과 미뤄 둔 사건이 다시 후보가 된다.
     log.clear()
     runner.run(cfg, "hourly", lake=_lake(), session_runner=_sessions([], log), now=NOW + runner.FOLLOW_UP + timedelta(hours=1))
-    assert {"geumyang-monlaa", "hybe-ipo-2019"} <= set(log[0][1])
+    assert set(log[0][1]) == {"geumyang-monlaa", "hybe-ipo-2019", "homeplus-short-term-bonds", "koreazinc-offering-2024"}
 
 
 def test_failed_session_leaves_a_code_record_and_keeps_the_articles(flow):
@@ -115,6 +115,7 @@ def test_failed_session_leaves_a_code_record_and_keeps_the_articles(flow):
     assert report["failed"] == ["hybe-ipo-2019"]
     saved = store.get(notes.key("hybe-ipo-2019"))[0].decode("utf-8")
     assert "(코드 기록)" in saved and "모델 API 장애" in saved
+    assert notes.open_items(saved) == 1  # 할 일이 비어 있던 첫 조사가 실패해도 FOLLOW_UP 뒤 다시 올라오게
     state = runner.json.loads(store.get(runner.STATE_KEY)[0])
     assert state["pending"]["hybe-ipo-2019"]["tries"] == 1
 
@@ -166,3 +167,35 @@ def test_registered_source_can_be_looked_up_by_id(tmp_path):
                            now=NOW.isoformat(), notes=notes.template(case))
     shown = tools.view_news(ws, {"id": "official-fsc-87894"})
     assert "https://www.fsc.go.kr/no010101/87894" in shown and "web_fetch" in shown
+
+
+def test_failed_plan_falls_back_to_code_order(flow):
+    # 계획 세션 하나가 매시 실패하면 사건 조사가 전부 멈춘다 — 코드 순서로 대신 조사하고 실패는 보고한다.
+    cfg, store = flow
+    log: list = []
+
+    def plan_breaks(cfg, ws, *, case_id, mode, prompt, **kw):
+        if mode == "plan":
+            raise RuntimeError("계획 모델 장애")
+        log.append(case_id)
+        tools.write_notes(ws, {"next": [], "record": "조사함"})
+        state = ws.state
+        state["done"] = True
+        ws.save_state(state)
+        return SessionResult(case_id=case_id, done=True)
+
+    report = runner.run(cfg, "hourly", lake=_lake(), session_runner=plan_breaks, now=NOW)
+    assert log[0] == "hybe-ipo-2019" and len(log) == cfg.max_sessions  # 절차 단서 기사가 있는 사건부터
+    assert report["plan"]["fallback"] and report["failed"] == ["plan-1005"]
+
+
+def test_name_only_articles_do_not_wake_the_planner(flow):
+    # 이름만 나온 기사(실적·신상품)마다 유료 계획 세션을 부르면 매시 비용만 든다. 절차 단서가 있어야 후보가 된다.
+    from test_news_render_runner import FakeLake, bk
+    cfg, store = flow
+    runner.run(cfg, "hourly", lake=_lake(), session_runner=_sessions(["hybe-ipo-2019"], []), now=NOW)
+    key = news.minute_prefix("2026-10-21") + "window=1030/attempt=1/page=1.ndjson"
+    quiet = FakeLake({key: [bk("하이브 신인 걸그룹 데뷔", "하이브가 새 걸그룹을 공개했다.", "https://www.yna.co.kr/view/AKR2", "01100101.20261021103000002")]})
+    log: list = []
+    runner.run(cfg, "hourly", lake=quiet, session_runner=_sessions([], log), now=NOW + timedelta(hours=1))
+    assert log == []

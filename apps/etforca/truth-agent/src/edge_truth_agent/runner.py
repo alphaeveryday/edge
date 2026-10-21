@@ -34,6 +34,7 @@ BACKFILL = ("title",)     # 나중에 생긴 칸: 저장본이 비어 있을 때
 DISCOVER_LIMIT = 3  # 하루(새 사건 찾기 한 번)에 등록하는 새 사건 상한
 PENDING_KEEP = 20  # 사건 하나에 쌓아 두는 배정 기사 수(최신만)
 PLAN_TOOL_CALLS = 8  # 계획 세션 도구 예산: 기사 몇 건을 훑고 set_plan·finish
+PLAN_TIMEOUT = 180  # 계획 세션 시간(초). 계획 + 사건 세션 4개(600초)가 잠금(55분) 안에 여유 있게 들게
 FOLLOW_UP = timedelta(hours=24)  # 새 기사 없이 '다음에 찾아볼 것'만 남은 사건을 다시 후보로 올리는 간격
 PENDING_TRIES = 3  # 반영되지 못한 배정 기사를 다시 시도하는 실행 수. 넘기면 버리고 보고에 남긴다
 SEED_DIR = Path(os.environ.get("TRUTH_SEED_DIR", Path(__file__).resolve().parents[2] / "seed"))
@@ -147,30 +148,44 @@ def _prompt_update(case: dict, articles: list[news.Article], reason: str, note: 
             "끝내기 전에 write_notes 로 다음에 찾아볼 것과 이번 조사 기록을 남기세요.")
 
 
+def _put_memo(store, report: dict, key: str, text: str) -> None:
+    """노트·계획 기록 쓰기. 메모라서 실패해도 사건 게시를 막지 않는다 — 보고에 남긴다."""
+    try:
+        store.put(key, text.encode("utf-8"), content_type="text/markdown; charset=utf-8")
+    except Exception as error:  # noqa: BLE001 - 메모 실패로 저장된 사건 수정의 게시·상태 저장을 건너뛰지 않는다
+        log.warning(json.dumps({"event": "memo_write_failed", "key": key, "error": str(error)[:200]}, ensure_ascii=False))
+        report.setdefault("memoErrors", []).append(key)
+
+
 def _load_notes(store, case: dict) -> str:
     data, _ = store.get(notes.key(case["id"]))
     return data.decode("utf-8") if data else notes.template(case)
 
 
-def _plan_candidates(cases: dict[str, dict], pending: dict[str, dict], notes_text: dict[str, str], seen: dict[str, str],
-                     now: datetime) -> list[dict]:
-    """계획 세션에 올릴 후보: 새 배정 기사가 있거나, 한 번도 안 봤거나, 할 일이 남았고 FOLLOW_UP 이 지난 사건.
+def _plan_candidates(cases: dict[str, dict], pending: dict[str, dict], texts: dict[str, news.Article], notes_text: dict[str, str],
+                     seen: dict[str, str], deferred: dict[str, dict], now: datetime) -> list[dict]:
+    """계획 세션에 올릴 후보: 절차 단서가 있는 배정 기사가 있거나, 한 번도 안 봤거나, 할 일이 남았고 FOLLOW_UP 이 지난 사건.
     노트 본문은 싣지 않는다(세션은 자기 사건 노트 하나만 본다) — 할 일 개수만 코드가 센다."""
     rows = []
     for cid, text in notes_text.items():
-        last, todo, fresh = seen.get(cid), notes.open_items(text), len(pending.get(cid, {}).get("ids", []))
-        if fresh or last is None or (todo and now - datetime.fromisoformat(last) >= FOLLOW_UP):
+        ids = pending.get(cid, {}).get("ids", [])
+        cue = sum(routing.needs_session([texts[i]]) for i in ids)  # 이름만 나온 기사로는 계획(유료 모델)을 부르지 않는다
+        last, todo, held = seen.get(cid), notes.open_items(text), deferred.get(cid)
+        if held and now - datetime.fromisoformat(held["at"]) < FOLLOW_UP and cue <= held["cue"]:
+            continue  # 지난 계획이 고르지 않은 사건: 새 절차 단서가 오거나 FOLLOW_UP 이 지날 때까지 다시 올리지 않는다
+        if cue or last is None or (todo and now - datetime.fromisoformat(last) >= FOLLOW_UP):
             c = cases[cid]
             rows.append({"id": cid, "subject": c["subject"], "status": c["status"], "headline": c.get("title") or c["headline"][0],
-                         "impact": c.get("impact"), "newArticles": fresh, "openItems": todo, "lastLooked": last})
-    return sorted(rows, key=lambda r: (-r["newArticles"], -(r["impact"] or 0)))
+                         "impact": c.get("impact"), "newArticles": len(ids), "cueArticles": cue, "openItems": todo, "lastLooked": last})
+    return sorted(rows, key=lambda r: (-r["cueArticles"], -(r["impact"] or 0)))
 
 
 def _prompt_plan(rows: list[dict], pending: dict[str, dict], texts: dict[str, news.Article], limit: int, now: datetime) -> str:
     lines = []
     for r in rows:
         last = r["lastLooked"][:16].replace("T", " ") if r["lastLooked"] else "아직 없음"
-        lines.append(f"- {r['id']} | {r['headline']} | {r['status']} | 파급력 {r['impact']} | 새 기사 {r['newArticles']}건 | "
+        lines.append(f"- {r['id']} | {r['headline']} | {r['status']} | 파급력 {r['impact']} | "
+                     f"새 기사 {r['newArticles']}건(절차 단서 {r['cueArticles']}건) | "
                      f"다음에 찾아볼 것 {r['openItems']}개 | 마지막으로 본 때 {last}")
         for i in pending.get(r["id"], {}).get("ids", [])[-5:]:
             a = texts[i]
@@ -286,7 +301,8 @@ def run(cfg, mode: str, *, lake=None, session_runner=session.run, now: datetime 
                     pending[cid] = {"ids": ids, "tries": entry.get("tries", 0)}
             for cid, arts in routing.route(fresh, list(cases.values())).items():
                 entry = pending.setdefault(cid, {"ids": [], "tries": 0})
-                if added := [a.id for a in arts if a.id not in entry["ids"]]:
+                # 정리(prune)로 말뭉치에서 이미 빠진 오래된 기사는 쌓지 않는다 — 뒤에서 texts[id] 로 읽는다
+                if added := [a.id for a in arts if a.id in texts and a.id not in entry["ids"]]:
                     entry["ids"], entry["tries"] = (entry["ids"] + added)[-PENDING_KEEP:], 0
         # 관련 보도는 새 기사만이 아니라 보관 중인 말뭉치 전체에서 같은 규칙으로 고른다 — 규칙이 바뀌거나
         # 잡음이 걸러져도 다음 실행이 스스로 채운다. 모델 세션은 계획에 오른 사건만 연다.
@@ -299,35 +315,44 @@ def run(cfg, mode: str, *, lake=None, session_runner=session.run, now: datetime 
 
         # 3. 세션 (모델): 계획 세션이 조사할 사건과 순서를 정하고, 사건 세션을 하나씩 연다(세션마다 그 사건 노트 하나만).
         start = partial(_run_session, cfg, run_dir, corpus_path=corpus_path, cases_dir=cases_dir, now=now, session_runner=session_runner)
-        start_plan = partial(_run_session, replace(cfg, max_tool_calls=PLAN_TOOL_CALLS), run_dir, corpus_path=corpus_path,
-                             cases_dir=cases_dir, now=now, session_runner=session_runner)
+        start_plan = partial(_run_session, replace(cfg, max_tool_calls=PLAN_TOOL_CALLS, session_timeout=PLAN_TIMEOUT), run_dir,
+                             corpus_path=corpus_path, cases_dir=cases_dir, now=now, session_runner=session_runner)
         outcomes: list = []
         investigated: list[tuple[str, session.SessionResult, Workspace]] = []
         seen: dict[str, str] = state.setdefault("seen", {}) if mode == "hourly" else {}
+        deferred: dict[str, dict] = state.setdefault("deferred", {}) if mode == "hourly" else {}
         notes_text: dict[str, str] = {}
         if mode == "hourly":
             notes_text = {cid: _load_notes(store, c) for cid, c in cases.items() if not c.get("locked")}
-            if rows := _plan_candidates(cases, pending, notes_text, seen, now):
+            if rows := _plan_candidates(cases, pending, texts, notes_text, seen, deferred, now):
                 inbox = [texts[i] for r in rows for i in pending.get(r["id"], {}).get("ids", [])]
                 result, ws = start_plan(key=f"plan-{now.strftime('%H%M')}", mode="plan", case=None, inbox=inbox, index=rows,
                                         prompt=_prompt_plan(rows, pending, texts, cfg.max_sessions, now))
                 outcomes.append((result, ws))
                 plan = ws.state.get("plan") if result.done else None
-                if plan:
-                    report["plan"] = plan
-                    store.put(f"plans/{today.isoformat()}/{run_id}.md", _plan_md(plan, rows, now).encode("utf-8"),
-                              content_type="text/markdown; charset=utf-8")
-                    for cid in plan["skip"]:  # 새 기사가 무관·반복이라고 본 사건: 쌓인 기사를 비운다
-                        pending.pop(cid, None)
-                        seen[cid] = now.isoformat()
-                    index = summaries(list(cases.values()))
-                    for item in plan["order"][:cfg.max_sessions]:
-                        cid = item["case"]
-                        arts = [texts[i] for i in pending.get(cid, {}).get("ids", [])]
-                        result, ws = start(key=cid, mode="update", case=cases[cid], inbox=arts, index=index, notes=notes_text[cid],
-                                           prompt=_prompt_update(cases[cid], arts, item["reason"], notes_text[cid]))
-                        outcomes.append((result, ws))
-                        investigated.append((cid, result, ws))
+                if plan is None:  # 계획이 실패해도 조사는 돈다 — 코드 순서(절차 단서·파급력)로 대신한다. 실패는 failed 에 남는다
+                    plan = {"order": [{"case": r["id"], "reason": "계획 세션 실패 — 코드 순서(절차 단서·파급력)"} for r in rows],
+                            "skip": [], "fallback": True}
+                plan["order"] = plan["order"][:cfg.max_sessions]  # 실제로 여는 만큼만 기록한다
+                report["plan"] = plan
+                _put_memo(store, report, f"plans/{today.isoformat()}/{run_id}.md", _plan_md(plan, rows, now))
+                chosen = {i["case"] for i in plan["order"]} | set(plan["skip"])
+                for r in rows:
+                    if r["id"] not in chosen:  # 고르지 않은 후보는 미룬다(매시 같은 후보로 계획을 다시 부르지 않게)
+                        deferred[r["id"]] = {"at": now.isoformat(), "cue": r["cueArticles"]}
+                for cid in plan["skip"]:  # 새 기사가 무관·반복이라고 본 사건: 쌓인 기사를 비운다
+                    pending.pop(cid, None)
+                    deferred.pop(cid, None)
+                    seen[cid] = now.isoformat()
+                index = summaries(list(cases.values()))
+                for item in plan["order"]:
+                    cid = item["case"]
+                    deferred.pop(cid, None)
+                    arts = [texts[i] for i in pending.get(cid, {}).get("ids", [])]
+                    result, ws = start(key=cid, mode="update", case=cases[cid], inbox=arts, index=index, notes=notes_text[cid],
+                                       prompt=_prompt_update(cases[cid], arts, item["reason"], notes_text[cid]))
+                    outcomes.append((result, ws))
+                    investigated.append((cid, result, ws))
         else:
             # 새 사건은 차례로 찾는다 — 앞 세션이 등록한 사건이 다음 세션의 목록·후보 제외에 들어가야 같은 사건이 두 번 안 생긴다.
             outcomes, found = [], dict(cases)
@@ -394,12 +419,14 @@ def run(cfg, mode: str, *, lake=None, session_runner=session.run, now: datetime 
         for cid, result, ws in investigated:
             text = ws.notes() or notes_text[cid]
             if cid not in landed:
-                text = notes.add_record(text, when, f"세션이 마무리되지 못해 사건 수정은 반영하지 않았다: "
-                                                    f"{result.error or '검사 미통과 또는 finish 전 중단'}")
+                # 할 일이 비면 FOLLOW_UP 이 이 사건을 다시 올리지 않는다(처음 조사가 실패한 사건은 영영 안 보게 된다)
+                todo = notes.items(text) or ["지난 세션이 마무리되지 못했다 — 사건 파일과 출처를 처음부터 다시 확인"]
+                text = notes.update(text, when, todo, f"세션이 마무리되지 못해 사건 수정은 반영하지 않았다: "
+                                                      f"{result.error or '검사 미통과 또는 finish 전 중단'}")
             elif cid in undone:
                 text = notes.add_record(text, when, "사건 수정이 화면 렌더 검사나 동시 수정 충돌로 되돌려졌다.")
             if text != notes_text[cid]:
-                store.put(notes.key(cid), text.encode("utf-8"), content_type="text/markdown; charset=utf-8")
+                _put_memo(store, report, notes.key(cid), text)
             seen[cid] = now.isoformat()
             if cid in landed and cid not in undone:
                 pending.pop(cid, None)

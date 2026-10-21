@@ -36,8 +36,12 @@ def _parse(text: str) -> tuple[str, list[str], list[str]]:
     return title, items, records
 
 
+def items(text: str) -> list[str]:
+    return _parse(text)[1]
+
+
 def open_items(text: str) -> int:
-    return len(_parse(text)[1])
+    return len(items(text))
 
 
 def update(text: str, when: str, items: list[str], record: str) -> str:
