@@ -14,10 +14,12 @@ import json
 import logging
 import os
 from pathlib import Path
+import random
 import tempfile
+import time
 import uuid
 
-from . import corpus, news, notes, routing, session, site
+from . import corpus, media, news, notes, routing, session, site
 from .cases import problems
 from .render import render
 from .store import ABSENT, ConflictError, open_store
@@ -316,6 +318,15 @@ def run(cfg, mode: str, *, lake=None, session_runner=session.run, now: datetime 
         for cid, case in cases.items():
             if not case.get("locked") and routing.add_related(case, routing.newest(corpus_related.get(cid, [])), today, now.isoformat()):
                 case["updatedAt"] = now.isoformat()
+        # 사진·영상도 같은 방식: 모델이 아니라 코드가 등록된 출처에서 채우고, 못 찾으면 다음 실행이 다시 찾는다.
+        # 순서를 섞어, 시간 상한이 매번 같은 사건에서 끊겨 뒤쪽 사건이 영영 채워지지 않는 일을 막는다.
+        if mode == "hourly":
+            media_deadline = time.monotonic() + media.RUN_SECONDS
+            for case in random.sample(list(cases.values()), len(cases)):
+                if not case.get("locked") and media.fill(case, media_deadline):
+                    case["updatedAt"] = now.isoformat()
+            if time.monotonic() >= media_deadline:
+                log.warning(json.dumps({"event": "media_deadline", "seconds": media.RUN_SECONDS}, ensure_ascii=False))
         for c in cases.values():
             (cases_dir / f"{c['id']}.json").write_bytes(_json(c))
 

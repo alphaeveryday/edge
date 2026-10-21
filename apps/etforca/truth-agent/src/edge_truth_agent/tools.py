@@ -25,6 +25,8 @@ EDITABLE = frozenset({"subject", "title", "instruments", "aliases", "topics", "s
                       "legalStatus", "ach", "beneficiary", "cover", "video", "body", "rebuttal"})
 READ_ONLY = ("id", "schemaVersion", "status", "resolution", "resolvedAt", "flaggedAt", "updatedAt", "origin", "locked",
              "sources", "related", "impact", "impactReason")
+MEDIA = ("cover", "video")  # 주소를 지어내지 않게 코드(media.fill)가 출처에서 채운다. 모델은 깨진 것을 null 로 비우기만 한다
+MEDIA_HINT = "cover·video 는 코드가 등록된 출처 기사에서 채웁니다. 주소를 직접 적지 말고, 깨졌으면 set_value 로 null 만 넣으세요."
 WEB_CALL_LIMIT = 6
 SHOW_CHARS = 6000
 
@@ -258,6 +260,8 @@ def str_replace(ws: Workspace, args: dict) -> str:
             value = paths.get(case, path)
         except paths.PathError as error:
             raise ToolError(str(error)) from error
+        if paths.parse(path)[0] in MEDIA:
+            raise ToolError(MEDIA_HINT)
         if not isinstance(value, str):
             raise ToolError(f"'{path}' 는 문자열 칸이 아닙니다. set_value 를 쓰세요.")
         count = value.count(old) if old else 0
@@ -278,7 +282,8 @@ def set_value(ws: Workspace, args: dict) -> str:
     with ws.lock():
         case, state = _need_case(ws), ws.state
         _need_fresh_view(ws, state)
-        _root(path)
+        if _root(path) in MEDIA and (args["value"] is not None or path not in MEDIA):
+            raise ToolError(MEDIA_HINT)
         try:
             paths.put(case, path, args["value"])
         except paths.PathError as error:
