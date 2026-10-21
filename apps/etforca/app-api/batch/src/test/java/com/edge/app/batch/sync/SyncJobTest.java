@@ -44,6 +44,9 @@ class SyncJobTest {
     static void seed(@Autowired JdbcTemplate jdbc, @Autowired PipelineDatabase pipelineDatabase) {
         // 원천 날짜·시각은 일봉 1년·발행본 30일 조회 창 안에 들도록 실행 시점 기준
         JdbcTemplate pipeline = pipelineDatabase.jdbc();
+        // 같은 티커의 다른 시장 ETF 를 먼저 넣어 시장 조건 없는 조회가 그쪽을 집는 상태
+        pipeline.update("insert into entity values ('i-us', '해외 동명 ETF')");
+        pipeline.update("insert into instrument values ('i-us', 'XNYS', '091160', 'ETF')");
         pipeline.update("insert into entity values ('i-etf', 'KODEX 반도체'), ('i-a', 'SK하이닉스 보통주'), ('i-b', '삼성전자')");
         pipeline.update("insert into instrument values ('i-etf', 'XKRX', '091160', 'ETF'), ('i-a', 'XKRX', '000660', 'EQUITY'), "
                 + "('i-b', 'XKRX', '005930', 'EQUITY')");
@@ -57,6 +60,9 @@ class SyncJobTest {
         pipeline.update("insert into movement_analyses values ('m-db', '091160', now() - interval '2 days', 'completed', "
                 + "now() - interval '2 days', '2026-09-29', '실데이터 요약', '{mi-2,mi-1}', 'database'), "
                 + "('m-old', '091160', now() - interval '47 hours', 'completed', now() - interval '47 hours', '2026-09-29', '가상 요약', '{}', 'unknown')");
+        // 같은 거래일의 더 최근 실데이터 발행본이라도 회수된 것은 제외
+        pipeline.update("insert into movement_analyses values ('m-withdrawn', '091160', now() - interval '46 hours', 'completed', "
+                + "now() - interval '46 hours', '2026-09-29', '회수된 요약', '{}', 'database', now())");
         pipeline.update("insert into movement_items(item_id, analysis_id, type, title_keyword, sentence, sentiment) values "
                 + "('mi-1', 'm-db', '이슈', 'HBM', '공급 시작', 'positive'), ('mi-2', 'm-db', '수급', '외국인', '순매수', 'neutral'), "
                 + "('mi-3', 'm-db', '차트', '선택 안 됨', '빠짐', 'negative')");
@@ -93,7 +99,8 @@ class SyncJobTest {
         run();
 
         assertThat(jdbc.queryForList("select code from etf", String.class)).as("선별 목록 밖 ETF 는 지워진다").containsExactly("091160");
-        assertThat(jdbc.queryForObject("select name from etf where code = '091160'", String.class)).isEqualTo("KODEX 반도체");
+        assertThat(jdbc.queryForObject("select instrument_id || ':' || name from etf where code = '091160'", String.class))
+                .as("선별 코드는 KRX 종목").isEqualTo("i-etf:KODEX 반도체");
         Map<String, Object> quote = jdbc.queryForMap("select price, change_pct from etf_quote where etf_code = '091160'");
         assertThat((BigDecimal) quote.get("price")).isEqualByComparingTo("142700");
         assertThat((BigDecimal) quote.get("change_pct")).as("등락률은 두 종가로 계산").isEqualByComparingTo("1.09");
@@ -109,7 +116,7 @@ class SyncJobTest {
         assertThat(detail.path("info").toString()).contains("{\"k\":\"총보수\",\"v\":\"연 0.45%\"}");
 
         JsonNode move = json("select payload::text from etf_move where etf_code = '091160'");
-        assertThat(move.path("summary").asText()).isEqualTo("실데이터 요약");
+        assertThat(move.path("summary").asText()).as("회수된 발행본 제외").isEqualTo("실데이터 요약");
         assertThat(move.path("items").valueStream().map(i -> i.path("type").asText()).toList())
                 .as("선택 항목만, 선택 순서대로").containsExactly("수급", "이슈");
         assertThat(jdbc.queryForObject("select count(*) from etf_move where as_of = '2026-09-20'", Integer.class))

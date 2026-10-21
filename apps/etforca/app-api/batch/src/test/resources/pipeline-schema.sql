@@ -21,7 +21,8 @@ CREATE TABLE movement_analyses (
     analysis_id text PRIMARY KEY, etf_code text NOT NULL, analysis_at timestamptz NOT NULL,
     status text NOT NULL CHECK (status IN ('running', 'completed', 'failed')), published_at timestamptz,
     trading_date date NOT NULL, summary text, selected_item_ids text[] NOT NULL DEFAULT '{}',
-    data_source text NOT NULL DEFAULT 'unknown' CHECK (data_source IN ('unknown', 'synthetic', 'database')));
+    data_source text NOT NULL DEFAULT 'unknown' CHECK (data_source IN ('unknown', 'synthetic', 'database')),
+    withdrawn_at timestamptz);
 CREATE TABLE movement_items (
     item_id text PRIMARY KEY, analysis_id text NOT NULL REFERENCES movement_analyses(analysis_id),
     type text NOT NULL CHECK (type IN ('이슈', '차트', '매크로', '밸류', '수급')), title_keyword text NOT NULL,

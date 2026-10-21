@@ -49,7 +49,7 @@ public class PipelineRepository {
         return jdbc.query("""
                 select i.instrument_id, i.market_code, coalesce(e.display_name, i.ticker) name
                   from instrument i left join entity e on e.entity_id = i.instrument_id
-                 where i.ticker = ? and i.instrument_type = 'ETF'
+                 where i.market_code = 'XKRX' and i.ticker = ? and i.instrument_type = 'ETF'
                 """, (rs, n) -> new Instrument(rs.getString(1), rs.getString(2), rs.getString(3)), code).stream().findFirst();
     }
 
@@ -93,11 +93,11 @@ public class PipelineRepository {
                 instrumentId, instrumentId, prev, last);
     }
 
-    /** 거래일마다 최신 완료 발행본 1건 */
+    /** 거래일마다 회수되지 않은 최신 완료 발행본 1건 */
     public List<Movement> movements(String code, Instant since) {
         return jdbc.query("""
                 select distinct on (trading_date) analysis_id, trading_date, published_at, summary, selected_item_ids
-                  from movement_analyses where etf_code = ? and analysis_at >= ? and %s
+                  from movement_analyses where etf_code = ? and analysis_at >= ? and withdrawn_at is null and %s
                  order by trading_date, analysis_at desc
                 """.formatted(DONE), (rs, n) -> new Movement(rs.getString(1), rs.getObject(2, LocalDate.class),
                         rs.getObject(3, OffsetDateTime.class).toInstant(), rs.getString(4), strings(rs.getArray(5))),
