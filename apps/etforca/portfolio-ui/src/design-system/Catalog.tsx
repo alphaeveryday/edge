@@ -32,6 +32,7 @@ export function DesignCatalog() {
         <label htmlFor="ds-email">이메일 주소<TextInput id="ds-email" type="email" value={email} onChange={e=>{setEmail(e.target.value);setSubmitted(false);}} placeholder="name@example.com" required /></label>
         <label htmlFor="ds-account">계좌<Select id="ds-account"><option>전체 계좌</option><option>ISA</option><option>IRP</option></Select></label>
         <label htmlFor="ds-question">요청사항 · 선택<TextArea id="ds-question" placeholder="궁금한 점을 적어 주세요" /></label>
+        <details className="askbox"><summary>요청사항 적기 · 선택</summary><div className="askbox__body"><label className="lab" htmlFor="ds-ask-folded">요청사항</label><p>모바일 입력 1단계에서는 선택 항목을 접어 두고 필요할 때 펼쳐요.</p><TextArea id="ds-ask-folded" placeholder="궁금한 점을 적어 주세요" /></div></details>
         <label htmlFor="ds-error">현재 평가금액<TextInput id="ds-error" value="" readOnly aria-invalid="true" aria-describedby="ds-error-message" /></label><p id="ds-error-message" className="ds-field-error">0보다 큰 금액을 입력해 주세요.</p>
         <Button variant="primary" type="submit">예시 입력 확인하기</Button>
         {submitted&&<Notice tone="success">입력 형식을 확인했어요. 저장하거나 메일을 보내지 않았어요.</Notice>}

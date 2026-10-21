@@ -81,7 +81,7 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
     return () => { stopped = true; };
   }, []);
   // 요청사항은 선택이다. 모바일 첫 화면에서는 접어 두고, 자리가 넉넉한 PC나 이미 적은 요청이 있으면 펼친다(처음 값만 쓰고 이후는 방문자가 연다·닫는다).
-  const [askOpen] = useState(() => !!initial?.question || window.matchMedia('(min-width: 1100px)').matches);
+  const [askOpen, setAskOpen] = useState(() => !!initial?.question || window.matchMedia('(min-width: 1100px)').matches);
   const searchOpened = useRef(false);
   const revealing = useRef(false);
   // 포커스를 옮긴 칸이 하단 고정 버튼·화면 밖·모바일 키보드 뒤에 숨지 않게 직접 맞춘다. focus() 는 반쯤 보이는 칸을 다시
@@ -205,11 +205,11 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
               } catch (error) { setInputError((error as Error).message); trackAction('bulk_entry_failed'); }
             }}>목록에 추가</Button></details>
           </article>)}
-          <div className="q">{/* 절세 전략은 선택이라 보유를 하나 넣은 뒤(또는 이미 답한 뒤)에만 연다 — 첫 화면에서 할 일을 흐리지 않게. */}{(holdings.length > 0 || tax) && <TaxAccounts accounts={selected} value={tax} onSave={async profile => { await save(profile); setTax(profile); }} />}<div className="chips">{accounts.filter(a => !selected.includes(a)).map(a => <Button className="chip add" key={a} onClick={() => setSelected([...selected, a])}>{a}</Button>)}</div></div>
+          <div className="q"><TaxAccounts accounts={selected} value={tax} onSave={async profile => { await save(profile); setTax(profile); }} /><div className="chips">{accounts.filter(a => !selected.includes(a)).map(a => <Button className="chip add" key={a} onClick={() => setSelected([...selected, a])}>{a}</Button>)}</div></div>
           <div className="entry"><Button className="rec" disabled={saving} onClick={() => void advance(true)}><b>종목부터 추천받기</b><span>나에게 맞는 ETF부터 찾아드려요</span></Button></div>
           {catalogError && <p role="alert">{catalogError} <Button onClick={() => setCatalogAttempt(n => n + 1)}>목록 다시 불러오기</Button></p>}
         </>
-        </div><aside className="holdings-context"><PortfolioPreview holdings={holdings} mode={mode} /><details className="askbox" open={askOpen} onToggle={e => { if (e.currentTarget.open && !askOpen) trackAction('request_box_opened'); }}><summary>요청사항 적기 · 선택</summary><label className="lab" htmlFor="ask">요청사항</label><p>원하는 변경이나 궁금한 점을 적어 주세요.</p><TextArea className="field" id="ask" maxLength={1000} value={question} onChange={e => setQuestion(e.target.value)} placeholder="예: 3년 뒤 결혼인데 지금 구성으로 버텨도 되는지, 배당은 언제부터 섞어야 하는지 궁금해요" /><span className="hintlab">이런 것도 요청할 수 있어요</span><div className="chips">{hints.map(h => <Button className="chip add" key={h} onClick={() => setQuestion((question + '\n' + h).trim().slice(0, 1000))}>{h}</Button>)}</div></details>
+        </div><aside className="holdings-context"><PortfolioPreview holdings={holdings} mode={mode} /><details className="askbox" open={askOpen} onToggle={e => { const opened = e.currentTarget.open; if (opened && !askOpen) trackAction('request_box_opened'); setAskOpen(opened); }}><summary>요청사항 적기 · 선택</summary><div className="askbox__body"><label className="lab" htmlFor="ask">요청사항</label><p>원하는 변경이나 궁금한 점을 적어 주세요.</p><TextArea className="field" id="ask" maxLength={1000} value={question} onChange={e => setQuestion(e.target.value)} placeholder="예: 3년 뒤 결혼인데 지금 구성으로 버텨도 되는지, 배당은 언제부터 섞어야 하는지 궁금해요" /><span className="hintlab">이런 것도 요청할 수 있어요</span><div className="chips">{hints.map(h => <Button className="chip add" key={h} onClick={() => setQuestion((question + '\n' + h).trim().slice(0, 1000))}>{h}</Button>)}</div></div></details>
       </aside></div></>}
       {step === 0 && initial?.dividendGoal && <label>기존 배당 목표<TextInput className="field" value={dividendGoal} maxLength={100} onChange={e => setDividendGoal(e.target.value)} /></label>}
       {step === 1 && <><span className="eyebrow">넣는 방법</span><h2>어떻게 투자할 계획인가요?</h2><div className="chips big">{['이미 다 매수한 상태에요', '매달 꾸준히', '목돈 한 번에', '아직 고민 중'].map(value => <Fragment key={value}><Button className="chip" aria-pressed={how === value} onClick={() => setHow(value)}>{value}</Button>{value === '매달 꾸준히' && how === value && <label className="money"><span>매달</span><TextInput ref={contributionRef} className="field" aria-label="추가 투자금액" inputMode="numeric" maxLength={9} value={contribution} onChange={e => setContribution(e.target.value.replace(/\D/g, ''))} placeholder="0" /><span>만 원</span></label>}</Fragment>)}</div></>}
