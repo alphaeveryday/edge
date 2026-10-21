@@ -63,6 +63,8 @@ test('the optional request box is folded on phones and open on desktop', async (
   await expect(request).toBeHidden();
   await page.getByText('요청사항 적기 · 선택', { exact: true }).click();
   await expect(request).toBeVisible();
+  // 펼치면 접기 줄이 사라지므로, 키보드 사용자가 길을 잃지 않게 입력칸으로 포커스를 옮긴다.
+  await expect(request).toBeFocused();
   // 다음 단계에 갔다 와도 방문자가 연 상자는 열린 채다(적은 요청이 숨지 않게).
   await request.fill('배당 위주로 바꾸고 싶어요');
   await addHolding(page);
