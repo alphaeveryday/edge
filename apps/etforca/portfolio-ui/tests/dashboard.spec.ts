@@ -72,7 +72,7 @@ test('preview edits and reloads without sending customer API or analytics traffi
   await page.getByRole('dialog').press('Escape');
   await expect(page.getByRole('button', { name: '종목 추가', exact: true })).toBeFocused();
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
-  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
   await page.getByRole('option', { name: /KODEX 200/ }).click();
   await page.getByLabel('보유 수량', { exact: true }).fill('2');
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();

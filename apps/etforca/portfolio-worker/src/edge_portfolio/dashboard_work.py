@@ -13,7 +13,7 @@ from pydantic import Field, model_validator
 from psycopg.types.json import Jsonb
 
 from . import store
-from .catalog import directory
+from .catalog import directory, price_symbol
 from .contracts import StrictModel
 
 log = logging.getLogger(__name__)
@@ -31,22 +31,24 @@ def identify(asset, *, strict=True, fx=None):
                 return asset
             asset.update(amount=asset['quantity'] * asset['price'] * (fx if asset['currency'] == 'USD' else 1), quantity=None, price=None)
         return {**asset, 'instrument_id': 'CASH:KRW', 'currency': 'KRW', 'category': '현금'}
-    rows = directory()['instruments']
+    rows = directory(include_stocks=True)['instruments']
     key = asset.get('instrument_id')
     matches = [r for r in rows if r['id'] == key] if key else [r for r in rows
         if asset['name'].casefold() in (r['ticker'].casefold(), r['name'].casefold(), f"{r['name']} ({r['ticker']})".casefold())]
     if key and not matches:
         if strict:
-            raise ValueError('SELECT_LISTED_ETF')
+            raise ValueError('SELECT_LISTED_INSTRUMENT')
         asset['instrument_id'] = None
     if len(matches) == 1:
         item = matches[0]
         if asset['currency'] != ('USD' if item['market'] == 'US' else 'KRW'):
             if strict:
-                raise ValueError('SELECT_LISTED_ETF')
+                raise ValueError('SELECT_LISTED_INSTRUMENT')
             asset['instrument_id'] = None
             return asset
         asset.update(instrument_id=item['id'], currency='USD' if item['market'] == 'US' else 'KRW', name=f"{item['name']} ({item['ticker']})")
+        if item['kind'] == 'stock':
+            asset.update(category='주식', name=item['name'])
     return asset
 
 
@@ -62,9 +64,9 @@ class Backtest(StrictModel):
 
     @model_validator(mode='after')
     def valid(self):
-        allowed = {r['id'] for r in directory()['instruments']} | {'CASH:KRW'}
+        allowed = {r['id'] for r in directory(include_stocks=True)['instruments']} | {'CASH:KRW'}
         if any(a.instrument_id not in allowed for a in self.allocations):
-            raise ValueError('SELECT_LISTED_ETF')
+            raise ValueError('SELECT_LISTED_INSTRUMENT')
         if abs(sum(a.weight_pct for a in self.allocations) - 100) > .01:
             raise ValueError('INVALID_MARKET_WEIGHTS')
         if self.end and self.end >= today() or self.start and self.start >= today() or self.start and self.end and self.start >= self.end:
@@ -270,7 +272,7 @@ async def records_for(ids, day, *, valuation_since=None, include_fx=True, collec
                         record = decode_prices(json.dumps(cached['payload']))
                     else:
                         requested_at = datetime.now(ZoneInfo('UTC')).isoformat()
-                        symbol = 'KRW=X' if key == 'FX' else key[3:] + ('.KS' if key.startswith('KR:') else '')
+                        symbol = price_symbol(key)
                         expected = 'KRW' if key == 'FX' or key.startswith('KR:') else 'USD'
                         captured = None
                         def capture(record):

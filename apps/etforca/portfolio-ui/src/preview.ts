@@ -31,7 +31,7 @@ export async function previewRequest<T>(path: string, init?: RequestInit): Promi
   const body = init?.body ? JSON.parse(String(init.body)) : null;
   let result: unknown;
   if (path === '/session') result = {};
-  else if (path === '/catalog') result = { fetched_at: report.as_of, counts: { KR: 1, US: 1 }, instruments: [{ id: 'KR:069500', market: 'KR', ticker: '069500', code: '069500', name: 'KODEX 200', kind: 'etf' }, { id: 'US:VOO', market: 'US', ticker: 'VOO', code: 'VOO', name: 'Vanguard S&P 500 ETF', kind: 'etf' }, { id: 'CASH:KRW', market: 'KR', ticker: 'KRW', code: 'KRW', name: '현금', kind: 'cash' }] };
+  else if (path === '/catalog' || path === '/workbook/catalog') result = { fetched_at: report.as_of, counts: { KR: path === '/catalog' ? 1 : 2, US: path === '/catalog' ? 1 : 2 }, instruments: [{ id: 'KR:069500', market: 'KR', ticker: '069500', code: '069500', name: 'KODEX 200', kind: 'etf' }, { id: 'US:VOO', market: 'US', ticker: 'VOO', code: 'VOO', name: 'Vanguard S&P 500 ETF', kind: 'etf' }, { id: 'CASH:KRW', market: 'KR', ticker: 'KRW', code: 'KRW', name: '현금', kind: 'cash' }, ...(path === '/workbook/catalog' ? [{ id: 'KR:005930', market: 'KR', ticker: '005930', code: '005930', name: '삼성전자', kind: 'stock' }, { id: 'US:AAPL', market: 'US', ticker: 'AAPL', code: 'AAPL', name: 'Apple Inc. - Common Stock', kind: 'stock' }] : [])] };
   else if (path.startsWith('/drafts/')) result = { status: 'saved' };
   else if (path === '/workbook/newsletter' && !body) result = { subscribed: false };
   else if (path.endsWith('/newsletter')) result = { status: 'pending', delivery_ready: true };

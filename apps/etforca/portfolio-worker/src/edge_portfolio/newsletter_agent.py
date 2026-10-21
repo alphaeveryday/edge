@@ -184,7 +184,7 @@ async def company_move(ticker, edition, quote_loader):
     """The related company's own last completed move, from the same price source as the ETF; never the model's number.
 
     ponytail: the ticker is the model's claim of which company it means; nothing checks it against `org` (no local
-    KRX code list). KOSDAQ codes miss too ('.KS' only) and fall back to the importance tag."""
+    identity match). Missing price data falls back to the importance tag."""
     if quote_loader is None or not TICKER.fullmatch(ticker or ''):
         return None
     try:

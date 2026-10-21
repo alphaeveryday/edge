@@ -84,6 +84,19 @@ test('bulk entry reaches analysis without optional question screens', async ({ p
   expect(posted.preferences.interests).toEqual([]);
 });
 
+test('saved stocks are not silently relabeled as ETFs when reusing holdings for analysis', async ({ page }) => {
+  await page.route('**/api/portfolio/**', route => {
+    if (route.request().url().endsWith('/catalog')) return route.fulfill({ json: catalog });
+    if (route.request().url().endsWith('/workbook')) return route.fulfill({ json: { version: 1, workbook: { assets: [{ id: 'a', instrument_id: 'US:AAPL', name: 'Apple', account: '일반 계좌', category: '주식', amount: 1000000 }] } } });
+    return route.fulfill({ json: {} });
+  });
+  await page.goto('/portfolio/');
+  await page.getByRole('button', { name: '저장된 보유 종목 불러오기' }).click();
+  await expect(page.getByRole('alert')).toContainText('Apple은 ETF 분석 대상이 아니에요.');
+  await expect(page.locator('.ds-confirm-dialog')).not.toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Apple 금액' })).toHaveCount(0);
+});
+
 for (const state of ['missing', 'pending', 'old-version', 'no-market']) test(`reuse leaves ${state} quotes blank instead of importing stale value`, async ({ page }) => {
   await page.route('**/api/portfolio/**', route => {
     if (route.request().url().endsWith('/catalog')) return route.fulfill({ json: catalog });

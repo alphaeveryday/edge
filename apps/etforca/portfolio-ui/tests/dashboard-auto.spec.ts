@@ -58,6 +58,40 @@ async function mock(page: Page, saved: Saved = { version: 1, workbook }) {
   });
 }
 
+for (const stock of [
+  { id: 'KR:005930', name: '삼성전자', ticker: '005930', market: 'KR', symbol: '005930.KS' },
+  { id: 'KR:247540', name: '에코프로비엠', ticker: '247540', market: 'KR', symbol: '247540.KQ' },
+  { id: 'US:AAPL', name: 'Apple', ticker: 'AAPL', market: 'US', symbol: 'AAPL' },
+  { id: 'US:BRK.B', name: 'Berkshire Hathaway', ticker: 'BRK.B', market: 'US', symbol: 'BRK-B' },
+]) test(`stock entry preserves identity, quantity and purchase basis on reload: ${stock.id}`, async ({ page }) => {
+  await mock(page);
+  await page.route('**/api/portfolio/workbook/catalog', r => r.fulfill({ json: { instruments: [...catalog.instruments, { ...stock, code: stock.ticker, kind: 'stock' }] } }));
+  await page.goto('/portfolio/?view=dashboard');
+  await page.getByRole('button', { name: '종목 추가', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('combobox', { name: '계좌', exact: true }).selectOption('일반 계좌');
+  await dialog.getByRole('combobox', { name: /종목 찾기/ }).fill(stock.symbol);
+  await expect(page.getByRole('option', { name: new RegExp(stock.name) })).toContainText('상장 주식');
+  await page.getByRole('option', { name: new RegExp(stock.name) }).click();
+  await expect(dialog.getByLabel('보유 수량', { exact: true })).toBeFocused();
+  await dialog.getByLabel('보유 수량', { exact: true }).fill('2.5');
+  await dialog.getByLabel(/평균매수가/).fill('100');
+  await page.screenshot({ path: `test-results/stock-entry-${stock.ticker}-${test.info().project.name}.png`, fullPage: true });
+  const request = page.waitForRequest(r => r.url().endsWith('/workbook') && r.method() === 'POST');
+  await dialog.getByRole('button', { name: '저장', exact: true }).click();
+  expect((await request).postDataJSON().workbook.assets[1]).toMatchObject({ instrument_id: stock.id, quantity: 2.5, average: 100, category: '주식', currency: stock.market === 'US' ? 'USD' : 'KRW' });
+  await expect(dialog).not.toBeVisible();
+  await page.reload();
+  await page.locator('.holding-edit').filter({ hasText: stock.name }).click();
+  await expect(dialog.getByLabel('보유 수량', { exact: true })).toHaveValue('2.5');
+  await expect(dialog.getByLabel(/평균매수가/)).toHaveValue('100');
+  await dialog.getByRole('button', { name: '취소', exact: true }).click();
+  await page.getByRole('button', { name: '백테스트', exact: true }).click();
+  await page.getByRole('combobox', { name: /백테스트에 담은 종목 찾기/ }).fill(stock.ticker);
+  await page.getByRole('option', { name: new RegExp(stock.name) }).click();
+  await expect(page.getByLabel(`${stock.name} 비중 (%)`)).toBeVisible();
+});
+
 test('tiny positive holdings stay represented by a valid hundredth-percent allocation', async ({ page }) => {
   const cash: Asset = { ...asset, id: 'cash', instrument_id: 'CASH:KRW', name: '현금', category: '현금', quantity: null, amount: 100000000 };
   await mock(page, { version: 1, workbook: { ...workbook, assets: [asset, cash] } });
@@ -297,7 +331,7 @@ test('invalid quantity cannot be saved and a missing average does not block hold
 test('cash can be added without quantity average price or currency fields', async ({ page }) => {
   await page.goto('/portfolio/?preview=empty');
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
-  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('현금');
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('현금');
   await page.getByRole('option', { name: /현금/ }).click();
   await page.getByLabel('현금 (원)', { exact: true }).fill('123456');
   await expect(page.getByLabel('보유 수량', { exact: true })).toHaveCount(0);
@@ -309,7 +343,7 @@ test('cash can be added without quantity average price or currency fields', asyn
 test('backtest edits stay available when navigating to another dashboard tab', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
   await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('combobox', { name: '백테스트에 담은 ETF 찾기' }).fill('VOO');
+  await page.getByRole('combobox', { name: '백테스트에 담은 종목 찾기' }).fill('VOO');
   await page.getByRole('option', { name: /Vanguard/ }).click();
   await page.getByLabel('시작일 · 선택').fill('2020-01-01');
   await page.getByRole('button', { name: '한눈에', exact: true }).click();
@@ -324,7 +358,7 @@ test('unknown legacy instruments require a real catalog match instead of fetchin
   await page.locator('.holding-edit').click();
   await expect(page.getByRole('dialog')).toContainText('자동 시세를 연결할 종목을 선택');
   await expect(page.getByRole('dialog').getByRole('button', { name: '저장', exact: true })).toBeDisabled();
-  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
   await page.getByRole('option', { name: /KODEX/ }).click();
   await expect(page.getByLabel('보유 수량', { exact: true })).toHaveValue('10');
   await expect(page.getByLabel(/평균매수가/)).toHaveValue('40000');
@@ -336,7 +370,7 @@ test('linking an old amount-only holding keeps its amount without demanding quan
   await mock(page, { version: 1, workbook: { ...workbook, assets: [{ ...asset, instrument_id: null, quantity: null, amount: 123456 }] } });
   await page.goto('/portfolio/?view=dashboard');
   await page.locator('.holding-edit').click();
-  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
   await page.getByRole('option', { name: /KODEX/ }).click();
   await expect(page.getByLabel('가져온 보유금액 (원)')).toHaveValue('123456');
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
@@ -482,7 +516,7 @@ test('recovering the first workbook read also restores ETF search', async ({ pag
   fail = false;
   await page.getByRole('button', { name: '저장된 내용 다시 불러오기' }).click();
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
-  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
   await expect(page.getByRole('option', { name: /KODEX/ })).toBeVisible();
 });
 

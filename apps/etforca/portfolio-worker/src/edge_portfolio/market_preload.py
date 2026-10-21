@@ -80,7 +80,7 @@ def initialize(db):
 
 def seed():
     from .catalog import directory
-    keys = sorted({r['id'] for r in directory()['instruments']} | {'FX'})
+    keys = sorted({r['id'] for r in directory(include_stocks=True)['instruments']} | {'FX'})
     with store.connect() as db:
         db.execute('''INSERT INTO portfolio_market_preload(instrument)
             SELECT jsonb_array_elements_text(%s::jsonb) ON CONFLICT DO NOTHING''', (json.dumps(keys),))
@@ -128,7 +128,8 @@ async def collect_one(stopping=None, *, now=None, session=None):
     error = None
     try:
         end = work.price_end(key, now.date())
-        symbol = 'KRW=X' if key == 'FX' else key[3:] + ('.KS' if key.startswith('KR:') else '')
+        from .catalog import price_symbol
+        symbol = price_symbol(key)
         requested_at = datetime.now(ZoneInfo('UTC')).isoformat()
         # Recent quotes are available before an instrument's long archive is collected.
         async with asyncio.timeout(40):

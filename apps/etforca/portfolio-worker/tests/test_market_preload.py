@@ -18,7 +18,7 @@ def test_bulk_collection_does_not_start_in_existing_batch_slots(hour, minute, ex
 
 def test_catalog_seeding_is_shared_and_does_not_reset_schedules(isolated_db, monkeypatch):
     from edge_portfolio import catalog
-    monkeypatch.setattr(catalog, 'directory', lambda: {'instruments': [{'id': 'US:SOXL'}, {'id': 'KR:069500'}]})
+    monkeypatch.setattr(catalog, 'directory', lambda **kwargs: {'instruments': [{'id': 'US:SOXL'}, {'id': 'KR:069500'}]})
     preload.seed()
     with store.connect() as db:
         db.execute("UPDATE portfolio_market_preload SET quote_after=now()+interval '1 day'")
@@ -523,7 +523,7 @@ def test_production_warm_loader_uses_existing_fallback_for_primary_failure(monke
     assert result['primary_failure'] == {'stale': 'PRICE_STALE', 'invalid': 'PRICE_INVALID'}.get(failure, failure)
 
 
-@pytest.mark.parametrize('symbol,currency,provider', [('069500.KS', 'KRW', 'FinanceDataReader:NAVER:069500'), ('SOXL', 'USD', 'FinanceDataReader:YAHOO:SOXL')])
+@pytest.mark.parametrize('symbol,currency,provider', [('069500.KS', 'KRW', 'FinanceDataReader:NAVER:069500'), ('247540.KQ', 'KRW', 'FinanceDataReader:NAVER:247540'), ('SOXL', 'USD', 'FinanceDataReader:YAHOO:SOXL')])
 def test_warm_fallback_preserves_primary_actual_prices_actions_and_split_warning(monkeypatch, symbol, currency, provider):
     from edge_portfolio import price_fetch, data_providers
     primary = {**record(currency=currency), 'pending_splits': ['2026-10-17']}

@@ -50,7 +50,7 @@ export function Dashboard() {
   const trackingSequence = useRef(0);
   const trackingPoll = useRef(false);
   const { ask, confirmation, restoreFocus } = useConfirmation();
-  async function loadCatalog() { try { setCatalog(await request<Catalog>('/catalog')); setCatalogError(''); } catch { setCatalogError('종목 목록을 불러오지 못했어요.'); } }
+  async function loadCatalog() { try { setCatalog(await request<Catalog>('/workbook/catalog')); setCatalogError(''); } catch { setCatalogError('종목 목록을 불러오지 못했어요.'); } }
   async function loadTracking() {
     const sequence = ++trackingSequence.current;
     try { const next = await request<Tracking>('/workbook/tracking'); if (!Array.isArray(next.days)) throw new Error('Invalid tracking'); if (sequence === trackingSequence.current) { setTracking(next); setTrackingLoaded(true); setTrackingError(''); } }
@@ -136,7 +136,7 @@ export function Dashboard() {
     if (w.assets.some(a => a.id !== editing.id && a.instrument_id === item.id && a.account === editing.account)) return '이 계좌에 이미 있어요. 보유 목록에서 수량을 수정해 주세요.';
     const currency = item.market === 'US' ? 'USD' : 'KRW';
     const existing = w.assets.some(a => a.id === editing.id);
-    setEditing({ ...editing, instrument_id: item.id, name: item.name, currency, category: item.kind === 'cash' ? '현금' : editing.category === '현금' ? '기타' : editing.category,
+    setEditing({ ...editing, instrument_id: item.id, name: item.name, currency, category: item.kind === 'cash' ? '현금' : item.kind === 'stock' ? '주식' : editing.category === '현금' ? '기타' : editing.category,
       quantity: existing ? editing.quantity : null, average: existing && editing.currency === currency ? editing.average : null, amount: existing ? editing.amount : null }); setDirty(true);
   }
   async function saveAsset(e: React.FormEvent<HTMLFormElement>) {
@@ -195,7 +195,7 @@ export function Dashboard() {
     </main>
     {editing && <dialog ref={dialog} onCancel={e => { e.preventDefault(); void cancelEditor(); }} className="asset-editor" aria-labelledby="asset-editor-title"><form onSubmit={saveAsset} onChange={() => setDirty(true)} onInput={e => { const data = new FormData(e.currentTarget); const q = data.get('quantity'), p = data.get('average'); setEntryCost(q && p && Number.isFinite(Number(q) * Number(p)) ? Number(q) * Number(p) : null); }}><div className="card-heading"><h2 id="asset-editor-title">{w.assets.some(a => a.id === editing.id) ? '보유 자산 수정' : '보유 자산 추가'}</h2><Button type="button" aria-label="수정 닫기" disabled={busy} onClick={() => void cancelEditor()}>×</Button></div><fieldset disabled={busy || loading} className="editor-fields">
       <label>계좌<Select name="account" value={editing.account} onChange={e => setEditing({ ...editing, account: e.target.value })}>{accounts.map(a => <option key={a}>{a}</option>)}</Select></label>
-      {editing.instrument_id ? <div className="selected-instrument"><strong>{editing.name}</strong>{!w.assets.some(a => a.id === editing.id) && <Button type="button" onClick={() => { setEditing({ ...editing, instrument_id: null }); setDirty(true); }}>종목 변경</Button>}</div> : <><InstrumentSearch account={editing.account} catalog={catalog} onAdd={selectInstrument} />{editing.name && <p>저장된 종목: {editing.name} · 자동 시세를 연결할 종목을 선택해 주세요.</p>}</>}
+      {editing.instrument_id ? <div className="selected-instrument"><strong>{editing.name}</strong>{!w.assets.some(a => a.id === editing.id) && <Button type="button" onClick={() => { setEditing({ ...editing, instrument_id: null }); setDirty(true); }}>종목 변경</Button>}</div> : <><InstrumentSearch includeStocks account={editing.account} catalog={catalog} onAdd={selectInstrument} />{editing.name && <p>저장된 종목: {editing.name} · 자동 시세를 연결할 종목을 선택해 주세요.</p>}</>}
       {catalogError && <p role="alert">{catalogError} <Button type="button" onClick={() => void loadCatalog()}>목록 다시 불러오기</Button></p>}
       {editing.instrument_id && (editing.category === '현금' ? <label>현금 (원)<TextInput name="amount" type="number" min="0" max="10000000000000" step="any" defaultValue={editing.amount ?? ''} required /></label> : <div className="editor-grid" key={editing.instrument_id}>
         <div><label>보유 수량<TextInput name="quantity" type="number" inputMode="decimal" aria-describedby="quantity-help" min="0" max="10000000000000" step="any" placeholder="예: 10" defaultValue={editing.quantity ?? ''} required={editing.amount === null} /></label><small id="quantity-help">소수점 수량도 입력할 수 있어요.</small></div>
