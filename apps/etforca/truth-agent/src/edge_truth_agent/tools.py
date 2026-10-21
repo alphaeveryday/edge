@@ -585,7 +585,7 @@ def _mover_source(ws: Workspace, sid: str) -> dict:
     """읽은 기사·원문·공시 id → 공개 출처 항목."""
     if sid.startswith(("web-", "dart-")):
         snap = ws.snapshot(sid) or {}
-        kind = "disclosure" if sid.startswith("dart-") else (host_kind(snap.get("url", "")) or "web")
+        kind = "disclosure" if sid.startswith("dart-") else (snap.get("kind") or host_kind(snap.get("url", "")) or "web")
         return {"title": snap.get("title") or snap.get("url", ""), "publisher": snap.get("publisher") or host_of(snap.get("url", "")) or "웹",
                 "url": snap.get("url", ""), "kind": kind, "publishedAt": _kst_day(snap.get("publishedDate")) or snap.get("publishedDate") or None}
     article = next((a for a in ws.inbox() if f"news-{a['id'][:16]}" == sid), None)
@@ -615,7 +615,7 @@ def set_mover_verdict(ws: Workspace, args: dict) -> str:
     if not 2 <= len(title) <= 60 or kind not in EVENT_KINDS:
         raise ToolError(f"event_title 은 2~60자, event_kind 는 {'·'.join(EVENT_KINDS)} 중 하나입니다.")
     reasons = [str(r).strip() for r in args.get("reasons") or [] if str(r).strip()]
-    if not reasons or len(reasons) > 3 or any(len(r) > 160 for r in reasons):
+    if not reasons or len(reasons) > 3 or any(not 2 <= len(r) <= 160 for r in reasons):
         raise ToolError("reasons 는 1~3줄, 각 160자 이내입니다(무엇을 확인했고 무엇이 없었는지).")
     claim, finding = str(args.get("claim", "")).strip(), str(args.get("finding", "")).strip()
     if len(claim) > 300 or len(finding) > 400 or not finding:
@@ -626,8 +626,10 @@ def set_mover_verdict(ws: Workspace, args: dict) -> str:
         raise ToolError(f"이 세션에서 읽지 않은 출처입니다: {bad}. view_news·web_fetch·view_disclosure 로 먼저 읽으세요.")
     if tag != "pending" and not ids:
         raise ToolError("유망주·허위매물 판정에는 읽은 출처가 하나 이상 필요합니다. 근거가 없으면 pending 으로 두세요.")
-    if tag == "promising" and not any(s.startswith(("dart-", "web-")) for s in ids):
-        raise ToolError("유망주는 원문(공시 dart-… 또는 기관·회사 원문 web-…)으로 확인될 때만 붙입니다. 보도만 있으면 pending 입니다.")
+    def primary(sid: str) -> bool:  # 공시 원문, 또는 공식 판단·법정공시 도메인의 웹 원문(뉴스 기사를 web_fetch 한 것은 아니다)
+        return sid.startswith("dart-") or (sid.startswith("web-") and (ws.snapshot(sid) or {}).get("kind") in ("official", "disclosure"))
+    if tag == "promising" and not any(primary(s) for s in ids):
+        raise ToolError("유망주는 원문(공시 dart-… 또는 기관 공식 원문)으로 확인될 때만 붙입니다. 보도(웹으로 연 기사 포함)만 있으면 pending 입니다.")
     verdict = {"tag": tag, "confidence": round(confidence, 2),
                "event": {"title": title, "kind": kind, "at": str(args.get("event_at") or "") or None},
                "claim": claim, "finding": finding, "reasons": reasons,

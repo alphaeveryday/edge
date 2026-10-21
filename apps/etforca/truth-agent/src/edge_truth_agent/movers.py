@@ -17,8 +17,8 @@ import uuid
 import jsonschema
 
 from . import corpus, logos, news, routing, session
-from .dart import Dart, DartError
-from .kis import Kis, KisError, Mover
+from .dart import Dart
+from .kis import Kis, Mover
 from .runner import _json, _now, lease
 from .store import open_store
 from .workspace import Workspace
@@ -28,6 +28,7 @@ LEASE_KEY = "state/lease-movers.json"
 CORP_KEY = "state/dart-corp-codes.json"
 LOGO_TRIED_KEY = "state/logo-tried.json"
 MIN_CHANGE = 10.0       # 급등 기준: 전일 대비 상승률(%)
+MIN_TRADE_VALUE = 30.0  # 거래대금 하한(억원, 현재가 × 누적거래량 근사) — 몇 주 체결로 뛴 종목은 해석할 사건이 아니다
 MAX_MOVERS = 15         # 화면에 싣는 종목 수
 NEW_SESSIONS = 5        # 한 실행에서 새로 판정하는 종목 수(나머지는 다음 정각에)
 PARALLEL = 3            # 판정 세션 동시 실행
@@ -60,7 +61,7 @@ def _corp_codes(store, dart: Dart | None, today: str) -> dict[str, str]:
         return cached.get("map", {})
     try:
         mapping = dart.corp_codes()
-    except DartError as error:
+    except Exception as error:  # noqa: BLE001 - ZIP·XML 파싱 오류도 같다. 어제 표로 계속하고 로그에 남긴다
         log.warning(json.dumps({"event": "dart_corp_codes_failed", "error": str(error)[:200]}, ensure_ascii=False))
         return cached.get("map", {})
     store.put(CORP_KEY, _json({"date": today, "map": mapping}))
@@ -76,7 +77,7 @@ def _logo(public, store, dart: Dart | None, corp: str | None, code: str, prior: 
     tried[code] = today
     try:
         home = dart.homepage(corp)
-    except DartError:
+    except Exception:  # noqa: BLE001 - 로고는 장식이다. 없으면 이니셜로 그린다
         return None
     got = logos.fetch_logo(home) if home else None
     if not got:
@@ -110,16 +111,22 @@ def run_movers(cfg, *, kis: Kis | None = None, dart: Dart | None = None, session
         prior = {i["code"]: i for i in (json.loads(raw)["items"] if raw else [])}
 
         # 1. 급등 목록 (코드)
-        risers = sorted((m for market in ("KOSPI", "KOSDAQ") for m in kis.risers(market) if m.change_pct >= MIN_CHANGE),
+        risers = sorted((m for market in ("KOSPI", "KOSDAQ") for m in kis.risers(market)
+                         if m.change_pct >= MIN_CHANGE and m.price * m.volume / 1e8 >= MIN_TRADE_VALUE),
                         key=lambda m: m.change_pct, reverse=True)[:MAX_MOVERS]
         until = min(now.strftime("%H:%M"), "15:30")
         series = {}
         for m in risers:
             try:
                 series[m.code] = kis.series(m.code, until, ymd)
-            except KisError as error:
+            except Exception as error:  # noqa: BLE001 - 한 종목의 시세 실패로 전체를 멈추지 않는다(빈 그래프로 싣는다)
                 log.warning(json.dumps({"event": "kis_series_failed", "code": m.code, "error": str(error)[:200]}, ensure_ascii=False))
                 series[m.code] = []
+        # 급등 종목이 없어도 그날 장이 열렸는지는 대표 종목 분봉으로 본다 — 휴장일의 빈 목록을 '오늘 급등 없음'으로 게시하지 않는다
+        if not risers and not kis.series("005930", until, ymd):
+            report["skipped"] = "그날 분봉이 없습니다(휴장일 또는 장 시작 전)."
+            log.info(json.dumps({"event": "movers_skipped", "reason": report["skipped"]}, ensure_ascii=False))
+            return report
         if risers and not any(series.values()):
             report["skipped"] = "그날 분봉이 없습니다(휴장일 또는 장 시작 전)."
             log.info(json.dumps({"event": "movers_skipped", "reason": report["skipped"]}, ensure_ascii=False))
@@ -128,13 +135,14 @@ def run_movers(cfg, *, kis: Kis | None = None, dart: Dart | None = None, session
         # 2. 재료 (코드)
         corp = _corp_codes(store, dart, today)
         since = (now.date() - timedelta(days=FILING_DAYS)).strftime("%Y%m%d")
-        filings: dict[str, list[dict]] = {}
+        # None = 공시를 조회하지 못함. '최근 공시 없음'과 구분한다 — 못 본 것을 없다고 넘기면 판정이 틀린다
+        filings: dict[str, list[dict] | None] = {}
         for m in risers:
-            filings[m.code] = []
+            filings[m.code] = None
             if dart and corp.get(m.code):
                 try:
                     filings[m.code] = dart.filings(corp[m.code], since, ymd)
-                except DartError as error:
+                except Exception as error:  # noqa: BLE001 - 그 종목만 판정을 미룬다
                     log.warning(json.dumps({"event": "dart_filings_failed", "code": m.code, "error": str(error)[:200]}, ensure_ascii=False))
         raw, _ = store.get(LOGO_TRIED_KEY)
         tried = json.loads(raw) if raw else {}
@@ -144,22 +152,31 @@ def run_movers(cfg, *, kis: Kis | None = None, dart: Dart | None = None, session
         texts = corpus.load(store)
         corpus_path = corpus.build_index(texts, Path(tmp) / "corpus.sqlite")
 
-        # 3. 판정 (모델) — 오늘 처음 보는 종목, 또는 보류였는데 판정 뒤 새 공시가 나온 종목
+        # 3. 판정 (모델) — 아직 판정 못 한 종목, 또는 판정 때 못 본 공시·보도가 새로 나온 종목(태그 무관 — 허위였다가 확인될 수 있다).
+        #    공시를 못 본 종목은 판정하지 않는다. 판정 때 본 근거 id 는 비공개 상태에 둔다(같은 근거로 다시 판정하지 않게).
+        seen_key = f"state/movers-seen/{today}.json"
+        raw, _ = store.get(seen_key)
+        seen: dict[str, list[str]] = json.loads(raw) if raw else {}
+        arts = {m.code: _articles(texts, m.name) for m in risers}
+        evidence = {m.code: sorted({f["rcept_no"] for f in filings[m.code] or []} | {a.id for a in arts[m.code]}) for m in risers}
+
         def stale(m: Mover) -> bool:
             old = prior.get(m.code)
-            if old is None:
+            if old is None or old.get("judgedAt") is None:
                 return True
-            return old["tag"] == "pending" and any(f["rcept_dt"] >= (old.get("judgedAt") or "")[:10] for f in filings[m.code])
-        targets = [m for m in risers if stale(m)][:NEW_SESSIONS]
+            return bool(set(evidence[m.code]) - set(seen.get(m.code, [])))
+        # 처음 보는 종목부터 — 한 실행의 세션 수가 정해져 있어 넘친 종목은 다음 정각에
+        targets = sorted((m for m in risers if filings[m.code] is not None and stale(m)),
+                         key=lambda m: m.code in prior and prior[m.code].get("judgedAt") is not None)[:NEW_SESSIONS]
         judge_cfg = replace(cfg, max_tool_calls=MOVER_TOOL_CALLS, session_timeout=MOVER_TIMEOUT)
 
         def judge(m: Mover) -> tuple[str, dict | None, session.SessionResult]:
-            arts = _articles(texts, m.name)
-            ws = Workspace.prepare(Path(tmp) / "sessions" / m.code, mode="mover", case=None, inbox=[a.to_dict() for a in arts],
+            found = filings[m.code] or []
+            ws = Workspace.prepare(Path(tmp) / "sessions" / m.code, mode="mover", case=None, inbox=[a.to_dict() for a in arts[m.code]],
                                    index=[], today=today, now=now.isoformat(),
-                                   mover={"code": m.code, "name": m.name, "filings": filings[m.code]})
+                                   mover={"code": m.code, "name": m.name, "filings": found})
             try:
-                result = session_runner(judge_cfg, ws, case_id=m.code, mode="mover", prompt=_prompt(m, filings[m.code], arts, series[m.code]),
+                result = session_runner(judge_cfg, ws, case_id=m.code, mode="mover", prompt=_prompt(m, found, arts[m.code], series[m.code]),
                                         corpus_path=corpus_path, cases_dir=Path(tmp))
             except Exception as error:  # noqa: BLE001 - 한 종목의 실패로 나머지 게시를 버리지 않는다. 보고에 남는다
                 result = session.SessionResult(case_id=m.code, done=False, error=f"{type(error).__name__}: {error}")
@@ -171,15 +188,23 @@ def run_movers(cfg, *, kis: Kis | None = None, dart: Dart | None = None, session
                 report["judged"].append({"code": code, "done": result.done, "error": result.error, "usage": result.usage})
                 if verdict:
                     verdicts[code] = verdict | {"judgedAt": now.isoformat()}
+                    seen[code] = evidence[code]
                 else:
                     report["failed"].append(code)
+        store.put(seen_key, _json(seen))
 
         # 4. 게시 (코드)
         items = []
         for m in risers:
             old = prior.get(m.code) or {}
-            judged = verdicts.get(m.code) or ({k: old[k] for k in ("tag", "confidence", "event", "claim", "finding", "reasons", "sources", "judgedAt")}
-                                              if old else _pending("아직 판정하지 못했습니다. 다음 정각에 다시 봅니다.") | {"judgedAt": None})
+            if m.code in verdicts:
+                judged = verdicts[m.code]
+            elif old.get("judgedAt"):  # 지난 판정을 그대로 싣는다(시세만 새로)
+                judged = {k: old[k] for k in ("tag", "confidence", "event", "claim", "finding", "reasons", "sources", "judgedAt")}
+            elif filings[m.code] is None:
+                judged = _pending("공시를 조회하지 못해 판정을 미룹니다.") | {"judgedAt": None}
+            else:
+                judged = _pending("아직 판정하지 못했습니다. 다음 정각에 다시 봅니다.") | {"judgedAt": None}
             item = {"code": m.code, "name": m.name, "market": m.market, "logo": logo[m.code], "price": m.price,
                     "prevClose": m.prev_close, "changePct": round(m.change_pct, 2),
                     "tradeValue": round(m.price * m.volume / 1e8, 1), "series": series[m.code]} | judged

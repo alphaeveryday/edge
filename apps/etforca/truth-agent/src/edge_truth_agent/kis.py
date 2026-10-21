@@ -32,13 +32,14 @@ class Mover:
 
 
 # ETF·ETN·스팩은 이름으로 거른다(순위 응답에 상품 구분이 없다). 우선주는 코드 끝자리로 거른다(보통주는 0).
-_EXCLUDE_WORDS = ("ETN", "스팩", "KODEX", "TIGER", "KBSTAR", "RISE", "ARIRANG", "HANARO", "SOL ", "ACE ", "PLUS ", "KOSEF",
-                  "TIMEFOLIO", "TREX", "히어로즈", "마이다스", "파워 ", "UNICORN", "WON ", "BNK ", "1Q ", "VITA", "에셋플러스")
+_EXCLUDE_WORDS = ("ETN", "ETF", "스팩", "KODEX", "TIGER", "KBSTAR", "RISE", "ARIRANG", "HANARO", "SOL ", "ACE ", "PLUS ", "KOSEF",
+                  "TIMEFOLIO", "TREX", "히어로즈", "마이다스", "파워 ", "UNICORN", "WON ", "BNK ", "1Q ", "VITA", "에셋플러스",
+                  "KIWOOM", "KoAct", "TIME ", "ITF ", "마이티", "레버리지", "인버스", "선물")
 
 
 def is_common_stock(code: str, name: str) -> bool:
-    """보통주인가(ETF·ETN·스팩·우선주 제외)."""
-    return code.isdigit() and code.endswith("0") and not any(w in name for w in _EXCLUDE_WORDS)
+    """보통주인가(ETF·ETN·스팩·우선주 제외). 우선주는 코드 끝자리가 0 이 아니다. 새 영숫자 코드도 받는다."""
+    return len(code) == 6 and code.isalnum() and code.endswith("0") and not any(w in name for w in _EXCLUDE_WORDS)
 
 
 def _num(value, default=0.0) -> float:
@@ -119,27 +120,30 @@ class Kis:
         closes: dict[str, float] = {}
         hour = until_hhmm.replace(":", "") + "00"
         for _ in range(14):  # 09:00~15:30 = 13콜이면 충분
+            # PW_DATA_INCU_YN=Y: 데이터 파이프라인 실측(kis_minute.py) — N 이면 창 앞부분이 빈다
             rows = self._get("/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice", "FHKST03010200", {
                 "FID_ETC_CLS_CODE": "", "FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": code,
-                "FID_INPUT_HOUR_1": hour, "FID_PW_DATA_INCU_YN": "N"}).get("output2") or []
-            labels = [str(r.get("stck_cntg_hour", "")) for r in rows if r.get("stck_cntg_hour")]
+                "FID_INPUT_HOUR_1": hour, "FID_PW_DATA_INCU_YN": "Y"}).get("output2") or []
+            labels = [str(r.get("stck_cntg_hour", "")) for r in rows if len(str(r.get("stck_cntg_hour", ""))) == 6]
             for r in rows:
                 t, p = str(r.get("stck_cntg_hour", "")), _num(r.get("stck_prpr"))
                 if len(t) == 6 and p > 0 and "090000" <= t <= "153000" and str(r.get("stck_bsop_date", day_ymd)) == day_ymd:
                     closes.setdefault(t[:4], p)
-            if not labels or min(labels) <= "090000":
-                break
-            hour = min(labels)  # 다음 콜은 이번에 받은 가장 이른 시각 이전
+            earliest = min(labels) if labels else ""
+            if not earliest or earliest <= "090000" or earliest >= hour:
+                break  # 다 받았거나, 더 거슬러 가지 못한다(같은 콜 반복 방지)
+            hour = earliest  # 다음 콜은 이번에 받은 가장 이른 시각부터
         return five_minute(closes)
 
 
 def five_minute(closes: dict[str, float]) -> list[list]:
-    """1분 종가(HHMM→가격) → 5분 구간 끝 종가 [HH:MM, 가격] (시각 오름차순)."""
+    """1분 종가(HHMM→가격) → 5분 구간 [구간 끝 HH:MM, 그 구간 마지막 종가] (시각 오름차순).
+    라벨을 구간 끝으로 단다 — 09:00~09:04 의 마지막 가격은 09:05 시점 가격이다."""
     buckets: dict[str, tuple[str, float]] = {}
     for hhmm, price in closes.items():
         minute = int(hhmm[:2]) * 60 + int(hhmm[2:])
-        start = minute - minute % 5
-        key = f"{start // 60:02d}:{start % 60:02d}"
+        end = minute - minute % 5 + 5
+        key = f"{end // 60:02d}:{end % 60:02d}"
         if key not in buckets or hhmm > buckets[key][0]:
             buckets[key] = (hhmm, price)
     return [[k, v[1]] for k, v in sorted(buckets.items())]

@@ -48,7 +48,8 @@ def command(cfg, ws: Workspace, mode: str, prompt: str) -> list[str]:
 
 
 def _env(cfg, ws: Workspace, mode: str, corpus_path: Path, cases_dir: Path) -> dict:
-    env = {k: v for k, v in os.environ.items() if k not in ("DEEPSEEK_RESIST_NEWS_API_KEY",)}
+    # 세션에는 모델 키(아래 DEEPSEEK_API_KEY)와 도구가 쓰는 키만 — 다른 서비스 키·KIS 키는 넘기지 않는다
+    env = {k: v for k, v in os.environ.items() if k not in ("DEEPSEEK_RESIST_NEWS_API_KEY", "TRUTH_KIS_APP_KEY", "TRUTH_KIS_APP_SECRET")}
     env.update({
         "DEEPSEEK_API_KEY": cfg.deepseek_key,  # pi 의 DeepSeek 제공자가 읽는 이름. 이 프로세스에만 넘긴다
         "PI_CODING_AGENT_DIR": str(ws.root / ".pi"), "PI_OFFLINE": "1", "PI_TELEMETRY": "0",
