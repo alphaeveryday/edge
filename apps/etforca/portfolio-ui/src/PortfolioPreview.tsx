@@ -4,8 +4,8 @@ import type { Holding } from './api';
 const colors = chartPalette;
 // Round to 만 first so 9,999.5만 원 reads as 1억, not 10,000만.
 const eok = (n: number) => Math.round(n / 1e4) >= 1e4;
-// The donut centre is narrow: whole 만, or 억 with one decimal.
-const short = (n: number) => eok(n) ? `${(n / 1e8).toLocaleString('ko-KR', { maximumFractionDigits: 1 })}억` : `${Math.round(n / 1e4).toLocaleString('ko-KR')}만`;
+// The donut centre is narrow: 만 (one decimal under 10만), or 억 with one decimal.
+const short = (n: number) => eok(n) ? `${(n / 1e8).toLocaleString('ko-KR', { maximumFractionDigits: 1 })}억` : `${(n / 1e4).toLocaleString('ko-KR', { maximumFractionDigits: n < 1e5 ? 1 : 0 })}만`;
 const won = (n: number) => eok(n) ? `${short(n)} 원` : n >= 1e4 ? `${(n / 1e4).toLocaleString('ko-KR', { maximumFractionDigits: 1 })}만 원` : `${n.toLocaleString('ko-KR')}원`;
 export function PortfolioPreview({ holdings, mode }: { holdings: Holding[]; mode: string }) {
   if (!holdings.length) return null;

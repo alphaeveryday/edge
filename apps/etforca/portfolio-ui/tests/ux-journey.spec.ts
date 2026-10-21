@@ -15,7 +15,7 @@ test('unit changes preserve independent amounts and percentages through refresh'
 });
 
 test('refresh resumes the current step and preview reset cannot erase a customer draft', async ({ page }) => {
-  await page.addInitScript(() => sessionStorage.setItem('edge-portfolio-form-v1', 'customer draft'));
+  await page.addInitScript(() => sessionStorage.setItem('edge-portfolio-form-v2', 'customer draft'));
   await page.goto('/portfolio/?preview=input');
   await addCash(page);
   await page.getByLabel('요청사항', { exact: true }).fill('반도체 테마 유지');
@@ -29,7 +29,7 @@ test('refresh resumes the current step and preview reset cannot erase a customer
   await expect(page.getByLabel('요청사항', { exact: true })).toHaveValue('반도체 테마 유지');
   await page.getByRole('button', { name: '테스트 초기화' }).click();
   await expect(page.getByLabel('요청사항', { exact: true })).toHaveValue('');
-  expect(await page.evaluate(() => sessionStorage.getItem('edge-portfolio-form-v1'))).toBe('customer draft');
+  expect(await page.evaluate(() => sessionStorage.getItem('edge-portfolio-form-v2'))).toBe('customer draft');
 });
 
 test('cancelling optional tax details never makes them a prerequisite', async ({ page }) => {
@@ -66,7 +66,7 @@ test('removing an account with holdings can be cancelled without losing its valu
 });
 
 test('malformed stored form does not prevent a new analysis', async ({ page }) => {
-  await page.addInitScript(() => sessionStorage.setItem('edge-preview-form-v1', '{"step":2,"holdings":null}'));
+  await page.addInitScript(() => sessionStorage.setItem('edge-preview-form-v2', '{"step":2,"holdings":null}'));
   await page.goto('/portfolio/?preview=input');
   await expect(page.locator('.rows .row')).toHaveCount(0);
   await expect(page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' })).toBeVisible();
@@ -115,7 +115,7 @@ test('invalid numeric precision is explained before an API submission fails', as
 test('the 20-holding limit is visible instead of silently rejecting a selection', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
   await page.evaluate(() => {
-    const key = 'edge-preview-form-v1';
+    const key = 'edge-preview-form-v2';
     const draft = JSON.parse(sessionStorage.getItem(key)!);
     draft.holdings = Array.from({ length: 20 }, (_, i) => ({ name: 'ETF ' + i, account: '일반 계좌', instrument_id: 'US:' + i, amount_krw: '10', kind: 'etf' }));
     sessionStorage.setItem(key, JSON.stringify(draft));
@@ -172,9 +172,9 @@ for (const matching of [false, true]) test(`a completed job clears only its own 
   await page.goto('/portfolio/?preview=input');
   await addCash(page, '345');
   await page.evaluate(matching => {
-    const draft = JSON.parse(sessionStorage.getItem('edge-preview-form-v1')!);
+    const draft = JSON.parse(sessionStorage.getItem('edge-preview-form-v2')!);
     if (matching) draft.submittedJobId = 'other-tab-job';
-    sessionStorage.setItem('edge-portfolio-form-v1', JSON.stringify(draft));
+    sessionStorage.setItem('edge-portfolio-form-v2', JSON.stringify(draft));
     localStorage.setItem('edge-portfolio-job', 'other-tab-job');
     localStorage.setItem('edge-portfolio-feedback:other-tab-job', 'done');
   }, matching);
@@ -191,7 +191,7 @@ test('a restored holding cannot be hidden outside the editable account list', as
   await page.goto('/portfolio/?preview=input');
   await addCash(page);
   await page.evaluate(() => {
-    const key = 'edge-preview-form-v1', draft = JSON.parse(sessionStorage.getItem(key)!);
+    const key = 'edge-preview-form-v2', draft = JSON.parse(sessionStorage.getItem(key)!);
     draft.holdings[0].account = 'ISA'; draft.holdings[0].amount_krw = '345';
     sessionStorage.setItem(key, JSON.stringify(draft));
   });

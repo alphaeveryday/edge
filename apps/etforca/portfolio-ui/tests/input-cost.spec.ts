@@ -5,7 +5,8 @@ import { addCash } from './holdings';
 // The analysis contract rejects weights that do not sum to exactly 100, so conversion must never leave a remainder or a zero weight.
 test('converted weights always total exactly 100 with no zero holding', () => {
   expect(toPercents([3000000, 1000000])).toEqual(['75', '25']);
-  for (const amounts of [[1, 1, 1], [1, 1e12], [7, 13, 29, 31, 37]]) {
+  // The last case raises 19 tiny holdings to the 0.01% floor, so the largest one must give the excess back.
+  for (const amounts of [[1, 1, 1], [1, 1e12], [7, 13, 29, 31, 37], [...Array(19).fill(1), 1e12]]) {
     const weights = toPercents(amounts).map(Number);
     expect(weights.reduce((sum, n) => sum + Math.round(n * 100), 0)).toBe(10000);
     expect(weights.every(n => n > 0)).toBe(true);
@@ -44,6 +45,8 @@ for (const mode of ['amount', 'percent'] as const) test(`a ${mode}-mode draft sa
     await page.getByRole('button', { name: '금액', exact: true }).click();
   }
   await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('1,234,567');
+  // Migrated once: the old 만 원 draft cannot come back after this draft is cleared, nor be read by a rolled-back bundle.
+  expect(await page.evaluate(() => [sessionStorage.getItem('edge-preview-form-v1'), !!sessionStorage.getItem('edge-preview-form-v2')])).toEqual([null, true]);
 });
 
 test('a pasted decimal amount keeps its won value instead of shifting 100x', async ({ page }) => {
@@ -56,6 +59,13 @@ test('a pasted decimal amount keeps its won value instead of shifting 100x', asy
   await expect(amount).toHaveValue('1,234,567');
   await amount.fill('1.,234,567');
   await expect(amount).toHaveValue('1,234,567');
+  await amount.fill('1,234,567.89원');
+  await expect(amount).toHaveValue('1,234,567');
+  // Too many digits is shown and refused, never silently cut down to a valid amount.
+  await amount.fill('100000000000000');
+  await expect(amount).toHaveValue('100,000,000,000,000');
+  await expect(page.locator('#step-guidance')).toHaveText('금액은 10조 원 이하로 적어 주세요.');
+  await expect(page.getByRole('button', { name: '다음', exact: true })).toBeDisabled();
 });
 
 test('the preview legend keeps small and large amounts readable instead of rounding them away', async ({ page }) => {
@@ -65,6 +75,10 @@ test('the preview legend keeps small and large amounts readable instead of round
   await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
   // VOO is still empty, so the legend shows amounts rather than weights.
   await expect(page.locator('.portfolio-preview li').filter({ hasText: '현금' })).toContainText('1.5만 원');
+  await page.getByRole('button', { name: 'Vanguard S&P 500 ETF 빼기' }).click();
+  await expect(page.locator('.portfolio-preview .donut__c')).toContainText('1.5만');
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).fill('VOO');
+  await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
   await page.getByLabel('현금 금액', { exact: true }).fill('99999999');
   await expect(page.locator('.portfolio-preview li').filter({ hasText: '현금' })).toContainText('1억 원');
 });
