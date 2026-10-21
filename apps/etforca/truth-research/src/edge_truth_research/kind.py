@@ -15,7 +15,10 @@ import urllib.request
 
 BASE = "https://kind.krx.co.kr"
 VIEW = BASE + "/common/disclsviewer.do?method=search&acptno={}"
-_HEADERS = {"user-agent": "Mozilla/5.0 (compatible; etforca-truth/1.0)"}
+# KIND 는 클라우드(AWS)에서 오는 봇 이름 User-Agent 를 403 으로 막는다(2026-10-22 ECS 실측). 브라우저와 같은 머리글이면 받는다.
+_HEADERS = {"user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36",
+            "accept": "text/html,application/xhtml+xml,*/*;q=0.8", "accept-language": "ko-KR,ko;q=0.9",
+            "referer": "https://kind.krx.co.kr/disclosure/details.do"}
 _ROW = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S)
 _CELL = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
 _ACPT = re.compile(r"openDisclsViewer\('(\d{14})'")
