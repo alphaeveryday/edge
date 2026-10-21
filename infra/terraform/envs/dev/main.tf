@@ -93,6 +93,7 @@ data "aws_secretsmanager_secret" "app_api_mail" {
 }
 
 # 파이프라인 RDS 읽기 전용 롤(app_sync_ro) 비밀번호. 롤과 시크릿은 수동 선생성(ALPHA-1134)
+# 사용 주체는 app-batch(ADR-0063). 이름의 app-api 접두어는 이전 사용 주체의 흔적
 data "aws_secretsmanager_secret" "app_api_pipeline" {
   name = "${local.prefix}-app-api/pipeline/password"
 }
@@ -988,9 +989,6 @@ module "app_api" {
     module.app_rds.master_user_secret_arn,
     data.aws_secretsmanager_secret.app_api_jwt.arn,
     data.aws_secretsmanager_secret.app_api_mail.arn,
-    # 파이프라인 동기화는 app_batch 로 이전(ADR-0063). 실행 중인 옛 리비전이 이 시크릿을 참조하므로
-    # 그 리비전이 교체되는 app-api 배포와 sync 코드 제거(후속 PR) 뒤에 뺀다.
-    data.aws_secretsmanager_secret.app_api_pipeline.arn,
     data.aws_secretsmanager_secret.app_api_apple.arn,
     data.aws_secretsmanager_secret.app_api_kakao.arn,
   ]
@@ -1005,16 +1003,6 @@ resource "aws_vpc_security_group_ingress_rule" "app_rds_from_app_api" {
   from_port                    = 5432
   to_port                      = 5432
   description                  = "app-api to postgres"
-}
-
-# 파이프라인 동기화는 app_batch 로 이전(ADR-0063). sync 코드 제거(후속 PR) 때 뺀다.
-resource "aws_vpc_security_group_ingress_rule" "rds_from_app_api" {
-  security_group_id            = module.rds.security_group_id
-  referenced_security_group_id = module.app_api.security_group_id
-  ip_protocol                  = "tcp"
-  from_port                    = 5432
-  to_port                      = 5432
-  description                  = "app-api pipeline read sync to postgres"
 }
 
 resource "aws_vpc_security_group_ingress_rule" "app_redis_from_app_api" {
