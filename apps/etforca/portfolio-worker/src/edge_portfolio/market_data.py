@@ -74,7 +74,7 @@ def positive_price(value):
 
 def repair_prices(ticker, frame, symbol, as_of, currency, *, since=None):
     columns = ['Adj Close', 'Close']
-    instrument = ('KR:' if symbol.endswith('.KS') else 'US:') + symbol
+    instrument = ('KR:' if symbol.endswith(('.KS', '.KQ')) else 'US:') + symbol
     start = pd.Timestamp(since) if since is not None else max(frame.index[0], pd.Timestamp(year_before(as_of, 2)))
     expected = expected_sessions(instrument, start, as_of - timedelta(days=1))
     valid = frame[columns].map(positive_price).all(axis=1)

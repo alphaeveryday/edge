@@ -42,7 +42,7 @@ def test_known_legacy_names_are_resolved_but_unknown_names_are_not_guessed():
 
 
 def test_customer_cannot_send_arbitrary_price_symbols():
-    with pytest.raises(ValueError, match='SELECT_LISTED_ETF'):
+    with pytest.raises(ValueError, match='SELECT_LISTED_INSTRUMENT'):
         work.identify({**asset(), 'instrument_id': 'https://internal'})
 
 
@@ -143,7 +143,7 @@ def test_split_adjusts_quantity_and_average_without_faking_a_loss_or_repeating_t
 
 def test_catalog_removal_cannot_hide_an_existing_portfolio_or_block_unrelated_edits(isolated_db, monkeypatch):
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
-    monkeypatch.setattr(work, 'directory', lambda: {'instruments': []})
+    monkeypatch.setattr(work, 'directory', lambda **kwargs: {'instruments': []})
     saved = dashboard.read('owner')
     assert saved['workbook']['assets'][0]['instrument_id'] is None
     assert saved['workbook']['assets'][0]['quantity'] == 10
@@ -424,7 +424,7 @@ def test_legacy_currency_mismatch_requires_relinking_without_reinterpreting_cost
     assert resolved['instrument_id'] is None
     assert resolved['currency'] == 'KRW'
     assert resolved['average'] == 500000
-    with pytest.raises(ValueError, match='SELECT_LISTED_ETF'):
+    with pytest.raises(ValueError, match='SELECT_LISTED_INSTRUMENT'):
         work.identify(a)
 
 

@@ -1,12 +1,32 @@
-"""Shared ETF directory for search and server-side instrument validation."""
+"""ETF analysis directory and expanded dashboard securities directory."""
 import json
 from functools import lru_cache
 from pathlib import Path
 
 
+@lru_cache(maxsize=2)
+def directory(include_stocks=False):
+    root = Path(__file__).parent / 'data'
+    data = json.loads((root / 'etf_catalog.json').read_text(encoding='utf8'))
+    if include_stocks:
+        stocks = json.loads((root / 'stock_catalog.json').read_text(encoding='utf8'))
+        data = {**data, 'sources': data['sources'] + stocks['sources'],
+                'stock_fetched_at': stocks['fetched_at'],
+                'counts': {market: data['counts'][market] + stocks['counts'][market] for market in ('KR', 'US')},
+                'instruments': data['instruments'] + stocks['instruments']}
+    return data
+
+
 @lru_cache(maxsize=1)
-def directory():
-    return json.loads((Path(__file__).parent / 'data' / 'etf_catalog.json').read_text(encoding='utf8'))
+def instruments():
+    return {row['id']: row for row in directory(include_stocks=True)['instruments']}
+
+
+def price_symbol(instrument_id):
+    if instrument_id == 'FX':
+        return 'KRW=X'
+    item = instruments().get(instrument_id, {})
+    return item.get('symbol') or instrument_id[3:] + ('.KS' if instrument_id.startswith('KR:') else '')
 
 
 def canonicalize(request):

@@ -124,13 +124,13 @@ test('a failed workbook read does not block the independent saved analysis', asy
 
 test('catalog failure can be retried from the backtest without opening a holding editor', async ({ page }) => {
   await setup(page, { version: 1, workbook });
-  await page.route('**/api/portfolio/catalog', r => r.fulfill({ status: 503, json: {} }));
+  await page.route('**/api/portfolio/workbook/catalog', r => r.fulfill({ status: 503, json: {} }));
   await page.goto('/portfolio/?view=dashboard');
   await page.getByRole('button', { name: '백테스트', exact: true }).click();
   await expect(page.getByRole('button', { name: '목록 다시 불러오기' })).toBeVisible();
-  await page.unroute('**/api/portfolio/catalog');
+  await page.unroute('**/api/portfolio/workbook/catalog');
   await page.getByRole('button', { name: '목록 다시 불러오기' }).click();
-  await page.getByRole('combobox', { name: /백테스트에 담은 ETF/ }).fill('069500');
+  await page.getByRole('combobox', { name: /백테스트에 담은 종목/ }).fill('069500');
   await expect(page.getByRole('option', { name: /KODEX 200/ })).toBeVisible();
 });
 

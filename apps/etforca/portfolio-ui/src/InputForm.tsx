@@ -78,6 +78,7 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
   const percentLeft = ((10000 - percentHundredths) / 100).toLocaleString('ko-KR', { maximumFractionDigits: 2 });
   const holdingsValid = holdings.length > 0 && !invalidHolding && (mode !== 'percent' || percentHundredths === 10000);
   function add(account: string, item: Instrument) {
+    if (item.kind === 'stock') return '개별 주식은 대시보드에서 관리할 수 있어요. AI 분석에는 ETF를 담아 주세요.';
     if (holdings.some(h => h.account === account && h.instrument_id === item.id)) return '이미 담은 종목이에요. 보유 금액이나 비율을 수정해 주세요.';
     if (holdings.length >= 20) return '최대 20종목까지 담을 수 있어요. 기존 종목을 빼고 추가해 주세요.';
     focusRow.current = account + '|' + item.id;
@@ -112,11 +113,13 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
       await ensureVisitorSession();
       const saved = await request<Saved>('/workbook');
       const assets = saved.workbook?.assets || [];
+      const etfs = catalog ?? await request<Catalog>('/catalog');
       if (!assets.length) throw new Error('저장된 보유 종목이 없어요.');
       if (assets.length > 20) throw new Error('분석은 최대 20종목까지 가능해요. 분석할 종목을 입력해 주세요.');
       const rows: Holding[] = assets.map(asset => {
         const instrumentId = asset.instrument_id || (asset.category === '현금' ? 'CASH:KRW' : null);
         if (!instrumentId) throw new Error(`${asset.name}의 종목 코드를 확인할 수 없어요. 대시보드에서 종목을 다시 선택해 주세요.`);
+        if (instrumentId !== 'CASH:KRW' && !etfs.instruments.some(item => item.id === instrumentId && item.kind === 'etf')) throw new Error(`${asset.name}은 ETF 분석 대상이 아니에요. 분석할 ETF를 직접 담아 주세요. 대시보드의 보유 종목은 그대로 유지돼요.`);
         const market = saved.tracking?.market?.version === saved.version ? saved.tracking.market.payload : null;
         const missing = market?.missing.includes(asset.id) || market?.pending_prices?.includes(asset.id);
         const quote = market?.assets.find(row => row.id === asset.id);

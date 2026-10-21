@@ -64,7 +64,7 @@ test('adding and editing a holding have distinct titles and a saved result', asy
   await page.goto('/portfolio/?preview=dashboard');
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
   await expect(page.getByRole('heading', { name: '보유 자산 추가' })).toBeVisible();
-  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
   await page.getByRole('option', { name: /KODEX 200/ }).click();
   await page.getByLabel('보유 수량', { exact: true }).fill('2');
   await page.getByRole('button', { name: '저장', exact: true }).last().click();

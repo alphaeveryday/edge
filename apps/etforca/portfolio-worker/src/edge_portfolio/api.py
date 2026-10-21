@@ -59,7 +59,7 @@ async def origin_check(request, call_next):
     if request.method == "POST" and len(await request.body()) > limit:
         return Response(status_code=413)
     response = await call_next(request)
-    response.headers["Cache-Control"] = "public, max-age=3600" if request.url.path == '/api/portfolio/catalog' else "no-store"
+    response.headers["Cache-Control"] = "public, max-age=3600" if request.url.path in ('/api/portfolio/catalog', '/api/portfolio/workbook/catalog') else "no-store"
     return response
 
 
@@ -84,6 +84,11 @@ def session(request: Request, response: Response):
 @app.get('/api/portfolio/catalog')
 def catalog():
     return directory()
+
+
+@app.get('/api/portfolio/workbook/catalog')
+def workbook_catalog():
+    return directory(include_stocks=True)
 
 
 @app.post('/api/portfolio/presence')
