@@ -291,7 +291,10 @@ HOT=failed FAULT=kill python3 run-cluster.py C4    # Cluster: C1~C4 (docker-comp
 ## 코드 구조
 
 헥사고날 구조다.
-controller는 application이 제공하는 포트만 부르고, 서비스는 application이 요구하는 포트만 부른다.
+controller는 provided 포트만 부른다.
+서비스는 저장소와 외부 연동을 required 포트로 부른다.
+같은 application 안의 호출은 허용한다(`VoteFacade` → `VoteService`, `MemberModifyService` → `MemberFinder`).
+`sync`는 예외로 adapter의 저장소를 직접 쓴다.
 
 ```
 app-api/
