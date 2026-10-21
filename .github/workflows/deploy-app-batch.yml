@@ -1,0 +1,38 @@
+# app-batch dev 배포 (ETF Orca 동기화 배치, ADR-0063). batch 하위 프로젝트가 바뀐 dev push 에서
+# 이미지를 만들고 task 정의 리비전만 등록한다. 서비스가 없고, 예약 태스크가 다음 실행부터 최신 리비전을 쓴다.
+#
+# 앱 DB 스키마(BATCH_* 포함)는 app-api Flyway 소관이라 app-api 의 마이그레이션 변경은 이 배포를 트리거하지 않는다.
+#
+# workflow_dispatch 는 최초 이미지 부트스트랩용. 이 워크플로가 신설되는 머지 push 는 terraform-apply(ECR 권한·task 정의 생성)와
+# 경주해 실패할 수 있다 — 그때는 apply 뒤 dispatch 로 다시 돌린다. 배포는 버전 태그와 함께 latest 를 옮긴다(TF baseline).
+name: deploy-app-batch
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - "apps/etforca/app-api/batch/**"
+      # 하위 프로젝트가 물려받는 루트 빌드 설정
+      - "apps/etforca/app-api/build.gradle"
+      - "apps/etforca/app-api/settings.gradle"
+      - "apps/etforca/app-api/gradle/**"
+      - ".dockerignore"
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+concurrency:
+  group: deploy-app-batch
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/deploy-app.yml
+    with:
+      app: app-batch
+      product: etforca
+      dockerfile: apps/etforca/app-api/batch/Dockerfile
+      kind: task
