@@ -19,6 +19,8 @@ on:
       - "apps/etforca/app-api/gradle/**"
       - "apps/etforca/app-api/gradlew"
       - ".dockerignore"
+      # 공용 배포 절차의 변경(다른 호출자와 같음)
+      - ".github/workflows/deploy-app.yml"
 
 permissions:
   id-token: write
