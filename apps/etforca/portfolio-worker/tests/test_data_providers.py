@@ -40,6 +40,18 @@ def test_unavailable_adjustments_use_explicit_price_basis_when_close_is_valid(mo
     assert record['frame']['Adj Close'].equals(record['frame']['Close'])
 
 
+@pytest.mark.parametrize('symbol', ['005930.KS', '247540.KQ'])
+def test_stock_fallback_never_labels_split_adjusted_prices_as_dividend_reinvestment(monkeypatch, symbol):
+    def reader(feed, *args):
+        assert feed == 'NAVER:' + symbol[:-3]
+        return pd.DataFrame({'Close': [100., 110.]}, index=pd.to_datetime(['2026-10-12', '2026-10-13']))
+    monkeypatch.setattr('FinanceDataReader.DataReader', reader)
+    record = load_fallback_prices(symbol, date(2026, 10, 14))
+    assert record['currency'] == 'KRW'
+    assert record['return_basis'] == 'price', 'Stock cash dividends are not supplied by this chart feed'
+    assert 'Dividends' not in record['frame']
+
+
 async def test_price_failure_switches_feed_instead_of_repeating_the_same_provider(monkeypatch):
     calls = []
     async def fetch(*args, provider='yahoo', **kwargs):

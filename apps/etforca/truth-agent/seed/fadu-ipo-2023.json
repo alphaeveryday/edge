@@ -49,8 +49,8 @@
   "beneficiary": "검찰은 상장으로 조달한 공모금 약 1,937억원을 부당이득으로 산정했다고 보도됐습니다. 수사기관의 산정액이며 법원이 인정한 금액이 아닙니다.",
   "impact": 80,
   "impactReason": "기술특례상장의 매출 추정과 공모가 산정이 쟁점이고, 공모주 청약자와 상장 뒤 매수자의 손실 판단에 직접 연결됩니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/7X6d3dQYSkE/hqdefault.jpg",
+  "video": {"youtube": "7X6d3dQYSkE", "title": "금감원, '뻥튀기 상장' 파두·주관사 관계자 검찰 송치 / 연합뉴스TV (YonhapnewsTV)"},
   "body": [
     { "h": "전망이 빗나간 문제와 받은 통보를 뺀 문제는 다릅니다" },
     {

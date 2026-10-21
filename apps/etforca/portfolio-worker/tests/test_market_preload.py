@@ -18,7 +18,7 @@ def test_bulk_collection_does_not_start_in_existing_batch_slots(hour, minute, ex
 
 def test_catalog_seeding_is_shared_and_does_not_reset_schedules(isolated_db, monkeypatch):
     from edge_portfolio import catalog
-    monkeypatch.setattr(catalog, 'directory', lambda: {'instruments': [{'id': 'US:SOXL'}, {'id': 'KR:069500'}]})
+    monkeypatch.setattr(catalog, 'directory', lambda **kwargs: {'instruments': [{'id': 'US:SOXL'}, {'id': 'KR:069500'}]})
     preload.seed()
     with store.connect() as db:
         db.execute("UPDATE portfolio_market_preload SET quote_after=now()+interval '1 day'")
@@ -470,6 +470,19 @@ def test_changed_adjustments_or_actions_preserve_cash_history_but_require_fresh_
     assert saved['frame'][1]['Close'] == 98
 
 
+def test_expanding_short_cache_preserves_valid_adjustments_and_new_dividends(isolated_db):
+    old = {**record(), 'history_complete': False, 'requested_at': '2026-10-17'}
+    expanded = {**record(), 'history_complete': False, 'requested_at': '2026-10-18'}
+    expanded['frame'].loc[pd.Timestamp('2025-11-03')] = [90., 85., 3.]
+    expanded['frame'] = expanded['frame'].sort_index()
+    with store.connect() as db:
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), old)
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), expanded)
+        saved = db.execute('SELECT payload FROM portfolio_dashboard_prices').fetchone()['payload']
+    assert [row['Dividends'] for row in saved['frame']] == [3., 0., 2.]
+    assert [row['Adj Close'] for row in saved['frame']] == [85., 100., 110.]
+
+
 def test_new_action_before_overlap_anchors_requires_full_adjustment_read(isolated_db):
     old = {**record(), 'history_complete': True, 'requested_at': '2026-10-17'}
     old['frame'].loc[pd.Timestamp('2020-01-02')] = [90., 90., 0.]
@@ -510,7 +523,7 @@ def test_production_warm_loader_uses_existing_fallback_for_primary_failure(monke
     assert result['primary_failure'] == {'stale': 'PRICE_STALE', 'invalid': 'PRICE_INVALID'}.get(failure, failure)
 
 
-@pytest.mark.parametrize('symbol,currency,provider', [('069500.KS', 'KRW', 'FinanceDataReader:NAVER:069500'), ('SOXL', 'USD', 'FinanceDataReader:YAHOO:SOXL')])
+@pytest.mark.parametrize('symbol,currency,provider', [('069500.KS', 'KRW', 'FinanceDataReader:NAVER:069500'), ('247540.KQ', 'KRW', 'FinanceDataReader:NAVER:247540'), ('SOXL', 'USD', 'FinanceDataReader:YAHOO:SOXL')])
 def test_warm_fallback_preserves_primary_actual_prices_actions_and_split_warning(monkeypatch, symbol, currency, provider):
     from edge_portfolio import price_fetch, data_providers
     primary = {**record(currency=currency), 'pending_splits': ['2026-10-17']}

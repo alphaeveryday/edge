@@ -67,8 +67,10 @@ test('default account, real stages, result restoration, chat gate and email rece
   await fillForm(page);
   await expect(page.locator('.progress')).toContainText('보통 5분');
   await expect(page.locator('.progress')).toContainText('최대 10분');
-  await expect(page.locator('.progress-steps li')).toHaveCount(4);
-  await expect(page.locator('.progress-steps [aria-current="step"]')).toHaveText('보유 구성 분석진행 중');
+  await expect(page.locator('.progress-steps')).toHaveCount(0);
+  await expect(page.getByRole('list', { name: '분석 역할과 검토 흐름' })).toBeVisible();
+  await expect(page.locator('.agents > li:not(.hand)')).toHaveCount(5);
+  await expect(page.locator('.research-motion [role=status]')).toHaveText('현재 포트폴리오 분석');
   await expect(page.locator('.research-motion svg')).toBeVisible();
   await page.screenshot({ path: `test-results/progress-${test.info().project.name}.png`, fullPage: true });
   ready = true;

@@ -1,6 +1,5 @@
 import { roles, titles, type Job } from './api';
 
-const steps = ['요청 확인', '보유 구성 분석', '시장 전망 확인', '추천안 정리'];
 export function ProgressView({ job, elapsed }: { job: Job | null; elapsed: number }) {
   const stage = job?.state === 'running' ? roles.indexOf(job.stage!) : -1;
   const card = (title: string, subtitle: string, index: number, path: string, mini = false) => <li className={mini ? 'mini' : 'wide'} data-s={stage < index ? 'wait' : stage === index ? 'run' : 'done'}><svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d={path} /></svg><b>{title}</b><span>{subtitle}</span><em>{stage === index ? '검토 중' : stage > index ? '검토 완료' : '대기'}</em></li>;
@@ -11,7 +10,7 @@ export function ProgressView({ job, elapsed }: { job: Job | null; elapsed: numbe
       <svg viewBox="0 0 360 110" aria-hidden="true">
         <path className="research-track" d="M40 55H310" />
         {stage >= 0 && <path className="research-flow" d={`M40 55H${40 + stage * 90}`} />}
-        {steps.map((_, i) => <g key={i} className={i === stage ? 'active' : i < stage ? 'complete' : ''}>
+        {roles.map((role, i) => <g key={role} className={i === stage ? 'active' : i < stage ? 'complete' : ''}>
           <circle className="research-halo" cx={40 + i * 90} cy="55" r="24" />
           <circle cx={40 + i * 90} cy="55" r="16" />
           <text x={40 + i * 90} y="60" textAnchor="middle">{i < stage ? '✓' : i + 1}</text>
@@ -29,7 +28,6 @@ export function ProgressView({ job, elapsed }: { job: Job | null; elapsed: numbe
       {card('리스크 매니저', '추천안의 위험과 놓친 점을 확인해요', 3, 'M12 3l7.5 3v5.5c0 4.6-3 8-7.5 9.5-4.5-1.5-7.5-4.9-7.5-9.5V6zM8.8 12l2.3 2.3 4.2-4.4')}
     </ul>
     <p className="notice">한 AI가 위 역할의 관점을 순서대로 검토해요.</p>
-    <ol className="progress-steps">{steps.map((label, i) => <li key={label} data-state={i < stage ? 'complete' : i === stage ? 'active' : 'waiting'} aria-current={i === stage ? 'step' : undefined}><span>{label}</span><small>{i < stage ? '완료' : i === stage ? '진행 중' : '대기'}</small></li>)}</ol>
     <p className="notice">보통 5분, 최대 10분 정도 걸려요.<br />화면을 닫아도 분석은 계속됩니다.</p>
     {job?.state === 'running' && <p className="notice">{Math.floor(elapsed / 60)}분 {elapsed % 60}초 경과</p>}
   </article>;

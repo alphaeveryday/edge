@@ -42,8 +42,8 @@
   },
   "impact": 60,
   "impactReason": "1심 재판부는 주가가 단기간에 비정상적으로 급등하는 과정에서 다수의 투자자가 유입돼 상당한 손실을 입었다고 밝혔습니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/zUZLbao8NSA/hqdefault.jpg",
+  "video": {"youtube": "zUZLbao8NSA", "title": "'라임사태 연루' 에스모 전 대표 1심서 징역 5년 / 연합뉴스TV (YonhapnewsTV)"},
   "body": [
     { "h": "회사가 아니라 전 대표 개인의 형사 사건입니다" },
     {

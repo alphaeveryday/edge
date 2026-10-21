@@ -24,12 +24,14 @@ test('chart motion respects reduced motion and monthly bars open the chosen mont
   await expect(page.getByRole('heading', { name: /2026년 10월/ })).toBeVisible();
   await expect(page.locator('.dividend-records')).not.toBeEmpty();
   await page.goto('/portfolio/?preview=running');
-  await expect(page.locator('.progress-steps [aria-current="step"]')).toHaveCount(1);
+  await expect(page.locator('.progress-steps')).toHaveCount(0);
+  await expect(page.locator('.research-motion g.active')).toHaveCount(1);
   await expect(page.locator('.research-flow')).toHaveCSS('animation-name', 'research-flow');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await expect(page.locator('.research-flow')).toHaveCSS('animation-name', 'none');
   await page.goto('/portfolio/?preview=queued');
-  await expect(page.locator('.progress-steps [aria-current="step"]')).toHaveCount(0);
+  await expect(page.locator('.research-motion g.active')).toHaveCount(0);
+  await expect(page.getByRole('list', { name: '분석 역할과 검토 흐름' })).toBeVisible();
 });
 test('money calculations preserve FX, fees and unavailable cost; purchases never exceed the budget', () => {
   expect(value(asset, 1360)).toBe(3046400);
@@ -70,7 +72,7 @@ test('preview edits and reloads without sending customer API or analytics traffi
   await page.getByRole('dialog').press('Escape');
   await expect(page.getByRole('button', { name: '종목 추가', exact: true })).toBeFocused();
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
-  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
   await page.getByRole('option', { name: /KODEX 200/ }).click();
   await page.getByLabel('보유 수량', { exact: true }).fill('2');
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();

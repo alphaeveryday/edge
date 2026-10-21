@@ -51,8 +51,8 @@
   },
   "impact": 55,
   "impactReason": "국내 첫 유전자치료제 허가 취소가 두 상장사 투자 판단에 걸린 사건입니다. 형사 무죄와 허가 취소·민사 책임을 분리해 읽어야 합니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/IcFuRm3GBHA/hqdefault.jpg",
+  "video": {"youtube": "IcFuRm3GBHA", "title": "‘인보사 사태’ 이웅열 코오롱 명예회장 2심도 ‘무죄’ / KBS  2026.02.05."},
   "body": [
     { "h": "무엇이 무죄인지" },
     {

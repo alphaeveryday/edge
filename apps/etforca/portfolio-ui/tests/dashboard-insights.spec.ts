@@ -99,12 +99,12 @@ test('the same instrument cannot accidentally be added twice to the same account
   await page.goto('/portfolio/?preview=dashboard');
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
   const dialog = page.getByRole('dialog');
-  await dialog.getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await dialog.getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
   await dialog.getByRole('option', { name: /KODEX 200/ }).click();
   await dialog.getByLabel('보유 수량', { exact: true }).fill('10');
   await dialog.getByRole('button', { name: '저장', exact: true }).click();
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
-  await dialog.getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await dialog.getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
   await dialog.getByRole('option', { name: /KODEX 200/ }).click();
   await expect(dialog.getByRole('alert')).toContainText('이 계좌에 이미 있어요');
   await expect(dialog.getByRole('button', { name: '저장', exact: true })).toBeDisabled();

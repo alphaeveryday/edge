@@ -14,7 +14,7 @@ def load_preload_prices(symbol, end, start, on_raw):
         nonlocal captured, pending
         pending = record.get('pending_splits', [])
         valid = record['frame']['Close'][record['frame']['Close'].map(positive_price)]
-        expected = 'KRW' if symbol == 'KRW=X' or symbol.endswith('.KS') else 'USD'
+        expected = 'KRW' if symbol == 'KRW=X' or symbol.endswith(('.KS', '.KQ')) else 'USD'
         if record['currency'] == expected and not valid.empty and 0 <= (end - valid.index[-1].date()).days <= 7:
             captured = record
         on_raw(record)

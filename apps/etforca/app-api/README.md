@@ -18,12 +18,13 @@ flowchart LR
     app[app-ui<br/>모바일 앱] -->|/api/v1| api[app-api<br/>1~N 인스턴스]
     api -->|투표 원본| pg[(PostgreSQL<br/>앱 전용 RDS)]
     api -->|투표 집계| redis[(Redis<br/>ElastiCache)]
-    engine[EDGE 엔진<br/>분석 결과 DB] -->|읽기 전용 동기화| api
+    engine[EDGE 엔진<br/>분석 결과 DB] -->|10분 주기 동기화| batch[batch<br/>예약 태스크]
+    batch -->|ETF·분석| pg
     api -.->|재조정| redis
 ```
 
 - 투표 원본은 PostgreSQL, 집계는 Redis에 둔다.
-- ETF·분석 데이터는 엔진 DB에서 읽기 전용으로 동기화한다.
+- ETF·분석 데이터는 `batch` 예약 태스크가 엔진 DB에서 읽어 앱 DB로 동기화한다.
 
 ## 투표 흐름
 
@@ -290,10 +291,10 @@ HOT=failed FAULT=kill python3 run-cluster.py C4    # Cluster: C1~C4 (docker-comp
 ## 코드 구조
 
 헥사고날 아키텍처를 따른다.
-controller는 provided 포트만 호출한다.
+controller는 application의 provided 패키지(포트와 그 입출력 타입)만 의존한다.
 서비스는 저장소와 외부 연동을 required 포트를 통해 호출한다.
 같은 application 안의 호출은 허용한다(`VoteFacade` → `VoteService`, `MemberModifyService` → `MemberFinder`).
-`sync`만 예외적으로 adapter의 저장소를 직접 사용한다.
+계층 방향(domain ← application ← adapter)과 슬라이스 순환 금지는 `HexagonalArchitectureTest`(ArchUnit)가 빌드에서 강제한다.
 
 ```
 app-api/
@@ -316,7 +317,7 @@ app-api/
         │   └── required/           서비스가 부르는 포트 (저장소, 외부 연동)
         ├── adapter/
         │   ├── webapi/<기능>/      controller와 응답 DTO
-        │   ├── persistence/        Redis 집계, 파이프라인 동기화 저장소
+        │   ├── persistence/        Redis 집계
         │   ├── integration/        메일, 푸시, 소셜 로그인
         │   └── security/           인증 필터와 principal 해석
         └── support/                설정, 커서, 에러 코드, JSON
@@ -353,10 +354,9 @@ app-api/
 ### 데이터
 
 - 이 모듈이 직접 쓰는 데이터: 사용자·관심·게시물·투표·알림.
-- 동기화 테이블(ETF·분석·순위)의 쓰기는 `sync` 하나만 한다. 다른 기능은 읽기만 한다.
-- `sync` 저장소는 JdbcTemplate이다. 파이프라인 테이블에 엔티티가 없고 쓰기가 일괄 upsert이기 때문이다.
-- 파이프라인 접속 env는 `APP_PIPELINE_URL`·`APP_PIPELINE_USERNAME`·`APP_PIPELINE_PASSWORD`다. 없으면 동기화가 돌지 않는다.
-- dev 의 동기화 실행 주체는 `batch` 예약 태스크다([ADR-0063](../../../docs/adr/0063-app-sync-batch-scheduled-task.md)). app-api 에는 파이프라인 env 를 주지 않는다.
+- 동기화 테이블(ETF·분석·순위)의 쓰기는 `batch` 의 sync 잡 하나만 한다([ADR-0063](../../../docs/adr/0063-app-sync-batch-scheduled-task.md)). app-api 는 읽기만 한다.
+- sync 잡의 저장소는 JdbcTemplate이다. 파이프라인 테이블에 엔티티가 없고 쓰기가 일괄 upsert이기 때문이다.
+- 파이프라인 접속 env(`APP_PIPELINE_URL`·`APP_PIPELINE_USERNAME`·`APP_PIPELINE_PASSWORD`)는 `batch` 만 받는다.
 - 원천 없는 값(선별 목록·테마·운용사)은 `etf_curation`·`theme` 마이그레이션이 넣는다.
 - 스키마는 `db/etf-migration` Flyway(별도 history table)가 소유하고, Hibernate는 `validate` 모드로 스키마를 검증만 한다.
 - `batch`의 `BATCH_*` 메타 테이블도 이 Flyway가 만든다.
