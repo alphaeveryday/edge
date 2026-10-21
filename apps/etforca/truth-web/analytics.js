@@ -70,4 +70,8 @@ if (!navigator.webdriver) {
     write(null);
     ask();
   });
+  // 다른 탭에서 동의를 거두면 이 탭도 바로 쿠키 없는 집계로 바꾼다(쿠키 모드로 열린 탭만)
+  addEventListener('storage', e => {
+    if (e.key === KEY && granted && e.newValue !== 'yes') { stopPersisting(); location.reload(); }
+  });
 }
