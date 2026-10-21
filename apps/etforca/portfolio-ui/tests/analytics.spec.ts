@@ -45,7 +45,7 @@ test('unknown classification withholds analytics without blocking input and reco
   await expect.poll(() => events.some(e => e.event === '$pageview' && e.properties.is_test === false)).toBe(true);
 });
 
-test('session replay masks customer text and cookies while linking visits and respecting opt out', async ({ page, baseURL }) => {
+test('session replay shows screen content while excluding auth cookies and respecting opt out', async ({ page, baseURL }) => {
   test.setTimeout(60000);
   const events = await instrument(page, baseURL!, false, true);
   await page.addInitScript(() => {
@@ -70,9 +70,9 @@ test('session replay masks customer text and cookies while linking visits and re
   });
   await expect.poll(() => events.filter(e => e.event === '$snapshot').flatMap(e => unpackReplay(e.properties.$snapshot_data)).some(e => e.type === 3 && e.timestamp >= mutationTime && e.data.source === 0), { timeout: 20000 }).toBe(true);
   const serialized = JSON.stringify(unpackReplay(events));
-  expect(serialized).not.toMatch(/private@example|private-token|private-holdings|private-input|private-title|never-record-this|auth-secret|private-financial-chart|37\.1234567/);
+  expect(serialized).not.toMatch(/private@example|private-token|never-record-this|auth-secret/);
   expect(serialized).toContain('.nav__pill');
-  expect(serialized).not.toMatch(/"class"\s*:\s*"gain"|private-profit|private-choice-marker|private-answer|private-tax-check|private-tax-radio|"isChecked":true/);
+  for (const value of ['private-holdings-value-123456789', 'private-input-value', 'private-title-value', 'private-financial-chart', 'private-profit', 'private-answer']) expect(serialized).toContain(value);
   const id = events.find(e => e.event === '$pageview')!.properties.distinct_id;
   expect(events.filter(e => e.event === '$snapshot').every(e => e.properties.$session_id && e.properties.distinct_id === id)).toBe(true);
   await page.reload({ waitUntil: 'domcontentloaded' });
