@@ -273,8 +273,9 @@ def test_cases_beyond_the_session_cap_are_not_dropped_untried(tmp_path, monkeypa
     assert state["pending"]["hybe-ipo-2019"]["tries"] == 0
 
 
-def test_seed_topics_win_but_agent_title_is_kept(tmp_path):
-    # 주제어는 사람이 정한 배정 설정이라 seed 를 좁히면 저장본도 따라가야 한다. 제목은 에이전트가 고친 것을 지킨다.
+def test_seed_topics_and_title_win_over_stored(tmp_path):
+    # 주제어는 사람이 정한 배정 설정이라 seed 를 좁히면 저장본도 따라가야 한다. 제목도 사람이 검토한 공개 문구라
+    # seed 를 고치면(예: 과장된 '확정' 표현을 바로잡으면) 저장본이 따라가야 한다.
     store, seeds = LocalStore(tmp_path / "store"), tmp_path / "seed"
     seeds.mkdir()
     case = seed("hybe-ipo-2019")
@@ -284,7 +285,7 @@ def test_seed_topics_win_but_agent_title_is_kept(tmp_path):
     loaded = {"hybe-ipo-2019": (stored, etag)}
     assert runner.sync_seed(store, loaded, seeds, date(2026, 10, 21)) == ["hybe-ipo-2019"]
     synced = loaded["hybe-ipo-2019"][0]
-    assert synced["topics"] == case["topics"] and synced["title"] == "하이브, 에이전트가 고친 제목"
+    assert synced["topics"] == case["topics"] and synced["title"] == case["title"]
 
 
 def _discover_setup(tmp_path, monkeypatch):
