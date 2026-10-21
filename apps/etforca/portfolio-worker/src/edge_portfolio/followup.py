@@ -17,11 +17,11 @@ async def answer_question(question, report, key, *, on_stage=None, on_event=None
                           on_checkpoint=None, revision_id=None, model_call=None, evidence=None, market=None):
     if not isinstance(question, str) or not 1 <= len(question.strip()) <= 1000:
         raise ValueError('INVALID_FOLLOWUP_QUESTION')
-    original = AnalysisInput.model_validate(report['input'])
+    original = AnalysisInput.model_validate(report['input'], context={'persisted_input': True})
     payload = original.model_dump(mode='json')
     payload['question'] = original.question + '\n\n후속 질문: ' + question
     payload['funding_questions'] = [original.question, question]
-    request = FollowupInput.model_validate(payload)
+    request = FollowupInput.model_validate(payload, context={'persisted_input': True})
     revised = await run_analysis(request, key, on_stage or (lambda role: None),
         model_call=model_call, evidence=evidence, market=market, on_event=on_event,
         on_checkpoint=on_checkpoint, prior_report=deepcopy(report), followup_question=question)

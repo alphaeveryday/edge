@@ -15,6 +15,19 @@ const report = {
   insights: [{ title: '결혼 자금은 따로 확보하세요', content: section }]
 };
 
+test('calculated upper sigma is labelled as a scenario instead of an AI expectation', async ({ page }) => {
+  const scenario = structuredClone(report);
+  Object.assign(scenario.recommendation, { expected_return_1y: 24.5,
+    return_forecast: { kind: 'upper_sigma_1y', reason: '과거 수익률 10% + 연환산 표준편차 14.5%p', method: '과거 기반 시나리오' } });
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'sigma'));
+  await page.route('**/api/portfolio/analyses/sigma', route => route.fulfill({ json: { id: 'sigma', state: 'succeeded', result: scenario } }));
+  await page.goto('/portfolio/');
+  await expect(page.locator('.forecast')).toContainText('1년 수익률 · 1σ 상단 시나리오');
+  await expect(page.locator('.forecast')).toContainText('+24.5%');
+  await page.getByText('수익률·배당률 산정 근거', { exact: true }).click();
+  await expect(page.getByText('과거 수익률 10% + 연환산 표준편차 14.5%p', { exact: true })).toBeVisible();
+});
+
 test('small positive allocations remain visible in composition and account totals', async ({ page }) => {
   const small = structuredClone(report);
   small.recommendation.allocations[0] = { ...small.recommendation.allocations[0], weight_pct: .004, amount_krw: null as any };

@@ -108,7 +108,7 @@ async def work_once(stopping=None):
                 on_stage=lambda role: store.stage(job['id'], role), on_event=on_event,
                 on_checkpoint=on_checkpoint, revision_id=job['id'])
         else:
-            result = await run_analysis(AnalysisInput.model_validate(job["input"]), os.environ["DEEPSEEK_API_KEY"],
+            result = await run_analysis(AnalysisInput.model_validate(job["input"], context={'persisted_input': True}), os.environ["DEEPSEEK_API_KEY"],
                                         lambda role: store.stage(job["id"], role), on_event=on_event, on_checkpoint=on_checkpoint)
         store.finish(job["id"], result=result)
         log.info("job=%s status=succeeded seconds=%s", job["id"], result.get("elapsed_seconds"))

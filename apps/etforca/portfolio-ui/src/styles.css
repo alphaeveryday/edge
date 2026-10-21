@@ -4551,6 +4551,8 @@ button:disabled {
   display: grid;
   gap: 8px;
 }
+.tax-dialog .tax-targets p.tax-ineligible { color: var(--color-danger)!important; font-size: .875rem; margin: .5rem 0; }
+.tax-dialog .tax-option:has(input:disabled) { opacity: .6; cursor: not-allowed; }
 .tax-dialog .tax-option {
   display: flex;
   align-items: center;

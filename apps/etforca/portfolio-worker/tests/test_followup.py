@@ -81,14 +81,21 @@ async def test_recalculation_keeps_periods_only_when_the_money_assumptions_match
                               on_stage=stages.append, on_checkpoint=snapshots.append)
 
 
-async def test_followup_reuses_research_checks_without_overwriting_the_original(monkeypatch):
+@pytest.mark.parametrize('tax_profile', [None, {
+    'recommended_accounts': ['ISA'], 'residence': '비거주자', 'age': '19~54세',
+    'income': '소득 없음', 'financial_income_tax': '예', 'accounts': [],
+}])
+async def test_followup_reuses_research_checks_without_overwriting_the_original(monkeypatch, tax_profile):
     report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
         'horizon': '10년 이상', 'question': '매도 금지'}, 'as_of': '2026-10-12',
         'current_evaluation': {'overall': 3.5}, 'recommendation': {'title': 'saved target'},
         'decision': {'constraints': [{'kind': 'no_sell', 'source': '매도 금지'}]}}
+    report['input']['preferences'] = {'tax_profile': tax_profile}
     original = deepcopy(report)
     async def analyze(request, key, on_stage, **kwargs):
         assert request.holdings[0].amount_krw == 1000000
+        assert (request.preferences.tax_profile.model_dump()['recommended_accounts']
+                if request.preferences.tax_profile else None) == (['ISA'] if tax_profile else None)
         assert '매도 금지' in request.question
         assert kwargs['followup_question'] == '리밸런싱은 어떻게 해요?'
         assert kwargs['prior_report']['current_evaluation']['overall'] == 3.5
