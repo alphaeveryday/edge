@@ -1039,7 +1039,7 @@ module "app_batch" {
   vpc_id      = module.network.vpc_id
   subnet_ids  = module.network.private_subnet_ids
 
-  # TF baseline 은 배포가 매번 옮기는 latest 태그(ECR 수명 주기 보존). 스케줄은 꺼진 채 만들어 첫 배포 뒤 켠다
+  # TF baseline 은 배포가 매번 옮기는 latest 태그(ECR 수명 주기 보존)
   container_image = "${data.aws_ecr_repository.app_batch.repository_url}:latest"
 
   # app-api 와 같은 JVM 크기(512MiB OOM 교훈)
@@ -1048,7 +1048,7 @@ module "app_batch" {
 
   # 기존 app-api 동기화 주기와 같은 10분
   schedule_expression = "rate(10 minutes)"
-  schedule_enabled    = false
+  schedule_enabled    = true
 
   alarm_topic_arn = module.data_pipeline.alarm_topic_arn
   # Spring Batch 의 잡 완료 로그(COMPLETED) — 30분 동안 0회면 알람
