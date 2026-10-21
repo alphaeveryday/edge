@@ -12,7 +12,7 @@ ETF ORCA는 이 질문에 포트폴리오 추천, ETF 전망, 가격변동 설�
 
 [서비스](https://etforca.com/) · [포트폴리오 분석](https://etforca.com/portfolio/) · [투자정보 기만 검증](https://etforca.com/truth/)
 
-앱 API의 장애 대응 설계와 트러블슈팅은 [app-api README](app-api/README.md#트러블슈팅)에 있습니다.
+앱 API의 장애 대응 설계와 트러블슈팅은 [app-api](app-api/#트러블슈팅)에 있습니다.
 
 ## 사용자가 만나는 기능
 
@@ -77,20 +77,20 @@ Redis 장애가 투표와 무관한 기능으로 번지지 않도록 장애를 �
 
 | 문제 | 해결 | 결과 | 자세히 보기 |
 |---|---|---|---|
-| Redis 연결이 끊기면 요청이 재연결을 기다리며 서버 스레드를 점유 | 끊긴 동안의 명령 즉시 실패와 서킷 브레이커 | SLO 초과 39.7% → 0% | [트러블슈팅](app-api/README.md#lettuce-기본-설정의-톰캣-스레드-점유) |
-| Redis 응답 대기가 DB 커넥션을 쥐어 무관한 요청까지 지연 | 커밋과 커넥션 반납 이후의 Redis 갱신 | 정상 샤드 투표 SLO 초과 70.1~85.9% → 0% | [트러블슈팅](app-api/README.md#커밋-직후-리스너의-db-커넥션-풀-고갈) |
-| 샤드 하나의 장애로 정상 샤드 조회까지 DB로 우회 | 샤드 단위 서킷 브레이커 | 정상 샤드 조회 DB 폴백 94.4~96.5% → 0% | [트러블슈팅](app-api/README.md#전역-서킷의-정상-샤드-조회-차단) |
-| Redis 유실과 집계 불일치 | DB 원본 기준의 주기·재연결 재조정 | Sentinel 마스터 장애 후 DB와 Redis 일치 | [장애 대응 장치](app-api/README.md#장애-대응-장치) |
+| Redis 연결이 끊기면 요청이 재연결을 기다리며 서버 스레드를 점유 | 끊긴 동안의 명령 즉시 실패와 서킷 브레이커 | SLO 초과 39.7% → 0% | [트러블슈팅](app-api/#lettuce-기본-설정의-톰캣-스레드-점유) |
+| Redis 응답 대기가 DB 커넥션을 쥐어 무관한 요청까지 지연 | 커밋과 커넥션 반납 이후의 Redis 갱신 | 정상 샤드 투표 SLO 초과 70.1~85.9% → 0% | [트러블슈팅](app-api/#커밋-직후-리스너의-db-커넥션-풀-고갈) |
+| 샤드 하나의 장애로 정상 샤드 조회까지 DB로 우회 | 샤드 단위 서킷 브레이커 | 정상 샤드 조회 DB 폴백 94.4~96.5% → 0% | [트러블슈팅](app-api/#전역-서킷의-정상-샤드-조회-차단) |
+| Redis 유실과 집계 불일치 | DB 원본 기준의 주기·재연결 재조정 | Sentinel 마스터 장애 후 DB와 Redis 일치 | [장애 대응 장치](app-api/#장애-대응-장치) |
 | 파이프라인 작업의 앱 사용자 영향 | 앱 전용 PostgreSQL 인스턴스 분리 | 스키마 변경 재부팅과 권한의 분리 | [ADR-0056](../../docs/adr/0056-etforca-app-api-infra.md) |
 
-측정 조건과 회차별 값은 [app-api README의 실측](app-api/README.md#실측)에 있습니다.
+측정 조건과 회차별 값은 [app-api의 실측](app-api/#실측)에 있습니다.
 
 ## 기술 스택과 개발 안내
 
 | 구성 | 기술과 문서 |
 |---|---|
 | 모바일 앱 | Expo / React Native, Expo Router, TanStack Query, Zustand — [app-ui](app-ui/README.md) |
-| 앱 API | Java·Spring Boot, PostgreSQL, Flyway, Redis, Lettuce, Resilience4j — [app-api](app-api/README.md) |
+| 앱 API | Java·Spring Boot, PostgreSQL, Flyway, Redis, Lettuce, Resilience4j — [app-api](app-api/) |
 | 랜딩 | 정적 HTML — [app-landing](app-landing/README.md) |
 | 포트폴리오 | React 화면, 독립 Python·FastAPI API/워커 — [실행·검증](portfolio-worker/README.md) |
 | 투자정보 기만 검증 | 정적 HTML 화면 — [truth-web](truth-web/README.md), Python 사건 계약 검사·공개 데이터 생성·매시 갱신 에이전트 — [truth-agent](truth-agent/README.md), [설계](../../docs/design/truth-service.md) |
