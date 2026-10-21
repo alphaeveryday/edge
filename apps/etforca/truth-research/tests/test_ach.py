@@ -146,3 +146,73 @@ def test_kind_list_parses_rows_and_fails_loudly_on_format_change():
     assert parse_list("<table><tr><td>조회된 결과값이 없습니다.</td></tr></table>") == []
     with pytest.raises(KindError):
         parse_list("<div onclick=\"openDisclsViewer('20261021000197','')\">바뀐 형식</div>")
+
+
+def test_untouched_hypothesis_cannot_win_a_label():
+    # 아무 증거와도 안 엮인 가설은 '어긋남 0'으로 이긴다 — 뒷받침 없이 허위매물을 붙이면 근거 없는 낙인이다.
+    ev = [_ev("news-a", "mid", H1="I", H3="I"), _ev("news-b", "mid", H3="I", H4="I"), _ev("news-c", "low", H1="I")]
+    got = _decide(ev)
+    assert got["winner"] == "H2" and got["tag"] == "pending"
+
+
+def _read_web(ws, sid, kind, text):
+    ws.save_snapshot(sid, {"id": sid, "url": f"https://www.{sid}.co.kr/a", "title": "원문", "kind": kind, "text": text, "full": True})
+    state = ws.state
+    state["viewed"].append(sid)
+    ws.save_state(state)
+
+
+def test_disclosure_list_and_mirrored_outlets_do_not_corroborate(ws):
+    # 공시 목록은 매체가 아니고, 같은 매체의 www·m 주소는 두 곳이 아니다 — 보도 한 건만으로 유망주가 되면 안 된다.
+    _table(ws)
+    for sid, url in (("web-a", "https://www.mk.co.kr/1"), ("web-b", "https://m.mk.co.kr/2")):
+        ws.save_snapshot(sid, {"id": sid, "url": url, "title": "계약 보도", "kind": "news", "text": "가나다전자 계약", "full": True})
+    state = ws.state
+    state["viewed"] += ["web-a", "web-b"]
+    ws.save_state(state)
+    tools.add_evidence(ws, {"source_id": "web-a", "note": "계약 보도", "weight": "mid", "marks": {"H1": "C", "H2": "I", "H3": "I", "H4": "I"}})
+    tools.add_evidence(ws, {"source_id": "web-b", "note": "같은 매체 모바일", "weight": "mid", "marks": {"H1": "C", "H3": "I"}})
+    tools.add_evidence(ws, {"source_id": "kind-list", "note": "공시 목록에 계약 공시가 있다", "weight": "high", "marks": {"H1": "C", "H3": "I"}})
+    tools.set_verdict(ws, TEXT)
+    assert ws.state["moverVerdict"]["tag"] == "pending"
+
+
+def test_same_source_counts_once(ws):
+    # 같은 출처를 여러 번 넣어 점수를 키우면 표가 증거가 아니라 반복 횟수를 잰다.
+    _table(ws)
+    tools.add_evidence(ws, {"source_id": "kind-list", "note": "공시 없음", "weight": "high", "marks": {"H1": "I"}})
+    with pytest.raises(ToolError, match="이미"):
+        tools.add_evidence(ws, {"source_id": "kind-list", "note": "공시 없음", "weight": "high", "marks": {"H1": "I"}})
+
+
+def test_other_company_or_market_notice_is_not_confirmation(ws, monkeypatch):
+    # 웹으로 연 다른 회사 공시, 거래소 투자주의 조치는 이 종목 사건의 확인이 아니다 — high 무게·유망주 근거가 될 수 없다.
+    _read_web(ws, "web-other", "disclosure", "라마바바이오 단일판매ㆍ공급계약")
+    _read_web(ws, "web-own", "official", "가나다전자 공급계약 체결")
+    assert not tools._primary(ws, "web-other") and tools._primary(ws, "web-own")
+    notice = FILING | {"acptno": "20261022000777", "submitter": "시장감시위원회", "title": "[투자주의]소수계좌 거래집중 종목"}
+    mover = ws.mover() | {"filings": [FILING, notice]}
+    (ws.root / "mover.json").write_text(__import__("json").dumps(mover, ensure_ascii=False), encoding="utf-8")
+    assert tools._primary(ws, "kind-20261022000001") and not tools._primary(ws, "kind-20261022000777")
+    _table(ws)
+    with pytest.raises(ToolError, match="high"):
+        tools.add_evidence(ws, {"source_id": "web-other", "note": "다른 회사 공시", "weight": "high", "marks": {"H1": "C"}})
+
+
+def test_kind_error_page_is_not_no_disclosures():
+    assert parse_list("<p>조회된 결과값이 없습니다.</p>") == []
+    with pytest.raises(KindError):
+        parse_list("<html><body>서비스 점검 중입니다</body></html>")
+
+
+def test_homepage_comes_from_its_own_cell(monkeypatch):
+    # 문서 앞의 DTD·스크립트 주소를 집으면 엉뚱한 아이콘이 이 회사 로고로 영영 남는다.
+    from edge_truth_research.kind import Kind
+    html = ('<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">'
+            '<script src="https://cdn.example.com/a.js"></script><tr><th scope="row">홈페이지</th>'
+            '<td colspan="3"><a href="http://www.haein.com" target="_blank">www.haein.com</a></td></tr>')
+    k = Kind()
+    monkeypatch.setattr(k, "_open", lambda url, data=None: html)
+    assert k.homepage("003010") == "http://www.haein.com"
+    monkeypatch.setattr(k, "_open", lambda url, data=None: '<tr><th scope="row">홈페이지</th><td>-</td></tr>')
+    assert k.homepage("003010") is None

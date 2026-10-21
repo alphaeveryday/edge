@@ -295,3 +295,17 @@ def test_logo_accepts_only_safe_image_formats():
     assert logos.image_kind(b"<svg onload=alert(1)>") is None and logos.image_kind(b"<!doctype html>") is None
     page = '<link rel="icon" href="/a.svg"><link rel="icon" href="/fav.png"><link rel="apple-touch-icon" href="/touch.png">'
     assert logos.icon_candidates(page, "https://x.co.kr/") == ["https://x.co.kr/touch.png", "https://x.co.kr/fav.png", "https://x.co.kr/favicon.ico"]
+
+
+def test_market_notice_does_not_reopen_a_settled_verdict(cfg):
+    # 급등주에는 거래소 투자주의·경고가 거의 매시 붙는다 — 그때마다 다시 열면 판정이 시간마다 뒤집히고 세션만 쓴다.
+    _seed_news(cfg)
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
+    _run(cfg, src, _judging({"900010": "false"}))
+
+    class Notice(FakeKind):
+        def disclosures(self, code, since, until):
+            return super().disclosures(code, since, until) + [_filing("20261022000777") | {"submitter": "시장감시위원회"}]
+    again = _judging({"900010": "false"})
+    _run(cfg, src, again, kind=Notice(), now=NOW + timedelta(hours=1))
+    assert again.calls == []

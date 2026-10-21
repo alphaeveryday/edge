@@ -18,7 +18,7 @@ const python = required("TRUTH_PYTHON");
 const maxCalls = Number(process.env.TRUTH_MAX_TOOL_CALLS ?? "40");
 // 예산 끝 몇 회는 표 마무리·판정·끝내기에만 쓴다 — 조사하다 예산이 끝나 판정 없이 멈추지 않게
 const reserve = Math.min(6, Math.floor(maxCalls / 4));
-const WRAP_UP = new Set(["add_evidence", "set_verdict", "finish"]);
+const WRAP_UP = new Set(["set_hypotheses", "add_evidence", "set_verdict", "finish"]);
 const web = process.env.EXA_API_KEY ? "1" : "0";
 
 type Spec = { name: string; description: string; parameters: Record<string, unknown> };

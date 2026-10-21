@@ -19,6 +19,14 @@ _HEADERS = {"user-agent": "Mozilla/5.0 (compatible; etforca-truth/1.0)"}
 _ROW = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S)
 _CELL = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
 _ACPT = re.compile(r"openDisclsViewer\('(\d{14})'")
+_EMPTY = "조회된 결과값이 없습니다"
+_HOME = re.compile(r"<th[^>]*>\s*홈페이지\s*</th>\s*<td[^>]*>.*?href=[\"'](https?://[^\"']+)", re.S)
+MARKET_BODIES = ("시장감시위원회", "시장본부", "한국거래소")  # 시장조치(투자주의·경고 등) 제출 주체 — 회사 공시가 아니다
+
+
+def is_market_notice(item: dict) -> bool:
+    """거래소 시장조치인가(회사가 낸 공시가 아니다)."""
+    return any(b in item.get("submitter", "") for b in MARKET_BODIES)
 
 
 class KindError(RuntimeError):
@@ -40,8 +48,9 @@ def parse_list(html: str) -> list[dict]:
             continue
         out.append({"acptno": acpt.group(1), "at": _text(cells[1]), "title": _text(cells[3]), "submitter": _text(cells[4]),
                     "url": VIEW.format(acpt.group(1))})
-    if not out and "openDisclsViewer" in html:
-        raise KindError("KIND 공시 목록 형식이 바뀌어 읽지 못했습니다.")
+    # 행이 없으면 '결과 없음' 표시가 있어야 '공시 없음'이다 — 점검·차단 페이지를 '공시 없음'으로 읽으면 테마로 몰게 된다
+    if not out and _EMPTY not in html:
+        raise KindError("KIND 공시 목록 응답을 읽지 못했습니다(형식 변경·점검 페이지).")
     return out
 
 
@@ -67,7 +76,7 @@ class Kind:
                 raise KindError(f"KIND 연결 실패: {error}") from error
         raise KindError("KIND 호출 실패")  # 도달하지 않는다
 
-    def disclosures(self, code: str, since: str, until: str, size: int = 30) -> list[dict]:
+    def disclosures(self, code: str, since: str, until: str, size: int = 100) -> list[dict]:  # ponytail: 한 쪽만 받는다 — 14일에 100건 넘는 종목이 생기면 쪽 넘김
         """종목의 공시·시장조치 목록(최신순). since·until 은 YYYY-MM-DD."""
         html = self._open(BASE + "/disclosure/details.do", {
             "method": "searchDetailsSub", "currentPageSize": str(size), "pageIndex": "1", "orderMode": "1", "orderStat": "D",
@@ -93,5 +102,5 @@ class Kind:
         """회사 홈페이지 주소(개요에 적힌 것). 없으면 None."""
         html = self._open(BASE + "/common/companysummary.do",
                           {"method": "searchCompanySummaryOvrvwDetail", "menuIndex": "0", "strIsurCd": code[:5], "taskDd": ""})
-        found = [u for u in re.findall(r"https?://[A-Za-z0-9./-]+", html) if "krx.co.kr" not in u]
-        return found[0] if found else None
+        found = _HOME.search(html)  # '홈페이지' 칸의 링크만 — 문서 앞의 다른 주소(DTD·스크립트)를 집지 않게
+        return found.group(1) if found and "krx.co.kr" not in found.group(1) else None

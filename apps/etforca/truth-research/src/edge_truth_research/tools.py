@@ -20,7 +20,7 @@ from edge_truth_agent.tools import (SHOW_CHARS, ToolError, _corpus_path, _kst_da
 from edge_truth_agent.workspace import Workspace
 
 from . import ach
-from .kind import Kind, KindError
+from .kind import Kind, KindError, is_market_notice
 
 DISCLOSURE_READ_LIMIT = 8
 EVENT_KINDS = ("disclosure", "earnings", "contract", "policy", "news", "rumor", "unknown")
@@ -88,6 +88,24 @@ def _usable(ws: Workspace, sid: str) -> bool:
     return sid == LIST_ID or sid in set(ws.state["viewed"])
 
 
+def _primary(ws: Workspace, sid: str) -> bool:
+    """사건을 확인해 주는 원문인가: 이 회사가 낸 공시 본문, 또는 이 회사를 다룬 공식·공시 웹 원문.
+    공시 목록(없음의 근거)·거래소 시장조치·다른 회사 공시는 아니다."""
+    name = _mover(ws).get("name", "")
+    snap = ws.snapshot(sid) or {}
+    if sid.startswith("kind-"):
+        item = next((f for f in _mover(ws).get("filings", []) if f"kind-{f['acptno']}" == sid), None)
+        return item is not None and not is_market_notice(item)
+    return sid.startswith("web-") and snap.get("kind") in ("official", "disclosure") and bool(name) and name in snap.get("text", "")
+
+
+def _outlet(url: str) -> str:
+    """매체 단위 도메인(www.·m. 등 하위 이름을 걷는다): news.mk.co.kr·m.mk.co.kr → mk.co.kr."""
+    parts = host_of(url).split(".")
+    keep = 3 if len(parts) >= 3 and parts[-2] in ("co", "or", "go", "ne", "ac", "re", "pe") else 2
+    return ".".join(parts[-keep:])
+
+
 # ── ACH ──
 def set_hypotheses(ws: Workspace, args: dict) -> str:
     """경쟁가설을 세운다(3~6개). 다시 부르면 가설과 이미 넣은 증거 표시를 새 가설에 맞춰 다시 넣어야 한다."""
@@ -119,8 +137,10 @@ def add_evidence(ws: Workspace, args: dict) -> str:
     note, weight = str(args.get("note", "")).strip(), str(args.get("weight", ""))
     if not 4 <= len(note) <= 200 or weight not in ach.WEIGHTS:
         raise ToolError("note 는 4~200자, weight 는 high(공시·공식 원문)·mid(구체적 보도)·low(단일·불분명 보도) 중 하나입니다.")
-    if weight == "high" and not (sid == LIST_ID or sid.startswith("kind-") or (ws.snapshot(sid) or {}).get("kind") in ("official", "disclosure")):
-        raise ToolError("high 는 공시(kind-…·kind-list)나 공식 원문만 붙입니다. 보도는 mid·low 입니다.")
+    if weight == "high" and not (sid == LIST_ID or sid.startswith("kind-") or _primary(ws, sid)):
+        raise ToolError("high 는 공시(kind-…·kind-list)나 이 회사를 다룬 공식 원문만 붙입니다. 보도는 mid·low 입니다.")
+    if any(e["source"] == sid for e in table["evidence"]):
+        raise ToolError(f"'{sid}' 는 이미 증거로 넣었습니다. 한 출처는 증거 한 건입니다(같은 보도자료를 옮긴 기사도 한 건으로 셉니다).")
     marks = {str(k): str(v).upper() for k, v in (args.get("marks") or {}).items()}
     ids = [h["id"] for h in table["hypotheses"]]
     if set(marks) - set(ids) or any(v not in ach.MARKS for v in marks.values()):
@@ -150,12 +170,13 @@ def set_verdict(ws: Workspace, args: dict) -> str:
     if _HID.search(" ".join([title, claim, finding, *reasons])):
         raise ToolError("공개 글에 가설 번호(H1 등)를 쓰지 마세요. 가설 내용을 풀어 쓰세요.")
     sources = list(dict.fromkeys(e["source"] for e in table["evidence"]))
-    # 사건을 확인해 주는 원문: 읽은 공시 본문·공식 원문. 공시 목록(kind-list)은 '없음'의 근거일 뿐 사건 확인이 아니다
-    primary = {s for s in sources if s != LIST_ID and (s.startswith("kind-") or (ws.snapshot(s) or {}).get("kind") in ("official", "disclosure"))}
+    primary = {s for s in sources if s != LIST_ID and _primary(ws, s)}
     try:
         cited = {s: _source(ws, s) for s in sources}
-        decision = ach.decide(table["hypotheses"], table["evidence"], primary=primary,
-                              publishers={s: host_of(c["url"]) or c["publisher"] for s, c in cited.items()})
+        # 매체 수는 보도만 센다(공시 목록·시장조치·원문은 매체가 아니다)
+        publishers = {s: _outlet(c["url"]) or c["publisher"] for s, c in cited.items()
+                      if s != LIST_ID and s not in primary and not s.startswith("kind-")}
+        decision = ach.decide(table["hypotheses"], table["evidence"], primary=primary, publishers=publishers)
     except ach.AchError as error:
         raise ToolError(str(error)) from error
     # 공개 출처: 이긴 가설을 가른 증거부터(무게 순)

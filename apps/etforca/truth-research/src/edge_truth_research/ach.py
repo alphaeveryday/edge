@@ -7,7 +7,7 @@
   overstated(과장·왜곡)  → 허위매물
   theme(회사 근거 없는 테마·풍문) → 허위매물. 단 차순위와 뚜렷이 갈릴 때만(차이 2 이상)
   sector·supply·other   → 판단 보류(업종 동반·수급은 주장의 참·거짓이 아니다)
-  승자와 차순위의 차이가 1 미만 → 판단 보류
+  승자와 차순위의 차이가 1 미만, 또는 승자를 직접 뒷받침(C)하는 mid 이상 증거가 없음 → 판단 보류
 """
 from __future__ import annotations
 
@@ -27,7 +27,8 @@ def score(hypotheses: list[dict], evidence: list[dict]) -> dict[str, int]:
 
 
 def decide(hypotheses: list[dict], evidence: list[dict], *, primary: set[str], publishers: dict[str, str]) -> dict:
-    """승자·차순위·태그·확신도. primary 는 공시·공식 원문 출처 id, publishers 는 출처 id → 매체(독립성 판단)."""
+    """승자·차순위·태그·확신도. primary 는 사건을 확인해 주는 원문 출처 id, publishers 는 보도 출처 id → 매체(독립성 판단).
+    publishers 에 없는 출처(공시 목록 등)는 매체 수에 세지 않는다."""
     if len(hypotheses) < 3:
         raise AchError("가설을 3개 이상 세우세요(실제 사건·과장·테마·업종·수급 중 이 종목에 맞는 것).")
     if not any(h["kind"] == "event" for h in hypotheses) or all(h["kind"] == "event" for h in hypotheses):
@@ -39,10 +40,13 @@ def decide(hypotheses: list[dict], evidence: list[dict], *, primary: set[str], p
     win, runner = ranked[0], ranked[1]
     margin = scores[runner["id"]] - scores[win["id"]]
     support = [e for e in evidence if e["marks"].get(win["id"]) == "C"]
-    corroborated = any(e["source"] in primary for e in support) or len({publishers.get(e["source"], e["source"]) for e in support
-                                                                        if e["source"] not in primary}) >= 2
+    corroborated = any(e["source"] in primary for e in support) or \
+        len({publishers[e["source"]] for e in support if e["source"] in publishers}) >= 2
+    backed = any(WEIGHTS[e["weight"]] >= 2 for e in support)  # 어긋남이 없다는 것만으로 이기지 않게
     if margin < 1:
         tag, why = "pending", "가장 덜 어긋나는 가설이 둘 이상이라 가르지 못했다"
+    elif not backed:
+        tag, why = "pending", "남은 설명을 직접 뒷받침하는 증거가 없다"
     elif win["kind"] == "event":
         tag, why = ("promising", "실제 회사 사건이 남았고 원문·복수 매체로 확인된다") if corroborated else \
                    ("pending", "실제 사건 가설이 남았으나 원문이나 서로 다른 매체 두 곳으로 확인되지 않았다")
