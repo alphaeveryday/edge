@@ -161,7 +161,7 @@ const card = it => {
         <span class="pct ${it.changePct >= 0 ? 'up' : 'down'}">${signed(it.changePct)}</span>
       </div>
       <div class="spark">${chart(it)}</div>
-      <p class="px">현재가 <b>${it.price.toLocaleString('ko-KR')}원</b> · 전일 ${it.prevClose.toLocaleString('ko-KR')}원 · 거래대금(약) ${Math.round(it.tradeValue).toLocaleString('ko-KR')}억원</p>
+      <p class="px">현재가 <b>${it.price.toLocaleString('ko-KR')}원</b> · 전일 ${it.prevClose.toLocaleString('ko-KR')}원 · 거래대금 ${Math.round(it.tradeValue).toLocaleString('ko-KR')}억원</p>
     </div>
     <div>
       <div class="vline"><span class="verdict v-${tag}">${tag === 'false' ? '⚠ ' : ''}${TAGS[tag]} <small>확신도 ${Math.round(it.confidence * 100)}%</small></span>

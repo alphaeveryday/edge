@@ -18,7 +18,7 @@ import jsonschema
 
 from . import corpus, logos, news, routing, session
 from .dart import Dart
-from .kis import Kis, Mover
+from .quotes import Mover, Quotes
 from .runner import _json, _now, lease
 from .store import open_store
 from .workspace import Workspace
@@ -28,7 +28,7 @@ LEASE_KEY = "state/lease-movers.json"
 CORP_KEY = "state/dart-corp-codes.json"
 LOGO_TRIED_KEY = "state/logo-tried.json"
 MIN_CHANGE = 10.0       # 급등 기준: 전일 대비 상승률(%)
-MIN_TRADE_VALUE = 30.0  # 거래대금 하한(억원, 현재가 × 누적거래량 근사) — 몇 주 체결로 뛴 종목은 해석할 사건이 아니다
+MIN_TRADE_VALUE = 30.0  # 거래대금 하한(억원, 누적 거래대금) — 몇 주 체결로 뛴 종목은 해석할 사건이 아니다
 MAX_MOVERS = 15         # 화면에 싣는 종목 수
 NEW_SESSIONS = 5        # 한 실행에서 새로 판정하는 종목 수(나머지는 다음 정각에)
 PARALLEL = 3            # 판정 세션 동시 실행
@@ -92,16 +92,13 @@ def _pending(reason: str) -> dict:
             "claim": "", "finding": reason, "reasons": [reason], "sources": []}
 
 
-def run_movers(cfg, *, kis: Kis | None = None, dart: Dart | None = None, session_runner=session.run,
+def run_movers(cfg, *, quotes: Quotes | None = None, dart: Dart | None = None, session_runner=session.run,
                now: datetime | None = None) -> dict:
     """한 번 실행하고 보고를 돌려준다. 장이 열리지 않은 날(그날 분봉 없음)에는 게시하지 않는다."""
     now = now or _now()
     today, ymd = now.date().isoformat(), now.strftime("%Y%m%d")
     run_id = f"{now.strftime('%Y%m%dT%H%M')}-movers-{uuid.uuid4().hex[:6]}"
-    if kis is None:
-        if not (cfg.kis_key and cfg.kis_secret):
-            raise RuntimeError("TRUTH_KIS_APP_KEY·TRUTH_KIS_APP_SECRET 이 없어 급등 목록을 받을 수 없습니다.")
-        kis = Kis(cfg.kis_key, cfg.kis_secret)
+    quotes = quotes or Quotes()
     if dart is None and cfg.dart_key:
         dart = Dart(cfg.dart_key)
     store, public = open_store(cfg.store), open_store(cfg.publish)
@@ -110,31 +107,27 @@ def run_movers(cfg, *, kis: Kis | None = None, dart: Dart | None = None, session
         raw, _ = store.get(f"movers/{today}.json")
         prior = {i["code"]: i for i in (json.loads(raw)["items"] if raw else [])}
 
+        # 0. 휴장일(그날 체결 없음)에는 게시하지 않는다 — 순위는 전 거래일 값을 그대로 준다
+        if quotes.session_day() != ymd:
+            report["skipped"] = "그날 체결이 없습니다(휴장일 또는 장 시작 전)."
+            log.info(json.dumps({"event": "movers_skipped", "reason": report["skipped"]}, ensure_ascii=False))
+            return report
+
         # 1. 급등 목록 (코드)
-        risers = sorted((m for market in ("KOSPI", "KOSDAQ") for m in kis.risers(market)
-                         if m.change_pct >= MIN_CHANGE and m.price * m.volume / 1e8 >= MIN_TRADE_VALUE),
+        risers = sorted((m for market in ("KOSPI", "KOSDAQ") for m in quotes.risers(market, MIN_CHANGE)
+                         if m.change_pct >= MIN_CHANGE and m.trade_value >= MIN_TRADE_VALUE),
                         key=lambda m: m.change_pct, reverse=True)[:MAX_MOVERS]
-        until = min(now.strftime("%H:%M"), "15:30")
         series, series_errors = {}, 0
         for m in risers:
             try:
-                series[m.code] = kis.series(m.code, until, ymd)
+                series[m.code] = quotes.series(m.code, m.market, ymd)
             except Exception as error:  # noqa: BLE001 - 한 종목의 시세 실패로 전체를 멈추지 않는다(빈 그래프로 싣는다)
-                log.warning(json.dumps({"event": "kis_series_failed", "code": m.code, "error": str(error)[:200]}, ensure_ascii=False))
+                log.warning(json.dumps({"event": "series_failed", "code": m.code, "error": str(error)[:200]}, ensure_ascii=False))
                 series[m.code], series_errors = [], series_errors + 1
-        # 급등 종목이 없어도 그날 장이 열렸는지는 대표 종목 분봉으로 본다 — 휴장일의 빈 목록을 '오늘 급등 없음'으로 게시하지 않는다
-        if not risers and not kis.series("005930", until, ymd):
-            report["skipped"] = "그날 분봉이 없습니다(휴장일 또는 장 시작 전)."
-            log.info(json.dumps({"event": "movers_skipped", "reason": report["skipped"]}, ensure_ascii=False))
-            return report
         if risers and series_errors == len(risers):  # 시세 장애를 휴장으로 보고하지 않는다 — 실패로 끝내 태스크 상태에 남긴다
-            report["skipped"] = "KIS 분봉 조회가 모두 실패했습니다."
-            report["failed"].append("kis-series")
+            report["skipped"] = "5분 시세 조회가 모두 실패했습니다."
+            report["failed"].append("series")
             log.warning(json.dumps({"event": "movers_skipped", "reason": report["skipped"]}, ensure_ascii=False))
-            return report
-        if risers and not any(series.values()):
-            report["skipped"] = "그날 분봉이 없습니다(휴장일 또는 장 시작 전)."
-            log.info(json.dumps({"event": "movers_skipped", "reason": report["skipped"]}, ensure_ascii=False))
             return report
 
         # 2. 재료 (코드)
@@ -217,7 +210,7 @@ def run_movers(cfg, *, kis: Kis | None = None, dart: Dart | None = None, session
                 judged = _pending("아직 판정하지 못했습니다. 다음 정각에 다시 봅니다.") | {"judgedAt": None}
             item = {"code": m.code, "name": m.name, "market": m.market, "logo": logo[m.code], "price": m.price,
                     "prevClose": m.prev_close, "changePct": round(m.change_pct, 2),
-                    "tradeValue": round(m.price * m.volume / 1e8, 1), "series": series[m.code]} | judged
+                    "tradeValue": round(m.trade_value, 1), "series": series[m.code]} | judged
             item["impact"] = round(m.change_pct * item["confidence"], 2) if item["tag"] == "false" else 0.0
             try:
                 jsonschema.validate(item, SCHEMA["$defs"]["item"])
