@@ -160,8 +160,10 @@ def test_session_can_finish_after_adding_a_source_dated_today(tmp_path):
     assert not [p for p in tools.session_problems(ws) if p.startswith("updatedAt")]
 
 
-def test_registered_source_can_be_looked_up_by_id(tmp_path):
+def test_registered_source_can_be_looked_up_by_id(tmp_path, monkeypatch):
     # 노트의 '다음에 찾아볼 것'은 기존 출처를 가리키는 일이 많다. 그 id 로 못 열면 세션이 원문 주소를 찾느라 예산을 쓴다.
+    from edge_truth_agent import corpus
+    monkeypatch.setenv("TRUTH_CORPUS", str(corpus.build_index({}, tmp_path / "corpus.sqlite")))
     case = seed("geumyang-monlaa")
     ws = Workspace.prepare(tmp_path / "u", mode="update", case=case, inbox=[], index=[], today="2026-10-21",
                            now=NOW.isoformat(), notes=notes.template(case))
@@ -199,3 +201,16 @@ def test_name_only_articles_do_not_wake_the_planner(flow):
     log: list = []
     runner.run(cfg, "hourly", lake=quiet, session_runner=_sessions([], log), now=NOW + timedelta(hours=1))
     assert log == []
+
+
+def test_case_cut_by_the_session_cap_is_not_deferred(flow):
+    # 계획이 보자고 했지만 상한에 밀린 사건을 하루 미루면 단서 기사가 있어도 하루 늦게 본다.
+    from dataclasses import replace
+    cfg, store = flow
+    cfg = replace(cfg, max_sessions=1)
+    log: list = []
+    runner.run(cfg, "hourly", lake=_lake(), session_runner=_sessions(["geumyang-monlaa", "hybe-ipo-2019"], log), now=NOW)
+    assert [e[0] for e in log[1:]] == ["geumyang-monlaa"]
+    log.clear()
+    runner.run(cfg, "hourly", lake=_lake(), session_runner=_sessions(["hybe-ipo-2019"], log), now=NOW + timedelta(hours=1))
+    assert "hybe-ipo-2019" in log[0][1] and [e[0] for e in log[1:]] == ["hybe-ipo-2019"]

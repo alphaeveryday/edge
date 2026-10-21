@@ -148,6 +148,11 @@ def _prompt_update(case: dict, articles: list[news.Article], reason: str, note: 
             "끝내기 전에 write_notes 로 다음에 찾아볼 것과 이번 조사 기록을 남기세요.")
 
 
+def _cue_ids(ids: list[str], texts: dict[str, news.Article]) -> list[str]:
+    """절차·대응 단서(송치·기소·제재 등)가 있는 기사 id."""
+    return [i for i in ids if i in texts and routing.needs_session([texts[i]])]
+
+
 def _put_memo(store, report: dict, key: str, text: str) -> None:
     """노트·계획 기록 쓰기. 메모라서 실패해도 사건 게시를 막지 않는다 — 보고에 남긴다."""
     try:
@@ -169,14 +174,15 @@ def _plan_candidates(cases: dict[str, dict], pending: dict[str, dict], texts: di
     rows = []
     for cid, text in notes_text.items():
         ids = pending.get(cid, {}).get("ids", [])
-        cue = sum(routing.needs_session([texts[i]]) for i in ids)  # 이름만 나온 기사로는 계획(유료 모델)을 부르지 않는다
+        cues = _cue_ids(ids, texts)  # 이름만 나온 기사로는 계획(유료 모델)을 부르지 않는다
         last, todo, held = seen.get(cid), notes.open_items(text), deferred.get(cid)
-        if held and now - datetime.fromisoformat(held["at"]) < FOLLOW_UP and cue <= held["cue"]:
+        if held and now - datetime.fromisoformat(held["at"]) < FOLLOW_UP and set(cues) <= set(held["cues"]):
             continue  # 지난 계획이 고르지 않은 사건: 새 절차 단서가 오거나 FOLLOW_UP 이 지날 때까지 다시 올리지 않는다
-        if cue or last is None or (todo and now - datetime.fromisoformat(last) >= FOLLOW_UP):
+        if cues or last is None or (todo and now - datetime.fromisoformat(last) >= FOLLOW_UP):
             c = cases[cid]
             rows.append({"id": cid, "subject": c["subject"], "status": c["status"], "headline": c.get("title") or c["headline"][0],
-                         "impact": c.get("impact"), "newArticles": len(ids), "cueArticles": cue, "openItems": todo, "lastLooked": last})
+                         "impact": c.get("impact"), "newArticles": len(ids), "cueArticles": len(cues), "cues": cues,
+                         "openItems": todo, "lastLooked": last})
     return sorted(rows, key=lambda r: (-r["cueArticles"], -(r["impact"] or 0)))
 
 
@@ -303,7 +309,9 @@ def run(cfg, mode: str, *, lake=None, session_runner=session.run, now: datetime 
                 entry = pending.setdefault(cid, {"ids": [], "tries": 0})
                 # 정리(prune)로 말뭉치에서 이미 빠진 오래된 기사는 쌓지 않는다 — 뒤에서 texts[id] 로 읽는다
                 if added := [a.id for a in arts if a.id in texts and a.id not in entry["ids"]]:
-                    entry["ids"], entry["tries"] = (entry["ids"] + added)[-PENDING_KEEP:], 0
+                    entry["ids"] = (entry["ids"] + added)[-PENDING_KEEP:]
+                    if _cue_ids(added, texts):  # 새 절차 단서가 올 때만 다시 세게 한다(이름만 나온 기사로 장애 중 재시도를 끝없이 늘리지 않게)
+                        entry["tries"] = 0
         # 관련 보도는 새 기사만이 아니라 보관 중인 말뭉치 전체에서 같은 규칙으로 고른다 — 규칙이 바뀌거나
         # 잡음이 걸러져도 다음 실행이 스스로 채운다. 모델 세션은 계획에 오른 사건만 연다.
         corpus_related = routing.route(list(texts.values()), list(cases.values()), public=True) if mode == "hourly" else {}
@@ -333,13 +341,15 @@ def run(cfg, mode: str, *, lake=None, session_runner=session.run, now: datetime 
                 if plan is None:  # 계획이 실패해도 조사는 돈다 — 코드 순서(절차 단서·파급력)로 대신한다. 실패는 failed 에 남는다
                     plan = {"order": [{"case": r["id"], "reason": "계획 세션 실패 — 코드 순서(절차 단서·파급력)"} for r in rows],
                             "skip": [], "fallback": True}
+                # 고른 사건(상한에 밀려 이번에 못 연 것 포함)과 건너뛴 사건을 뺀 후보는 미룬다 — 매시 같은 후보로 계획을 다시 부르지 않게.
+                # 상한에 밀린 사건은 미루지 않는다: 계획이 보자고 한 사건이라 다음 실행에 바로 다시 오른다.
+                chosen = {i["case"] for i in plan["order"]} | set(plan["skip"])
                 plan["order"] = plan["order"][:cfg.max_sessions]  # 실제로 여는 만큼만 기록한다
                 report["plan"] = plan
                 _put_memo(store, report, f"plans/{today.isoformat()}/{run_id}.md", _plan_md(plan, rows, now))
-                chosen = {i["case"] for i in plan["order"]} | set(plan["skip"])
                 for r in rows:
-                    if r["id"] not in chosen:  # 고르지 않은 후보는 미룬다(매시 같은 후보로 계획을 다시 부르지 않게)
-                        deferred[r["id"]] = {"at": now.isoformat(), "cue": r["cueArticles"]}
+                    if r["id"] not in chosen:
+                        deferred[r["id"]] = {"at": now.isoformat(), "cues": r["cues"]}
                 for cid in plan["skip"]:  # 새 기사가 무관·반복이라고 본 사건: 쌓인 기사를 비운다
                     pending.pop(cid, None)
                     deferred.pop(cid, None)
