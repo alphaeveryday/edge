@@ -53,16 +53,28 @@ async def test_quotes_precede_archives_and_new_customer_uses_preloaded_quote(iso
     assert all(c[1] is not None for c in calls), 'No archive may delay catalogue price coverage'
 
 
-@pytest.mark.parametrize('leased', [False, True])
-async def test_preload_yields_to_due_or_running_customer_quotes(isolated_db, leased):
+async def test_preload_yields_to_running_customer_quotes(isolated_db):
     with store.connect() as db:
         db.execute("INSERT INTO portfolio_market_preload(instrument) VALUES ('US:SOXL')")
         db.execute("""INSERT INTO portfolio_quote_refresh(instrument,since,refresh_after,lease_until)
-            VALUES ('US:VOO',current_date,CASE WHEN %s THEN now()+interval '1 minute' ELSE now() END,
-                CASE WHEN %s THEN now()+interval '5 minutes' ELSE NULL END)""", (leased, leased))
+            VALUES ('US:VOO',current_date,now()+interval '1 minute',now()+interval '5 minutes')""")
     assert not await preload.collect_one(now=NOW), 'A warm background child must not starve a customer price request'
     with store.connect() as db:
         assert db.execute("SELECT lease_until FROM portfolio_market_preload").fetchone()['lease_until'] is None
+
+
+async def test_scheduled_preload_turn_runs_with_customer_refresh_due(isolated_db, monkeypatch):
+    with store.connect() as db:
+        db.execute("INSERT INTO portfolio_market_preload(instrument) VALUES ('KR:069500')")
+        db.execute("INSERT INTO portfolio_quote_refresh(instrument,since) VALUES ('US:VOO',current_date)")
+    monkeypatch.setattr(work, 'price_end', lambda *args: date(2026, 10, 17))
+    async def load(*args, **kwargs):
+        return record()
+    monkeypatch.setattr(market_data, 'fetch_prices', load)
+    assert await preload.collect_one(now=NOW)
+    with store.connect() as db:
+        assert db.execute("SELECT 1 FROM portfolio_dashboard_prices WHERE instrument='KR:069500'").fetchone()
+        assert db.execute("SELECT 1 FROM portfolio_quote_refresh WHERE refresh_after<=now()").fetchone()
 
 
 async def test_preload_yields_to_customer_analysis_and_source_errors_back_off(isolated_db, monkeypatch):

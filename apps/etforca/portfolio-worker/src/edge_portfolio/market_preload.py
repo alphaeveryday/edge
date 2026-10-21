@@ -108,8 +108,8 @@ async def collect_one(stopping=None, *, now=None, session=None):
     with store.connect() as db:
         if store.queued_count(db) or db.execute("SELECT 1 FROM portfolio_newsletter_content WHERE state='running' LIMIT 1").fetchone():
             return False
-        # Release the warm child so customer quotes can use the single price slot.
-        if db.execute("SELECT 1 FROM portfolio_quote_refresh WHERE refresh_after<=now() OR lease_until>now() LIMIT 1").fetchone():
+        # The shared scheduler admits bounded preload turns even with customer work due.
+        if db.execute("SELECT 1 FROM portfolio_quote_refresh WHERE lease_until>now() LIMIT 1").fetchone():
             return False
         if db.execute("""SELECT 1 FROM portfolio_market_preload WHERE last_error='PRICE_PROVIDER_RATE_LIMIT'
                 AND failed_at>now()-interval '15 minutes' LIMIT 1""").fetchone():
@@ -184,24 +184,3 @@ async def collect_one(stopping=None, *, now=None, session=None):
                 (error, job['quote'], retry, retry, key, job['lease_until']))
     log.info('market preload instrument=%s stage=%s result=%s', key, 'quote' if job['quote'] else 'history', error or 'ready')
     return True
-
-
-async def loop(stopping):
-    seeded = None
-    session = PriceSession(stopping)
-    try:
-        while not stopping.is_set():
-            try:
-                day = datetime.now(KST).date()
-                if seeded != day:
-                    await asyncio.to_thread(seed)
-                    seeded = day
-                worked = await collect_one(stopping, session=session)
-            except Exception as error:
-                log.warning('market preload loop failed code=%s', type(error).__name__)
-                worked = False
-            if not worked:
-                await session.close()
-            await asyncio.sleep(1 if worked else 10)
-    finally:
-        await session.close()

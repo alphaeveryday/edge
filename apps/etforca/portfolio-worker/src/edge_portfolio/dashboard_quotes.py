@@ -2,7 +2,8 @@
 import asyncio
 import json
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from time import monotonic
 
 from . import store
 
@@ -78,7 +79,7 @@ def project(db, owner, version, workbook, *, record_day=False):
     return result
 
 
-async def collect_once(stopping=None):
+async def collect_once(stopping=None, *, preload_session=None):
     if stopping and stopping.is_set():
         return False
     with store.connect() as db:
@@ -100,6 +101,8 @@ async def collect_once(stopping=None):
     from .dashboard_work import records_for, today
     key = job['instrument']
     try:
+        if preload_session:
+            await preload_session.close()
         if stopping and stopping.is_set():
             return True
         await records_for([key], today(), valuation_since={key: job['since']}, include_fx=False, collector_lease=job['lease_until'])
@@ -120,10 +123,33 @@ async def collect_once(stopping=None):
 
 
 async def collection_loop(stopping):
-    while not stopping.is_set():
-        try:
-            worked = await collect_once(stopping)
-        except Exception as error:
-            log.warning('shared quote loop failed code=%s', type(error).__name__)
-            worked = False
-        await asyncio.sleep(0 if worked else 1)
+    from . import market_preload as preload
+    session = preload.PriceSession(stopping)
+    seeded = None
+    preload_after = monotonic() + 60
+    try:
+        while not stopping.is_set():
+            preloaded = False
+            try:
+                worked = await collect_once(stopping, preload_session=session)
+            except Exception as error:
+                log.warning('shared quote loop failed code=%s', type(error).__name__)
+                worked = False
+            # A continuously due customer queue must not prevent all catalogue coverage.
+            if not worked or monotonic() >= preload_after:
+                try:
+                    day = datetime.now(preload.KST).date()
+                    if seeded != day:
+                        await asyncio.to_thread(preload.seed)
+                        seeded = day
+                    preloaded = await preload.collect_one(stopping, session=session)
+                except Exception as error:
+                    log.warning('market preload loop failed code=%s', type(error).__name__)
+                    preloaded = False
+                if not preloaded:
+                    await session.close()
+                worked = worked or preloaded
+                preload_after = monotonic() + 60
+            await asyncio.sleep(1 if preloaded or not worked else 0)
+    finally:
+        await session.close()
