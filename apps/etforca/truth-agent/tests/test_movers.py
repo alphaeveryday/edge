@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import json
+from pathlib import Path
 
 import pytest
 
@@ -121,6 +122,8 @@ def test_published_dates_accumulate_newest_first(cfg):
     src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
     movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW)
     movers.run_movers(cfg, quotes=src, dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW + timedelta(hours=1))
+    # 운영 태스크는 공개 버킷을 읽을 권한이 없다 — 목록은 비공개 원본에서 이어 써야 한다(공개 사본이 사라져도)
+    (Path(str(cfg.publish)) / "movers" / "dates.json").unlink()
     nxt = type("Next", (FakeQuotes,), {"session_day": lambda self, market="KOSPI": "20261023"})(src.by_market)
     movers.run_movers(cfg, quotes=nxt, dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW + timedelta(days=1))
     assert json.loads(LocalStore(cfg.publish).get("movers/dates.json")[0]) == ["2026-10-23", "2026-10-22"]
