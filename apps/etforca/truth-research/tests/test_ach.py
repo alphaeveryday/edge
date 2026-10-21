@@ -216,3 +216,25 @@ def test_homepage_comes_from_its_own_cell(monkeypatch):
     assert k.homepage("003010") == "http://www.haein.com"
     monkeypatch.setattr(k, "_open", lambda url, data=None: '<tr><th scope="row">홈페이지</th><td>-</td></tr>')
     assert k.homepage("003010") is None
+
+
+def test_homepage_link_must_be_inside_its_cell(monkeypatch):
+    # 홈페이지 칸이 비면 다음 칸의 IR·광고 링크를 집지 않는다.
+    from edge_truth_research.kind import Kind
+    k = Kind()
+    monkeypatch.setattr(k, "_open", lambda url, data=None: '<tr><th scope="row">홈페이지</th><td>-</td></tr>'
+                                                           '<tr><th>IR</th><td><a href="https://ir.other.com">IR</a></td></tr>')
+    assert k.homepage("003010") is None
+
+
+def test_same_article_by_another_route_counts_once(ws):
+    # 같은 기사를 웹 원문으로 또 열거나 모바일 주소로 넣어도 증거는 한 건이다.
+    _table(ws)
+    for sid, url in (("web-a", "https://www.mk.co.kr/news/1"), ("web-b", "https://m.mk.co.kr/news/1")):
+        ws.save_snapshot(sid, {"id": sid, "url": url, "title": "계약 보도", "kind": "news", "text": "가나다전자", "full": True})
+    state = ws.state
+    state["viewed"] += ["web-a", "web-b"]
+    ws.save_state(state)
+    tools.add_evidence(ws, {"source_id": "web-a", "note": "계약 보도", "weight": "mid", "marks": {"H1": "C"}})
+    with pytest.raises(ToolError, match="이미"):
+        tools.add_evidence(ws, {"source_id": "web-b", "note": "같은 기사", "weight": "mid", "marks": {"H1": "C"}})

@@ -21,7 +21,7 @@ from edge_truth_agent.store import open_store
 from edge_truth_agent.workspace import Workspace
 
 from . import logos, session
-from .kind import Kind, is_market_notice
+from .kind import Kind, is_market_warning
 from .quotes import Mover, Quotes
 
 log = logging.getLogger(__name__)
@@ -138,14 +138,14 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
         corpus_path = corpus.build_index(texts, Path(tmp) / "corpus.sqlite")
 
         # 3. 판정 (모델) — 오늘 아직 판정 못 한 종목, 판정 뒤 회사가 새 공시를 낸 종목(태그 무관 — 허위였다가 정정 공시로 뒤집힐 수 있다.
-        #    급등주마다 붙는 거래소 투자주의·경고는 다시 열지 않는다 — 매시 판정이 뒤집히고 세션만 쓴다),
+        #    급등주마다 붙는 거래소 투자주의·경고는 다시 열지 않는다 — 매시 판정이 뒤집히고 세션만 쓴다. 매매정지·관리종목은 다시 연다),
         #    보류였는데 새 보도가 나온 종목. 새 보도만으로 확정 판정을 다시 열지 않는다(특징주 기사가 매시 나와 세션을 다 쓴다).
         #    공시를 못 본 종목은 판정하지 않는다. 판정과 그때 본 근거 id 는 비공개 상태에 둔다 — 목록에서 빠졌다 돌아온 종목도 이어 쓴다.
         seen_key = f"state/movers-seen/{today}.json"
         raw, _ = store.get(seen_key)
         seen: dict[str, dict] = json.loads(raw) if raw else {}
         arts = {m.code: _articles(texts, m.name) for m in risers}
-        evidence = {m.code: {"filings": sorted(f["acptno"] for f in filings[m.code] or [] if not is_market_notice(f)), "news": sorted(a.id for a in arts[m.code])}
+        evidence = {m.code: {"filings": sorted(f["acptno"] for f in filings[m.code] or [] if not is_market_warning(f)), "news": sorted(a.id for a in arts[m.code])}
                     for m in risers}
 
         def stale(m: Mover) -> bool:

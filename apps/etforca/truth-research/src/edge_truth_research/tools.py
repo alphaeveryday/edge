@@ -99,6 +99,18 @@ def _primary(ws: Workspace, sid: str) -> bool:
     return sid.startswith("web-") and snap.get("kind") in ("official", "disclosure") and bool(name) and name in snap.get("text", "")
 
 
+def _same_doc(ws: Workspace, sid: str) -> str | None:
+    """같은 문서 판별 키(매체 + 경로). news-·web- 로 두 번, www·m 주소로 두 번 넣는 것을 한 건으로 본다."""
+    if sid == LIST_ID:
+        return None
+    try:
+        url = _source(ws, sid)["url"]
+    except ToolError:
+        return None
+    rest = url.split("://", 1)[-1].split("/", 1)
+    return _outlet(url) + "/" + (rest[1].split("#")[0] if len(rest) > 1 else "")
+
+
 def _outlet(url: str) -> str:
     """매체 단위 도메인(www.·m. 등 하위 이름을 걷는다): news.mk.co.kr·m.mk.co.kr → mk.co.kr."""
     parts = host_of(url).split(".")
@@ -139,8 +151,9 @@ def add_evidence(ws: Workspace, args: dict) -> str:
         raise ToolError("note 는 4~200자, weight 는 high(공시·공식 원문)·mid(구체적 보도)·low(단일·불분명 보도) 중 하나입니다.")
     if weight == "high" and not (sid == LIST_ID or sid.startswith("kind-") or _primary(ws, sid)):
         raise ToolError("high 는 공시(kind-…·kind-list)나 이 회사를 다룬 공식 원문만 붙입니다. 보도는 mid·low 입니다.")
-    if any(e["source"] == sid for e in table["evidence"]):
-        raise ToolError(f"'{sid}' 는 이미 증거로 넣었습니다. 한 출처는 증거 한 건입니다(같은 보도자료를 옮긴 기사도 한 건으로 셉니다).")
+    same = _same_doc(ws, sid)
+    if any(e["source"] == sid or (same and _same_doc(ws, e["source"]) == same) for e in table["evidence"]):
+        raise ToolError(f"'{sid}' 는 이미 증거로 넣은 문서입니다. 한 문서는 증거 한 건입니다(같은 보도자료를 옮긴 기사도 한 건으로 셉니다).")
     marks = {str(k): str(v).upper() for k, v in (args.get("marks") or {}).items()}
     ids = [h["id"] for h in table["hypotheses"]]
     if set(marks) - set(ids) or any(v not in ach.MARKS for v in marks.values()):

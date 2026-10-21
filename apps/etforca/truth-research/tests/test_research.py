@@ -305,7 +305,22 @@ def test_market_notice_does_not_reopen_a_settled_verdict(cfg):
 
     class Notice(FakeKind):
         def disclosures(self, code, since, until):
-            return super().disclosures(code, since, until) + [_filing("20261022000777") | {"submitter": "시장감시위원회"}]
+            return super().disclosures(code, since, until) + [_filing("20261022000777") | {"submitter": "시장감시위원회", "title": "[투자주의]소수계좌 거래집중 종목"}]
     again = _judging({"900010": "false"})
     _run(cfg, src, again, kind=Notice(), now=NOW + timedelta(hours=1))
     assert again.calls == []
+
+
+def test_trading_halt_reopens_but_warning_does_not(cfg):
+    # 매매정지·관리종목은 판정을 바꿀 수 있는 사건이라 다시 연다. 매시 붙는 투자경고만 건너뛴다.
+    _seed_news(cfg)
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
+    _run(cfg, src, _judging({"900010": "promising"}))
+
+    class Halt(FakeKind):
+        def disclosures(self, code, since, until):
+            return super().disclosures(code, since, until) + [
+                _filing("20261022000888") | {"submitter": "코스닥시장본부", "title": "매매거래정지(투자경고종목 지정중 주가상승)"}]
+    again = _judging({"900010": "pending"})
+    _run(cfg, src, again, kind=Halt(), now=NOW + timedelta(hours=1))
+    assert again.calls == ["900010"]

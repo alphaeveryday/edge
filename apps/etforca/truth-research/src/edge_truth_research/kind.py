@@ -20,13 +20,23 @@ _ROW = re.compile(r"<tr[^>]*>(.*?)</tr>", re.S)
 _CELL = re.compile(r"<td[^>]*>(.*?)</td>", re.S)
 _ACPT = re.compile(r"openDisclsViewer\('(\d{14})'")
 _EMPTY = "조회된 결과값이 없습니다"
-_HOME = re.compile(r"<th[^>]*>\s*홈페이지\s*</th>\s*<td[^>]*>.*?href=[\"'](https?://[^\"']+)", re.S)
+_HOME = re.compile(r"<th[^>]*>\s*홈페이지\s*</th>\s*<td[^>]*>(?:(?!</td>).)*?href=[\"'](https?://[^\"']+)", re.S)  # 그 칸 안의 링크만
 MARKET_BODIES = ("시장감시위원회", "시장본부", "한국거래소")  # 시장조치(투자주의·경고 등) 제출 주체 — 회사 공시가 아니다
+
+
+WARNINGS = ("투자주의", "투자경고", "투자위험", "단기과열", "공매도 과열")  # 급등주에 거의 매시 붙는 시장경보
 
 
 def is_market_notice(item: dict) -> bool:
     """거래소 시장조치인가(회사가 낸 공시가 아니다)."""
     return any(b in item.get("submitter", "") for b in MARKET_BODIES)
+
+
+def is_market_warning(item: dict) -> bool:
+    """급등에 따라붙는 시장경보인가(투자주의·경고·위험 등). 매매정지·관리종목 같은 조치는 아니다."""
+    title = item.get("title", "")
+    # 매매정지 제목에도 '투자경고'가 들어간다(예: 매매거래정지(투자경고종목 지정중 주가상승)) — 정지·관리종목은 경보가 아니다
+    return is_market_notice(item) and any(w in title for w in WARNINGS) and not any(x in title for x in ("정지", "관리종목", "불성실"))
 
 
 class KindError(RuntimeError):
