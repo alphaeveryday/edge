@@ -49,9 +49,13 @@ jobs:
         run: |
           set -euo pipefail
           : "${BUCKET:?repo var APP_LANDING_BUCKET 이 비어 있다}"
+          # 사이트 링크는 확장자 없는 주소(/truth/issue?id=…)다. CloudFront 에 주소 변환이 없어 같은 내용을 확장자 없는 키에도 둔다.
+          # .html 키도 계속 올려 이미 공유된 주소가 열리게 한다.
           for page in index issue list privacy; do
-            aws s3 cp "${page}.html" "s3://${BUCKET}/truth/${page}.html" \
-              --content-type "text/html; charset=utf-8" --cache-control "no-cache"
+            for key in "${page}.html" "${page}"; do
+              aws s3 cp "${page}.html" "s3://${BUCKET}/truth/${key}" \
+                --content-type "text/html; charset=utf-8" --cache-control "no-cache"
+            done
           done
           aws s3 cp style.css "s3://${BUCKET}/truth/style.css" --content-type "text/css; charset=utf-8" --cache-control "no-cache"
           aws s3 cp common.js "s3://${BUCKET}/truth/common.js" --content-type "text/javascript; charset=utf-8" --cache-control "no-cache"
@@ -100,7 +104,7 @@ jobs:
           id="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
             --paths '/truth/*' '/truth/' '/truth' --query 'Invalidation.Id' --output text)"
           aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$id"
-          for path in truth/ truth/issue.html truth/privacy.html truth/data/index.json; do
+          for path in truth/ truth/issue truth/list truth/privacy truth/issue.html truth/data/index.json; do
             curl --fail --silent --show-error --retry 5 --retry-all-errors -o /dev/null "https://etforca.com/${path}"
           done
           echo "truth 배포 완료: https://etforca.com/truth/"

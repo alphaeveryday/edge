@@ -9,6 +9,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import os
 from pathlib import Path
 import shutil
 import tempfile
@@ -22,6 +23,11 @@ WEB_FILES = ("index.html", "issue.html", "list.html", "common.js", "intro.js", "
 class _Quiet(SimpleHTTPRequestHandler):
     def log_message(self, format, *args):  # noqa: A002 - 부모 서명 그대로. 요청 로그를 남기지 않는다
         pass
+
+    def translate_path(self, path):
+        # 배포본처럼 확장자 없는 주소(/truth/issue?id=…)를 같은 이름의 .html 로 답한다(배포가 확장자 없는 사본을 올린다)
+        local = super().translate_path(path)
+        return local + ".html" if not os.path.exists(local) and os.path.isfile(local + ".html") else local
 
 
 @contextmanager

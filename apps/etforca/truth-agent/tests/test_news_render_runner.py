@@ -336,3 +336,14 @@ def test_discover_stops_when_a_session_registers_nothing(tmp_path, monkeypatch):
 
     report = runner.run(_cfg(tmp_path), "discover", session_runner=nothing, now=NOW)
     assert calls == ["new-20261021-1"] and report["failed"] == [] and report["changed"] == []
+
+
+def test_render_server_answers_extensionless_urls_like_the_site(tmp_path):
+    # 사이트 링크는 확장자 없는 주소다(배포가 확장자 없는 키에도 올린다). 렌더 검사 서버가 이를 모르면 링크가 404 인데도 통과한다.
+    import urllib.request
+    from edge_truth_agent.render import _serve
+    (tmp_path / "truth").mkdir()
+    (tmp_path / "truth" / "issue.html").write_text("<!doctype html><title>issue</title>", encoding="utf-8")
+    with _serve(tmp_path) as base:
+        body = urllib.request.urlopen(base + "issue?id=hybe-ipo-2019").read().decode("utf-8")
+    assert "<title>issue</title>" in body
