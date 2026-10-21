@@ -77,9 +77,10 @@ test('session replay shows screen content while excluding auth cookies and respe
   expect(events.filter(e => e.event === '$snapshot').every(e => e.properties.$session_id && e.properties.distinct_id === id)).toBe(true);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await expect(page.getByText('이용 통계 설정', { exact: true })).toBeVisible();
-  await expect.poll(async () => (await page.context().cookies()).some(c => c.name === 'ph_orca_portfolio')).toBe(true);
-  const cookie = (await page.context().cookies()).find(c => c.name === 'ph_orca_portfolio')!;
-  expect(JSON.parse(decodeURIComponent(cookie.value)).distinct_id).toBe(id);
+  await expect.poll(async () => {
+    const cookie = (await page.context().cookies()).find(c => c.name === 'ph_orca_portfolio');
+    return cookie ? JSON.parse(decodeURIComponent(cookie.value)).distinct_id : null;
+  }).toBe(id);
   await page.getByText('이용 통계 설정', { exact: true }).click();
   await page.getByRole('button', { name: '이용 통계 끄기' }).click();
   await page.waitForTimeout(3000);
