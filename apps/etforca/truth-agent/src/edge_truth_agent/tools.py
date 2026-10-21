@@ -129,6 +129,12 @@ def view_news(ws: Workspace, args: dict) -> str:
         found = corpus.find(_corpus_path(), sid)
         article = found.to_dict() if found else None
     if article is None:
+        registered = next((s for s in (ws.case() or {}).get("sources", []) if s["id"] == sid), None)
+        if registered is not None:
+            # 말뭉치에 없는 등록 출처(지난 세션·사람이 넣은 것)는 정보와 주소만 있다 — 원문은 web_fetch 로 읽게 한다
+            return (f"{sid} (이미 등록된 출처)\n종류: {registered['kind']}\n발행: {registered['publisher']} · {registered['publishedAt']}\n"
+                    f"제목: {registered['title']}\n주소: {registered['url']}\n"
+                    "본문은 보관돼 있지 않습니다. 원문 문장을 확인하려면 web_fetch 로 이 주소를 여세요.")
         raise ToolError(f"'{sid}' 기사를 찾지 못했습니다. search_news 결과의 id 를 쓰세요.")
     sid = f"news-{article['id'][:16]}"
     _mark_viewed(ws, sid)
@@ -412,7 +418,9 @@ def session_problems(ws: Workspace) -> list[str]:
     if case is None:
         return []
     today = date.fromisoformat(state["today"])
-    found = problems(case, today=today)
+    # updatedAt 은 모델이 못 고치고, 받아들여지면 runner 가 이번 실행 시각으로 쓴다. 그 값으로 검사해야
+    # 오늘 날짜 출처를 등록한 세션이 '갱신일이 기록보다 이르다'에 걸려 영영 끝나지 못하는 일이 없다.
+    found = problems({**case, "updatedAt": state["now"]}, today=today)
     if base is not None:
         for key in ("id", "schemaVersion", "flaggedAt", "origin", "locked", "related"):
             if case.get(key) != base.get(key):
@@ -483,9 +491,60 @@ def _check_video(video_id: str) -> list[str]:
         return [f"영상 {video_id} 를 확인하지 못했습니다({error}). 삭제·비공개 영상이면 video 를 null 로 두세요."]
 
 
+# ── 조사 노트·계획 ──
+def write_notes(ws: Workspace, args: dict) -> str:
+    """이 사건 조사 노트를 갱신한다: 다음에 찾아볼 것(통째 교체) + 이번 조사 기록(한 항목). 형식은 코드가 맞춘다."""
+    from . import notes
+    if ws.state["mode"] != "update":
+        raise ToolError("조사 노트는 기존 사건 세션에서만 씁니다.")
+    items = args.get("next")
+    items = [] if items is None else items
+    record = str(args.get("record", ""))
+    if found := notes.problems(items, record):
+        raise ToolError("\n".join(found))
+    with ws.lock():
+        state = ws.state
+        text = notes.update(ws.notes() or "", state["now"][:16].replace("T", " "), [i.strip() for i in items], record)
+        ws.save_notes(text)
+        state["notesWritten"] = True
+        ws.save_state(state)
+    return f"노트를 저장했습니다. 다음에 찾아볼 것 {len(items)}개. 이제 check(사건을 고쳤으면) → finish 로 마무리하세요."
+
+
+def set_plan(ws: Workspace, args: dict) -> str:
+    """오늘 조사할 사건 순서와 이번에 볼 필요 없는 사건을 정한다. 후보 목록(index)에 있는 사건만 받는다."""
+    if ws.state["mode"] != "plan":
+        raise ToolError("계획은 계획 세션에서만 세웁니다.")
+    candidates = {c["id"] for c in ws.index()}
+    order, seen = [], set()
+    for item in args.get("order") or []:
+        cid = str((item or {}).get("case", "")).strip()
+        if cid not in candidates:
+            raise ToolError(f"'{cid}' 는 이번 후보가 아닙니다. 후보 목록의 id 를 쓰세요.")
+        reason = str(item.get("reason", "")).strip()
+        if not reason:
+            raise ToolError(f"'{cid}' 를 왜 먼저 보는지 reason 을 한 문장으로 쓰세요.")
+        if cid not in seen:
+            order.append({"case": cid, "reason": reason[:200]})
+            seen.add(cid)
+    skip = [str(c).strip() for c in args.get("skip") or []]
+    if bad := [c for c in skip if c not in candidates or c in seen]:
+        raise ToolError(f"skip 에는 순서에 넣지 않은 후보만 씁니다: {bad}")
+    with ws.lock():
+        state = ws.state
+        state["plan"] = {"order": order, "skip": sorted(set(skip))}
+        ws.save_state(state)
+    return f"계획을 저장했습니다: 조사 {len(order)}건, 건너뜀 {len(set(skip))}건. finish 로 끝내세요."
+
+
 def finish(ws: Workspace, args: dict) -> str:
     """세션을 끝낸다. 바뀐 내용이 있으면 검사를 통과해야 한다. 바꿀 것이 없었다면 그대로 끝내도 된다."""
     summary = str(args.get("summary", "")).strip() or "요약 없음"
+    mode = ws.state["mode"]
+    if mode == "update" and not ws.state.get("notesWritten"):
+        raise ToolError("끝내기 전에 write_notes 로 다음에 찾아볼 것과 이번 조사 기록을 남기세요(바꾼 것이 없어도).")
+    if mode == "plan" and ws.state.get("plan") is None:
+        raise ToolError("끝내기 전에 set_plan 으로 조사 순서를 정하세요(조사할 사건이 없으면 order 를 비워 둡니다).")
     case, base = ws.case(), ws.base()
     unchanged = case is None or (base is not None and case == base)
     if not unchanged:
@@ -500,7 +559,7 @@ def finish(ws: Workspace, args: dict) -> str:
 
 
 TOOLS = {f.__name__: f for f in (view_case, view_news, search_news, web_search, web_fetch, add_source, str_replace, set_value,
-                                   remove, set_impact, propose_verdict, list_cases, create_case, check, finish)}
+                                   remove, set_impact, propose_verdict, list_cases, create_case, write_notes, set_plan, check, finish)}
 
 
 def run(name: str, args: dict, root: Path) -> str:

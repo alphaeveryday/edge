@@ -77,13 +77,28 @@ def test_render_catches_a_broken_page_script(tmp_path):
 def _cfg(tmp_path: Path) -> Config:
     return Config(store=str(tmp_path / "store"), publish=str(tmp_path / "public"), lake_bucket=None, deepseek_key="test",
                   exa_key=None, model="deepseek/deepseek-flash", thinking="low", web_dir=WEB, pi_dir=tmp_path,
-                  python="python", max_sessions=4, parallel=2, session_timeout=60, max_tool_calls=30, corpus_days=21)
+                  python="python", max_sessions=4, session_timeout=60, max_tool_calls=30, corpus_days=21)
 
 
 def _lake_with_indictment() -> FakeLake:
     key = news.minute_prefix("2026-10-21") + "window=0930/attempt=1/page=1.ndjson"
     return FakeLake({key: [bk("방시혁 하이브 의장 검찰 기소", "서울남부지검이 방시혁 의장을 자본시장법 위반 혐의로 기소했다.",
                               "https://www.yna.co.kr/view/AKR20261021000100001")]})
+
+
+def _planned(fake):
+    """계획 세션 역할: 새 기사가 있는 후보를 순서대로 고르고 나머지는 건너뛴다. 사건 세션은 fake 에 맡긴다."""
+    def run(cfg, ws, *, case_id, mode, **kw):
+        if mode != "plan":
+            return fake(cfg, ws, case_id=case_id, mode=mode, **kw)
+        rows = ws.index()
+        tools.set_plan(ws, {"order": [{"case": r["id"], "reason": "새 기사"} for r in rows if r["newArticles"]],
+                            "skip": [r["id"] for r in rows if not r["newArticles"]]})
+        state = ws.state
+        state["done"] = True
+        ws.save_state(state)
+        return SessionResult(case_id=case_id, done=True)
+    return run
 
 
 def _editing_session(text: str):
@@ -102,7 +117,7 @@ def _editing_session(text: str):
 def test_hourly_run_adds_related_news_and_publishes_accepted_edit(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "SEED_DIR", SEED)
     report = runner.run(_cfg(tmp_path), "hourly", lake=_lake_with_indictment(),
-                        session_runner=_editing_session("검찰 기소(2026-10-21). 재판 진행"), now=NOW)
+                        session_runner=_planned(_editing_session("검찰 기소(2026-10-21). 재판 진행")), now=NOW)
     assert report["changed"] == ["hybe-ipo-2019"] and report["reverted"] == []
     stored = json.loads((tmp_path / "store" / "cases" / "hybe-ipo-2019.json").read_text(encoding="utf-8"))
     assert stored["legalStatus"].startswith("검찰 기소") and len(stored["related"]) == 1
@@ -110,7 +125,7 @@ def test_hourly_run_adds_related_news_and_publishes_accepted_edit(tmp_path, monk
     assert public["legalStatus"] == stored["legalStatus"] and "locked" not in public
     # 같은 기사로 다시 돌면 아무것도 바뀌지 않는다(이미 읽은 page·이미 붙은 관련 보도).
     again = runner.run(_cfg(tmp_path), "hourly", lake=_lake_with_indictment(),
-                       session_runner=_editing_session("다른 값"), now=NOW + timedelta(hours=1))
+                       session_runner=_planned(_editing_session("다른 값")), now=NOW + timedelta(hours=1))
     assert again["changed"] == [] and again["sessions"] == []
 
 
@@ -128,7 +143,7 @@ def test_session_that_breaks_the_contract_is_not_published(tmp_path, monkeypatch
         ws.save_state(state)
         return SessionResult(case_id=kw["case_id"], done=True)
 
-    report = runner.run(_cfg(tmp_path), "hourly", lake=_lake_with_indictment(), session_runner=breaking, now=NOW)
+    report = runner.run(_cfg(tmp_path), "hourly", lake=_lake_with_indictment(), session_runner=_planned(breaking), now=NOW)
     stored = json.loads((tmp_path / "store" / "cases" / "hybe-ipo-2019.json").read_text(encoding="utf-8"))
     assert "거짓말" not in stored["headline"][0] and len(stored["related"]) == 1
     assert report["changed"] == ["hybe-ipo-2019"]
@@ -181,9 +196,9 @@ def test_failed_session_keeps_trigger_articles_for_the_next_run(tmp_path, monkey
     # 장애 시간에 들어온 '기소' 기사를 말뭉치에만 넣고 버리면 다시는 세션이 열리지 않는다.
     monkeypatch.setattr(runner, "SEED_DIR", SEED)
     lake = _lake_with_indictment()
-    first = runner.run(_cfg(tmp_path), "hourly", lake=lake, session_runner=_failing_session, now=NOW)
+    first = runner.run(_cfg(tmp_path), "hourly", lake=lake, session_runner=_planned(_failing_session), now=NOW)
     assert first["failed"] == ["hybe-ipo-2019"]
-    second = runner.run(_cfg(tmp_path), "hourly", lake=lake, session_runner=_editing_session("검찰 기소(2026-10-21)"),
+    second = runner.run(_cfg(tmp_path), "hourly", lake=lake, session_runner=_planned(_editing_session("검찰 기소(2026-10-21)")),
                         now=NOW + timedelta(hours=1))
     assert second["newArticles"] == 0 and second["changed"] == ["hybe-ipo-2019"] and second["failed"] == []
     state = json.loads((tmp_path / "store" / "state" / "state.json").read_text(encoding="utf-8"))
@@ -195,7 +210,7 @@ def test_trigger_is_dropped_and_reported_after_repeated_failures(tmp_path, monke
     # 계속 실패하는 사건을 매시 영원히 다시 부르면 비용만 든다 — 정해진 횟수 뒤 버리고 보고한다.
     monkeypatch.setattr(runner, "SEED_DIR", SEED)
     lake = _lake_with_indictment()
-    reports = [runner.run(_cfg(tmp_path), "hourly", lake=lake, session_runner=_failing_session, now=NOW + timedelta(hours=i))
+    reports = [runner.run(_cfg(tmp_path), "hourly", lake=lake, session_runner=_planned(_failing_session), now=NOW + timedelta(hours=i))
                for i in range(runner.PENDING_TRIES + 1)]
     assert [r["dropped"] for r in reports] == [[]] * runner.PENDING_TRIES + [["hybe-ipo-2019"]]
 
@@ -252,7 +267,7 @@ def test_cases_beyond_the_session_cap_are_not_dropped_untried(tmp_path, monkeypa
     cfg = replace(_cfg(tmp_path), max_sessions=0)
     lake = _lake_with_indictment()
     for hour in range(runner.PENDING_TRIES + 2):
-        report = runner.run(cfg, "hourly", lake=lake, session_runner=_failing_session, now=NOW + timedelta(hours=hour))
+        report = runner.run(cfg, "hourly", lake=lake, session_runner=_planned(_failing_session), now=NOW + timedelta(hours=hour))
         assert report["dropped"] == []
     state = json.loads((tmp_path / "store" / "state" / "state.json").read_text(encoding="utf-8"))
     assert state["pending"]["hybe-ipo-2019"]["tries"] == 0

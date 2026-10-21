@@ -17,6 +17,9 @@ const sessionDir = required("TRUTH_SESSION_DIR");
 const python = required("TRUTH_PYTHON");
 const mode = required("TRUTH_MODE");
 const maxCalls = Number(process.env.TRUTH_MAX_TOOL_CALLS ?? "50");
+// 예산 끝 몇 회는 마무리(노트·계획·검사·끝내기)에만 쓴다 — 조사하다 예산이 끝나 노트 없이 멈추지 않게
+const reserve = Math.min(5, Math.floor(maxCalls / 4));
+const WRAP_UP = new Set(["write_notes", "set_plan", "check", "finish"]);
 const web = process.env.EXA_API_KEY ? "1" : "0";
 
 type Spec = { name: string; description: string; parameters: Record<string, unknown> };
@@ -51,12 +54,13 @@ export default function (pi: ExtensionAPI) {
         parameters: Type.Unsafe(spec.parameters),
         async execute(_toolCallId, params, signal) {
           calls += 1;
-          if (calls > maxCalls && spec.name !== "check" && spec.name !== "finish") {
-            throw new Error(`이 세션의 도구 호출 ${maxCalls}회를 넘었습니다. check 와 finish 로 마무리하세요.`);
+          if (calls > maxCalls - reserve && !WRAP_UP.has(spec.name)) {
+            throw new Error(`도구 예산 ${maxCalls}회 중 마무리용 ${reserve}회만 남았습니다. ${[...WRAP_UP].join("·")} 로 마무리하세요.`);
           }
           const result = await runTool(spec.name, params, signal);
-          if (!result.ok) throw new Error(result.text || `${spec.name} 가 실패했습니다`);
-          return { content: [{ type: "text", text: result.text }], details: undefined, terminate: spec.name === "finish" };
+          const budget = `\n[도구 ${calls}/${maxCalls}회 사용 · 마지막 ${reserve}회는 마무리 전용]`;
+          if (!result.ok) throw new Error((result.text || `${spec.name} 가 실패했습니다`) + budget);
+          return { content: [{ type: "text", text: result.text + budget }], details: undefined, terminate: spec.name === "finish" };
         },
       }),
     );
