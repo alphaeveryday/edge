@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 import re
 
+import jsonschema
+
 from . import corpus, paths
 from .cases import REFUTATION_KINDS, RESOLUTION_KINDS, host_kind, host_of, problems
 from .workspace import Workspace
@@ -542,10 +544,116 @@ def set_plan(ws: Workspace, args: dict) -> str:
     return f"계획을 저장했습니다: 조사 {len(order)}건, 건너뜀 {len(set(skip))}건. finish 로 끝내세요."
 
 
+# ── 오늘의 급등주 ──
+DISCLOSURE_VIEW_LIMIT = 8
+MOVER_TAGS = ("promising", "false", "pending")
+EVENT_KINDS = ("disclosure", "earnings", "contract", "policy", "news", "rumor", "unknown")
+
+
+def view_disclosure(ws: Workspace, args: dict) -> str:
+    """이 종목의 최근 공시(첫 메시지 목록) 원문을 읽는다. 읽은 공시는 dart-<접수번호> 로 출처에 쓸 수 있다."""
+    from .dart import VIEW, Dart, DartError
+    if ws.state["mode"] != "mover":
+        raise ToolError("공시 원문 보기는 급등주 판정 세션에서만 씁니다.")
+    rcept = str(args.get("rcept_no", "")).strip().removeprefix("dart-")
+    filing = next((f for f in (ws.mover() or {}).get("filings", []) if f["rcept_no"] == rcept), None)
+    if filing is None:
+        raise ToolError("첫 메시지의 공시 목록에 있는 접수번호(rcept_no)를 쓰세요.")
+    sid = f"dart-{rcept}"
+    if not ws.snapshot(sid):
+        key = os.environ.get("TRUTH_DART_API_KEY")
+        if not key:
+            raise ToolError("공시 원문을 볼 수 없습니다(키 없음). 공시 제목과 보도로 판단하세요.")
+        with ws.lock():
+            state = ws.state
+            if state.get("dartViews", 0) >= DISCLOSURE_VIEW_LIMIT:
+                raise ToolError(f"이 세션의 공시 원문 보기 {DISCLOSURE_VIEW_LIMIT}회를 다 썼습니다. 가진 자료로 판단하세요.")
+            state["dartViews"] = state.get("dartViews", 0) + 1
+            ws.save_state(state)
+        try:
+            text = Dart(key).document_text(rcept)
+        except DartError as error:
+            raise ToolError(str(error)) from error
+        ws.save_snapshot(sid, {"id": sid, "url": VIEW.format(rcept), "title": filing["report_nm"], "publisher": filing.get("flr_nm") or "DART",
+                               "publishedDate": filing["rcept_dt"], "kind": "disclosure", "text": text, "full": True})
+    _mark_viewed(ws, sid)
+    snap = ws.snapshot(sid)
+    text = snap["text"]
+    tail = f"\n(전체 {len(text)}자 중 앞 {SHOW_CHARS}자)" if len(text) > SHOW_CHARS else ""
+    return f"{sid}\n제목: {snap['title']}\n제출: {snap['publisher']} · {snap['publishedDate']}\n주소: {snap['url']}\n\n{text[:SHOW_CHARS]}{tail}"
+
+
+def _mover_source(ws: Workspace, sid: str) -> dict:
+    """읽은 기사·원문·공시 id → 공개 출처 항목."""
+    if sid.startswith(("web-", "dart-")):
+        snap = ws.snapshot(sid) or {}
+        kind = "disclosure" if sid.startswith("dart-") else (snap.get("kind") or host_kind(snap.get("url", "")) or "web")
+        return {"title": snap.get("title") or snap.get("url", ""), "publisher": snap.get("publisher") or host_of(snap.get("url", "")) or "웹",
+                "url": snap.get("url", ""), "kind": kind, "publishedAt": _kst_day(snap.get("publishedDate")) or snap.get("publishedDate") or None}
+    article = next((a for a in ws.inbox() if f"news-{a['id'][:16]}" == sid), None)
+    if article is None:
+        found = corpus.find(_corpus_path(), sid)
+        article = found.to_dict() if found else None
+    if article is None:
+        raise ToolError(f"'{sid}' 기사를 찾지 못했습니다.")
+    return {"title": article["title"], "publisher": article["publisher"] or "언론사 미상", "url": article["url"], "kind": "news",
+            "publishedAt": (article["published"] or "")[:10] or None}
+
+
+def set_mover_verdict(ws: Workspace, args: dict) -> str:
+    """급등 사건과 판정(유망주·허위매물·판단 보류)을 남긴다. 출처는 이 세션에서 읽은 news-·web-·dart- id 만."""
+    if ws.state["mode"] != "mover":
+        raise ToolError("판정은 급등주 판정 세션에서만 남깁니다.")
+    tag = str(args.get("tag", ""))
+    if tag not in MOVER_TAGS:
+        raise ToolError("tag 는 promising(유망주)·false(허위매물)·pending(판단 보류) 중 하나입니다.")
+    try:
+        confidence = float(args.get("confidence"))
+    except (TypeError, ValueError):
+        raise ToolError("confidence 는 0~1 사이 숫자입니다.") from None
+    if not 0 <= confidence <= 1:
+        raise ToolError("confidence 는 0~1 사이 숫자입니다.")
+    title, kind = str(args.get("event_title", "")).strip(), str(args.get("event_kind", "unknown"))
+    if not 2 <= len(title) <= 60 or kind not in EVENT_KINDS:
+        raise ToolError(f"event_title 은 2~60자, event_kind 는 {'·'.join(EVENT_KINDS)} 중 하나입니다.")
+    reasons = [str(r).strip() for r in args.get("reasons") or [] if str(r).strip()]
+    if not reasons or len(reasons) > 3 or any(not 2 <= len(r) <= 160 for r in reasons):
+        raise ToolError("reasons 는 1~3줄, 각 160자 이내입니다(무엇을 확인했고 무엇이 없었는지).")
+    claim, finding = str(args.get("claim", "")).strip(), str(args.get("finding", "")).strip()
+    if len(claim) > 300 or len(finding) > 400 or not finding:
+        raise ToolError("claim 은 300자, finding 은 1~400자입니다.")
+    ids = list(dict.fromkeys(str(s).strip() for s in args.get("source_ids") or []))
+    viewed = set(ws.state["viewed"])
+    if bad := [s for s in ids if s not in viewed]:
+        raise ToolError(f"이 세션에서 읽지 않은 출처입니다: {bad}. view_news·web_fetch·view_disclosure 로 먼저 읽으세요.")
+    if tag != "pending" and not ids:
+        raise ToolError("유망주·허위매물 판정에는 읽은 출처가 하나 이상 필요합니다. 근거가 없으면 pending 으로 두세요.")
+    def primary(sid: str) -> bool:  # 공시 원문, 또는 공식 판단·법정공시 도메인의 웹 원문(뉴스 기사를 web_fetch 한 것은 아니다)
+        return sid.startswith("dart-") or (sid.startswith("web-") and (ws.snapshot(sid) or {}).get("kind") in ("official", "disclosure"))
+    if tag == "promising" and not any(primary(s) for s in ids):
+        raise ToolError("유망주는 원문(공시 dart-… 또는 기관 공식 원문)으로 확인될 때만 붙입니다. 보도(웹으로 연 기사 포함)만 있으면 pending 입니다.")
+    verdict = {"tag": tag, "confidence": round(confidence, 2),
+               "event": {"title": title, "kind": kind, "at": str(args.get("event_at") or "") or None},
+               "claim": claim, "finding": finding, "reasons": reasons,
+               "sources": [_mover_source(ws, s) for s in ids[:8]]}
+    # 게시 계약(movers.schema.json)을 여기서 검사한다 — 게시 단계에서 걸러지면 세션은 성공으로 끝나고 종목은 화면에서 빠진다
+    item = json.loads(Path(__file__).with_name("movers.schema.json").read_text(encoding="utf-8"))["$defs"]["item"]["properties"]
+    for key, value in verdict.items():
+        if error := next(jsonschema.Draft202012Validator(item[key]).iter_errors(value), None):
+            raise ToolError(f"판정의 {key} 가 게시 형식에 맞지 않습니다: {error.message[:200]}. 출처를 바꾸거나 고쳐 다시 남기세요.")
+    with ws.lock():
+        state = ws.state
+        state["moverVerdict"] = verdict
+        ws.save_state(state)
+    return f"판정을 저장했습니다: {tag} (확신도 {confidence:.0%}, 출처 {len(verdict['sources'])}건). finish 로 끝내세요."
+
+
 def finish(ws: Workspace, args: dict) -> str:
     """세션을 끝낸다. 바뀐 내용이 있으면 검사를 통과해야 한다. 바꿀 것이 없었다면 그대로 끝내도 된다."""
     summary = str(args.get("summary", "")).strip() or "요약 없음"
     mode = ws.state["mode"]
+    if mode == "mover" and not ws.state.get("moverVerdict"):
+        raise ToolError("끝내기 전에 set_mover_verdict 로 판정을 남기세요(근거가 모자라면 pending).")
     if mode == "update" and not ws.state.get("notesWritten"):
         raise ToolError("끝내기 전에 write_notes 로 다음에 찾아볼 것과 이번 조사 기록을 남기세요(바꾼 것이 없어도).")
     if mode == "plan" and ws.state.get("plan") is None:
@@ -564,7 +672,8 @@ def finish(ws: Workspace, args: dict) -> str:
 
 
 TOOLS = {f.__name__: f for f in (view_case, view_news, search_news, web_search, web_fetch, add_source, str_replace, set_value,
-                                   remove, set_impact, propose_verdict, list_cases, create_case, write_notes, set_plan, check, finish)}
+                                   remove, set_impact, propose_verdict, list_cases, create_case, write_notes, set_plan, view_disclosure,
+                                   set_mover_verdict, check, finish)}
 
 
 def run(name: str, args: dict, root: Path) -> str:

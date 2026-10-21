@@ -59,24 +59,24 @@ def _json(value) -> bytes:
 
 # ── 잠금 ──
 @contextmanager
-def lease(store, run_id: str, now: datetime):
+def lease(store, run_id: str, now: datetime, key: str = LEASE_KEY):
     """실행 하나만 돌게 한다. 앞 실행이 남긴 잠금은 LEASE_MINUTES 가 지나면 넘겨받는다."""
-    data, etag = store.get(LEASE_KEY)
+    data, etag = store.get(key)
     if data is not None:
         held = json.loads(data)
         if datetime.fromisoformat(held["until"]) > now:
             raise RunBusy(f"앞 실행 {held['runId']} 이 {held['until']} 까지 잠금을 쥐고 있습니다.")
     until = (now + timedelta(minutes=LEASE_MINUTES)).isoformat()
     try:
-        store.put(LEASE_KEY, _json({"runId": run_id, "until": until}), if_match=etag or ABSENT)
+        store.put(key, _json({"runId": run_id, "until": until}), if_match=etag or ABSENT)
     except ConflictError as error:
         raise RunBusy("다른 실행이 방금 잠금을 잡았습니다.") from error
     try:
         yield
     finally:
-        current, _ = store.get(LEASE_KEY)
+        current, _ = store.get(key)
         if current is not None and json.loads(current).get("runId") == run_id:
-            store.delete(LEASE_KEY)
+            store.delete(key)
 
 
 # ── 사건 저장소 ──

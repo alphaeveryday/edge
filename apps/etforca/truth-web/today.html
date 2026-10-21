@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>오늘의 급등주 해석 · 투자정보 기만 검증</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="style.css">
+<script src="intro.js"></script>
+<script src="analytics.js"></script>
+<style>
+/* list.html 처럼 창 높이를 풀고 페이지가 스크롤한다 */
+body{overflow-y:auto}
+.window{height:auto;min-height:calc(100vh - 100px)}
+.back:hover{background:rgba(255,255,255,.1)}
+:root{--up:#ff453a;--down:#4c8dff;--warn:#ff6a2b;--ok:#34c759;--ok-text:#6fe08f}
+
+.lhead{padding:20px 8px 18px}
+.lhead h1{font-size:clamp(30px,4.5vw,56px);line-height:1.1;letter-spacing:-.03em;margin:6px 0 12px}
+.lhead p{font-size:14px;color:var(--muted)}
+.lhead p b{color:var(--text)}
+.disc{font-size:12.5px;color:var(--faint);margin-top:8px}
+.notice{margin:0 6px 14px;padding:12px 16px;border-radius:var(--r-md);font-size:13.5px;line-height:1.5;
+  background:rgba(255,214,10,.08);border:1px solid rgba(255,214,10,.28);color:#ffe27a}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;padding:0 8px 18px;font-size:12.5px;color:var(--muted)}
+.legend span{display:flex;align-items:center;gap:8px}
+
+/* 판정 배지: 허위매물 = 진한 주황 경고(꽉 찬 바탕) · 유망주 = 초록 · 판단 보류 = 회색 */
+.verdict{font-style:normal;display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:12.5px;font-weight:700;line-height:1.2;
+  padding:5px 11px;border-radius:999px;border:1px solid}
+.verdict small{font-size:11.5px;font-weight:600;opacity:.85}
+.v-false{background:var(--warn);border-color:var(--warn);color:#1a0800}
+.v-promising{background:rgba(52,199,89,.14);border-color:rgba(52,199,89,.45);color:var(--ok-text)}
+.v-pending{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.22);color:var(--muted)}
+
+.movers{display:flex;flex-direction:column;gap:14px;padding:0 6px}
+.mv{display:grid;grid-template-columns:minmax(0,360px) minmax(0,1fr);gap:28px;padding:22px;border-radius:var(--r-lg);border-left:3px solid transparent}
+.mv.t-false{border-left-color:var(--warn)}
+.mv.t-promising{border-left-color:var(--ok)}
+.mv.t-pending{border-left-color:rgba(255,255,255,.3)}
+
+/* 왼쪽: 종목 · 장중 차트 */
+.who{display:flex;align-items:center;gap:12px}
+.logo-c{position:relative;flex:none;width:44px;height:44px;border-radius:50%;overflow:hidden;display:grid;place-items:center;
+  font-size:18px;font-weight:700;color:#fff}
+.logo-c img{position:absolute;inset:0;object-fit:contain;padding:5px;background:#fff}
+.who>div{min-width:0;flex:1}
+.who b{display:block;font-size:17px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who small{font-size:12.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.pct{flex:none;font-size:24px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.up{color:var(--up)}.down{color:var(--down)}
+.spark{margin-top:16px}
+.spark svg{display:block;width:100%;height:110px;overflow:visible}
+.ax{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--faint);margin-top:6px;font-variant-numeric:tabular-nums}
+.ax.top{margin:0 0 6px}
+.nochart{height:110px;display:grid;place-items:center;font-size:12.5px;color:var(--faint);border:1px dashed var(--line);border-radius:12px}
+.px{margin-top:12px;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.px b{color:var(--text)}
+
+/* 오른쪽: 사건 · 판정 */
+.vline{display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;font-size:12.5px;color:var(--faint)}
+.kicker{font-size:12px;font-weight:600;color:var(--faint);margin-top:14px}
+.mv h2{font-size:21px;line-height:1.35;letter-spacing:-.02em;margin-top:4px}
+.qa{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}
+.qbox{border-radius:var(--r-md);padding:14px 16px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.08)}
+.qbox small{font-size:12px;font-weight:600;color:var(--faint)}
+.qbox p{font-size:14.5px;line-height:1.6;margin-top:6px}
+.t-false .qbox.f{background:rgba(255,106,43,.08);border-color:rgba(255,106,43,.35)}
+.t-false .qbox.f small{color:#ffa77f}
+.t-promising .qbox.f{background:rgba(52,199,89,.07);border-color:rgba(52,199,89,.3)}
+.t-promising .qbox.f small{color:var(--ok-text)}
+.qa.one{grid-template-columns:1fr}
+.why{margin-top:14px;padding-left:18px;font-size:14px;line-height:1.65;color:rgba(255,255,255,.82)}
+.srcs{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.srcs a{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:6px 12px;border-radius:999px;font-size:12.5px;
+  background:rgba(255,255,255,.06);border:1px solid var(--line);color:var(--muted)}
+.srcs a:hover{background:rgba(255,255,255,.12);color:var(--text)}
+.srcs a span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srcs a em{flex:none;font-style:normal;font-size:11px;color:var(--faint)}
+.srcs svg{flex:none;width:11px;height:11px}
+.impact{margin-top:14px;font-size:12.5px;color:var(--faint)}
+.impact b{color:#ffa77f;font-variant-numeric:tabular-nums}
+
+@media (max-width:900px){
+  .mv{grid-template-columns:minmax(0,1fr);gap:18px;padding:18px 16px}
+  .movers{padding:0}
+  .mv h2{font-size:19px}
+  .qa{grid-template-columns:1fr}
+  .lhead,.legend{padding-left:4px;padding-right:4px}
+  .notice{margin:0 0 14px}
+}
+</style>
+</head>
+<body>
+<main class="window">
+  <header class="top">
+    <a class="back pill glass" href="./">← 홈</a>
+    <div class="score pill glass" id="status">불러오는 중</div>
+  </header>
+  <div class="lhead">
+    <h1>오늘의 급등주 해석</h1>
+    <p id="summary">오늘 크게 오른 종목마다 급등 요인으로 꼽힌 사건과, 그 주장이 원문으로 확인되는지를 보여 줍니다.</p>
+    <p class="disc">AI 판단이며 투자 권유가 아닙니다. 원문 출처를 함께 확인하세요.</p>
+  </div>
+  <div class="legend">
+    <span><i class="verdict v-false">허위매물</i>주장이 원문과 어긋나거나, 원문 없이 테마·풍문으로 올랐다</span>
+    <span><i class="verdict v-promising">유망주</i>급등 사건이 원문으로 확인된다</span>
+    <span><i class="verdict v-pending">판단 보류</i>자료가 모자라 아직 가리지 못했다</span>
+  </div>
+  <div id="notice"></div>
+  <section class="movers" id="movers"><div class="empty">급등주 해석을 불러오는 중입니다.</div></section>
+  <p class="cookie-note">방문 통계를 위해 본 페이지·클릭, 기기·브라우저 정보, 접속 IP를 PostHog(미국)로 보냅니다. 쿠키는 허용한 경우에만 쓰고 1년간 유지합니다. 허용하지 않으면 쿠키 없이 그날의 방문 수만 셉니다. <button type="button" data-consent hidden>쿠키 사용 다시 고르기</button> · <a href="privacy">개인정보 처리방침</a></p>
+</main>
+
+<script src="common.js"></script>
+<script>
+// 데이터: truth-agent 가 장중 매시 게시하는 data/movers/latest.json (docs/design/truth-movers.md §4)
+const TAGS = {false: '허위매물', promising: '유망주', pending: '판단 보류'};
+const EVENT_KINDS = {disclosure: '공시', earnings: '실적', contract: '계약', policy: '정책', news: '보도', rumor: '풍문', unknown: '출처 불명'};
+const SOURCE_KINDS = {official: '공식', disclosure: '공시', news: '보도', web: '웹', video: '영상'};
+const LOGO_RE = /^data\/logos\/[0-9A-Z]{6}\.(png|jpg|ico|webp)$/;  // 스키마와 같은 규칙만 src 로 쓴다
+const todayKst = () => new Intl.DateTimeFormat('en-CA', {timeZone: 'Asia/Seoul'}).format(new Date());
+const hhmm = s => (/T(\d{2}:\d{2})/.exec(s || '') || [])[1] || '';
+const md = d => `${+d.slice(5, 7)}월 ${+d.slice(8, 10)}일`;
+const signed = (v, n = 2) => `${v > 0 ? '+' : ''}${v.toFixed(n)}%`;
+const hue = code => (Math.imul([...code].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7), 0x9E3779B1) >>> 0) % 360;  // 끝자리만 달라도 색이 갈린다
+
+// 로고가 없거나 못 불러오면 이름 첫 글자 배지가 드러난다(종목코드로 색을 고정)
+const logo = it => `<span class="logo-c" style="background:hsl(${hue(it.code)} 42% 36%)" aria-hidden="true">${esc([...it.name][0])}${
+  LOGO_RE.test(it.logo || '') ? `<img src="${esc(it.logo)}" alt="" loading="lazy" onerror="this.remove()">` : ''}</span>`;
+
+// 장중 5분 시세 + 전일 종가 점선. 가로는 시각(분), 세로는 가격. 상승 빨강 · 하락 파랑
+function chart(it){
+  const s = (it.series || []).filter(p => Array.isArray(p) && /^\d{2}:\d{2}$/.test(p[0]) && Number.isFinite(p[1]));
+  if (s.length < 2) return '<div class="nochart">장중 시세가 아직 없습니다</div>';
+  const W = 300, H = 110, min = t => +t.slice(0, 2) * 60 + +t.slice(3);
+  const t0 = min(s[0][0]), t1 = Math.max(t0 + 1, min(s.at(-1)[0]));
+  const ps = s.map(p => p[1]), lo = Math.min(it.prevClose, ...ps), hi = Math.max(it.prevClose, ...ps), pad = (hi - lo) * .08 || 1;
+  const x = t => ((min(t) - t0) / (t1 - t0) * W).toFixed(1), y = v => ((hi + pad - v) / (hi - lo + 2 * pad) * H).toFixed(1);
+  const line = s.map((p, i) => `${i ? 'L' : 'M'}${x(p[0])},${y(p[1])}`).join('');
+  const col = it.changePct >= 0 ? 'var(--up)' : 'var(--down)', base = y(it.prevClose);
+  const top = Math.max(...ps), topPct = (top / it.prevClose - 1) * 100;
+  return `
+    <div class="ax top"><span>장중 최고 <b class="${topPct >= 0 ? 'up' : 'down'}">${signed(topPct, 1)}</b></span><span>점선 = 전일 종가</span></div>
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(it.name)} 장중 시세, ${s[0][0]}부터 ${s.at(-1)[0]}까지">
+      <path d="${line}L${W},${H}L0,${H}Z" fill="${col}" fill-opacity=".1"/>
+      <line x1="0" x2="${W}" y1="${base}" y2="${base}" stroke="rgba(255,255,255,.45)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+      <path d="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+    </svg>
+    <div class="ax"><span>${s[0][0]}</span><span>${s.at(-1)[0]}</span></div>`;
+}
+
+const card = it => {
+  const tag = TAGS[it.tag] ? it.tag : 'pending';
+  const at = hhmm(it.event?.at), judged = hhmm(it.judgedAt);
+  return `
+  <article class="mv glass t-${tag}">
+    <div>
+      <div class="who">${logo(it)}
+        <div><b>${esc(it.name)}</b><small>${esc(it.code)} · ${esc(it.market)}</small></div>
+        <span class="pct ${it.changePct >= 0 ? 'up' : 'down'}">${signed(it.changePct)}</span>
+      </div>
+      <div class="spark">${chart(it)}</div>
+      <p class="px">현재가 <b>${it.price.toLocaleString('ko-KR')}원</b> · 전일 ${it.prevClose.toLocaleString('ko-KR')}원 · 거래대금(약) ${Math.round(it.tradeValue).toLocaleString('ko-KR')}억원</p>
+    </div>
+    <div>
+      <div class="vline"><span class="verdict v-${tag}">${tag === 'false' ? '⚠ ' : ''}${TAGS[tag]} <small>확신도 ${Math.round(it.confidence * 100)}%</small></span>
+        <span>${esc(EVENT_KINDS[it.event?.kind] || '출처 불명')}${at ? ` · ${at}` : ''}${judged ? ` · 판정 ${judged}` : ''}</span></div>
+      <p class="kicker">급등 요인으로 꼽힌 사건</p>
+      <h2>${esc(it.event?.title)}</h2>
+      <div class="qa${it.claim ? '' : ' one'}">
+        ${it.claim ? `<div class="qbox"><small>내세운 주장</small><p>${esc(it.claim)}</p></div>` : ''}
+        <div class="qbox f"><small>원문 확인 결과</small><p>${esc(it.finding)}</p></div>
+      </div>
+      ${it.reasons?.length ? `<ul class="why">${it.reasons.slice(0, 3).map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
+      ${it.sources?.length ? `<div class="srcs">${it.sources.map(s => `<a ${ext(s.url)} title="${esc(s.title)}">
+        <em>${esc(SOURCE_KINDS[s.kind] || s.kind)}</em><span>${esc(s.publisher)} · ${esc(s.title)}</span>${ARROW}</a>`).join('')}</div>` : ''}
+      ${tag === 'false' && it.impact > 0 ? `<p class="impact">되돌림 예상 폭 <b>약 ${it.impact.toFixed(1)}%</b> · 순서를 정하는 근사값이며 증거가 아닙니다</p>` : ''}
+    </div>
+  </article>`;
+};
+
+let loaded = false;
+function render(d){
+  const items = [...d.items].sort((a, b) => b.impact - a.impact || b.changePct - a.changePct);
+  const stale = d.date !== todayKst(), n = t => items.filter(i => i.tag === t).length;
+  $('status').innerHTML = `<b>${esc(md(d.date))}</b> ${esc(hhmm(d.generatedAt))} 기준`;
+  $('notice').innerHTML = stale ? `<p class="notice">오늘 결과가 아직 없어 마지막 거래일(${esc(md(d.date))}) 결과를 보여 줍니다.</p>` : '';
+  if (items.length) $('summary').innerHTML = `급등 <b>${items.length}종목</b> · 허위매물 <b>${n('false')}</b> · 유망주 <b>${n('promising')}</b> · 판단 보류 <b>${n('pending')}</b> · 되돌림 예상 폭 순`;
+  $('movers').innerHTML = items.length ? items.map(card).join('')
+    : `<div class="empty">${esc(md(d.date))} 기준 아직 급등한 종목이 없거나 장이 열리지 않았습니다. 장중에는 매시 새로 판정합니다.</div>`;
+  loaded = true;
+}
+
+const load = () => getJson('data/movers/latest.json').then(render).catch(() => {
+  // 처음 실패면 안내, 다시 받기 실패면 보던 결과를 그대로 두고 상태만 알린다
+  if (!loaded) $('movers').innerHTML = '<div class="empty">급등주 해석을 불러오지 못했습니다. 잠시 뒤 다시 열어 주세요.</div>';
+  $('status').textContent = loaded ? '새로 받지 못함 · 이전 결과' : '불러오지 못함';
+});
+load();
+setInterval(load, 5 * 60e3);
+</script>
+</body>
+</html>

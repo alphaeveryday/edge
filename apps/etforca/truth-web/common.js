@@ -74,13 +74,14 @@ const resolvedRow = (c, i) => `
     <span class="span">${prior(c) ? elapsed(c.flaggedAt, c.resolvedAt) : '사후 정리'}</span>
   </a>`;
 
-/* 최상단 바: 로고·슬로건 | 다른 서비스 버튼. 세 페이지 공용 */
+/* 최상단 바: 로고·슬로건 | 오늘의 급등주 · 다른 서비스 버튼. 모든 페이지 공용 */
 document.querySelector('.window').insertAdjacentHTML('beforebegin', `
   <header class="topbar">
     <a class="logo" href="./">
       <img src="logo.png" alt="로고">
       <b>국장 세력 판, 언제까지 당할래?</b><small>진짜와 가짜, 우리가 검증해 줄게.</small>
     </a>
+    <a class="tlink" href="today">오늘의 급등주</a>
     <a class="cta" href="https://etforca.com/">다른 서비스도 보기 ${ARROW}</a>
   </header>`);
 
