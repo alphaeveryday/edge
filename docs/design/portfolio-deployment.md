@@ -28,7 +28,7 @@ PostHog **Product analytics → New insight → Trends**에서 아래 이벤트�
 | 스크롤이 멈춘 구간 | `portfolio_scroll_pause`의 Total count 또는 Sum `pause_seconds`, Breakdown `section`, 필요시 `screen = result` 필터 |
 | 분석 만족도 | `portfolio_feedback`, Filter `action = submitted`, Total count, Breakdown `rating` (`good` 좋아요 / `okay` 그냥 그래요 / `needs_improvement` 개선이 필요해요) |
 | 정체 위치·도달 깊이 | 정체 이벤트의 `scroll_y`(뷰포트 상단 px), `scroll_depth_pct`(뷰포트 하단 기준 %), 체류 이벤트의 `max_scroll_depth_pct` |
-| 보유 편집·저장·백테스트 흐름 | `portfolio_action`, Breakdown `action`: `holding_add_opened`, `holding_edit_opened`, `holdings_saved`, `holdings_save_failed`, `portfolio_saved`, `backtest_requested`, `backtest_completed`, `backtest_failed` |
+| 보유 편집·저장·백테스트 흐름 | `portfolio_action`, Breakdown `action`: `holding_add_opened`, `holding_edit_opened`, `holdings_saved`, `holdings_save_failed`, `portfolio_saved`, `newsletter_requested`, `backtest_requested`, `backtest_completed`, `backtest_failed`, `instrument_search_empty`(입력 종목 검색이 0건으로 바뀐 횟수, 검색어는 수집하지 않음) |
 | 화면 조작 재생 | Session replay에서 `/portfolio/` 방문을 선택. 마스킹된 화면의 스크롤·클릭·이동을 재생 |
 
 `screen`은 입력 5단계(`input_holdings`, `input_funding`, `input_horizon`, `input_interests`, `input_question`), `loading`, `queued`, `running`, `result`, `failed`, 대시보드의 `dashboard_overview`, `dashboard_dividends`, `dashboard_returns`, `dashboard_backtest`이다. `section`은 `answers`, `current_portfolio`, `recommendation`, `changes`, `account_plans`, `execution`, `performance`, `conclusion`, `outlook`, `insights`, `evaluation`, `scenarios`, `followup`, `feedback`이며 그 밖의 위치는 화면 이름으로 집계한다.
