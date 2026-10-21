@@ -2,7 +2,7 @@
 
     python -m edge_truth_agent validate <사건 폴더>
     python -m edge_truth_agent build-site --cases <사건 폴더> --out <출력 폴더>
-    python -m edge_truth_agent run hourly|discover          # 환경변수 설정은 config.py
+    python -m edge_truth_agent run hourly|discover|movers   # 환경변수 설정은 config.py
     python -m edge_truth_agent tool <이름>                  # pi 확장이 부른다: 표준입력 JSON → 표준출력 글
     python -m edge_truth_agent tool-specs --mode update --web 1
 """

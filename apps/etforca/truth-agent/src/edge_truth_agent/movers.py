@@ -153,6 +153,8 @@ def run_movers(cfg, *, kis: Kis | None = None, dart: Dart | None = None, session
             if why:
                 report["deferred"].append(m.code)
                 log.warning(json.dumps({"event": "mover_deferred", "code": m.code, "reason": why}, ensure_ascii=False))
+        if risers and len(report["deferred"]) == len(risers):  # 공시 전면 장애는 실패로 남긴다(보류만 게시하고 성공으로 끝내지 않는다)
+            report["failed"].append("dart")
         raw, _ = store.get(LOGO_TRIED_KEY)
         tried = json.loads(raw) if raw else {}
         logo = {m.code: _logo(public, store, dart, corp.get(m.code), m.code, (prior.get(m.code) or {}).get("logo"), tried, today)

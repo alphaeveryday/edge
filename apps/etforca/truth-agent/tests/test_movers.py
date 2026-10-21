@@ -150,6 +150,28 @@ def test_dart_failure_defers_instead_of_judging_without_filings(cfg):
     movers.run_movers(cfg, kis=kis, dart=FakeDart(fail={"00000001"}), session_runner=runner, now=NOW)
     item = json.loads(LocalStore(cfg.publish).get("movers/latest.json")[0])["items"][0]
     assert runner.calls == [] and item["tag"] == "pending" and "공시를 조회하지 못해" in item["finding"]
+    # 전 종목이 공시를 못 보면 보류만 게시하고 성공으로 끝내지 않는다(태스크 상태에 남긴다)
+    report = movers.run_movers(cfg, kis=kis, dart=None, session_runner=runner, now=NOW + timedelta(hours=1))
+    assert report["deferred"] == ["900010"] and "dart" in report["failed"] and report["published"]
+
+
+def test_verdict_evidence_is_recorded_only_after_publishing(cfg, monkeypatch):
+    # 게시 전에 죽었는데 근거를 '본 것'으로 남기면 새 판정은 사라지고 다음 정각에도 다시 보지 않는다.
+    _seed_news(cfg)
+    kis = FakeKis({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
+    real = LocalStore.put
+
+    def broken(self, key, *a, **kw):
+        if key == "movers/latest.json":
+            raise OSError("publish failed")
+        return real(self, key, *a, **kw)
+    monkeypatch.setattr(LocalStore, "put", broken)
+    with pytest.raises(OSError):
+        movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=_judging({"900010": "false"}), now=NOW)
+    monkeypatch.setattr(LocalStore, "put", real)
+    again = _judging({"900010": "false"})
+    movers.run_movers(cfg, kis=kis, dart=FakeDart(), session_runner=again, now=NOW + timedelta(hours=1))
+    assert again.calls == ["900010"]
 
 
 def test_new_filing_reopens_a_settled_verdict(cfg):
