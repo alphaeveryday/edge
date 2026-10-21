@@ -19,7 +19,7 @@ const mode = required("TRUTH_MODE");
 const maxCalls = Number(process.env.TRUTH_MAX_TOOL_CALLS ?? "50");
 // 예산 끝 몇 회는 마무리(노트·계획·검사·끝내기)에만 쓴다 — 조사하다 예산이 끝나 노트 없이 멈추지 않게
 const reserve = Math.min(5, Math.floor(maxCalls / 4));
-const WRAP_UP = new Set(["write_notes", "set_plan", "check", "finish"]);
+const WRAP_UP = new Set(["write_notes", "set_plan", "set_mover_verdict", "check", "finish"]);
 const web = process.env.EXA_API_KEY ? "1" : "0";
 
 type Spec = { name: string; description: string; parameters: Record<string, unknown> };
