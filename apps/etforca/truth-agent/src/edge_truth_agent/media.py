@@ -46,8 +46,9 @@ def og_image(url: str) -> str | None:
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; etforca-truth/1.0)"})
     try:
         with urllib.request.urlopen(req, timeout=10) as res:
-            if "html" not in res.headers.get("Content-Type", ""):
+            if "html" not in res.headers.get("Content-Type", "").lower():
                 return None
+            # ponytail: timeout 은 소켓 읽기 한 번마다라, 조금씩 흘려보내는 서버는 RUN_SECONDS 를 넘겨 붙잡을 수 있다(상한은 배치 시간 제한). 생기면 조각 읽기로 바꾼다.
             raw = res.read(PAGE_BYTES)
     except NETWORK_ERRORS:
         return None
@@ -64,7 +65,7 @@ def image_ok(url: str) -> bool:
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; etforca-truth/1.0)"})
     try:
         with urllib.request.urlopen(req, timeout=10) as res:
-            return res.status == 200 and res.headers.get("Content-Type", "").startswith("image/")
+            return res.status == 200 and res.headers.get("Content-Type", "").lower().startswith("image/")
     except NETWORK_ERRORS:
         return False
 
@@ -90,27 +91,36 @@ def fill(case: dict, deadline: float | None = None) -> bool:
     def time_left() -> bool:
         return deadline is None or time.monotonic() < deadline
 
+    def miss(field: str, tried: int, total: int) -> None:
+        # 다 찾아보고 없을 때만 '못 찾음'이다. 시간 상한으로 건너뛴 것은 실행 단위로 따로 남긴다(runner).
+        if tried == total:
+            log.info(json.dumps({"event": "media_miss", "case": case.get("id"), "field": field, "sources": total}, ensure_ascii=False))
+
     changed = False
     sources = [s for s in case.get("sources", []) if isinstance(s.get("url"), str)]
     if case.get("cover") is None:
         news = [s["url"] for s in sources if kind_of(s["url"]) == "news" and s["url"].startswith("https://")][:SOURCES_PER_CASE]
         # ponytail: 사진이 없는 사건은 매시 실행마다 다시 요청한다(RUN_SECONDS 안에서). 사건이 많아지면 '찾아봤음' 기록을 둔다.
+        tried = 0
         for url in news:
             if not time_left():
                 break
+            tried += 1
             if (image := og_image(url)) and image_ok(image):
                 case["cover"], changed = image, True
                 break
         if case.get("cover") is None and news:
-            log.info(json.dumps({"event": "media_miss", "case": case.get("id"), "field": "cover", "sources": len(news)}, ensure_ascii=False))
+            miss("cover", tried, len(news))
     if case.get("video") is None:
         videos = [(vid, s) for s in sources if (vid := youtube_id(s["url"]))][:SOURCES_PER_CASE]
+        tried = 0
         for vid, s in videos:
             if not time_left():
                 break
+            tried += 1
             if video_ok(vid):
                 case["video"], changed = {"youtube": vid, "title": s.get("title") or case.get("subject") or vid}, True
                 break
         if case.get("video") is None and videos:
-            log.info(json.dumps({"event": "media_miss", "case": case.get("id"), "field": "video", "sources": len(videos)}, ensure_ascii=False))
+            miss("video", tried, len(videos))
     return changed

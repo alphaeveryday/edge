@@ -140,3 +140,43 @@ def test_hourly_run_fills_cover_from_sources_and_publishes_it(tmp_path, monkeypa
     import json
     public = json.loads((tmp_path / "public" / "cases" / "geumyang-monlaa.json").read_text(encoding="utf-8"))
     assert public["cover"] == "https://img.yna.co.kr/cover.jpg"
+
+
+def test_fill_tries_at_most_three_news_sources_per_case(monkeypatch):
+    # 매시 실행이 사건 하나의 출처를 전부 두드리면 시간 상한을 한 사건이 다 쓴다.
+    asked = []
+    monkeypatch.setattr(media, "og_image", lambda url: asked.append(url))
+    case = seed("geumyang-monlaa")
+    case["cover"] = None
+    case["sources"] = [{"id": f"news-{i}", "kind": "news", "url": f"https://www.yna.co.kr/view/AKR{i}", "title": "연합"} for i in range(5)]
+    media.fill(case)
+    assert len(asked) == media.SOURCES_PER_CASE
+
+
+def test_out_of_time_is_not_reported_as_not_found(monkeypatch, caplog):
+    # 시간이 없어 찾지 않은 사건을 '못 찾음'으로 남기면 사진이 왜 없는지 잘못 읽게 된다.
+    case = seed("geumyang-monlaa")
+    case["cover"] = None
+    with caplog.at_level("INFO", logger=media.__name__):
+        media.fill(case, deadline=time.monotonic() - 1)
+        assert "media_miss" not in caplog.text
+        media.fill(case)
+        assert "media_miss" in caplog.text
+
+
+def test_hourly_run_leaves_locked_cases_media_to_people(tmp_path, monkeypatch):
+    # locked 는 사람이 정정한 사건이다. 코드가 사진을 바꾸면 사람의 정정을 덮는다.
+    import json
+    seeds = tmp_path / "seed"
+    seeds.mkdir()
+    locked = seed("geumyang-monlaa")
+    locked["locked"], locked["cover"] = True, None
+    (seeds / "geumyang-monlaa.json").write_text(json.dumps(locked, ensure_ascii=False), encoding="utf-8")
+    monkeypatch.setattr(runner, "SEED_DIR", seeds)
+    monkeypatch.setattr(runner, "render", lambda cases, web, focus: {k: {"errors": [], "warnings": []} for k in [*focus, "index"]})
+    monkeypatch.setattr(media, "og_image", lambda url: "https://img.yna.co.kr/cover.jpg")
+    monkeypatch.setattr(media, "image_ok", lambda url: True)
+    report = runner.run(_cfg(tmp_path), "hourly", now=NOW)
+    assert report["changed"] == []
+    public = json.loads((tmp_path / "public" / "cases" / "geumyang-monlaa.json").read_text(encoding="utf-8"))
+    assert public["cover"] is None
