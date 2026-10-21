@@ -4,7 +4,7 @@ from uuid import UUID
 from datetime import date
 import re
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
 ROLES = ("question", "portfolio", "outlook", "opinion")
 LIMITS = {role: (90, 650) for role in ROLES}
@@ -56,7 +56,10 @@ class TaxProfile(StrictModel):
     accounts: list[TaxAccount] = Field(max_length=4)
 
     @model_validator(mode='after')
-    def eligible_targets(self):
+    def eligible_targets(self, info: ValidationInfo):
+        # Saved reports predate eligibility checks and must remain usable for follow-ups.
+        if info.context and info.context.get('persisted_input'):
+            return self
         if 'ISA' in self.recommended_accounts and (
             self.residence == '비거주자' or self.financial_income_tax == '예' or self.age == '15세 미만'
             or (self.age in ('15~18세', '19세 미만') and self.previous_year_earned_income == '아니요')

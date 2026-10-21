@@ -23,7 +23,7 @@ test('a restored ineligible target cannot silently save as an empty selection', 
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem('edge-preview-form-v2'))).not.toBeNull();
   await page.evaluate(() => {
     const saved = JSON.parse(sessionStorage.getItem('edge-preview-form-v2')!);
-    saved.tax = { residence: '비거주자', age: '19~54세', income: '소득 없음', financial_income_tax: '아니요',
+    saved.tax = { residence: '비거주자', age: '19세 미만', income: '소득 없음', financial_income_tax: '아니요',
       recommended_accounts: ['ISA'], accounts: [] };
     sessionStorage.setItem('edge-preview-form-v2', JSON.stringify(saved));
   });
@@ -34,6 +34,9 @@ test('a restored ineligible target cannot silently save as an empty selection', 
   await dialog.getByRole('button', { name: '선택한 내용 적용하기', exact: true }).click();
   await expect(dialog.getByRole('alert')).toContainText('전략에 포함할 계좌');
   await expect(dialog).toBeVisible();
+  await dialog.getByRole('checkbox', { name: '연금저축', exact: true }).check();
+  await dialog.getByRole('button', { name: '선택한 내용 적용하기', exact: true }).click();
+  await expect(dialog).not.toBeVisible();
 });
 
 test('ineligible ISA choices explain why and clear a prior selection without blocking pension savings', async ({ page }) => {
