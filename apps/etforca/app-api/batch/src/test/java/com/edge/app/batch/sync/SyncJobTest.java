@@ -58,8 +58,13 @@ class SyncJobTest {
 
         // 같은 날 실데이터 발행본과 더 최근 미분류 발행본 중 실데이터만 이전
         pipeline.update("insert into movement_analyses values ('m-db', '091160', now() - interval '2 days', 'completed', "
-                + "now() - interval '2 days', '2026-09-29', '실데이터 요약', '{mi-2,mi-1}', 'database'), "
+                + "now() - interval '2 days', '2026-09-29', '실데이터 요약', '{mi-2,mi-0,mi-1}', 'database'), "
                 + "('m-old', '091160', now() - interval '47 hours', 'completed', now() - interval '47 hours', '2026-09-29', '가상 요약', '{}', 'unknown')");
+        // 이전 리비전 소유 항목(mi-0)을 이어받은 선택
+        pipeline.update("insert into movement_analyses values ('m-prev', '091160', now() - interval '50 hours', 'completed', "
+                + "now() - interval '50 hours', '2026-09-29', '이전 요약', '{}', 'unknown')");
+        pipeline.update("insert into movement_items(item_id, analysis_id, type, title_keyword, sentence, sentiment) values "
+                + "('mi-0', 'm-prev', '매크로', '금리', '동결', 'neutral')");
         // 같은 거래일의 더 최근 실데이터 발행본이라도 회수된 것은 제외
         pipeline.update("insert into movement_analyses values ('m-withdrawn', '091160', now() - interval '46 hours', 'completed', "
                 + "now() - interval '46 hours', '2026-09-29', '회수된 요약', '{}', 'database', now())");
@@ -118,7 +123,7 @@ class SyncJobTest {
         JsonNode move = json("select payload::text from etf_move where etf_code = '091160'");
         assertThat(move.path("summary").asText()).as("회수된 발행본 제외").isEqualTo("실데이터 요약");
         assertThat(move.path("items").valueStream().map(i -> i.path("type").asText()).toList())
-                .as("선택 항목만, 선택 순서대로").containsExactly("수급", "이슈");
+                .as("이전 리비전 항목 포함 선택 항목만, 선택 순서대로").containsExactly("수급", "매크로", "이슈");
         assertThat(jdbc.queryForObject("select count(*) from etf_move where as_of = '2026-09-20'", Integer.class))
                 .as("원천에 없는 날짜의 옛 시드는 지워진다").isEqualTo(0);
         assertThat(jdbc.queryForList("select trade_date - current_date as offset_days, close::text, coalesce(open::text, '-') open from etf_candle "
@@ -215,6 +220,23 @@ class SyncJobTest {
         assertThat(jdbc.queryForObject("select price from etf_quote where etf_code = '091160'", BigDecimal.class))
                 .as("앞 단계에서 커밋된 이번 실행의 ETF 반영 유지").isEqualByComparingTo("150000");
         assertThat(kosdaq).as("실패한 지수 뒤의 지수도 갱신").isEqualByComparingTo("808");
+    }
+
+    @Test
+    void emptyCurationFailsJobWithoutDeletingSyncedRows() throws Exception {
+        run();
+        jdbc.execute("alter table etf_curation rename to etf_curation_hidden");
+        jdbc.execute("create table etf_curation (like etf_curation_hidden including all)");
+        JobExecution execution;
+        try {
+            execution = jobOperator.start(syncJob, new JobParameters());
+        } finally {
+            jdbc.execute("drop table etf_curation");
+            jdbc.execute("alter table etf_curation_hidden rename to etf_curation");
+        }
+
+        assertThat(execution.getStatus()).as("빈 선별 목록의 잡 실패").isEqualTo(BatchStatus.FAILED);
+        assertThat(jdbc.queryForList("select code from etf", String.class)).as("동기화 행 전체 삭제 방지").containsExactly("091160");
     }
 
     // 실행마다 새 인스턴스라 인자 없는 재실행도 완료

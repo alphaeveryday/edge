@@ -123,10 +123,15 @@ class EtfProcessor implements ItemProcessor<Curation, EtfSnapshot> {
     }
 
     // 선택된 항목이 있을 때 그 순서를 따르는 오늘 움직임
+    // 선택 항목의 이전 리비전 소유 허용
     private Dated move(Movement m) {
-        List<MovementItem> all = pipeline.movementItems(m.id());
-        List<MovementItem> items = m.selected().isEmpty() ? all
-                : m.selected().stream().flatMap(id -> all.stream().filter(i -> i.id().equals(id))).toList();
+        List<MovementItem> items;
+        if (m.selected().isEmpty()) {
+            items = pipeline.movementItems(m.id());
+        } else {
+            List<MovementItem> selected = pipeline.movementItemsByIds(m.selected());
+            items = m.selected().stream().flatMap(id -> selected.stream().filter(i -> i.id().equals(id))).toList();
+        }
         List<Map<String, Object>> rows = items.stream().map(i -> map("type", i.type(), "title_keyword", i.titleKeyword(),
                 "sentence", i.sentence(), "sentiment", i.sentiment())).toList();
         return new Dated(m.tradingDate(), m.publishedAt(), JSON.writeValueAsString(map("summary", m.summary(), "items", rows)));

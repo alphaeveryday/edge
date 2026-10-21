@@ -112,6 +112,14 @@ public class PipelineRepository {
                         rs.getString(5)), analysisId);
     }
 
+    /** 이전 리비전에서 이어받은 항목을 포함한 선택 항목 */
+    public List<MovementItem> movementItemsByIds(List<String> itemIds) {
+        return jdbc.query("""
+                select item_id, type, title_keyword, sentence, sentiment from movement_items where item_id = any(?)
+                """, (rs, n) -> new MovementItem(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4),
+                        rs.getString(5)), (Object) itemIds.toArray(String[]::new));
+    }
+
     /** KST 날짜마다 최신 완료 전망 1건 */
     public List<Outlook> outlooks(String code, Instant since) {
         return jdbc.query("""

@@ -19,6 +19,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.transaction.PlatformTransactionManager;
 
+import java.util.List;
+
 /**
  * 선별 ETF 의 파이프라인 RDS 데이터를 앱 테이블로 옮기는 동기화 잡
  * 실행마다 전체 재동기화라 새 인스턴스로 시작, 재시작 없음
@@ -42,11 +44,16 @@ class SyncJobConfig {
     }
 
     // 선별 목록 밖 코드의 동기화 행 삭제
+    // 빈 선별 목록의 전체 삭제 방지
     @Bean
     Step cleanupStep(JobRepository jobRepository, PlatformTransactionManager tx, SyncRepository sync) {
         return new StepBuilder("cleanupStep", jobRepository)
                 .tasklet((contribution, context) -> {
-                    sync.deleteOutside(sync.curation().stream().map(Curation::code).toList());
+                    List<String> codes = sync.curation().stream().map(Curation::code).toList();
+                    if (codes.isEmpty()) {
+                        throw new IllegalStateException("sync curation empty");
+                    }
+                    sync.deleteOutside(codes);
                     return RepeatStatus.FINISHED;
                 }, tx)
                 .build();
