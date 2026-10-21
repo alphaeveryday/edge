@@ -6,7 +6,7 @@ import { PortfolioPreview } from './PortfolioPreview';
 import { TaxAccounts, type TaxProfile } from './TaxAccounts';
 import { trackScreen } from './analytics';
 
-import { inputDraftKey, readInputDraft, inputDraftFromInput } from './inputDraft';
+import { inputDraftKey, legacyDraftKey, readInputDraft, inputDraftFromInput } from './inputDraft';
 import { useConfirmation } from './design-system/confirmation';
 import { bulkHoldings, toPercents } from './bulkHoldings';
 import type { Saved } from './workbook';
@@ -63,7 +63,9 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
   const [alternate, setAlternate] = useState<Holding[]>(initial?.alternate ?? []);
   const [storageError, setStorageError] = useState(false);
   useEffect(() => {
-    try { sessionStorage.setItem(inputDraftKey, JSON.stringify({ step, holdings, alternate, selected, question, horizon, how, interests, note, dividendGoal, contribution, keyword, tax, draftId, mode, fresh })); setStorageError(false); }
+    try { sessionStorage.setItem(inputDraftKey, JSON.stringify({ step, holdings, alternate, selected, question, horizon, how, interests, note, dividendGoal, contribution, keyword, tax, draftId, mode, fresh }));
+      // Any v2 write supersedes a leftover v1 draft, so clearing v2 later cannot bring the old one back.
+      sessionStorage.removeItem(legacyDraftKey); setStorageError(false); }
     catch { setStorageError(true); }
   }, [step, holdings, alternate, selected, question, horizon, how, interests, note, dividendGoal, contribution, keyword, tax, draftId, mode, fresh]);
   const previousStep = useRef(step);

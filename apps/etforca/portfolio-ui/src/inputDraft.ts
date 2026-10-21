@@ -5,7 +5,7 @@ import { preview } from './preview';
 
 // v2 drafts hold won; v1 held 만 원. A new key keeps a rolled-back bundle from reading won as 만 원.
 export const inputDraftKey = preview ? 'edge-preview-form-v2' : 'edge-portfolio-form-v2';
-const legacyDraftKey = preview ? 'edge-preview-form-v1' : 'edge-portfolio-form-v1';
+export const legacyDraftKey = preview ? 'edge-preview-form-v1' : 'edge-portfolio-form-v1';
 export type InputDraft = { submittedJobId?: string; dividendGoal?: string; step: number; holdings: Holding[]; alternate: Holding[]; selected: string[]; question: string; horizon: string; how: string; interests: string[]; note: string; contribution: string; keyword: string; tax: TaxProfile | null; draftId: string; mode: 'amount' | 'percent'; fresh: boolean };
 export function inputDraftFromInput(input: Input) {
   const mode = input.input_mode === 'percent' ? 'percent' : 'amount';
@@ -39,7 +39,7 @@ export function readInputDraft(): InputDraft | null {
       const won = (rows: Holding[]) => rows.map(h => ({ ...h, amount_krw: h.amount_krw ? String(Math.round(Number(h.amount_krw) * 10000)) : h.amount_krw }));
       if (d.mode === 'amount') d.holdings = won(d.holdings); else d.alternate = won(d.alternate);
       // Migrate once so clearing the v2 draft cannot bring the v1 draft back.
-      try { sessionStorage.setItem(inputDraftKey, JSON.stringify(d)); sessionStorage.removeItem(legacyDraftKey); } catch { /* The converted draft still opens in this tab. */ }
+      try { sessionStorage.removeItem(legacyDraftKey); sessionStorage.setItem(inputDraftKey, JSON.stringify(d)); } catch { /* The converted draft still opens in this tab. */ }
     }
     return d;
   } catch { return null; }

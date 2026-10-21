@@ -82,3 +82,22 @@ test('the preview legend keeps small and large amounts readable instead of round
   await page.getByLabel('현금 금액', { exact: true }).fill('99999999');
   await expect(page.locator('.portfolio-preview li').filter({ hasText: '현금' })).toContainText('1억 원');
 });
+
+// A tab that was mid-analysis at deploy keeps its v1 draft while a v2 draft is restored from the server;
+// starting over must not resurrect the pre-deploy input.
+test('starting over after a restored draft does not bring back a leftover 만 원 draft', async ({ page }) => {
+  const cash = { name: '현금', kind: 'cash', instrument_id: 'CASH:KRW', account: '일반 계좌' };
+  const base = { step: 0, alternate: [], selected: ['일반 계좌'], question: '', horizon: '', how: '', interests: [], note: '', contribution: '', keyword: '', tax: null, mode: 'amount', fresh: false };
+  await page.addInitScript(([v1, v2]) => {
+    if (sessionStorage.getItem('seeded')) return;
+    sessionStorage.setItem('seeded', '1');
+    sessionStorage.setItem('edge-preview-form-v1', v1);
+    sessionStorage.setItem('edge-preview-form-v2', v2);
+  }, [JSON.stringify({ ...base, draftId: 'old', holdings: [{ ...cash, amount_krw: '7' }] }), JSON.stringify({ ...base, draftId: 'new', holdings: [{ ...cash, amount_krw: '5000' }] })]);
+  await page.goto('/portfolio/?preview=input');
+  await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('5,000');
+  await page.getByRole('button', { name: '새로 작성', exact: true }).click();
+  await page.getByRole('button', { name: '새로 시작하기', exact: true }).click();
+  await expect(page.locator('.rows .row')).toHaveCount(0);
+  expect(await page.evaluate(() => sessionStorage.getItem('edge-preview-form-v1'))).toBeNull();
+});
