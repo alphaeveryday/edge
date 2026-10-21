@@ -17,6 +17,7 @@ from .workspace import Workspace
 
 log = logging.getLogger(__name__)
 PROMPTS = Path(__file__).resolve().parent / "prompts"
+SKILLS = {"plan": "plan-day.md", "update": "update-case.md", "discover": "discover-cases.md"}  # 세션 종류별 덧붙일 지침
 
 
 @dataclass
@@ -42,7 +43,7 @@ def command(cfg, ws: Workspace, mode: str, prompt: str) -> list[str]:
             "-e", str(cfg.pi_dir / "extension.ts"), "--tools", names,
             "--model", cfg.model, "--thinking", cfg.thinking,
             "--system-prompt", str(PROMPTS / "system.md"),
-            "--append-system-prompt", str(PROMPTS / ("update-case.md" if mode == "update" else "discover-cases.md")),
+            "--append-system-prompt", str(PROMPTS / SKILLS[mode]),
             prompt]
 
 
