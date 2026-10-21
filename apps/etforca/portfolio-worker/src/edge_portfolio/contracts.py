@@ -48,10 +48,23 @@ class TaxAccount(StrictModel):
 class TaxProfile(StrictModel):
     recommended_accounts: list[Literal['ISA', 'IRP', '연금저축']] = Field(default_factory=list, max_length=3)
     residence: Literal['대한민국 거주자', '비거주자', '확인 필요']
-    age: Literal['19세 미만', '19~54세', '55세 이상', '확인 필요']
+    age: Literal['15세 미만', '15~18세', '19세 미만', '19~54세', '55세 이상', '확인 필요']
     income: str = Field(min_length=1, max_length=60)
     financial_income_tax: Literal['아니요', '예', '확인 필요']
+    previous_year_earned_income: Literal['', '예', '아니요', '확인 필요'] = ''
+    irp_qualification: Literal['', '근로자·자영업자·직역연금 가입자', '퇴직급여 수령 대상', '해당 없음', '확인 필요'] = ''
     accounts: list[TaxAccount] = Field(max_length=4)
+
+    @model_validator(mode='after')
+    def eligible_targets(self):
+        if 'ISA' in self.recommended_accounts and (
+            self.residence == '비거주자' or self.financial_income_tax == '예' or self.age == '15세 미만'
+            or (self.age in ('15~18세', '19세 미만') and self.previous_year_earned_income == '아니요')
+        ):
+            raise ValueError('ISA 가입 요건에 맞지 않아요. 전략에 포함할 계좌를 다시 선택해 주세요.')
+        if 'IRP' in self.recommended_accounts and self.irp_qualification == '해당 없음':
+            raise ValueError('IRP 가입 대상이 아니에요. 전략에 포함할 계좌를 다시 선택해 주세요.')
+        return self
 
 
 class DraftInput(StrictModel):

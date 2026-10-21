@@ -198,7 +198,7 @@ async def test_provider_failure_is_visible_and_can_be_retried_without_aborting_a
     assert calls == ['069500.KS', '069500.KS']
 
 
-async def test_forecast_retains_loss_and_dividends_require_complete_web_coverage():
+async def test_model_forecast_cannot_replace_missing_price_scenario():
     final = FinalReport.model_validate(final_payload())
     final.return_forecast = ReturnForecast(percent=-8, reason='가격 부담과 실적 둔화 가능성을 과거 성과에 더해 보수적으로 판단한 추정 수익률이에요.',
                              evidence=[{'source_id': 's1', 'passage_id': 'p1'}])
@@ -213,12 +213,12 @@ async def test_forecast_retains_loss_and_dividends_require_complete_web_coverage
     published = {'recommendation': {'allocations': [{'instrument_id': 'US:VOO', 'weight_pct': 100}], 'expected_return_1y': None}}
     sources = [{'id': 's1', 'url': 'https://official.example', 'passages': [{'id': 'p1', 'text': 'Trailing 12 months dividend yield 1.25% as of 2026-10-10'}]}]
     await enrich_report(published, final, FakeMarket(), sources)
-    assert published['recommendation']['expected_return_1y'] == -8
+    assert published['recommendation']['expected_return_1y'] is None
     assert published['recommendation']['target_return_1y'] == 7
     assert published['recommendation']['dividend_yield_1y'] is None
 
 
-async def test_optimizer_cache_alone_cannot_authorize_a_forecast_without_reading_history():
+async def test_model_reading_history_cannot_supply_a_missing_numeric_scenario():
     final = FinalReport.model_validate(final_payload())
     final.return_forecast = ReturnForecast(percent=8, reason='가격 부담과 실적 둔화 가능성을 과거 성과에 더해 보수적으로 판단한 추정 수익률이에요.',
         evidence=[{'source_id': 's1', 'passage_id': 'p1'}])
@@ -234,7 +234,7 @@ async def test_optimizer_cache_alone_cannot_authorize_a_forecast_without_reading
     assert 'return_forecast' not in published['recommendation']
     await market.tool({'allocations': rows})
     await enrich_report(published, final, market, sources)
-    assert published['recommendation']['expected_return_1y'] == 8
+    assert published['recommendation']['expected_return_1y'] is None
 
 
 

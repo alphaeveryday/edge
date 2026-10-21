@@ -409,6 +409,31 @@ def history_returns(history):
     return {'return_period_pct': period, 'return_1y_pct': annual}
 
 
+def upper_sigma_scenario(history):
+    points = history.get('points', [])
+    if len(points) < 3:
+        return None
+    cutoff = year_before(date.fromisoformat(points[-1]['date']))
+    bases = [i for i, point in enumerate(points) if date.fromisoformat(point['date']) <= cutoff]
+    if not bases:
+        return None
+    window = points[bases[-1]:]
+    values = pd.Series([point['recommended'] for point in window], dtype=float)
+    if len(values) < 3 or not values.map(positive_price).all():
+        return None
+    returns = values.pct_change().dropna()
+    # The common KR/US daily calendar can have more than 252 observations in a year.
+    variance = float(returns.var(ddof=1)) * len(returns)
+    annual_return = float(values.iloc[-1] / values.iloc[0] - 1) * 100
+    sigma = math.sqrt(variance) * 100
+    return {'kind': 'upper_sigma_1y', 'percent': round(annual_return + sigma, 2),
+            'historical_return_pct': round(annual_return, 2), 'annualized_sigma_pct': round(sigma, 2),
+            'annualized_variance': variance, 'observations': len(returns),
+            'start_date': window[0]['date'], 'end_date': window[-1]['date'],
+            'reason': f'과거 1년 수익률 {annual_return:.2f}%에 연환산 표준편차 {sigma:.2f}%p를 더한 1σ 상단 시나리오예요.',
+            'method': '원화·분배금 재투자 포트폴리오 일별 수익률의 표본분산 × 해당 1년 관측 수의 제곱근을 사용해요. 종목 간 동행을 반영한 과거 기반 시나리오이며 미래 수익률이나 달성 확률을 보장하지 않아요.'}
+
+
 def comparison(target, current, records, as_of, *, bounds=None):
     active = set(target) | set(current or {}) | {'FX'}
     records = {key: record for key, record in records.items() if key in active}
@@ -570,9 +595,8 @@ async def enrich_report(published, final, market, sources):
     plan = published['recommendation']
     dividends = {}
     target = weights(plan['allocations'])
-    queried = tuple(sorted(target.items())) in market.queried
-    # An ungrounded optional forecast must not discard the validated allocation.
-    forecast_evidence = cited(final.return_forecast.evidence, sources) if final.return_forecast and queried else []
+    plan['expected_return_1y'] = None
+    plan.pop('return_forecast', None)
     result = await market.get(plan['allocations'])
     plan['target_return_1y'] = 7
     # Web research informs the analysis, but numeric yields use identified cash events.
@@ -590,10 +614,10 @@ async def enrich_report(published, final, market, sources):
         plan['historical_return_1y'] = result['return_1y_pct']
         plan['historical_return_period'] = result.get('return_period_pct')
         plan['unavailable_reason'] = ''
-        if final.return_forecast and queried:
-            plan['expected_return_1y'] = final.return_forecast.percent
-            plan['return_forecast'] = {'reason': final.return_forecast.reason, 'evidence': forecast_evidence,
-                                       'method': '표시된 공통 기간의 과거 성과와 시장 근거를 고려한 AI 추정 · 수익 보장 아님'}
+        scenario = upper_sigma_scenario(result['history'])
+        if scenario:
+            plan['expected_return_1y'] = scenario['percent']
+            plan['return_forecast'] = scenario
     else:
         plan['unavailable_reason'] = '비교할 공통 기간의 유효한 일별 가격·환율을 확보하지 못해 과거 성과를 표시하지 못했어요.'
         plan['market_data_failure'] = result['reason']
