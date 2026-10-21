@@ -302,7 +302,7 @@ app-api/
 ├── docker-compose.yaml             PostgreSQL + Redis Sentinel
 ├── docker-compose.cluster.yaml     Redis Cluster 부분 장애 실험
 ├── experiments/                    장애 주입 실험 (k6·러너·결과 기록)
-├── batch/                          Spring Batch 하위 프로젝트 (예약 태스크 진입점)
+├── batch/                          Spring Batch 하위 프로젝트 (sync 잡)
 └── src/main/
     ├── resources/
     │   ├── vote.lua · reconcile.lua · withdraw.lua   집계 Lua
