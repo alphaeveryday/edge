@@ -19,4 +19,8 @@ python -m http.server 8010 --directory /tmp/truth-preview   # http://127.0.0.1:8
 
 ## 방문 분석
 
-`analytics.js` 가 PostHog 를 붙인다. 프로젝트·키·쿠키 없는 모드는 랜딩과 같다([app-landing README](../app-landing/README.md#방문-분석-posthog)). 자동화 브라우저(`navigator.webdriver`, 게시 전 렌더 검사·CI)에서는 보내지 않는다.
+`analytics.js` 가 PostHog 를 붙인다. 프로젝트·키는 랜딩과 같다([app-landing README](../app-landing/README.md#방문-분석-posthog)). 처음 방문하면 화면 아래 막대에서 쿠키 사용을 묻는다. '허용'하면 쿠키(1년 유지)로 재방문을 이어서 세고, 고르기 전이나 '거부'하면 랜딩처럼 쿠키 없이 센다(`cookieless_mode: 'always'`, 방문은 집계된다). 쿠키 동의는 2026-10-28 부터 묻는다(`analytics.js` 의 `ASK_FROM`). 각 페이지 끝 `.cookie-note` 가 수집 항목·전송처·보관 기간을 알리고 선택을 다시 고르게 한다. 수집 항목을 바꾸면 이 문구도 함께 고친다. 자동화 브라우저(`navigator.webdriver`, 게시 전 렌더 검사·CI)에서는 보내지 않는다.
+
+## 개인정보 처리방침
+
+`privacy.html` 이 이 사이트 전용 처리방침이다(etforca.com/truth/privacy.html, `deploy-truth-web.yml` 이 함께 올린다). ETF Orca 앱 처리방침과 별개다. 수집 항목을 바꾸면 `analytics.js`·각 페이지 `.cookie-note`·`privacy.html` 을 함께 고친다.

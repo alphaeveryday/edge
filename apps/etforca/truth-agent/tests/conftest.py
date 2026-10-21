@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -21,6 +22,18 @@ def no_media_network(monkeypatch):
 ROOT = Path(__file__).resolve().parents[1]
 SEED = ROOT / "seed"
 WEB = ROOT.parent / "truth-web"
+
+
+FLOW_SEEDS = ("geumyang-monlaa", "homeplus-short-term-bonds", "hybe-ipo-2019", "koreazinc-offering-2024")
+
+
+def flow_seed(tmp_path: Path) -> Path:
+    """실행 흐름 시험용 seed 폴더(처음 4건). 시작 사건이 늘어도 흐름 시험의 후보·렌더 범위가 바뀌지 않게."""
+    out = tmp_path / "flow-seed"
+    out.mkdir(exist_ok=True)
+    for name in FLOW_SEEDS:
+        shutil.copy(SEED / f"{name}.json", out)
+    return out
 
 
 def seed(name: str) -> dict:

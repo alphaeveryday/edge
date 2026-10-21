@@ -33,14 +33,16 @@ async def test_quotes_precede_archives_and_new_customer_uses_preloaded_quote(iso
     with store.connect() as db:
         db.execute("INSERT INTO portfolio_market_preload(instrument) VALUES ('KR:069500'),('US:SOXL')")
     calls = []
-    monkeypatch.setattr(work, 'today', lambda: NOW.date())
+    # The next KR quote is due at 17:00 the day after `now`, and the second pass compares it with the database clock.
+    # A fixed past date makes that quote due again once the real clock passes it, so anchor `now` to today.
+    now = datetime.now(preload.KST).replace(hour=17, minute=0, second=0, microsecond=0)
+    monkeypatch.setattr(work, 'today', lambda: now.date())
     monkeypatch.setattr(work, 'price_end', lambda *args: date(2026, 10, 17))
     async def load(symbol, end, **kwargs):
         calls.append((symbol, kwargs['history_start']))
         return {**record(currency='USD' if symbol == 'SOXL' else 'KRW'),
                 'history_complete': kwargs['history_start'] is None, 'repair_since': '2026-09-01'}
     monkeypatch.setattr(market_data, 'fetch_prices', load)
-    now = NOW
     assert await preload.collect_one(now=now)
     dashboard.save('new', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
     assert work.tracking('new')['market']['payload']['assets'][0]['value'] == 1100

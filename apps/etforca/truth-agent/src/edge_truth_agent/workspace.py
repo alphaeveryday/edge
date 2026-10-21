@@ -3,7 +3,8 @@
     case.json      지금 고치는 사건 (discover 는 create_case 전까지 없음)
     base.json      세션 시작 때 사건 (update) — 읽기 전용 칸 비교용
     inbox.json     이번 실행에서 배정된 기사 (update) 또는 후보 기사 (discover)
-    index.json     다른 사건 요약 (중복 확인용)
+    index.json     다른 사건 요약 (중복 확인용) — plan 세션에서는 조사 후보 사건 목록
+    notes.md       이 사건의 조사 노트 (update) — 세션은 자기 사건 노트 하나만 받는다
     state.json     본 버전·읽은 출처·웹 호출 수·판정 제안·완료 여부
     snapshots/     웹에서 가져온 원문 (인용 근거)
 """
@@ -27,7 +28,7 @@ class Workspace:
     # ── 준비 (runner 가 세션 전에 한 번) ──
     @classmethod
     def prepare(cls, root: Path, *, mode: str, case: dict | None, inbox: list[dict], index: list[dict],
-                today: str, now: str) -> "Workspace":
+                today: str, now: str, notes: str | None = None) -> "Workspace":
         """세션 폴더를 만든다."""
         ws = cls(root)
         ws.root.mkdir(parents=True, exist_ok=True)
@@ -35,10 +36,13 @@ class Workspace:
         if case is not None:
             ws._write("case.json", case)
             ws._write("base.json", case)
+        if notes is not None:
+            (ws.root / "notes.md").write_text(notes, encoding="utf-8")
         ws._write("inbox.json", inbox)
         ws._write("index.json", index)
         ws._write("state.json", {"mode": mode, "today": today, "now": now, "viewedHash": None, "viewed": [],
-                                 "webCalls": 0, "verdict": None, "done": False, "summary": ""})
+                                 "webCalls": 0, "verdict": None, "notesWritten": False, "plan": None,
+                                 "done": False, "summary": ""})
         return ws
 
     # ── 파일 ──
@@ -98,6 +102,15 @@ class Workspace:
 
     def index(self) -> list[dict]:
         return self._read("index.json", [])
+
+    def notes(self) -> str | None:
+        path = self.root / "notes.md"
+        return path.read_text(encoding="utf-8") if path.is_file() else None
+
+    def save_notes(self, text: str) -> None:
+        tmp = self.root / "notes.md.tmp"
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, self.root / "notes.md")
 
     def snapshot(self, sid: str) -> dict | None:
         return self._read(f"snapshots/{sid}.json")

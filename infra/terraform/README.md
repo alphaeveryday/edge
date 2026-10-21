@@ -25,6 +25,7 @@ infra/terraform/
     ├── rds/                # PostgreSQL(private·관리형 비밀번호·로테이션 창 고정) + 관측(FreeableMemory 경보·Performance Insights — 경보는 data-pipeline 토픽으로, ALPHA-919)
     ├── elasticache/        # Redis(클러스터 모드 끔, TLS, 노드 수 입력 — 2 이상이면 Multi-AZ 페일오버, dev 는 1), app-api 투표 캐시 (ADR-0056)
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
+    ├── ecs-scheduled-task/ # 주기 실행 후 종료 Fargate task: task def + Scheduler(RunTask) + SG + IAM + 실패·미실행 알림 (ADR-0063, 호출자: app-batch)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
     ├── pipeline/           # 구 news-pipeline SFN 의 존치 자원 — data-pipeline 이 쓰는 lake S3 버킷만 소유 (ALPHA-549)
     ├── analysis-v2/        # 분석엔진 v2: 단건 워크플로(Fargate)·조회 API(Lambda + HTTP API)·전망 배치 워크플로와 스케줄(outlook_batch.tf, ALPHA-1142)

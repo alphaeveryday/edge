@@ -16,6 +16,8 @@ on:
     branches: [dev]
     paths:
       - "apps/etforca/app-api/**"
+      # 같은 Gradle 루트의 배치 하위 프로젝트는 별도 이미지(deploy-app-batch.yml)
+      - "!apps/etforca/app-api/batch/**"
       # 자체 Gradle 루트라 루트 빌드 설정과 libs 는 이미지에 무관
       - ".dockerignore"
       # 배포 절차 자체의 변경. tenant-sync-api 와 같이 이 파일 자신은 넣지 않는다.

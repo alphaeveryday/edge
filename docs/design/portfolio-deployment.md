@@ -28,8 +28,8 @@ PostHog **Product analytics → New insight → Trends**에서 아래 이벤트�
 | 스크롤이 멈춘 구간 | `portfolio_scroll_pause`의 Total count 또는 Sum `pause_seconds`, Breakdown `section`, 필요시 `screen = result` 필터 |
 | 분석 만족도 | `portfolio_feedback`, Filter `action = submitted`, Total count, Breakdown `rating` (`good` 좋아요 / `okay` 그냥 그래요 / `needs_improvement` 개선이 필요해요) |
 | 정체 위치·도달 깊이 | 정체 이벤트의 `scroll_y`(뷰포트 상단 px), `scroll_depth_pct`(뷰포트 하단 기준 %), 체류 이벤트의 `max_scroll_depth_pct` |
-| 보유 편집·저장·백테스트 흐름 | `portfolio_action`, Breakdown `action`: `holding_add_opened`, `holding_edit_opened`, `holdings_saved`, `holdings_save_failed`, `portfolio_saved`, `backtest_requested`, `backtest_completed`, `backtest_failed` |
-| 화면 조작 재생 | Session replay에서 `/portfolio/` 방문을 선택. 마스킹된 화면의 스크롤·클릭·이동을 재생 |
+| 보유 편집·저장·백테스트 흐름 | `portfolio_action`, Breakdown `action`: `holding_add_opened`, `holding_edit_opened`, `holdings_saved`, `holdings_save_failed`, `portfolio_saved`, `newsletter_requested`, `backtest_requested`, `backtest_completed`, `backtest_failed`, `instrument_search_empty`(입력 종목 검색이 0건으로 바뀐 횟수, 검색어는 수집하지 않음) |
+| 화면 조작 재생 | Session replay에서 `/portfolio/` 방문을 선택. 화면 본문·입력값과 스크롤·클릭·이동을 재생 |
 
 `screen`은 입력 5단계(`input_holdings`, `input_funding`, `input_horizon`, `input_interests`, `input_question`), `loading`, `queued`, `running`, `result`, `failed`, 대시보드의 `dashboard_overview`, `dashboard_dividends`, `dashboard_returns`, `dashboard_backtest`이다. `section`은 `answers`, `current_portfolio`, `recommendation`, `changes`, `account_plans`, `execution`, `performance`, `conclusion`, `outlook`, `insights`, `evaluation`, `scenarios`, `followup`, `feedback`이며 그 밖의 위치는 화면 이름으로 집계한다.
 
@@ -43,7 +43,7 @@ PostHog **Product analytics → New insight → Trends**에서 아래 이벤트�
 
 사용자 요청에 따라 익명 재방문 연결용 `localStorage+cookie` 저장과 세션 리플레이를 사용한다. `ph_orca_portfolio`는 Secure·호스트 전용·365일 쿠키이며 고객 계정 ID와 연결하지 않는다. 서비스 인증 쿠키를 수집하거나 복사하지 않는다. 페이지 하단 ‘이용 통계 설정’에서 끄면 수집·녹화를 중지하고 분석 쿠키를 제거한다. 다시 켜면 현재 화면부터 수집을 재개하며 Do Not Track 설정을 존중한다.
 
-리플레이는 카메라 영상이 아니라 마스킹된 DOM과 조작 기록이다. 모든 본문·입력값을 가리고 이미지·SVG·캔버스·배당 그래프·손익 요소를 차단한다. 손익 클래스도 중립화한다. URL·속성은 허용 목록으로 제한하고 네트워크 본문·헤더·콘솔 로그는 수집하지 않는다. 공개 CSS는 레이아웃 재구성을 위해 유지한다. 자동 클릭 분석·SDK 설문·기능 플래그·히트맵은 사용하지 않는다. 직접 보내는 이벤트에도 이메일·종목·분석 ID·보고서 본문을 넣지 않는다. 테스트 미리보기는 쿠키·녹화를 포함한 수집을 시작하지 않는다. 이미 녹화 중인 세션의 화면 이동은 마스킹 정책을 유지한다.
+리플레이는 카메라 영상이 아니라 DOM과 조작 기록이다. 사용자 요청에 따라 본문·입력값·이미지·차트의 전체 마스킹을 해제한다. 보유금액·종목·수량·이메일이 녹화에 포함될 수 있음을 이용 통계 설정에 안내한다. 명시적인 `.ph-no-capture` 영역과 SDK의 비밀번호 보호는 유지한다. 인증 쿠키·네트워크 본문·헤더·콘솔 로그는 수집하지 않으며 녹화 URL은 포폴 경로로 제한한다. 자동 클릭 분석·SDK 설문·기능 플래그·히트맵은 사용하지 않는다. 직접 보내는 분석 이벤트의 속성 허용 목록과 테스트 미리보기 수집 차단은 유지한다. 변경 후 새 녹화부터 적용되며 기존 마스킹 기록은 복원되지 않는다.
 
 SDK 원격 설정은 리플레이 스크립트 로드에 필요하므로 전체 설정 조회를 차단하지 않는다. 개인정보 마스킹과 저장 설정은 [PostHog 리플레이 지침](https://posthog.com/docs/session-replay/privacy)과 [브라우저 저장 지침](https://posthog.com/docs/libraries/js/persistence)을 따른다. 새 AWS 자원은 추가하지 않으며 PostHog 사용량은 해당 프로젝트 요금에 반영된다.
 
