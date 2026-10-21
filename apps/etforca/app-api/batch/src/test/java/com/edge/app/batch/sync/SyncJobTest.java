@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.batch.core.BatchStatus;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
+import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.core.launch.JobOperator;
 import org.springframework.batch.core.step.StepExecution;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -36,6 +37,8 @@ class SyncJobTest {
     Job syncJob;
     @Autowired
     JdbcTemplate jdbc;
+    @Autowired
+    PipelineDatabase pipelineDatabase;
 
     @BeforeAll
     static void seed(@Autowired JdbcTemplate jdbc, @Autowired PipelineDatabase pipelineDatabase) {
@@ -149,6 +152,23 @@ class SyncJobTest {
     }
 
     @Test
+    void jobFailsWhenEveryEtfIsSkipped() throws Exception {
+        JdbcTemplate pipeline = pipelineDatabase.jdbc();
+        pipeline.execute("alter table movement_analyses rename to movement_analyses_hidden");
+        JobExecution execution;
+        try {
+            execution = jobOperator.start(syncJob, new JobParameters());
+        } finally {
+            pipeline.execute("alter table movement_analyses_hidden rename to movement_analyses");
+        }
+
+        assertThat(execution.getStatus()).as("원천 스키마 불일치로 모든 ETF 가 실패하면 잡 실패").isEqualTo(BatchStatus.FAILED);
+        assertThat(execution.getStepExecutions().stream().map(StepExecution::getStepName).toList())
+                .as("반영 없는 순위·지수 갱신 생략").containsExactly("cleanupStep", "etfStep");
+    }
+
+    // 실행마다 새 인스턴스라 인자 없는 재실행도 완료
+    @Test
     void rerunWithUnchangedSourceWritesNothing() throws Exception {
         run();
         Instant before = lastSyncedAt();
@@ -170,8 +190,9 @@ class SyncJobTest {
         assertThat((BigDecimal) kospi.get("change_pct")).isEqualByComparingTo("1.0");
     }
 
+    // 인자 없는 예약 실행을 그대로 따르는 기동 러너와 같은 호출
     private JobExecution run() throws Exception {
-        JobExecution execution = jobOperator.startNextInstance(syncJob);
+        JobExecution execution = jobOperator.start(syncJob, new JobParameters());
         assertThat(execution.getStatus()).isEqualTo(BatchStatus.COMPLETED);
         return execution;
     }

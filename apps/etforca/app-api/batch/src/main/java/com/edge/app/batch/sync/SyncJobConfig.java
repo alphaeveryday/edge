@@ -22,6 +22,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 /**
  * 선별 ETF 의 파이프라인 RDS 데이터를 앱 테이블로 옮기는 동기화 잡
  * 실행마다 전체 재동기화라 새 인스턴스로 시작, 재시작 없음
+ * ETF step 이 완료가 아니면(전부 실패 포함) 순위·지수 갱신 없이 잡 실패
  */
 @Slf4j
 @Configuration(proxyBeanMethods = false)
@@ -33,8 +34,10 @@ class SyncJobConfig {
                 .incrementer(new RunIdIncrementer())
                 .start(cleanupStep)
                 .next(etfStep)
-                .next(rankStep)
+                .on(ExitStatus.COMPLETED.getExitCode()).to(rankStep)
                 .next(indexStep)
+                .from(etfStep).on("*").fail()
+                .end()
                 .build();
     }
 
@@ -50,7 +53,7 @@ class SyncJobConfig {
     }
 
     // ETF 하나당 한 트랜잭션
-    // ETF 하나의 실패가 나머지를 막지 않는 무제한 skip
+    // ETF 하나의 실패가 나머지를 막지 않는 skip
     @Bean
     Step etfStep(JobRepository jobRepository, PlatformTransactionManager tx, CurationReader curationReader,
             EtfProcessor processor, EtfWriter writer) {
@@ -77,6 +80,11 @@ class SyncJobConfig {
                     @Override
                     public ExitStatus afterStep(StepExecution step) {
                         log.info("sync done etfs={}/{} skipped={}", step.getWriteCount(), step.getReadCount(), step.getSkipCount());
+                        // 스키마 불일치 같은 전면 장애가 skip 에 묻혀 성공으로 끝나지 않도록 반영 0건의 전부 실패 판정
+                        if (step.getWriteCount() == 0 && step.getSkipCount() > 0) {
+                            log.error("sync failed reason=all-etfs-skipped skipped={}", step.getSkipCount());
+                            return ExitStatus.FAILED;
+                        }
                         return step.getExitStatus();
                     }
                 })
