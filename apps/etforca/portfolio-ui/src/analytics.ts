@@ -18,7 +18,7 @@ export function setAnalyticsEnabled(enabled: boolean) {
   } else if (enabled) initialize();
   window.dispatchEvent(new Event('orca-analytics-change'));
 }
-export function trackAction(action: 'holding_add_opened' | 'holding_edit_opened' | 'holdings_saved' | 'holdings_save_failed' | 'backtest_requested' | 'backtest_completed' | 'backtest_failed' | 'portfolio_saved' | 'newsletter_requested') {
+export function trackAction(action: 'holding_add_opened' | 'holding_edit_opened' | 'holdings_saved' | 'holdings_save_failed' | 'backtest_requested' | 'backtest_completed' | 'backtest_failed' | 'portfolio_saved' | 'newsletter_requested' | 'instrument_search_empty') {
   if (!initialize()) return;
   try { posthog.capture('portfolio_action', { action }); } catch { /* Optional analytics. */ }
 }

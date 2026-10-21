@@ -1,6 +1,7 @@
 import { Button, TextInput } from './design-system/components';
 import { useEffect, useId, useMemo, useState } from 'react';
 import type { Catalog, Instrument } from './api';
+import { trackAction } from './analytics';
 
 export const cashInstrument: Instrument = { id: 'CASH:KRW', market: 'CASH', ticker: 'KRW', code: 'KRW', name: '현금', kind: 'cash' };
 export function InstrumentSearch({ account, catalog, onAdd }: { account: string; catalog: Catalog | null; onAdd: (item: Instrument) => string | void }) {
@@ -16,6 +17,9 @@ export function InstrumentSearch({ account, catalog, onAdd }: { account: string;
     return rows.filter(r => (r.name + r.ticker + r.code).toLocaleUpperCase().replace(/\s/g, '').includes(q))
       .sort((a, b) => Number(b.ticker === q) - Number(a.ticker === q)).slice(0, 20);
   }, [query, catalog]);
+  const empty = !!catalog && !!query.trim() && !options.length;
+  // Counts searches that found nothing (e.g. individual stocks) without sending what was typed.
+  useEffect(() => { if (empty) trackAction('instrument_search_empty'); }, [empty]);
   useEffect(() => {
     const option = open ? document.getElementById(id + '-' + active) : null;
     const list = option?.closest<HTMLElement>('.sug');
@@ -33,6 +37,6 @@ export function InstrumentSearch({ account, catalog, onAdd }: { account: string;
       if (e.key === 'Enter' && open && options[active]) { e.preventDefault(); choose(options[active]); }
     }} />
     {error && <p role="alert">{error}</p>}
-    {open && <div className="sug" onMouseDown={e => e.preventDefault()}><div className="catalog-note">ETF·현금만 선택할 수 있어요</div><div role="listbox" id={id + '-list'}>{options.map((item, i) => <Button type="button" role="option" aria-selected={active === i} id={id + '-' + i} key={item.id} onClick={() => choose(item)}><span>{item.name}<small>{item.kind === 'cash' ? '원화 현금' : `${item.market === 'KR' ? '국내 상장 ETF' : '미국 상장 ETF'} · ${item.ticker}`}</small></span></Button>)}</div>{!catalog && <p className="catalog-note" role="status">ETF 목록이 준비되지 않았어요. 현금은 먼저 추가할 수 있어요.</p>}{catalog && !options.length && <p className="catalog-note">일치하는 ETF가 없어요. 종목코드나 티커로 다시 찾아 주세요.</p>}{catalog?.counts && <p className="catalog-note">국내 {catalog.counts.KR.toLocaleString()}개 · 미국 {catalog.counts.US.toLocaleString()}개</p>}</div>}
+    {open && <div className="sug" onMouseDown={e => e.preventDefault()}><div className="catalog-note">ETF·현금만 선택할 수 있어요</div><div role="listbox" id={id + '-list'}>{options.map((item, i) => <Button type="button" role="option" aria-selected={active === i} id={id + '-' + i} key={item.id} onClick={() => choose(item)}><span>{item.name}<small>{item.kind === 'cash' ? '원화 현금' : `${item.market === 'KR' ? '국내 상장 ETF' : '미국 상장 ETF'} · ${item.ticker}`}</small></span></Button>)}</div>{!catalog && <p className="catalog-note" role="status">ETF 목록이 준비되지 않았어요. 현금은 먼저 추가할 수 있어요.</p>}{empty && <p className="catalog-note">찾는 ETF가 없어요. 개별 주식은 아직 분석하지 않으니 빼고 진행해도 돼요. ETF는 종목코드나 티커로 다시 찾아 주세요.</p>}{catalog?.counts && <p className="catalog-note">국내 {catalog.counts.KR.toLocaleString()}개 · 미국 {catalog.counts.US.toLocaleString()}개</p>}</div>}
   </div>;
 }

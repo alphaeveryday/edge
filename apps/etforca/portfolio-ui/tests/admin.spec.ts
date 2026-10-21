@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { addCash } from './holdings';
 
 test('customer requests and metrics stay separate from the test tab', async ({ page }) => {
   const queries: string[] = [];
@@ -194,6 +195,7 @@ test('presence and first input save share one in-flight visitor session', async 
   });
   await page.goto('/portfolio/');
   await expect.poll(() => sessionCalls).toBe(1);
+  await addCash(page);
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await page.waitForTimeout(200);
   expect(sessionCalls).toBe(1);
@@ -222,6 +224,7 @@ test('two first-visit tabs share the cookie before recording presence', async ({
   await page.goto('/portfolio/');
   await expect.poll(() => sessions).toBe(1);
   await second.goto('/portfolio/');
+  await addCash(second);
   await second.getByRole('button', { name: '다음', exact: true }).click();
   await second.waitForTimeout(200);
   expect(sessions).toBe(1);
