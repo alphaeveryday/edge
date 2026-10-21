@@ -25,6 +25,7 @@ infra/terraform/
     ├── rds/                # PostgreSQL(private·관리형 비밀번호·로테이션 창 고정) + 관측(FreeableMemory 경보·Performance Insights — 경보는 data-pipeline 토픽으로, ALPHA-919)
     ├── elasticache/        # Redis(클러스터 모드 끔, TLS, 노드 수 입력 — 2 이상이면 Multi-AZ 페일오버, dev 는 1), app-api 투표 캐시 (ADR-0056)
     ├── schema-migrate/     # Flyway one-off task (ECR은 foundation 입력으로 decoupled)
+    ├── ecs-scheduled-task/ # 주기 실행 후 종료 Fargate task: task def + Scheduler(RunTask) + SG + IAM + 실패·미실행 알림 (ADR-0063, 호출자: app-batch)
     ├── github-oidc-deploy/ # GitHub Actions OIDC 배포 역할(최소 권한)
     ├── pipeline/           # 구 news-pipeline SFN 의 존치 자원 — data-pipeline 이 쓰는 lake S3 버킷만 소유 (ALPHA-549)
     ├── analysis-v2/        # 분석엔진 v2: 단건 워크플로(Fargate)·조회 API(Lambda + HTTP API)·전망 배치 워크플로와 스케줄(outlook_batch.tf, ALPHA-1142)
@@ -32,7 +33,7 @@ infra/terraform/
     ├── data-pipeline/      # Step Functions 배치 5종 — 시장 + 장전 유니버스 + 뉴스 + 공시(평일 19:30 보충) + 장중 수급(Airflow 실행 중, 롤백용 보존) — 및 가격·뉴스·공시·iNAV·업종지수 1분 서비스 (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
     ├── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 클라우드 프론트 CDN
     ├── landing-export/     # 랜딩 전망 내보내기: 매일 08:00 KST 에 분석 v2 조회 API 로 그날 전망을 읽어 랜딩 버킷 outlook/<코드>.json 에 쓰는 Lambda(zip)·스케줄·실패 경보 — ALPHA-1267
-    ├── truth-agent/        # 투자정보 기만 검증 에이전트: 매시·매일 예약 Fargate 태스크(스케줄러 → RunTask)·비공개 저장 버킷·키 시크릿 그릇·실패 알림, 결과는 랜딩 버킷 truth/data/ 에 게시 — ADR-0062, ALPHA-1415
+    ├── truth-agent/        # 투자정보 기만 검증 에이전트: 매시 예약 Fargate 태스크(스케줄러 → RunTask)·비공개 저장 버킷·키 시크릿 그릇(실패 알림 없음 — 로그·runs/ 보고로 본다), 결과는 랜딩 버킷 truth/data/ 에 게시 — ADR-0062, ALPHA-1415
     ├── proxy-site/         # CloudFront(커스텀 오리진 창문)+Route53 alias — 데모 표면(박스 서빙) — ALPHA-632
     └── demo-onprem/        # 가상 온프렘 데모 박스: EC2 + SG + IAM(SSM·ECR) + user-data(docker/compose 부트스트랩) — ADR-0033
 ```
@@ -105,7 +106,7 @@ cd ../envs/dev  && terraform apply
 
 - 앱 ECR 이미지(push), 프론트 S3 콘텐츠 3개(build sync) — 백엔드(super-admin-api·tenant-sync-api)·data-pipeline·프론트 3종은 CD(`deploy-<app>.yml`·`deploy-data-pipeline.yml`·`deploy-<ui>.yml`)가 채운다. tenant-sync-api 최초 이미지는 `deploy-tenant-sync-api` 수동 실행(workflow_dispatch)으로 부트스트랩
 - Airflow 이미지(`edge/airflow`)·서비스 기동 — `deploy-airflow.yml` 이 채운다. 서비스는 desired 0 으로 생기고, 최초 1회 workflow_dispatch `start_service=true` 로 켠다(앱 시크릿 `edge-dev-airflow/app` 값도 수동, [airflow README](../../apps/engine/airflow/README.md) "최초 구축")
-- 랜딩페이지 S3 콘텐츠(`edge-dev-landing`) — `deploy-app-landing.yml` 이 채운다. 원본은 `apps/etforca/app-landing/` 에 있고 ([README](../../apps/etforca/app-landing/README.md)), 배포는 버킷의 `index.html`·`robots.txt`·`sitemap.xml` 과 `assets/` 만 다룬다. 버킷이 비어 있으면 `https://etforca.com` 은 404 를 돌려준다(`static-site` 버킷 정책이 CloudFront 에 `s3:ListBucket` 을 줘서 없는 키가 403 이 아니라 404 다). `www.etforca.com` 은 `etforca.com` 으로 영구 이동한다(`static-site` 의 `redirect_www`). 같은 버킷의 `outlook/<코드>.json`(종목별 그날 전망)은 배포가 아니라 `landing-export` 람다가 매일 08:00 KST 에 쓴다 — 랜딩 배포는 이 경로를 건드리지 않는다. `truth/data/`(기만 검증 공개 데이터)는 `truth-agent` 태스크가 매시 쓴다 — 시크릿 `edge-dev-truth-agent/runtime` 에 값(`{"DEEPSEEK_RESIST_NEWS_API_KEY":"…","EXA_API_KEY":"…"}`)을 넣기 전까지는 태스크가 시작하지 못하고 실패 알림이 울린다.
+- 랜딩페이지 S3 콘텐츠(`edge-dev-landing`) — `deploy-app-landing.yml` 이 채운다. 원본은 `apps/etforca/app-landing/` 에 있고 ([README](../../apps/etforca/app-landing/README.md)), 배포는 버킷의 `index.html`·`robots.txt`·`sitemap.xml` 과 `assets/` 만 다룬다. 버킷이 비어 있으면 `https://etforca.com` 은 404 를 돌려준다(`static-site` 버킷 정책이 CloudFront 에 `s3:ListBucket` 을 줘서 없는 키가 403 이 아니라 404 다). `www.etforca.com` 은 `etforca.com` 으로 영구 이동한다(`static-site` 의 `redirect_www`). 같은 버킷의 `outlook/<코드>.json`(종목별 그날 전망)은 배포가 아니라 `landing-export` 람다가 매일 08:00 KST 에 쓴다 — 랜딩 배포는 이 경로를 건드리지 않는다. `truth/data/`(기만 검증 공개 데이터)는 `truth-agent` 태스크가 매시 쓴다 — 시크릿 `edge-dev-truth-agent/runtime` 에 값(`{"DEEPSEEK_RESIST_NEWS_API_KEY":"…","EXA_API_KEY":"…"}`)을 넣기 전까지는 태스크가 시작하지 못한다. 알림은 오지 않으므로 넣은 뒤 다음 매시 실행의 로그(`/ecs/edge-dev-truth-agent`)나 저장소 `runs/` 보고로 확인한다.
 
 ### 🔮 미구축 (후속 증분)
 

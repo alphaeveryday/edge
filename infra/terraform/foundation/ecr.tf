@@ -6,7 +6,8 @@ locals {
   # state 에 반영한 뒤(2026-07-21 apply), 2단계(ALPHA-475)에서 키를 빼 안전히 destroy 했다.
   image_repositories = toset([
     "edge/super-admin-api",
-    "edge/app-api", # ETF Orca 앱 API (ADR-0056)
+    "edge/app-api",   # ETF Orca 앱 API (ADR-0056)
+    "edge/app-batch", # ETF Orca 동기화 배치 (ADR-0063)
     "edge/tenant-sync-api",
     "edge/tenant-console-api",
     "edge/pipeline",       # news-pipeline SFN 배치 이미지
@@ -74,6 +75,11 @@ locals {
     "edge/airflow" = {
       protected_rules = [{ patterns = ["verify*"], keep = 3 }]
       keep_tagged     = 13
+    }
+    # 예약 태스크(ADR-0063)의 TF baseline 이 가리키는 움직이는 태그. TF 가 task 정의 리비전을
+    # 새로 만들면 스케줄이 이 이미지를 실행하므로 버전 수와 무관하게 남긴다.
+    "edge/app-batch" = {
+      protected_rules = [{ patterns = ["latest"], keep = 1 }]
     }
   }
 }

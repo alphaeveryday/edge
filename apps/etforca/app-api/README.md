@@ -302,7 +302,7 @@ app-api/
 ├── docker-compose.yaml             PostgreSQL + Redis Sentinel
 ├── docker-compose.cluster.yaml     Redis Cluster 부분 장애 실험
 ├── experiments/                    장애 주입 실험 (k6·러너·결과 기록)
-├── batch/                          Spring Batch 하위 프로젝트 (예약 태스크 진입점)
+├── batch/                          Spring Batch 하위 프로젝트 (sync 잡)
 └── src/main/
     ├── resources/
     │   ├── vote.lua · reconcile.lua · withdraw.lua   집계 Lua
@@ -356,6 +356,7 @@ app-api/
 - 동기화 테이블(ETF·분석·순위)의 쓰기는 `sync` 하나만 한다. 다른 기능은 읽기만 한다.
 - `sync` 저장소는 JdbcTemplate이다. 파이프라인 테이블에 엔티티가 없고 쓰기가 일괄 upsert이기 때문이다.
 - 파이프라인 접속 env는 `APP_PIPELINE_URL`·`APP_PIPELINE_USERNAME`·`APP_PIPELINE_PASSWORD`다. 없으면 동기화가 돌지 않는다.
+- dev 의 동기화 실행 주체는 `batch` 예약 태스크다([ADR-0063](../../../docs/adr/0063-app-sync-batch-scheduled-task.md)). app-api 에는 파이프라인 env 를 주지 않는다.
 - 원천 없는 값(선별 목록·테마·운용사)은 `etf_curation`·`theme` 마이그레이션이 넣는다.
 - 스키마는 `db/etf-migration` Flyway(별도 history table)가 소유하고, Hibernate는 `validate` 모드로 스키마를 검증만 한다.
 - `batch`의 `BATCH_*` 메타 테이블도 이 Flyway가 만든다.

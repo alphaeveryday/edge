@@ -16,7 +16,7 @@ function required(name: string): string {
 const sessionDir = required("TRUTH_SESSION_DIR");
 const python = required("TRUTH_PYTHON");
 const mode = required("TRUTH_MODE");
-const maxCalls = Number(process.env.TRUTH_MAX_TOOL_CALLS ?? "70");
+const maxCalls = Number(process.env.TRUTH_MAX_TOOL_CALLS ?? "50");
 const web = process.env.EXA_API_KEY ? "1" : "0";
 
 type Spec = { name: string; description: string; parameters: Record<string, unknown> };

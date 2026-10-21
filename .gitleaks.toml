@@ -14,7 +14,13 @@ useDefault = true
 
 # Public JSON metric identifiers, not credentials. Exact secret text only;
 # keep inspecting every file and every other value, including fields named key.
+# PostHog 프로젝트 키(phc_) — 브라우저·앱 번들에 실리도록 만든 공개 수집용 키라 비밀이 아니다.
+# 랜딩·truth-web·포트폴리오·앱이 같은 계열을 쓰고 변수 이름에 따라 반복해서 걸려 패턴으로 둔다.
+# 서버용 개인 API 키(phx_)는 비밀이라 접두어와 길이를 고정해 그 계열을 가리지 않는다.
 [allowlist]
-description = "Public factor metric identifiers"
+description = "Public factor metric identifiers and PostHog public project keys"
 regexTarget = "secret"
-regexes = ['''^(ma20_distance_pct|ma60_direction|commodity_return_20d_pct|distribution_yield_12m_pct)$''']
+regexes = [
+  '''^(ma20_distance_pct|ma60_direction|commodity_return_20d_pct|distribution_yield_12m_pct)$''',
+  '''^phc_[A-Za-z0-9]{44}$''',
+]

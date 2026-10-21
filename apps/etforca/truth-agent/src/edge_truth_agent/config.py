@@ -58,6 +58,6 @@ class Config:
             max_sessions=int(os.environ.get("TRUTH_MAX_SESSIONS", "8")),
             parallel=int(os.environ.get("TRUTH_PARALLEL", "3")),
             session_timeout=int(os.environ.get("TRUTH_SESSION_TIMEOUT", "600")),
-            max_tool_calls=int(os.environ.get("TRUTH_MAX_TOOL_CALLS", "70")),
+            max_tool_calls=int(os.environ.get("TRUTH_MAX_TOOL_CALLS", "50")),
             corpus_days=int(os.environ.get("TRUTH_CORPUS_DAYS", "21")),
         )

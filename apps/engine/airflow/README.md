@@ -11,7 +11,7 @@
 | `dags/edge_batch.py` | 레인 공통 연결 코드. `EdgeStep`(ECS 실행과 exit code 해석), 슬롯과 `pipeline_run_id` 파생 |
 | `dags/edge_investor_intraday.py` | 장중 수급 DAG: `plan → collect → normalize → load → verdict` |
 | `dags/edge_source_daily.py` | 원천 관측 DAG(ALPHA-1130, Airflow 전용 레인 `source-daily`): `plan → {매크로·업종·재무} 각각 collect → normalize → load → report → verdict`. 생성 시 pause — 아래 "원천 관측 레인" |
-| `dags/edge_disclosure.py` | 공시 보충 배치 DAG(ALPHA-1407, 평일 19:30): `plan → collect → {정제 2개} → load → report → verdict`. 생성 시 pause. 아직 SFN 이 실행한다 — 아래 "공시 보충 배치 레인" |
+| `dags/edge_disclosure.py` | 공시 보충 배치 DAG(ALPHA-1407, 평일 19:30): `plan → collect → {정제 2개} → load → report → verdict`. 생성 시 pause. dev 는 10-21 전환으로 Airflow 가 실행한다(ALPHA-1425, SFN 스케줄 DISABLED) — 아래 "공시 보충 배치 레인" |
 | `dags/edge_premarket.py` | 장전 유니버스 DAG(ALPHA-1408, 평일 07:00, 원장 밖): `collect → normalize → universe → verdict`. 생성 시 pause. 아직 SFN 이 실행한다 — 아래 "장전 유니버스 레인" |
 | `dags/edge_news.py` | 뉴스 DAG(ALPHA-1409, 매일 00:10·08:10): `plan → collect → normalize → {tag, load_documents} → load_assertions → assemble → report → verdict`. 생성 시 pause. 아직 SFN 이 실행한다 — 아래 "뉴스 레인" |
 | `dags/edge_dividend_daily.py` | 배당 갱신 전용 DAG: 03:00 KST, 기존 배치 종료 확인 → plan → collect → normalize → load → report. 생성 시 pause. 수집·조회 범위 계약과 활성화 순서는 `docs/design/portfolio-dividend-ledger.md` |
@@ -1220,13 +1220,13 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 ## 공시 보충 배치 레인(disclosure, ALPHA-1407)
 
-**현재 상태(2026-10-20): 실행 경로만 있다. 운영 전환 전이다.** dev 의 평일 19:30 슬롯은 SFN `edge-dev-data-pipeline-disclosure` 가 돈다. `edge_disclosure` 는 pause 상태로 배포되고, `disclosure_orchestrator` 는 기본값 `"SFN"` 이다.
+**현재 상태(2026-10-21): Airflow 가 실행한다(ALPHA-1425).** dev `disclosure_orchestrator = "AIRFLOW"` — SFN `edge-dev-data-pipeline-disclosure` 의 19:30 EventBridge 스케줄은 DISABLED, 슬롯 대조(Reconciler)와 dart 창 환경 변수는 그대로다. 평일 19:30 슬롯은 `edge_disclosure`(unpause)가 돈다. SFN 상태 머신은 롤백용으로 남는다. 전환 전 10-20 수동 시험 1회(`disclosure:2026-10-20T19:50`)가 SFN 과 같은 명령·순서로 원장 작업 4개를 채웠다.
 
 - 롤백할 길을 남기려고 `ops.entry._AIRFLOW_ONLY_LANES` 에 넣지 않는다. 그래서 SFN 과 Airflow 둘 다 이 레인을 계획할 수 있다.
 - 이 레인의 스텝을 한 주체만 실행하게 하는 장치는 아래 전환 절차뿐이다. pause 와 스케줄 DISABLED 가 그 역할을 한다.
 - SFN 과 같은 것·달라진 것은 DAG 도크스트링에 있다.
 - 명령은 `statemachine.tf` 잡 목록이 정본이다. `tests/sfn_commands.py` 가 DAG 명령을 태스크 정의·인자까지 대조한다.
-- 인자에 terraform 변수(`${var.…}`)가 섞인 잡(장전 `krx_etf_deadline_sec`, 뉴스 `tag_news_limit`·`assemble_window_days`)은 그 대조에서 실패한다. 그 레인을 옮길 때 값을 넘기는 방법을 정하고 대조도 함께 넓힌다.
+- 인자에 terraform 값(`${var.…}`·`${local.…}`)이 든 잡은 DAG 가 그 자리를 `{{ edge_lane_arg('X') }}` 로 두고, 값은 data-pipeline 출력 `airflow_lane_args` 가 같은 var·local 에서 넘긴다(아래 장전 레인의 "경로"). `tests/sfn_commands.py` 가 그 배선까지 대조한다. 공시 잡에는 이런 인자가 없다.
 
 **전환·롤백.** 위 "운영 전환·롤백 절차(장중 수급)"를 따르되, 아래만 바꿔 읽는다.
 
