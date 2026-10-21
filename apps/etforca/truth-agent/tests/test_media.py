@@ -36,6 +36,9 @@ class _Page(io.BytesIO):
     # 평문 http·자바스크립트 주소는 공개 화면에 싣지 않는다
     ('<meta property="og:image" content="http://img.example.com/d.jpg">', None),
     ('<meta property="og:image" content="javascript:alert(1)">', None),
+    # http 대표 사진 뒤의 https 대안은 써야 한다(첫 값만 보고 버리지 않는다)
+    ('<meta property="og:image" content="http://img.example.com/e.jpg"><meta property="og:image:secure_url" content="https://img.example.com/e.jpg">',
+     "https://img.example.com/e.jpg"),
     ('<title>사진 없음</title>', None),
 ])
 def test_og_image_reads_only_https_images_from_the_page(monkeypatch, html, expected):

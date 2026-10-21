@@ -30,16 +30,17 @@ _HTTPS_URL = re.compile(r"https://[^\s\"'<>]+")
 
 
 class _OgImage(HTMLParser):
+    """og:image 후보를 모두 모은다 — http og:image 뒤에 https secure_url 이 오는 페이지가 있다."""
     def __init__(self):
         super().__init__()
-        self.found: str | None = None
+        self.found: list[str] = []
 
     def handle_starttag(self, tag, attrs):
-        if tag == "meta" and self.found is None:
+        if tag == "meta":
             a = dict(attrs)
             content = a.get("content")
             if (a.get("property") or a.get("name")) in ("og:image", "og:image:secure_url") and content:
-                self.found = content.strip()
+                self.found.append(content.strip())
 
 
 def og_image(url: str) -> str | None:
@@ -55,10 +56,11 @@ def og_image(url: str) -> str | None:
         return None
     parser = _OgImage()
     parser.feed(raw.decode("utf-8", "replace"))  # 주소는 ASCII 라 문자셋이 달라도 깨지지 않는다
-    image = parser.found
-    if image and image.startswith("//"):
-        image = "https:" + image
-    return image if image and _HTTPS_URL.fullmatch(image) else None
+    for image in parser.found:
+        image = "https:" + image if image.startswith("//") else image
+        if _HTTPS_URL.fullmatch(image):
+            return image
+    return None
 
 
 def image_ok(url: str) -> bool:
