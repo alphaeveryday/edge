@@ -67,7 +67,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "store" {
 # ── 키: TF 는 그릇만 만든다. 값은 TF 밖에서 넣는다(state 에 평문을 남기지 않는다) ──
 # aws secretsmanager put-secret-value --secret-id <name> \
 #   --secret-string '{"DEEPSEEK_RESIST_NEWS_API_KEY":"...","EXA_API_KEY":"..."}'
-# 값이 없으면 태스크가 시작하지 못하고(TaskFailedToStart) 아래 실패 알림이 울린다.
+# 값이 없으면 태스크가 시작하지 못하고(TaskFailedToStart) ECS 태스크 상태(stopCode)와 로그에 남는다(알림은 보내지 않는다).
 resource "aws_secretsmanager_secret" "runtime" {
   name        = "${var.name}/runtime"
   description = "truth-agent 실행 키 (수동 주입: {\"DEEPSEEK_RESIST_NEWS_API_KEY\":\"...\",\"EXA_API_KEY\":\"...\"})"
@@ -204,7 +204,6 @@ resource "aws_iam_role_policy" "scheduler" {
       Condition = { ArnEquals = { "ecs:cluster" = var.cluster_arn } }
     },
     { Effect = "Allow", Action = ["iam:PassRole"], Resource = [aws_iam_role.execution.arn, aws_iam_role.task.arn] },
-    { Effect = "Allow", Action = ["sqs:SendMessage"], Resource = var.scheduler_dlq_arn },
   ] })
 }
 
@@ -246,50 +245,7 @@ resource "aws_scheduler_schedule" "this" {
       maximum_event_age_in_seconds = 900
       maximum_retry_attempts       = 2
     }
-    dead_letter_config { arn = var.scheduler_dlq_arn }
   }
 }
 
-# ── 실패 알림 ───────────────────────────────────────────
-# 스케줄러는 RunTask 제출까지만 본다. 컨테이너가 0 이 아닌 코드로 끝나거나(게시 중단·예외)
-# 시작조차 못 한 경우(키 없음·이미지 없음)를 기존 운영 알람 토픽으로 보낸다(minute_session_failure 선례).
-resource "aws_cloudwatch_event_rule" "failure" {
-  name        = "${var.name}-failure"
-  description = "truth-agent task exited non-zero or failed to start"
-
-  event_pattern = jsonencode({
-    source        = ["aws.ecs"]
-    "detail-type" = ["ECS Task State Change"]
-    detail = {
-      lastStatus        = ["STOPPED"]
-      taskDefinitionArn = [{ prefix = "arn:aws:ecs:${var.region}:${local.account_id}:task-definition/${var.name}:" }]
-      "$or" = [
-        { containers = { name = [local.container_name], exitCode = [{ "anything-but" = 0 }] } },
-        { stopCode = ["TaskFailedToStart"] },
-      ]
-    }
-  })
-}
-
-resource "aws_cloudwatch_event_target" "failure" {
-  rule      = aws_cloudwatch_event_rule.failure.name
-  target_id = "alarm-sns"
-  arn       = var.alarm_topic_arn
-  role_arn  = aws_iam_role.failure_events.arn
-}
-
-resource "aws_iam_role" "failure_events" {
-  name = "${var.name}-failure-events"
-  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{
-    Effect    = "Allow", Principal = { Service = "events.amazonaws.com" }, Action = "sts:AssumeRole",
-    Condition = { ArnEquals = { "aws:SourceArn" = aws_cloudwatch_event_rule.failure.arn } }
-  }] })
-}
-
-resource "aws_iam_role_policy" "failure_events" {
-  name = "${var.name}-failure-events"
-  role = aws_iam_role.failure_events.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [
-    { Effect = "Allow", Action = ["sns:Publish"], Resource = var.alarm_topic_arn }
-  ] })
-}
+# 실패 알림은 두지 않는다 — 실패는 로그(/ecs/${var.name})와 저장소 runs/ 실행 보고로만 본다.

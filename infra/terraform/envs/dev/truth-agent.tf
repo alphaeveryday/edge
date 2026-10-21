@@ -17,8 +17,6 @@ module "truth_agent" {
   landing_bucket_name = module.landing_site.bucket_name
   landing_bucket_arn  = module.landing_site.bucket_arn
 
-  alarm_topic_arn   = module.data_pipeline.alarm_topic_arn
-  scheduler_dlq_arn = module.data_pipeline.scheduler_dlq_arn
 }
 
 output "truth_agent_store_bucket" { value = module.truth_agent.store_bucket }

@@ -48,16 +48,6 @@ variable "landing_bucket_arn" {
   type        = string
 }
 
-variable "alarm_topic_arn" {
-  description = "태스크 실패를 보낼 SNS 토픽"
-  type        = string
-}
-
-variable "scheduler_dlq_arn" {
-  description = "스케줄러가 RunTask 제출에 실패한 이벤트를 보낼 큐"
-  type        = string
-}
-
 variable "hourly_schedule_expression" {
   description = "사건 갱신 시각 (Asia/Seoul). 정시 직후 1분 수집분이 레이크에 쌓인 뒤로 둔다."
   type        = string
