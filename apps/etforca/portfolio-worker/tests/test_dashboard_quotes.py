@@ -8,6 +8,73 @@ from test_dashboard_work import asset, record
 from test_store import isolated_db  # noqa: F401
 
 
+async def test_continuous_customer_refreshes_leave_bounded_preload_turns(monkeypatch):
+    from edge_portfolio import market_preload as preload
+    stopping = asyncio.Event()
+    clock, events, seeds = [0], [], []
+    async def customer(*args, **kwargs):
+        events.append('customer')
+        clock[0] += 20
+        if len(events) >= 8:
+            stopping.set()
+        return True  # There is always another customer quote due.
+    async def background(*args, **kwargs):
+        events.append('preload')
+        if events.count('preload') == 2:
+            stopping.set()
+        return True
+    monkeypatch.setattr(quotes, 'monotonic', lambda: clock[0], raising=False)
+    monkeypatch.setattr(quotes, 'collect_once', customer)
+    monkeypatch.setattr(preload, 'collect_one', background)
+    monkeypatch.setattr(preload, 'seed', lambda: seeds.append('seed'))
+    await quotes.collection_loop(stopping)
+    assert events == ['customer'] * 3 + ['preload'] + ['customer'] * 3 + ['preload']
+    assert seeds == ['seed'], 'Catalogue seeding must not run once per customer quote'
+
+
+async def test_customer_releases_warm_preload_slot_before_fetching(isolated_db, monkeypatch):
+    from edge_portfolio import market_preload as preload
+    dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
+    session = preload.PriceSession()
+    assert market_data._PRICE_SLOTS.acquire(blocking=False)
+    session.admitted = True
+    fetched = []
+    async def fetch(*args, **kwargs):
+        assert not session.admitted, 'A warm background child must not deadlock customer collection'
+        async with market_data.price_slot():
+            fetched.append(True)
+            return {}
+    monkeypatch.setattr(work, 'records_for', fetch)
+    try:
+        assert await quotes.collect_once(preload_session=session)
+        assert fetched == [True]
+    finally:
+        await session.close()
+
+
+async def test_idle_collection_reuses_preload_child_and_cancellation_releases_slot(monkeypatch):
+    from edge_portfolio import market_preload as preload
+    sessions = []
+    async def customer(*args, **kwargs):
+        return False
+    async def background(*args, session):
+        sessions.append(session)
+        if len(sessions) == 1:
+            assert market_data._PRICE_SLOTS.acquire(blocking=False)
+            session.admitted = True
+            return True
+        assert session is sessions[0] and session.admitted
+        raise asyncio.CancelledError
+    monkeypatch.setattr(quotes, 'collect_once', customer)
+    monkeypatch.setattr(preload, 'collect_one', background)
+    monkeypatch.setattr(preload, 'seed', lambda: None)
+    with pytest.raises(asyncio.CancelledError):
+        await quotes.collection_loop(asyncio.Event())
+    assert not sessions[0].admitted
+    assert market_data._PRICE_SLOTS.acquire(blocking=False), 'Shutdown must not strand the shared price slot'
+    market_data._PRICE_SLOTS.release()
+
+
 async def test_saves_serve_shared_prices_immediately_and_only_new_instrument_is_queued(isolated_db, monkeypatch):
     monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
     fetched = []
