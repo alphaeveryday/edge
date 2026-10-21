@@ -59,7 +59,7 @@ JVM은 `settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs
 | 런타임 | 루트 설정 | 포함 모듈 |
 |---|---|---|
 | JVM | `settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api · sync-agent · intake · screening-worker |
-| JVM (ETF Orca) | `apps/etforca/app-api/settings.gradle` | app-api |
+| JVM (ETF Orca) | `apps/etforca/app-api/settings.gradle` | app-api · batch |
 | Node | `pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
 | Python | `pyproject.toml` | analysis-engine-v2 · db-query · data-pipeline · ontology · truth-agent |
 
