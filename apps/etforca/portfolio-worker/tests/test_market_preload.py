@@ -470,6 +470,19 @@ def test_changed_adjustments_or_actions_preserve_cash_history_but_require_fresh_
     assert saved['frame'][1]['Close'] == 98
 
 
+def test_expanding_short_cache_preserves_valid_adjustments_and_new_dividends(isolated_db):
+    old = {**record(), 'history_complete': False, 'requested_at': '2026-10-17'}
+    expanded = {**record(), 'history_complete': False, 'requested_at': '2026-10-18'}
+    expanded['frame'].loc[pd.Timestamp('2025-11-03')] = [90., 85., 3.]
+    expanded['frame'] = expanded['frame'].sort_index()
+    with store.connect() as db:
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), old)
+        work.publish_prices(db, 'KR:069500', date(2026, 10, 17), expanded)
+        saved = db.execute('SELECT payload FROM portfolio_dashboard_prices').fetchone()['payload']
+    assert [row['Dividends'] for row in saved['frame']] == [3., 0., 2.]
+    assert [row['Adj Close'] for row in saved['frame']] == [85., 100., 110.]
+
+
 def test_new_action_before_overlap_anchors_requires_full_adjustment_read(isolated_db):
     old = {**record(), 'history_complete': True, 'requested_at': '2026-10-17'}
     old['frame'].loc[pd.Timestamp('2020-01-02')] = [90., 90., 0.]

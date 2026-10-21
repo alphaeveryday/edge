@@ -60,3 +60,32 @@ def test_annual_cash_keeps_original_distributions_instead_of_rounded_yield():
     details = work.dividend_details(record, 'KR:069500')
     assert details['dividend_yield_pct'] == 1.3333
     assert details['annual_dividend_per_share'] == 8
+
+
+@pytest.mark.parametrize('key,currency', [('KR:069500', 'KRW'), ('US:SOXL', 'USD')])
+async def test_new_holdings_collect_a_year_of_dividends_without_waiting_a_year(monkeypatch, key, currency):
+    from contextlib import contextmanager
+    from edge_portfolio import market_data, store
+    class Database:
+        def execute(self, *args):
+            return self
+        def fetchone(self):
+            return None
+    @contextmanager
+    def connect():
+        yield Database()
+    monkeypatch.setattr(store, 'connect', connect)
+    monkeypatch.setattr(work, 'publish_prices', lambda *args, **kwargs: True)
+    monkeypatch.setattr(work, 'price_end', lambda *args: date(2026, 10, 17))
+    async def fetch(symbol, end, **kwargs):
+        result = history(['2026-01', '2026-04', '2026-07', '2026-10'])
+        result['currency'] = currency
+        result['frame'] = result['frame'].loc[str(kwargs['history_start']):]
+        return result
+    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    records, failures = await work.records_for([key], date(2026, 10, 18),
+        valuation_since={key: date(2026, 10, 18)}, include_fx=False)
+    assert failures == []
+    assert work.dividend_details(records[key], key)['annual_dividend_per_share'] == 4
+    projected = work.forecast({'id': 'a', 'instrument_id': key}, records[key], 10, 1, date(2026, 10, 18))
+    assert len(projected) == 4 and sum(row['amount'] for row in projected) == 40
