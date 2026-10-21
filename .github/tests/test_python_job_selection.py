@@ -79,6 +79,15 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(result["legacy"], [])
         self.assertFalse(result["e2e"])
 
+    def test_truth_agent_change_also_tests_the_research_agent_that_reuses_it(self):
+        # 조사 에이전트는 truth-agent 의 도구·작업 폴더를 그대로 쓴다 — truth-agent 만 시험하면 조사 에이전트가 깨진 채 배포된다.
+        result = self.select("apps/etforca/truth-agent/src/edge_truth_agent/tools.py",
+                             available=("edge-truth-agent", "edge-truth-research"))
+        self.assertEqual([p["package"] for p in result["optional"]], ["edge-truth-agent", "edge-truth-research"])
+        own = self.select("apps/etforca/truth-research/src/edge_truth_research/ach.py",
+                          available=("edge-truth-agent", "edge-truth-research"))
+        self.assertEqual([p["package"] for p in own["optional"]], ["edge-truth-research"])
+
     def test_v2_change_without_registration_fails_instead_of_skipping(self):
         with self.assertRaisesRegex(ValueError, "analysis-engine-v2"):
             self.select("apps/engine/analysis-engine-v2/pyproject.toml", available=())

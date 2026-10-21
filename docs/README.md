@@ -117,4 +117,4 @@
 
 - [투자정보 기만 검증 조사 방법론](design/truth-investigation-methodology.md): 6유형·유형별 판정·경쟁가설·공개용 두 문장. 사건을 쓰거나 판정할 때의 정본.
 - [투자정보 기만 검증 서비스 설계](design/truth-service.md): 사건 JSON 계약, 화면 숫자의 정의, 매시 갱신 흐름과 한계.
-- [오늘의 급등주 해석](design/truth-movers.md): 급등 종목의 사건·주장을 원문과 대조해 유망주·허위매물로 판정하는 장중 매시 흐름, 공개 데이터 형식.
+- [오늘의 급등주 해석](design/truth-movers.md): 조사 에이전트(truth-research)가 급등 종목의 급등 이유를 KIND 공시·보도와 대조(ACH)해 유망주·허위매물로 판정하는 장중 매시 :35 흐름, 공개 데이터 형식.

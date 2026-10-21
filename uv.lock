@@ -17,6 +17,7 @@ members = [
     "db-query",
     "edge-ontology",
     "edge-truth-agent",
+    "edge-truth-research",
 ]
 
 [[package]]
@@ -514,6 +515,29 @@ requires-dist = [
     { name = "data-pipeline", editable = "apps/engine/data-pipeline" },
     { name = "jsonschema", specifier = ">=4.23,<5" },
     { name = "playwright", specifier = ">=1.49,<2" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = ">=8" }]
+
+[[package]]
+name = "edge-truth-research"
+version = "0.1.0"
+source = { editable = "apps/etforca/truth-research" }
+dependencies = [
+    { name = "edge-truth-agent" },
+    { name = "jsonschema" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "edge-truth-agent", editable = "apps/etforca/truth-agent" },
+    { name = "jsonschema", specifier = ">=4.23,<5" },
 ]
 
 [package.metadata.requires-dev]

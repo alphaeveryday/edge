@@ -8,7 +8,6 @@
 uv run --package edge-truth-agent python -m edge_truth_agent validate apps/etforca/truth-agent/seed
 uv run --package edge-truth-agent python -m edge_truth_agent run hourly     # 매시: 새 기사 → 해당 사건만 갱신
 uv run --package edge-truth-agent python -m edge_truth_agent run discover   # 새 사건 후보(최대 3건). 운영 일정에 없다 — 모델은 기존 사건 관리에만 쓴다
-uv run --package edge-truth-agent python -m edge_truth_agent run movers     # 장중 매시 정각: 오늘의 급등주 해석(docs/design/truth-movers.md)
 ```
 
 `tool <이름>`·`tool-specs` 는 pi 확장(`pi/extension.ts`)이 부르는 내부 명령이다.
@@ -22,7 +21,6 @@ uv run --package edge-truth-agent python -m edge_truth_agent run movers     # �
 | `DEEPSEEK_RESIST_NEWS_API_KEY` | ✓ | 이 서비스 전용 DeepSeek 키. pi 자식 프로세스에만 넘긴다 |
 | `EXA_API_KEY` | | 없으면 웹 검색 도구를 끈다 |
 | `TRUTH_LAKE_BUCKET` | | 뉴스 레이크 버킷. 없으면 뉴스 수집을 건너뛴다 |
-| `TRUTH_DART_API_KEY` | | 오늘의 급등주(`run movers`) 전용 OpenDART 키. 없으면 공시를 못 봐 전 종목을 판정 보류로 싣고 `run movers` 가 실패로 끝난다. 시세(Naver 순위·Yahoo 5분봉)는 키가 없다 |
 | `TRUTH_MODEL` · `TRUTH_THINKING` | | 기본 `deepseek/deepseek-flash` · `medium` |
 | `TRUTH_MAX_SESSIONS` | | 한 실행에서 조사할 사건 수 상한(4). 사건 세션은 하나씩 돈다 |
 | `TRUTH_SESSION_TIMEOUT` · `TRUTH_MAX_TOOL_CALLS` | | 세션 하나의 시간(600초)·도구 호출(50회) 상한 |

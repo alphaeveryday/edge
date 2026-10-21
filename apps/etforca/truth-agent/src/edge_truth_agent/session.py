@@ -17,7 +17,7 @@ from .workspace import Workspace
 
 log = logging.getLogger(__name__)
 PROMPTS = Path(__file__).resolve().parent / "prompts"
-SKILLS = {"plan": "plan-day.md", "update": "update-case.md", "discover": "discover-cases.md", "mover": "judge-mover.md"}  # 세션 종류별 덧붙일 지침
+SKILLS = {"plan": "plan-day.md", "update": "update-case.md", "discover": "discover-cases.md"}  # 세션 종류별 덧붙일 지침
 
 
 @dataclass

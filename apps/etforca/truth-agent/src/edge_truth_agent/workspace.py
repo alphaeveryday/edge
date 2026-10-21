@@ -5,7 +5,7 @@
     inbox.json     이번 실행에서 배정된 기사 (update) 또는 후보 기사 (discover)
     index.json     다른 사건 요약 (중복 확인용) — plan 세션에서는 조사 후보 사건 목록
     notes.md       이 사건의 조사 노트 (update) — 세션은 자기 사건 노트 하나만 받는다
-    mover.json     판정할 급등 종목·시세·최근 공시 목록 (mover)
+    mover.json     조사할 급등 종목·최근 공시 목록 (truth-research 가 이 작업 폴더를 그대로 쓴다)
     state.json     본 버전·읽은 출처·웹 호출 수·판정 제안·완료 여부
     snapshots/     웹에서 가져온 원문 (인용 근거)
 """

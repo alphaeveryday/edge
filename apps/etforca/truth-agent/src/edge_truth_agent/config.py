@@ -36,7 +36,6 @@ class Config:
     session_timeout: int
     max_tool_calls: int
     corpus_days: int
-    dart_key: str | None = None     # 오늘의 급등주: truth 전용 OpenDART 키
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -59,5 +58,4 @@ class Config:
             session_timeout=int(os.environ.get("TRUTH_SESSION_TIMEOUT", "600")),
             max_tool_calls=int(os.environ.get("TRUTH_MAX_TOOL_CALLS", "50")),
             corpus_days=int(os.environ.get("TRUTH_CORPUS_DAYS", "21")),
-            dart_key=os.environ.get("TRUTH_DART_API_KEY") or None,
         )
