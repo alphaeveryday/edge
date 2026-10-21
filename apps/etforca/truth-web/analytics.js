@@ -1,11 +1,11 @@
 /* PostHog 방문 분석 — 랜딩과 같은 웹 프로젝트(apps/etforca/app-landing/README.md '방문 분석'). 키는 공개 수집용(phc_)이다.
    기본은 랜딩처럼 쿠키 없이 센다(cookieless_mode 'always' — 고르기 전·거부도 방문은 집계된다).
    아래 막대에서 '허용'한 방문자만 다음 페이지부터 쿠키(1년 유지)로 센다. 선택은 localStorage 'truth-consent' 에 둔다.
-   안내 문구는 각 페이지 끝 .cookie-note, 처리방침은 app-api privacy.html — 수집 항목을 바꾸면 둘 다 고친다.
+   안내 문구는 각 페이지 끝 .cookie-note, 처리방침은 이 사이트의 privacy.html — 수집 항목을 바꾸면 둘 다 고친다.
    자동화 브라우저(게시 전 렌더 검사·CI)는 아무것도 보내지 않고 막대도 띄우지 않는다. */
 if (!navigator.webdriver) {
   const KEY = 'truth-consent';
-  // ponytail: 처리방침 개정 시행일(9항: 시행 7일 전 게시). 이날 전에는 쿠키를 묻지 않는다 — 지난 뒤에는 이 줄과 조건을 지워도 된다.
+  // ponytail: 쿠키 동의를 묻기 시작하는 날. 이날 전에는 쿠키를 묻지 않는다 — 지난 뒤에는 이 줄과 조건을 지워도 된다.
   const ASK_FROM = '2026-10-28';
   const asking = new Date().toISOString().slice(0, 10) >= ASK_FROM;
   const read = () => { try { return localStorage.getItem(KEY); } catch { return null; } };
