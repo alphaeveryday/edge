@@ -21,7 +21,7 @@ body{overflow-y:auto}
 .dhead{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 4px 0 6px;min-width:0}
 .brand{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:700;letter-spacing:-.02em;white-space:nowrap;border-radius:10px}
 .brand svg{flex:none;width:32px;height:32px}
-.live{padding:9px 16px;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.live{min-width:0;overflow:hidden;padding:9px 16px;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .live b{color:var(--text);font-weight:600}
 .live small{font-size:12px;color:var(--faint)}
 .dot{position:relative;flex:none;width:8px;height:8px;border-radius:50%;background:rgba(245,245,247,.4)}
@@ -64,7 +64,7 @@ body{overflow-y:auto}
 
 .movers{display:flex;flex-direction:column;gap:12px;padding:0 6px}
 .mv{display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:32px;padding:24px;border-radius:var(--r-lg);scroll-margin-top:16px;transition:border-color .3s}
-.mv:focus{outline:none}
+.mv:focus:not(:focus-visible){outline:none}
 .mv.lit{border-color:rgba(255,255,255,.34)}
 
 /* 가격이 바뀌면 잠깐 물든다(상승 빨강 · 하락 파랑) — 매분 갱신이 실제로 들어왔다는 신호 */
@@ -224,8 +224,9 @@ const mins = t => +t.slice(0, 2) * 60 + +t.slice(3, 5);
 
 // 가격이 바뀐 종목만 잠깐 물들인다. 같은 날짜 안에서만 비교한다
 const lastPx = new Map();
+let lastDate = null;
 const tick = it => {
-  const was = lastPx.get(`${state.doc.date}:${it.code}`);
+  const was = lastPx.get(it.code);
   return was == null || was === it.price ? '' : ` tick ${it.price > was ? 't-up' : 't-down'}`;
 };
 const conf = it => tagOf(it) === 'pending' ? '' : `확신도 ${Math.round(it.confidence * 100)}%`;
@@ -234,7 +235,7 @@ const pill = (it, rank) => `<span class="verdict v-${tagOf(it)}" role="img" aria
 
 // 오늘의 1위(허위매물 · 유망주) — 누르면 그 종목 카드로 간다
 const spot = (tag, it) => it ? `
-  <button type="button" class="spot glass s-${tag}" data-code="${esc(it.code)}">
+  <button type="button" class="spot glass s-${tag}" id="spot-${tag}" data-code="${esc(it.code)}">
     <span class="sh">${pill(it, 1)}<span class="pct ${it.changePct >= 0 ? 'up' : 'down'}${tick(it)}">${signed(it.changePct)}</span></span>
     <span class="who">${logo(it)}<span><b>${esc(it.name)}</b><small>${esc(it.code)} · ${esc(it.market)}</small></span></span>
     <span class="t">${esc(it.event?.title)}</span>
@@ -246,8 +247,8 @@ function liveState(d){
   const wd = new Date(d.date + 'T00:00:00Z').getUTCDay(), now = mins(kstNow());
   if (d.date !== todayKst()) return {cls: '', label: '지난 기록'};
   if (wd === 0 || wd === 6 || now < 9 * 60 || now >= 16 * 60) return {cls: '', label: '장 마감'};
-  const at = hhmm(d.pricedAt || d.generatedAt);
-  return at && now - mins(at) > 45 ? {cls: 'late', label: '갱신 지연'} : {cls: 'on', label: '실시간'};
+  const at = d.pricedAt || d.generatedAt || '';
+  return !at.startsWith(d.date) || now - mins(hhmm(at)) > 45 ? {cls: 'late', label: '갱신 지연'} : {cls: 'on', label: '실시간'};
 }
 
 const card = (it, rank) => {
@@ -294,6 +295,8 @@ const saveUrl = () => {
 
 function render(focusRow){
   const d = state.doc, items = [...d.items].sort((a, b) => b.impact - a.impact || b.changePct - a.changePct), rank = ranksOf(items);
+  const keep = document.activeElement?.id;
+  if (d.date !== lastDate) lastPx.clear();
   const count = t => t === 'all' ? items.length : items.filter(i => i.tag === t).length;
   const dates = [...new Set([...state.dates, state.latest, d.date].filter(Boolean))].sort().reverse().slice(0, 10);
   // 가격은 Yahoo 시세(약 20분 늦음)를 매분 싣는다 — 그 마지막 체결 시각을 쓴다(없던 때의 파일은 게시 시각)
@@ -317,7 +320,11 @@ function render(focusRow){
   $('movers').innerHTML = shown.length ? shown.map(it => card(it, rank[it.code])).join('')
     : `<div class="empty">${items.length ? `${esc(md(d.date))}에는 ${TAGS[state.tag]}로 판정한 종목이 없습니다.`
       : `${esc(md(d.date))}에는 10% 넘게 오른 종목이 없거나 장이 열리지 않았습니다.`}</div>`;
-  for (const it of items) lastPx.set(`${d.date}:${it.code}`, it.price);
+  lastPx.clear();
+  for (const it of items) lastPx.set(it.code, it.price);
+  lastDate = d.date;
+  // 매분 다시 그려도 보던 자리(1위 카드·옮겨 간 종목)의 초점을 지킨다
+  if (!focusRow && keep) document.getElementById(keep)?.focus({preventScroll: true});
 }
 
 // 날짜를 주면 그날 파일, 없으면 최신(latest.json). 없는 날짜면 최신으로 돌아간다
