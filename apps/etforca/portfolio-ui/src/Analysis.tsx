@@ -9,6 +9,8 @@ import { ProgressView } from './ProgressView';
 import { startPresence } from './presence';
 import { trackScreen } from './analytics';
 import { preview, jobKey, pendingKey } from './preview';
+import { useConfirmation } from './design-system/confirmation';
+import type { Saved } from './workbook';
 
 export function Analysis({ embedded = false, active = true }: { embedded?: boolean; active?: boolean }) {
   useEffect(startPresence, []);
@@ -23,6 +25,17 @@ export function Analysis({ embedded = false, active = true }: { embedded?: boole
   const [pendingInput, setPendingInput] = useState<Input | null>(null);
   const [rejectedInput, setRejectedInput] = useState<Input | null>(null);
   const [elapsed, setElapsed] = useState(0);
+  const { ask, confirmation } = useConfirmation();
+  // 처음 온 방문자는 저장한 포트폴리오도 분석도 없어 대시보드가 비어 있다 — 첫 행동 대신 빈 화면으로 빠지지 않게 한 번 묻는다.
+  async function openDashboard(e: React.MouseEvent<HTMLAnchorElement>) {
+    if (jobId || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; // 새 탭 열기 등은 그대로 둔다
+    e.preventDefault();
+    const href = e.currentTarget.href;
+    let saved = true;
+    try { await ensureVisitorSession(); saved = !!(await request<Saved>('/workbook')).workbook?.assets?.length; }
+    catch { /* 확인하지 못하면 이동을 막지 않는다. */ }
+    if (saved || await ask('아직 처음이라 저장된 포트폴리오가 없어요. 그래도 내 포트폴리오 대시보드로 갈까요?', '대시보드로 가기')) location.href = href;
+  }
   const pendingRestored = useRef(false);
   useEffect(() => {
     if (pendingRestored.current) return;
@@ -118,7 +131,7 @@ export function Analysis({ embedded = false, active = true }: { embedded?: boole
   const Container = embedded ? 'div' : 'main';
   if (pendingInput) return <Container className="app"><article className="ans"><h1>분석 요청을 확인하고 있어요.</h1><p>입력한 내용은 보관돼 있어요. 접수 여부를 다시 확인해도 같은 요청이 중복되지 않아요.</p>{error && <Notice tone="error">{error}</Notice>}{busy ? <Loading>접수 확인 중</Loading> : <Button variant="primary" onClick={() => void submit(pendingInput)}>접수 다시 확인</Button>}</article></Container>;
   if (restoring) return <section className="dashboard-card">{error ? <><Notice tone="error">{error}</Notice><Button onClick={() => setRestoreAttempt(n => n + 1)}>다시 불러오기</Button></> : <Loading>최근 분석을 불러오고 있어요.</Loading>}</section>;
-  return <Container className="app">{!embedded && <a className="dashboard-link" href={preview ? '?preview=dashboard' : '?view=dashboard'}>내 포트폴리오 ↗</a>}{embedded && jobId && <div className="card-heading"><h2>최근 AI 포폴 분석</h2><Button onClick={reset}>새로 분석하기</Button></div>}{jobId && <div className="nav"><div className="nav__pill"><span className="nav__logo">ETF Orca</span></div></div>}
+  return <Container className="app">{!embedded && <a className="dashboard-link" href={preview ? '?preview=dashboard' : '?view=dashboard'} onClick={e => void openDashboard(e)}>내 포트폴리오 ↗</a>}{confirmation}{embedded && jobId && <div className="card-heading"><h2>최근 AI 포폴 분석</h2><Button onClick={reset}>새로 분석하기</Button></div>}{jobId && <div className="nav"><div className="nav__pill"><span className="nav__logo">ETF Orca</span></div></div>}
     {storageWarning && <Notice>{storageWarning}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}
     {!jobId ? <InputForm onSubmit={submit} busy={busy} initialInput={rejectedInput} /> : job?.state === 'succeeded' && job.result ? <><ReportView report={job.result} feedbackJobId={jobId} /><Followup jobId={jobId} /><Button variant="secondary" className="secondary" onClick={reset}>새 포트폴리오 분석하기</Button></> : job?.state === 'failed' ? <><article className="ans"><h1>분석을 마치지 못했어요.</h1><p>{job.failure === 'SEARCH_RATE_LIMIT' ? '자료 조회가 잠시 지연됐어요.' : job.failure === 'TIMED_OUT' ? '분석이 예상보다 오래 걸려 중단됐어요.' : '분석을 마무리하는 중 문제가 생겼어요.'} 입력한 내용은 그대로 보관돼 있어요.</p>{job.input && <Button variant="primary" loading={busy} onClick={retry}>같은 입력으로 다시 분석</Button>}<Button variant="secondary" disabled={busy} onClick={reset}>입력 수정하기</Button></article>

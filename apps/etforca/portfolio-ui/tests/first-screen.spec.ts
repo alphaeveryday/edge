@@ -86,3 +86,39 @@ async function addHolding(page: Page) {
   await page.keyboard.press('Enter');
   await page.keyboard.type('1000000');
 }
+
+// 이탈 분석: 해 볼 가치를 확인하기 전에 떠난다 — 입력 전에 받을 결과를 보여주되, 닫으면 하던 자리로 돌아온다.
+test('the example result opens as a picture and returns to where the visitor was', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 640 });
+  const search = await open(page);
+  expect(await aboveBar(page, search)).toBe(true); // 예시 링크가 첫 행동을 밀어내지 않는다
+  const trigger = page.getByRole('button', { name: '예시 결과 보기' });
+  await trigger.click();
+  const dialog = page.getByRole('dialog', { name: '이런 결과를 받아요' });
+  await expect(dialog.getByRole('img', { name: /예시 결과/ })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+  await trigger.click();
+  await dialog.getByRole('button', { name: '예시 결과 닫기' }).click();
+  await expect(dialog).toBeHidden();
+});
+
+// 처음 온 방문자는 저장한 것이 없어 대시보드가 비어 있다 — 첫 행동 대신 빈 화면으로 빠지기 전에 한 번 묻는다.
+test('a first-time visitor is asked before going to an empty dashboard', async ({ page }) => {
+  await open(page);
+  await page.getByRole('link', { name: '내 포트폴리오 ↗' }).click();
+  const ask = page.getByRole('dialog', { name: /아직 처음이라 저장된 포트폴리오가 없어요/ });
+  await expect(ask).toBeVisible();
+  await ask.getByRole('button', { name: '취소' }).click();
+  await expect(page).not.toHaveURL(/view=dashboard/);
+  await page.getByRole('link', { name: '내 포트폴리오 ↗' }).click();
+  await page.getByRole('button', { name: '대시보드로 가기' }).click();
+  await expect(page).toHaveURL(/view=dashboard/);
+});
+
+test('a visitor with a saved portfolio goes straight to the dashboard', async ({ page }) => {
+  await open(page, { assets: [{ id: 'a', instrument_id: 'US:VOO', name: 'VOO', account: '일반 계좌', category: '주식', amount: 1000000 }] });
+  await page.getByRole('link', { name: '내 포트폴리오 ↗' }).click();
+  await expect(page).toHaveURL(/view=dashboard/);
+});
