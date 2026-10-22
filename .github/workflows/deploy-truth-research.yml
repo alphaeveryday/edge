@@ -50,6 +50,9 @@ jobs:
           names = [t["name"] for t in json.load(sys.stdin)]
           print(names)
           raise SystemExit(0 if {"read_disclosure", "set_hypotheses", "add_evidence", "set_verdict", "finish"} <= set(names) else 1)'
+          # 매분 가격 갱신이 부르는 명령과 그 import 경로
+          docker run --rm --entrypoint python truth-research:ci -c 'import edge_truth_research.prices'
+          docker run --rm truth-research:ci prices --help
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4

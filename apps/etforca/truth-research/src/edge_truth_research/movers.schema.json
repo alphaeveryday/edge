@@ -8,6 +8,7 @@
   "properties": {
     "date": {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$"},
     "generatedAt": {"type": "string", "minLength": 20},
+    "pricedAt": {"type": ["string", "null"], "description": "가격(Yahoo, 약 20분 늦음)의 마지막 체결 시각. 가격 갱신(prices)이 매분 고친다"},
     "items": {"type": "array", "maxItems": 40, "items": {"$ref": "#/$defs/item"}}
   },
   "$defs": {

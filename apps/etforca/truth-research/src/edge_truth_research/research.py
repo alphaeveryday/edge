@@ -22,7 +22,7 @@ from edge_truth_agent.workspace import Workspace
 
 from . import logos, session
 from .kind import Kind, is_market_warning
-from .quotes import Mover, Quotes
+from .quotes import Chart, Mover, Quotes
 
 log = logging.getLogger(__name__)
 LEASE_KEY = "state/lease-movers.json"
@@ -73,6 +73,18 @@ def _logo(public, kind: Kind, code: str, prior: str | None, tried: dict, today: 
     return f"data/logos/{code}.{ext}"
 
 
+def impact(item: dict) -> float:
+    """되돌림 예상 폭(허위매물만): 상승률 × 확신도. 가격이 전일 아래로 내려가면 0."""
+    return round(max(0.0, item["changePct"]) * item["confidence"], 2) if item["tag"] == "false" else 0.0
+
+
+def finish_doc(doc: dict) -> bytes:
+    """순서를 정하고(되돌림 예상 폭 → 상승률) 계약을 검사한 게시 본문."""
+    doc["items"].sort(key=lambda i: (i["impact"], i["changePct"]), reverse=True)
+    jsonschema.validate(doc, SCHEMA)
+    return _json(doc)
+
+
 def _pending(reason: str) -> dict:
     return {"tag": "pending", "confidence": 0.0, "event": {"title": "급등 사건 확인 전", "kind": "unknown", "at": None},
             "claim": "", "finding": reason, "reasons": [reason], "sources": []}
@@ -101,13 +113,14 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
         risers = sorted((m for market in ("KOSPI", "KOSDAQ") for m in quotes.risers(market, MIN_CHANGE)
                          if m.change_pct >= MIN_CHANGE and m.trade_value >= MIN_TRADE_VALUE),
                         key=lambda m: m.change_pct, reverse=True)[:MAX_MOVERS]
-        series, series_errors = {}, 0
+        charts: dict[str, Chart] = {}
+        series_errors = 0
         for m in risers:
             try:
-                series[m.code] = quotes.series(m.code, m.market, ymd)
-            except Exception as error:  # noqa: BLE001 - 한 종목의 시세 실패로 전체를 멈추지 않는다(빈 그래프로 싣는다)
+                charts[m.code] = quotes.chart(m.code, m.market, ymd)
+            except Exception as error:  # noqa: BLE001 - 한 종목의 시세 실패로 전체를 멈추지 않는다(빈 그래프·순위 가격으로 싣는다)
                 log.warning(json.dumps({"event": "series_failed", "code": m.code, "error": str(error)[:200]}, ensure_ascii=False))
-                series[m.code], series_errors = [], series_errors + 1
+                charts[m.code], series_errors = Chart([], None, None), series_errors + 1
         if risers and series_errors == len(risers):  # 시세 장애를 휴장으로 보고하지 않는다 — 실패로 끝내 태스크 상태에 남긴다
             report["skipped"] = "5분 시세 조회가 모두 실패했습니다."
             report["failed"].append("series")
@@ -164,7 +177,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
                                    index=[], today=today, now=now.isoformat(),
                                    mover={"code": m.code, "name": m.name, "filings": found})
             try:
-                result = session_runner(cfg, ws, code=m.code, prompt=_prompt(m, found, arts[m.code], series[m.code]), corpus_path=corpus_path)
+                result = session_runner(cfg, ws, code=m.code, prompt=_prompt(m, found, arts[m.code], charts[m.code].series), corpus_path=corpus_path)
             except Exception as error:  # noqa: BLE001 - 한 종목의 실패로 나머지 게시를 버리지 않는다. 보고에 남는다
                 result = session.SessionResult(case_id=m.code, done=False, error=f"{type(error).__name__}: {error}")
             state = ws.state
@@ -189,10 +202,13 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
                 judged = _pending("공시를 조회하지 못해 판정을 미룹니다.") | {"judgedAt": None}
             else:
                 judged = _pending("아직 판정하지 못했습니다. 다음 정각에 다시 봅니다.") | {"judgedAt": None}
-            item = {"code": m.code, "name": m.name, "market": m.market, "logo": logo[m.code], "price": m.price,
-                    "prevClose": m.prev_close, "changePct": round(m.change_pct, 2),
-                    "tradeValue": round(m.trade_value, 1), "series": series[m.code]} | judged
-            item["impact"] = round(m.change_pct * item["confidence"], 2) if item["tag"] == "false" else 0.0
+            # 가격은 Yahoo(그래프와 같은 출처, 약 20분 늦음)로 싣는다 — 순위의 Naver 가격은 넥스트레이드 체결이 섞인다. 없으면 순위 가격
+            c = charts[m.code]
+            price = c.price or m.price
+            item = {"code": m.code, "name": m.name, "market": m.market, "logo": logo[m.code], "price": price,
+                    "prevClose": m.prev_close, "changePct": round((price / m.prev_close - 1) * 100, 2),
+                    "tradeValue": round(m.trade_value, 1), "series": c.series} | judged
+            item["impact"] = impact(item)
             try:
                 jsonschema.validate(item, SCHEMA["$defs"]["item"])
             except jsonschema.ValidationError as error:
@@ -200,10 +216,9 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
                 log.warning(json.dumps({"event": "mover_item_invalid", "code": m.code, "error": error.message[:200]}, ensure_ascii=False))
                 continue
             items.append(item)
-        items.sort(key=lambda i: (i["impact"], i["changePct"]), reverse=True)
-        doc = {"date": today, "generatedAt": now.isoformat(timespec="seconds"), "items": items}
-        jsonschema.validate(doc, SCHEMA)
-        body = _json(doc)
+        priced = [charts[i["code"]].at for i in items if charts[i["code"]].at]
+        doc = {"date": today, "generatedAt": now.isoformat(timespec="seconds"), "pricedAt": max(priced) if priced else None, "items": items}
+        body = finish_doc(doc)
         store.put(f"movers/{today}.json", body)
         public.put("movers/latest.json", body, cache_control="no-cache")
         public.put(f"movers/{today}.json", body, cache_control="no-cache")

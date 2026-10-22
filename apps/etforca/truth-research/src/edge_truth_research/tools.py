@@ -168,14 +168,22 @@ def add_evidence(ws: Workspace, args: dict) -> str:
         " · ".join(f"{h}={s}" for h, s in sorted(scores.items(), key=lambda x: x[1]))
 
 
+# 제목 규칙(prompts/system.md) 중 코드가 가릴 수 있는 것. 나머지(쉬운 말·이유 하나)는 규칙 글이 맡는다
+TITLE_MAX = 32
+FILING_WORDS = ("대용납입", "영구전환사채", "출자증권", "잠정실적", "단일판매", "타법인", "제3자배정")
+
+
 def set_verdict(ws: Workspace, args: dict) -> str:
     """ACH 표로 태그·확신도를 정하고(코드), 사건·주장·확인 결과 글과 함께 판정을 남긴다."""
     table = ws.state.get("ach")
     if not table:
         raise ToolError("먼저 set_hypotheses·add_evidence 로 표를 채우세요.")
     title, kind = str(args.get("event_title", "")).strip(), str(args.get("event_kind", "unknown"))
-    if not 2 <= len(title) <= 60 or kind not in EVENT_KINDS:
-        raise ToolError(f"event_title 은 2~60자, event_kind 는 {'·'.join(EVENT_KINDS)} 중 하나입니다.")
+    if not 2 <= len(title) <= TITLE_MAX or kind not in EVENT_KINDS:
+        raise ToolError(f"event_title 은 {TITLE_MAX}자 이내(지금 {len(title)}자, 덜 중요한 말을 지우세요), "
+                        f"event_kind 는 {'·'.join(EVENT_KINDS)} 중 하나입니다.")
+    if words := [w for w in FILING_WORDS if w in title] or (["끝의 '공시'·'발표'"] if title.endswith(("공시", "발표")) else []):
+        raise ToolError(f"event_title 에 공시 용어 {', '.join(words)} 가 있습니다. 제목 규칙대로 무슨 일인지 쉬운 말로 바꾸세요.")
     claim, finding = str(args.get("claim", "")).strip(), str(args.get("finding", "")).strip()
     reasons = [str(r).strip() for r in args.get("reasons") or [] if str(r).strip()]
     if len(claim) > 300 or not 1 <= len(finding) <= 400 or not 1 <= len(reasons) <= 3 or any(not 2 <= len(r) <= 160 for r in reasons):

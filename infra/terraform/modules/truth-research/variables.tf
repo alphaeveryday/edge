@@ -59,6 +59,12 @@ variable "schedule_expression" {
   default     = "cron(35 9-15 ? * MON-FRI *)"
 }
 
+variable "prices_schedule_expression" {
+  description = "가격 갱신 시각 (Asia/Seoul). 장중 매분 — Yahoo 한국 시세가 약 20분 늦어 15:59 까지 돌아야 장 마감 가격이 들어온다."
+  type        = string
+  default     = "cron(* 9-15 ? * MON-FRI *)"
+}
+
 variable "schedule_state" {
   description = "ENABLED 또는 DISABLED."
   type        = string

@@ -85,7 +85,7 @@ def _table(ws):
     tools.set_hypotheses(ws, {"hypotheses": [{"text": h["text"], "kind": h["kind"]} for h in H]})
 
 
-TEXT = {"event_title": "공급계약 공시", "event_kind": "contract", "claim": "대형 계약을 맺었다", "finding": "공시 금액과 보도가 다르다",
+TEXT = {"event_title": "매출의 3% 규모 공급 계약", "event_kind": "contract", "claim": "대형 계약을 맺었다", "finding": "공시 금액과 보도가 다르다",
         "reasons": ["공시 금액은 매출의 3%다"]}
 
 
@@ -115,6 +115,13 @@ def test_tag_comes_from_the_table_not_the_model(ws, monkeypatch):
     tools.add_evidence(ws, {"source_id": "kind-list", "note": "다른 공시 없음", "weight": "high", "marks": {"H3": "I"}})
     with pytest.raises(ToolError, match="가설 번호"):
         tools.set_verdict(ws, TEXT | {"finding": "H2 가 남았다"})
+    # 제목은 '왜 올랐는지' 한눈에 읽혀야 한다 — 공시 제목을 옮기거나 길게 늘어놓으면 다시 쓰게 한다
+    with pytest.raises(ToolError, match="공시 용어"):
+        tools.set_verdict(ws, TEXT | {"event_title": "지분 66.92% 확보·228억 전환사채 대용납입"})
+    with pytest.raises(ToolError, match="공시 용어"):
+        tools.set_verdict(ws, TEXT | {"event_title": "데이터센터 부품 공급계약 공시"})
+    with pytest.raises(ToolError, match="32자"):
+        tools.set_verdict(ws, TEXT | {"event_title": "계열사가 시가의 2.5배에 최대주주 지분을 사 기업가치 재평가 기대"})
     out = tools.set_verdict(ws, TEXT | {"tag": "promising"})  # 모델이 태그를 넣어도 무시된다
     verdict = ws.state["moverVerdict"]
     assert "false" in out and verdict["tag"] == "false" and verdict["sources"][0]["kind"] == "disclosure"

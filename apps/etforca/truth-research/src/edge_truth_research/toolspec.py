@@ -33,7 +33,7 @@ SPECS = [
                      "description": "가설 id → C·I·N (예: {\"H1\": \"I\", \"H2\": \"C\"})"}},
           ["source_id", "note", "weight", "marks"])),
     ("set_verdict", "표로 태그·확신도를 코드가 정하고, 사건·주장·확인 결과 글과 함께 판정을 남긴다. 결과가 증거와 어긋나면 증거를 보태고 다시 부른다.",
-     _obj({"event_title": {**_STR, "description": "급등 사건 한 줄(60자 이내)"},
+     _obj({"event_title": {**_STR, "description": "왜 올랐는지 한 줄(32자 이내, 시스템 지시의 제목 규칙)"},
            "event_kind": {"type": "string", "enum": ["disclosure", "earnings", "contract", "policy", "news", "rumor", "unknown"]},
            "event_at": {**_STR, "description": "사건 날짜 YYYY-MM-DD(아는 경우)"},
            "claim": {**_STR, "description": "시장·보도가 내세운 급등 이유(300자 이내)"},
