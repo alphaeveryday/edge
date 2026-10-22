@@ -22,7 +22,7 @@ export function InstrumentSearch({ account, catalog, onAdd, onOpen, includeStock
   // Counts searches that found nothing (e.g. individual stocks) without sending what was typed.
   // 검색 한 번(열고 고르거나 닫을 때까지)에 한 번만 센다 — 한글 조합 중에는 결과 0건이 깜빡여 같은 검색이 여러 번 잡혔다.
   const emptyReported = useRef(false);
-  useEffect(() => { if (empty && !emptyReported.current) { emptyReported.current = true; trackAction('instrument_search_empty'); } }, [empty]);
+  useEffect(() => { if (empty && !emptyReported.current) { emptyReported.current = true; trackAction('instrument_search_empty'); } }, [empty, query]); // 닫은 뒤 0건 그대로 이어 쳐도 새 검색으로 센다
   useEffect(() => {
     const option = open ? document.getElementById(id + '-' + active) : null;
     const list = option?.closest<HTMLElement>('.sug');

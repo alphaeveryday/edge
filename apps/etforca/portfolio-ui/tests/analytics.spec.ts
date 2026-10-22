@@ -596,7 +596,7 @@ test('a no-result search is counted once per search, not once per keystroke flic
   const search = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
   for (const text of ['V', 'Vq', 'V', 'Vq', 'V', 'Vq']) await search.fill(text);
   await search.blur();
-  await search.fill(''); await search.fill('Vq'); // 닫았다가 다시 연 검색은 새 검색이다
+  await search.fill('Vqx'); // 닫았다가 0건인 채로 이어 친 검색도 새 검색이다
   await page.keyboard.press('Escape'); // 후보 목록이 아래 토글을 덮는다
   await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click(); // 뒤 행동이 도착한 뒤 개수를 본다
   const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
@@ -608,7 +608,14 @@ test('starting from recommendations is counted so the no-search path is visible'
   const events = await instrument(page, baseURL!);
   await page.goto('https://etforca.com/portfolio/');
   await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
-  await expect.poll(() => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action)).toContain('recommend_started');
+  // 돌아와 다시 눌러도 같은 초안의 추천 시작은 한 번이다(횟수가 부풀지 않게).
+  await page.getByRole('button', { name: '앞 질문으로' }).click();
+  await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
+  await page.getByRole('button', { name: '앞 질문으로' }).click();
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).focus(); // 뒤 행동이 도착한 뒤 개수를 본다
+  const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
+  await expect.poll(actions).toContain('input_search_opened');
+  expect(actions().filter(a => a === 'recommend_started')).toHaveLength(1);
 });
 
 test('a recommendation click that cannot save is not counted as a started recommendation', async ({ page, baseURL }) => {
