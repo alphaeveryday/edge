@@ -43,7 +43,7 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [catalogAttempt, setCatalogAttempt] = useState(0);
   const [catalogError, setCatalogError] = useState('');
-  useEffect(() => { let stopped = false; setCatalogError(''); request<Catalog>('/catalog').then(data => { if (!stopped) setCatalog(data); }).catch(() => { if (!stopped) setCatalogError('ETF 목록을 불러오지 못했어요. 입력은 유지돼요.'); }); return () => { stopped = true; }; }, [catalogAttempt]);
+  useEffect(() => { let stopped = false; setCatalogError(''); request<Catalog>('/workbook/catalog').then(data => { if (!stopped) setCatalog(data); }).catch(() => { if (!stopped) setCatalogError('종목 목록을 불러오지 못했어요. 입력은 유지돼요.'); }); return () => { stopped = true; }; }, [catalogAttempt]);
   const [question, setQuestion] = useState(initial?.question ?? '');
   const [horizon, setHorizon] = useState(initial?.horizon ?? '');
   const [how, setHow] = useState(initial?.how ?? '');
@@ -109,7 +109,6 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
   const percentLeft = ((10000 - percentHundredths) / 100).toLocaleString('ko-KR', { maximumFractionDigits: 2 });
   const holdingsValid = holdings.length > 0 && !invalidHolding && (mode !== 'percent' || percentHundredths === 10000);
   function add(account: string, item: Instrument) {
-    if (item.kind === 'stock') return '개별 주식은 대시보드에서 관리할 수 있어요. AI 분석에는 ETF를 담아 주세요.';
     if (holdings.some(h => h.account === account && h.instrument_id === item.id)) return '이미 담은 종목이에요. 보유 금액이나 비율을 수정해 주세요.';
     if (holdings.length >= 20) return '최대 20종목까지 담을 수 있어요. 기존 종목을 빼고 추가해 주세요.';
     focusRow.current = account + '|' + item.id;
@@ -145,19 +144,20 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
       await ensureVisitorSession();
       const saved = await request<Saved>('/workbook');
       const assets = saved.workbook?.assets || [];
-      const etfs = catalog ?? await request<Catalog>('/catalog');
+      const listed = catalog ?? await request<Catalog>('/workbook/catalog');
       if (!assets.length) throw new Error('저장된 보유 종목이 없어요.');
       if (assets.length > 20) throw new Error('분석은 최대 20종목까지 가능해요. 분석할 종목을 입력해 주세요.');
       const rows: Holding[] = assets.map(asset => {
         const instrumentId = asset.instrument_id || (asset.category === '현금' ? 'CASH:KRW' : null);
         if (!instrumentId) throw new Error(`${asset.name}의 종목 코드를 확인할 수 없어요. 대시보드에서 종목을 다시 선택해 주세요.`);
-        if (instrumentId !== 'CASH:KRW' && !etfs.instruments.some(item => item.id === instrumentId && item.kind === 'etf')) throw new Error(`${asset.name}은 ETF 분석 대상이 아니에요. 분석할 ETF를 직접 담아 주세요. 대시보드의 보유 종목은 그대로 유지돼요.`);
+        const item = listed.instruments.find(row => row.id === instrumentId && row.kind !== 'cash');
+        if (instrumentId !== 'CASH:KRW' && !item) throw new Error(`${asset.name}을 종목 목록에서 찾지 못했어요. 대시보드에서 종목을 다시 선택해 주세요. 저장된 보유 종목은 그대로 유지돼요.`);
         const market = saved.tracking?.market?.version === saved.version ? saved.tracking.market.payload : null;
         const missing = market?.missing.includes(asset.id) || market?.pending_prices?.includes(asset.id);
         const quote = market?.assets.find(row => row.id === asset.id);
         const amount = instrumentId === 'CASH:KRW' ? asset.amount : missing ? null : quote?.value;
         return { name: asset.name, instrument_id: instrumentId, account: asset.account,
-          kind: asset.category === '현금' ? 'cash' : 'etf', amount_krw: amount == null ? '' : String(Math.round(amount)) };
+          kind: instrumentId === 'CASH:KRW' ? 'cash' : item!.kind === 'stock' ? 'stock' : 'etf', amount_krw: amount == null ? '' : String(Math.round(amount)) };
       });
       if (!await ask('현재 입력을 저장된 보유 종목으로 바꿀까요?', '불러오기')) return;
       try { sessionStorage.removeItem(pendingKey); } catch { /* Import remains available in memory without browser storage. */ }
@@ -187,7 +187,7 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
       {storageError && <p role="alert">이 브라우저에서는 입력을 임시 보관할 수 없어요. 완료할 때까지 이 화면을 유지해 주세요.</p>}
       {initial && step === 0 && <div className="draft-resume"><span>입력하던 내용을 이어서 작성해요.</span><Button onClick={async () => { if (await ask('입력한 내용을 지우고 새로 시작할까요?', '새로 시작하기')) { try { sessionStorage.removeItem(inputDraftKey); sessionStorage.removeItem(legacyDraftKey); sessionStorage.removeItem(pendingKey); location.reload(); } catch { setInputError('임시 입력을 지우지 못했어요. 이 브라우저의 저장 설정을 확인해 주세요.'); restoreFocus(); } } }}>새로 작성</Button></div>}
       {inputError && <p role="alert">{inputError}</p>}
-      {step === 0 && <><span className="eyebrow holdings-eyebrow">내 구성 확인</span><h2>내 포트폴리오를<br />더 좋게 바꿔볼까요?</h2><p className="hint">보유 ETF를 검색해 평가금액을 적어 주세요.</p><ExampleReport />
+      {step === 0 && <><span className="eyebrow holdings-eyebrow">내 구성 확인</span><h2>내 포트폴리오를<br />더 좋게 바꿔볼까요?</h2><p className="hint">보유 ETF·주식을 검색해 평가금액을 적어 주세요.</p><ExampleReport />
         {hasSaved && <Button className="reuse-link" disabled={saving} onClick={() => void reuse()}>저장된 보유 종목 불러오기</Button>}
         <div className="holdings-layout"><div className="holdings-input">
         <>
@@ -196,7 +196,7 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
             {!!holdings.filter(h => h.account === account).length && <ul className="rows">{holdings.map((h, i) => h.account === account && <li className="row" key={i}><span className="row__name">{h.name}</span><label className="num won" data-unit={mode}>{mode === 'amount'
                 ? <TextInput aria-label={h.name + ' 금액'} data-holding={h.account + '|' + h.instrument_id} inputMode="numeric" autoComplete="off" placeholder="0" value={h.amount_krw ? Number(h.amount_krw).toLocaleString('ko-KR') : ''} onKeyDown={nextSearch} onChange={e => setHoldings(holdings.map((x, n) => n === i ? { ...x, amount_krw: e.target.value.replace(/[^\d.]/g, '').replace(/\.\d{0,2}$/, '').replace(/\D/g, '').replace(/^0+/, '') } : x))} />
                 : <TextInput aria-label={h.name + ' 비율'} data-holding={h.account + '|' + h.instrument_id} inputMode="decimal" type="number" min={0.01} max={100} step={0.01} placeholder="0" value={h.amount_krw || ''} onKeyDown={nextSearch} onChange={e => setHoldings(holdings.map((x, n) => n === i ? { ...x, amount_krw: e.target.value } : x))} />}<span>{mode === 'amount' ? '원' : '%'}</span></label><Button className="x" aria-label={h.name + ' 빼기'} onClick={() => { setHoldings(holdings.filter((_, n) => n !== i)); setAlternate(alternate.filter(a => a.account !== h.account || a.instrument_id !== h.instrument_id)); }}>×</Button></li>)}</ul>}
-            <InstrumentSearch account={account} catalog={catalog} onAdd={item => add(account, item)} onOpen={openedSearch} />
+            <InstrumentSearch includeStocks account={account} catalog={catalog} onAdd={item => add(account, item)} onOpen={openedSearch} />
             <details className="bulk-entry" onToggle={e => { if (e.currentTarget.open) trackAction('bulk_entry_opened'); }}><summary>여러 종목 한 번에 넣기</summary><label>{account} · 종목 코드와 {mode === 'amount' ? '금액(원)' : '비중(%)'}<TextArea className="field" value={bulk} onChange={e => setBulk(e.target.value)} placeholder={mode === 'amount' ? '360750 5,000,000\n379810 3,000,000' : '360750 50\n379810 50'} /></label><Button variant="secondary" disabled={!catalog || !bulk.trim()} onClick={() => {
               try {
                 const rows = bulkHoldings(bulk, catalog!, account, mode);

@@ -11,6 +11,8 @@ from .market_data import fetch_prices, normalized_prices, comparison_bounds, exp
 from .recommendation import selected_accounts, allocation_error
 from .decision import Decision, check_constraints
 from .execution import plan_execution
+from .catalog import price_symbol
+from .contracts import calculate
 from .market_data import comparison_method, comparison_column
 
 PRICE_TIMEOUT_SECONDS = 65
@@ -198,8 +200,7 @@ class Optimizer:
         if missing:
             self.result.update(reason='CURRENT_INSTRUMENT_UNAVAILABLE', missing_instrument_ids=missing)
             return self.result
-        needed = {key: self.market.catalog[key]['ticker'] + ('.KS' if self.market.catalog[key]['market'] == 'KR' else '')
-                  for key in ids - {'CASH:KRW'}}
+        needed = {key: price_symbol(key) for key in ids - {'CASH:KRW'}}
         if any(self.market.catalog[key]['market'] == 'US' for key in ids - {'CASH:KRW'}):
             needed['FX'] = 'KRW=X'
         priority = set(self.market.current) - {'CASH:KRW'}
@@ -417,6 +418,19 @@ class Optimizer:
                     status = 'pass' if all(amount <= (total * targets[key] / 100).to_integral_value(rounding=ROUND_CEILING) + max(0, len(allowed) - 1)
                                            for key, amount in amounts.items()) else 'fail'
                 checks.append({'kind': 'no_sell', 'status': status})
+        # 고객 보유 개별주의 비중을 늘리는 조합은 추가 매수라 게시할 수 없다. 후보 단계에서 미리 뺀다.
+        held = {}
+        for holding in calculate(self.request)['holdings']:
+            if holding['kind'] == 'stock' and holding['weight_pct'] is not None:
+                held[holding['instrument_id']] = held.get(holding['instrument_id'], 0) + holding['weight_pct']
+        target = {}
+        for row in rows:
+            target[row['instrument_id']] = target.get(row['instrument_id'], 0) + float(row['weight_pct'])
+        if held:
+            # 추가 투자금이 정해져 있으면 금액표로 순매수를 본다(같은 비중이어도 새 돈이 들어가면 더 사야 할 수 있다).
+            funded = plan_execution(request, [{**row, 'account': '일반 계좌'} for row in rows], self.decision.model_copy(update={'constraints': []}))
+            if 'HELD_STOCK_BUY' in funded['reasons'] or any(target.get(key, 0) > weight + .005 for key, weight in held.items()):
+                checks.append({'kind': 'held_stock', 'status': 'fail'})
         possible = all(any(allocation_error(self.market.catalog[row['instrument_id']], account, self.request.preferences.tax_profile) is None
                            for account in allowed) for row in rows)
         if not possible:

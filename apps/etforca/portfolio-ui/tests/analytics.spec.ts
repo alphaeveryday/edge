@@ -533,7 +533,7 @@ test('input funnel steps are counted once per visit without the query or the amo
   // 보고서의 핵심 지표(입력 화면 → 첫 검색 → 첫 종목 추가)를 재려면 이 이벤트가 있어야 하고, 고객 값은 남지 않아야 한다.
   const events = await instrument(page, baseURL!);
   await page.goto('https://etforca.com/portfolio/');
-  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
+  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' });
   await search.fill('zzqprivate');
   await search.blur();
   await search.fill('현금');
@@ -553,19 +553,19 @@ test('a first search made before visitor classification finishes is still counte
   const events = await instrument(page, baseURL!);
   await page.route('https://etforca.com/api/portfolio/session', async route => { await new Promise(r => setTimeout(r, 2000)); await route.fulfill({ json: { is_test: false } }); });
   await page.goto('https://etforca.com/portfolio/');
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).focus();
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).focus();
   await expect.poll(() => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action), { timeout: 10000 }).toContain('input_search_opened');
 });
 
 test('focus moved by the form itself is not counted as the visitor opening the search', async ({ page, baseURL }) => {
   const events = await instrument(page, baseURL!);
-  await page.route('https://etforca.com/api/portfolio/catalog', route => route.fulfill({ json: { counts: { KR: 0, US: 1 }, instruments: [{ id: 'US:VOO', name: 'VOO', ticker: 'VOO', code: 'VOO', market: 'US', kind: 'etf' }] } }));
+  await page.route('https://etforca.com/api/portfolio/workbook/catalog', route => route.fulfill({ json: { counts: { KR: 0, US: 1 }, instruments: [{ id: 'US:VOO', name: 'VOO', ticker: 'VOO', code: 'VOO', market: 'US', kind: 'etf' }] } }));
   await page.goto('https://etforca.com/portfolio/');
   await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
   await page.getByLabel('일반 계좌 · 종목 코드와 금액(원)').fill('VOO 1000000');
   await page.getByRole('button', { name: '목록에 추가' }).click();
   await page.getByRole('textbox', { name: 'VOO 금액' }).press('Enter');
-  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
+  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' });
   await expect(search).toBeFocused();
   // 뒤에 일어난 행동이 도착한 걸 확인한 뒤에 부재를 본다 — 이벤트는 묶음으로 보내져 늦게 올 수 있다.
   await page.keyboard.press('Escape'); // 포커스된 검색창의 후보 목록이 아래 '여러 종목' 토글을 덮는다
@@ -599,7 +599,7 @@ test('a request box that starts open on desktop is not reported as opened by the
   await page.goto('https://etforca.com/portfolio/');
   await expect(page.getByLabel('요청사항', { exact: true })).toBeVisible();
   // 뒤 행동이 도착한 걸 확인한 뒤 부재를 본다(이벤트는 묶음으로 늦게 올 수 있다).
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).focus();
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).focus();
   const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
   await expect.poll(actions).toContain('input_search_opened');
   expect(actions()).not.toContain('request_box_opened');
@@ -608,9 +608,9 @@ test('a request box that starts open on desktop is not reported as opened by the
 test('a no-result search is counted once per search, not once per keystroke flicker', async ({ page, baseURL }) => {
   // 한글 조합 중에는 결과 0건이 깜빡인다. 한 번의 검색을 여러 번으로 세면 '못 찾음' 빈도가 부풀려진다.
   const events = await instrument(page, baseURL!);
-  await page.route('https://etforca.com/api/portfolio/catalog', route => route.fulfill({ json: { counts: { KR: 0, US: 1 }, instruments: [{ id: 'US:VOO', name: 'VOO', ticker: 'VOO', code: 'VOO', market: 'US', kind: 'etf' }] } }));
+  await page.route('https://etforca.com/api/portfolio/workbook/catalog', route => route.fulfill({ json: { counts: { KR: 0, US: 1 }, instruments: [{ id: 'US:VOO', name: 'VOO', ticker: 'VOO', code: 'VOO', market: 'US', kind: 'etf' }] } }));
   await page.goto('https://etforca.com/portfolio/');
-  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
+  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' });
   for (const text of ['V', 'Vq', 'V', 'Vq', 'V', 'Vq']) await search.fill(text);
   await search.blur();
   await search.fill('Vqx'); // 닫았다가 0건인 채로 이어 친 검색도 새 검색이다
@@ -629,7 +629,7 @@ test('starting from recommendations is counted so the no-search path is visible'
   await page.getByRole('button', { name: '앞 질문으로' }).click();
   await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
   await page.getByRole('button', { name: '앞 질문으로' }).click();
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).focus(); // 뒤 행동이 도착한 뒤 개수를 본다
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).focus(); // 뒤 행동이 도착한 뒤 개수를 본다
   const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
   await expect.poll(actions).toContain('input_search_opened');
   expect(actions().filter(a => a === 'recommend_started')).toHaveLength(1);
@@ -642,7 +642,7 @@ test('a recommendation click that cannot save is not counted as a started recomm
   await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
   await expect(page.getByRole('alert')).toBeVisible();
   await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).focus(); // 뒤 행동이 도착한 뒤 부재를 본다
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).focus(); // 뒤 행동이 도착한 뒤 부재를 본다
   const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
   await expect.poll(actions).toContain('input_search_opened');
   expect(actions()).not.toContain('recommend_started');

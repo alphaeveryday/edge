@@ -2,13 +2,13 @@ import { preview, previewRequest } from './preview';
 export const roles = ['question', 'portfolio', 'outlook', 'opinion'] as const;
 export type Role = typeof roles[number];
 export const titles: Record<Role, string> = { question: '질문에 대한 답', portfolio: '현재 포트폴리오 분석', outlook: '앞으로의 전망', opinion: '투자 의견' };
-export type Holding = { name: string; account: string; amount_krw: string | null; kind?: 'cash' | 'etf'; instrument_id?: string };
+export type Holding = { name: string; account: string; amount_krw: string | null; kind?: 'cash' | 'etf' | 'stock'; instrument_id?: string };
 export type Instrument = { id: string; market: string; ticker: string; code: string; name: string; kind: 'etf' | 'cash' | 'stock'; symbol?: string };
 export type Catalog = { fetched_at: string; counts: { KR: number; US: number }; instruments: Instrument[] };
 export type Input = { draft_id?: string; holdings: Holding[]; question: string; horizon: string; input_mode?: string; planning?: boolean; preferences?: { accounts: string[]; contribution: string; dividend_goal?: string; interests: string[]; note: string; tax_profile: import('./TaxAccounts').TaxProfile | null } };
 export type Section = { paragraphs: string[]; evidence: { source_id: string; quote: string }[]; limitations: string[] };
 export type Evaluation = { scores: { leadership: number; profitability: number; stability: number } | null; overall: number | null; reason: Section; method: string; rubric_version?: number };
-export type Allocation = { instrument_id: string; name: string; ticker: string; kind: 'cash' | 'etf'; account: string; weight_pct: number; amount_krw: string | null };
+export type Allocation = { instrument_id: string; name: string; ticker: string; kind: 'cash' | 'etf' | 'stock'; account: string; weight_pct: number; amount_krw: string | null };
 export type Execution = { status: 'ready' | 'conditional' | 'needs_input' | 'infeasible'; reasons: string[]; assumptions: string[]; additional_krw: string; monthly_krw: string | null; required_additional_krw: string | null; required_additional_is_minimum?: boolean; months: number | null; rows: { instrument_id: string; name?: string; account: string; before_krw: string; target_krw: string; buy_krw: string; sell_krw: string; cash_used_krw: string }[]; accounts: { account: string; deposit_krw: string; withdrawal_krw: string }[] };
 export type History = { points: { date: string; recommended: number; current: number | null }[]; basis: string; source_url: string; baseline_kind?: 'new_cash' | 'current_holdings' | 'unknown_weights'; current_unavailable_reason?: string; interval?: '1d'; currency?: 'KRW'; initial_krw?: number; method?: string; sources?: { instrument_id: string; url: string }[] };
 export type Recommendation = { title: string; execution?: Execution; allocations: Allocation[]; evaluation: Evaluation; total_krw: string | null; actions: { instrument_id: string; name: string; ticker: string; account: string; before_pct: number | null; after_pct: number; action: string; buy_krw?: string; sell_krw?: string; cash_used_krw?: string }[]; expected_return_1y: number | null; dividend_yield_1y: number | null; historical_performance: History | null; unavailable_reason: string; target_return_1y?: number; dividend_basis?: string; return_forecast?: { kind?: 'upper_sigma_1y'; reason: string; method: string }; dividend_observations?: { instrument_id: string; as_of: string; trailing_yield_pct: number; source_url?: string; method?: string; evidence: { url: string; quote: string }[] }[] };
@@ -61,7 +61,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (body.detail === 'CHAT_LIMIT') throw new Error('CHAT_LIMIT');
     if (body.detail === 'CHAT_BUSY') throw new Error('CHAT_BUSY');
     if (body.detail === 'RECOVERY_LIMIT') throw new Error('RECOVERY_LIMIT');
-    if (body.detail === 'NO_HOLDINGS') throw new Error('보유 ETF를 입력한 분석에서 뉴스레터를 신청해 주세요.');
+    if (body.detail === 'NO_HOLDINGS') throw new Error('보유 종목을 입력한 분석에서 뉴스레터를 신청해 주세요.');
     if (body.detail === 'SUBSCRIPTION_LIMIT') throw new Error('오늘 뉴스레터 신청 횟수를 모두 사용했어요. 내일 다시 신청해 주세요.');
     if (body.detail === 'INVALID_CONFIRMATION') throw new Error('확인 링크가 만료됐거나 이미 사용됐어요. 분석 결과에서 다시 신청해 주세요.');
     if (response.status === 422) {
@@ -72,7 +72,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
         CONTRIBUTION_CHOICE_REQUIRED: '투자금을 넣는 방법을 선택해 주세요.',
         MONTHLY_AMOUNT_REQUIRED: '매달 투자할 금액을 입력해 주세요.',
       };
-      throw Object.assign(new Error(messages[body.detail] || '목록에서 ETF 또는 현금을 선택하고 금액을 확인해 주세요.'), { status: response.status });
+      throw Object.assign(new Error(messages[body.detail] || '목록에서 종목 또는 현금을 선택하고 금액을 확인해 주세요.'), { status: response.status });
     }
     if (response.status === 429) throw Object.assign(new Error('현재 요청이 많거나 오늘 체험 횟수를 모두 사용했어요. 잠시 후 다시 시도해 주세요.'), { status: response.status });
     if (response.status === 401) throw Object.assign(new Error('분석을 시작한 브라우저에서 다시 열어 주세요.'), { status: response.status });

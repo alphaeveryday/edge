@@ -2,7 +2,7 @@
 from decimal import Decimal, ROUND_HALF_UP
 import re
 
-from .catalog import directory
+from .catalog import analysis_catalog, directory
 from .contracts import validate_section
 from .execution import allocate_amounts, plan_execution
 
@@ -28,6 +28,8 @@ def selected_accounts(request):
 
 
 def allocation_error(item, account, tax):
+    if item.get('kind') == 'stock' and account in ('연금저축', 'IRP'):
+        return 'Individual stocks cannot be held in 연금저축 or IRP accounts'
     if account != '일반 계좌' and item['market'] == 'US':
         return 'US-listed ETFs cannot be allocated directly to ISA/pension accounts'
     if tax:
@@ -37,18 +39,39 @@ def allocation_error(item, account, tax):
     return None
 
 
+def held_stock_limit(rows, execution, metrics):
+    """고객이 넣은 개별주는 유지하거나 줄일 수만 있다. 새로 사는 돈은 ETF로만 간다."""
+    stocks = {row['instrument_id'] for row in rows if row['kind'] == 'stock'}
+    if not stocks:
+        return
+    message = 'A held individual stock can be kept or reduced, never bought more; put new money into ETFs'
+    if 'HELD_STOCK_BUY' in execution['reasons']:
+        raise ValueError(message)
+    if execution['rows'] or any(holding['weight_pct'] is None for holding in metrics['holdings']):
+        return  # 금액표는 plan_execution 이 이미 검사했다. 현재 비중을 모르면(이름만 입력) 비교할 기준이 없다.
+    # 금액표가 없으면(추가 투자금 미상 등) 비중으로 본다. 계좌를 합친 비중이 늘면 추가 매수를 뜻한다.
+    before = {}
+    for holding in metrics['holdings']:
+        before[holding['instrument_id']] = before.get(holding['instrument_id'], 0) + (holding['weight_pct'] or 0)
+    after = {}
+    for row in rows:
+        after[row['instrument_id']] = after.get(row['instrument_id'], 0) + row['weight_pct']
+    if any(after[key] > before.get(key, 0) + .005 for key in stocks):
+        raise ValueError(message)
+
+
 def publish_recommendation(final, request, metrics, sources, decision=None):
     def evaluation(value, current=False):
         scores = value.scores.model_dump() if value.scores else None
         overall = float((sum(Decimal(str(v)) for v in scores.values()) / 3).quantize(Decimal('.1'), rounding=ROUND_HALF_UP)) if scores else None
         input_only = current and scores is None and (decision and decision.scenario_requested or not sources or all(h.kind == 'cash' for h in request.holdings))
         return {'scores': scores, 'overall': overall, 'rubric_version': 1, 'reason': validate_section('question' if input_only else 'portfolio', value.reason.model_dump(), sources),
-                'method': '시장 주도성·수익성·안정성 세 항목의 평균이에요. ETF 구성 종목·과거 가격·보수율을 확인해 평가하며, 사용자 선호는 점수에 넣지 않아요.'}
+                'method': '시장 주도성·수익성·안정성 세 항목의 평균이에요. ETF 구성 종목·과거 가격·보수율을 확인해 평가하며(개별주는 과거 가격과 기업 자료로 봐요), 사용자 선호는 점수에 넣지 않아요.'}
 
     if final.recommendation is None:
         return {'schema_version': 3, 'current_evaluation': evaluation(final.current_evaluation, current=True), 'recommendation': None,
                 'insights': [{'title': item.title, 'content': validate_section('question', item.content.model_dump(), sources)} for item in final.insights]}
-    by_id = {r['id']: r for r in directory()['instruments']}
+    by_id = analysis_catalog(request)
     by_id['CASH:KRW'] = {'name': '현금', 'ticker': 'KRW', 'kind': 'cash', 'market': 'KR'}
     allowed_accounts = selected_accounts(request)
     tax = request.preferences.tax_profile
@@ -56,7 +79,7 @@ def publish_recommendation(final, request, metrics, sources, decision=None):
     for allocation in final.recommendation.allocations:
         item = by_id.get(allocation.instrument_id)
         if item is None:
-            raise ValueError('Recommendation must use a registered ETF or CASH:KRW; use search_etfs')
+            raise ValueError('Recommendation must use a registered ETF, a stock the customer already holds, or CASH:KRW; use search_etfs')
         if item['kind'] == 'cash':
             raise ValueError('Recommended cash weight must be zero')
         if allocation.account not in allowed_accounts:
@@ -69,6 +92,7 @@ def publish_recommendation(final, request, metrics, sources, decision=None):
     execution = plan_execution(request, rows, decision)
     if execution['reasons'] == ['ADDITIONAL_FUNDING_REQUIRED']:
         total = None
+    held_stock_limit(rows, execution, metrics)
     for row in execution['rows']:
         row['name'] = by_id.get(row['instrument_id'], {}).get('name', row['instrument_id'])
     execution_amounts = {(row['instrument_id'], row['account']): row['target_krw'] for row in execution['rows']}

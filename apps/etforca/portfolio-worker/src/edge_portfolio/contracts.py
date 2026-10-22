@@ -16,7 +16,7 @@ class StrictModel(BaseModel):
 
 class Holding(StrictModel):
     name: str = Field(min_length=1, max_length=250)
-    kind: Literal['etf', 'cash'] = 'etf'
+    kind: Literal['etf', 'stock', 'cash'] = 'etf'
     instrument_id: str | None = Field(default=None, max_length=32)
     account: Literal["일반 계좌", "ISA", "연금저축", "IRP"] = "일반 계좌"
     amount_krw: Decimal | None = Field(default=None, gt=0, le=10**13, max_digits=16, decimal_places=2)

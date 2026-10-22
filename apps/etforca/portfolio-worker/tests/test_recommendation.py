@@ -143,3 +143,37 @@ def test_sentence_boundary_preserves_etf_initialisms_and_decimal_values():
     assert multiple_sentences('올라요. 내려요.')
     assert multiple_sentences('“올라요.” 내려요.')
     assert not multiple_sentences('결론은 “유지해요.”')
+
+
+def test_a_held_stock_can_be_kept_or_reduced_but_never_bought_and_no_new_stock_is_published():
+    # 고객이 넣은 개별주는 분석·유지·축소할 수 있다. AI가 새 개별주를 담거나 보유 개별주를 더 사게 하면 안 된다.
+    from edge_portfolio.catalog import canonicalize
+    from edge_portfolio.decision import Decision
+    request = canonicalize(AnalysisInput(holdings=[{'name': 'x', 'instrument_id': key, 'amount_krw': 500000} for key in ['US:AAPL', 'US:VOO']],
+                                         horizon='10년 이상', question='추가 100만원'))
+    def plan(rows, funded=False):
+        raw = final_payload()
+        raw['recommendation']['allocations'] = [{'instrument_id': key, 'account': '일반 계좌', 'weight_pct': weight} for key, weight in rows]
+        decision = Decision(kind='rebalance', funding_text='추가 100만원') if funded else None
+        return publish_recommendation(FinalReport.model_validate(raw), request, calculate(request), SOURCES, decision)['recommendation']
+    kept = plan([('US:AAPL', 25), ('US:VOO', 75)], funded=True)
+    assert next(row for row in kept['allocations'] if row['instrument_id'] == 'US:AAPL')['kind'] == 'stock'
+    assert next(a for a in kept['actions'] if a['instrument_id'] == 'US:AAPL')['buy_krw'] == '0', 'new money goes to the ETF'
+    with pytest.raises(ValueError, match='never bought more'):
+        plan([('US:AAPL', 40), ('US:VOO', 60)], funded=True)
+    with pytest.raises(ValueError, match='never bought more'):
+        plan([('US:AAPL', 60), ('US:VOO', 40)])
+    assert plan([('US:AAPL', 30), ('US:VOO', 70)])['allocations'][0]['weight_pct'] == 30
+    with pytest.raises(ValueError, match='stock the customer already holds'):
+        plan([('US:MSFT', 20), ('US:VOO', 80)])
+
+
+def test_unknown_current_weights_do_not_force_selling_a_held_stock():
+    # 이름만 입력해 현재 비중을 모르면 '늘렸다'고 판단할 기준이 없다. 보유 개별주를 유지하는 안을 막지 않는다.
+    from edge_portfolio.catalog import canonicalize
+    request = canonicalize(AnalysisInput(holdings=[{'name': 'x', 'instrument_id': key} for key in ['US:AAPL', 'US:VOO']],
+                                         horizon='10년 이상', input_mode='names'))
+    raw = final_payload()
+    raw['recommendation']['allocations'] = [{'instrument_id': 'US:AAPL', 'account': '일반 계좌', 'weight_pct': 50},
+                                            {'instrument_id': 'US:VOO', 'account': '일반 계좌', 'weight_pct': 50}]
+    assert publish_recommendation(FinalReport.model_validate(raw), request, calculate(request), SOURCES)['recommendation']['allocations'][0]['kind'] == 'stock'

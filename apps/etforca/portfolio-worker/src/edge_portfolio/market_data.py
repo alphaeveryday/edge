@@ -20,7 +20,7 @@ import pandas as pd
 import yfinance as yf
 import exchange_calendars as calendars
 
-from .catalog import directory
+from .catalog import analysis_catalog, price_symbol
 
 log = logging.getLogger(__name__)
 # The analysis process and price libraries share one container memory limit.
@@ -464,7 +464,7 @@ class MarketData:
         self.calls = 0
         # Repair imports SciPy/sklearn in each child; three leave no usable 512 MiB headroom.
         self.semaphore = asyncio.Semaphore(2)
-        self.catalog = {r['id']: r for r in directory()['instruments']}
+        self.catalog = analysis_catalog(request)
         total = sum(h.amount_krw or 0 for h in request.holdings)
         self.current = None
         self.baseline_kind = 'unknown_weights'
@@ -486,7 +486,7 @@ class MarketData:
         ids = set(target) | set(self.current or {})
         if any(i != 'CASH:KRW' and i not in self.catalog for i in ids):
             raise ValueError('UNREGISTERED_INSTRUMENT')
-        needed = {i: self.catalog[i]['ticker'] + ('.KS' if self.catalog[i]['market'] == 'KR' else '') for i in ids - {'CASH:KRW'}}
+        needed = {i: price_symbol(i) for i in ids - {'CASH:KRW'}}
         if any(self.catalog[i]['market'] == 'US' for i in ids - {'CASH:KRW'}):
             needed['FX'] = 'KRW=X'
         try:

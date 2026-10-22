@@ -630,3 +630,26 @@ def test_tiny_permitted_weight_cannot_block_no_sell_calculation():
         "assert int(plan['required_additional_krw']) == 999999999900\n"
         "assert plan['status'] == 'infeasible'\n")
     subprocess.run([sys.executable, '-X', 'utf8', '-c', code], check=True, capture_output=True, timeout=5)
+
+
+def test_every_execution_path_refuses_a_net_buy_of_a_held_stock_but_allows_moving_it_between_accounts():
+    # 저장안 실행·리밸런싱 계산·추천 게시가 모두 이 계산을 거친다. 개별주는 고객이 가진 만큼까지만 남을 수 있다.
+    def stock_request(*rows):
+        return AnalysisInput(holdings=[{'name': key, 'instrument_id': key, 'amount_krw': amount, 'kind': kind, 'account': account}
+                                       for key, kind, amount, account in rows], horizon='10년 이상')
+    req = stock_request(('KR:005930', 'stock', 500000, 'ISA'), ('KR:069500', 'etf', 500000, '일반 계좌'))
+    keep = [{'instrument_id': 'KR:005930', 'account': 'ISA', 'weight_pct': 25}, {'instrument_id': 'KR:069500', 'account': '일반 계좌', 'weight_pct': 75}]
+    assert build_execution(req, keep, additional_krw=1000000)['status'] == 'ready', 'new money goes to the ETF'
+    more = [{**keep[0], 'weight_pct': 40}, {**keep[1], 'weight_pct': 60}]
+    refused = build_execution(req, more, additional_krw=1000000)
+    assert (refused['status'], refused['reasons'], refused['rows']) == ('infeasible', ['HELD_STOCK_BUY'], [])
+    moved = [{'instrument_id': 'KR:005930', 'account': '일반 계좌', 'weight_pct': 50}, {'instrument_id': 'KR:069500', 'account': 'ISA', 'weight_pct': 50}]
+    assert build_execution(req, moved)['status'] == 'ready', 'selling in ISA and buying the same amount in 일반 계좌 is not a new buy'
+
+
+def test_individual_stocks_cannot_be_placed_in_pension_accounts():
+    from edge_portfolio.catalog import instruments
+    from edge_portfolio.recommendation import allocation_error
+    stock, etf = instruments()['KR:005930'], instruments()['KR:069500']
+    assert allocation_error(stock, 'IRP', None) and allocation_error(stock, '연금저축', None)
+    assert allocation_error(stock, 'ISA', None) is None and allocation_error(etf, 'IRP', None) is None

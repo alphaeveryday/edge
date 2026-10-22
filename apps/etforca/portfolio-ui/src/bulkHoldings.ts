@@ -12,7 +12,6 @@ export function bulkHoldings(text: string, catalog: Catalog, account: string, mo
     if (matches.length !== 1) throw new Error(`${index + 1}번째 줄: 정확한 종목 코드나 이름을 적어 주세요.`);
     if (!(amount > 0) || amount > (mode === 'percent' ? 100 : 1e13)) throw new Error(`${index + 1}번째 줄의 숫자를 확인해 주세요.`);
     const item = matches[0];
-    if (item.kind === 'stock') throw new Error(`${index + 1}번째 줄: AI 분석에는 ETF를 담아 주세요. 개별 주식은 대시보드에서 관리할 수 있어요.`);
     if (account !== '일반 계좌' && item.market === 'US') throw new Error(`${index + 1}번째 줄: 미국 상장 종목은 일반 계좌에 담아 주세요.`);
     return { name: item.name, instrument_id: item.id, kind: item.kind, account, amount_krw: String(amount) };
   });
