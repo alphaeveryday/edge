@@ -1132,3 +1132,25 @@ def test_planner_missing_when_slot_has_no_run():
         "orchestration_status": None, "hard_deadline_at": None, "trading_date": "2026-07-25"}
     detect_planner_missing(ledger, expected_run_keys=["etf-daily:2026-07-25"])
     assert len(db.open_issues(states.ISSUE_PLANNER_MISSING)) == 0
+
+
+def test_planner_missing_logs_only_when_issue_opens(caplog):
+    """WHY(ALPHA-1430): 알람은 이 ERROR 문구를 세는 metric filter 위에 선다. 새 이슈일 때 안 남기면
+    슬롯 누락이 다시 DB 행에만 남고, 재발(15분마다 bump)마다 남기면 같은 슬롯이 매 주기 메일을 보낸다."""
+    ledger = _ledger(FakeOpsDB())
+    with caplog.at_level("ERROR", logger=reconciler_mod.__name__):
+        detect_planner_missing(ledger, expected_run_keys=["investor-intraday:2026-10-21T11:25"])
+    opened = [r for r in caplog.records if reconciler_mod.PLANNER_MISSING_LOG in r.getMessage()]
+    assert [r.getMessage().split(" ")[1] for r in opened] == ["run_key=investor-intraday:2026-10-21T11:25"]
+    caplog.clear()
+    with caplog.at_level("ERROR", logger=reconciler_mod.__name__):
+        detect_planner_missing(ledger, expected_run_keys=["investor-intraday:2026-10-21T11:25"])
+    assert not [r for r in caplog.records if reconciler_mod.PLANNER_MISSING_LOG in r.getMessage()]
+
+
+def test_planner_missing_log_matches_alarm_filter():
+    """WHY: 문구를 한쪽만 바꾸면 필터가 아무것도 세지 않고 알람은 영영 조용하다."""
+    import pathlib
+    tf = (pathlib.Path(__file__).resolve().parents[4]
+          / "infra/terraform/modules/data-pipeline/ops_ledger.tf").read_text(encoding="utf-8")
+    assert f'pattern        = "\\"{reconciler_mod.PLANNER_MISSING_LOG}\\""' in tf
