@@ -147,6 +147,8 @@ details[open] summary svg{transform:rotate(90deg)}
 .pop-h button:hover:not(:disabled){background:rgba(255,255,255,.1);color:var(--text)}
 .pop-h button:disabled{opacity:.3;cursor:default}
 .pop-h svg{width:14px;height:14px}
+.disclaim{font-size:12.5px;color:var(--muted);padding-bottom:0}
+.disclaim+.cookie-note{padding-top:6px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .pop-track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;overscroll-behavior-x:contain}
 .pop-track::-webkit-scrollbar{display:none}
@@ -190,6 +192,7 @@ details[open] summary svg{transform:rotate(90deg)}
   </nav>
   <p class="hint" id="hint" aria-live="polite"></p>
   <section class="movers" id="movers"><div class="empty">급등주 해석을 불러오는 중입니다.</div></section>
+  <p class="cookie-note disclaim">AI 판단이며 투자 권유가 아닙니다.</p>
   <p class="cookie-note">방문 통계를 위해 본 페이지·클릭, 기기·브라우저 정보, 접속 IP를 PostHog(미국)로 보냅니다. 쿠키는 허용한 경우에만 쓰고 1년간 유지합니다. 허용하지 않으면 쿠키 없이 그날의 방문 수만 셉니다. <button type="button" data-consent hidden>쿠키 사용 다시 고르기</button> · <a href="privacy">개인정보 처리방침</a></p>
 </main>
 <!-- 팝업은 .window 밖에 둔다 — .window 의 backdrop-filter 가 고정 위치의 기준이 되어 화면 밖으로 밀린다 -->
