@@ -42,8 +42,9 @@ def launch_research() -> str:
 
 
 def watch_new(store_uri: str, *, quotes: Quotes | None = None, now: datetime | None = None, launch=launch_research) -> dict:
-    """새 급등주가 있으면 조사 실행을 띄우고 보고를 돌려준다. 정각 조사(:35) 전 15분은 띄우지 않는다 — 새 종목만 실행은
-    태스크 기동·세션 한 묶음까지 10분 남짓 걸리고, 잠금이 겹치면 정각 조사가 통째로 건너뛰어진다(새 종목은 정각 조사가 함께 본다)."""
+    """새 급등주가 있으면 조사 실행을 띄우고 보고를 돌려준다. :20~:37 에는 띄우지 않는다 — 새 종목만 실행은 기동·세션 한 묶음까지
+    10분 남짓 걸리고, 정각 조사(:35)는 태스크가 뜬 뒤에야 잠금을 잡는다. 잠금이 겹치면 정각 조사가 통째로 건너뛰어진다
+    (새 종목은 정각 조사가 함께 본다)."""
     now, quotes = now or _now(), quotes or Quotes()
     today = now.date().isoformat()
     store = open_store(store_uri)
@@ -61,7 +62,7 @@ def watch_new(store_uri: str, *, quotes: Quotes | None = None, now: datetime | N
     report["new"] = new = [m.code for m in risers if m.code not in seen]
     if not new:
         return report
-    if 20 <= now.minute < 35:
+    if 20 <= now.minute < 38:
         report["skipped"] = "정각 조사 직전이라 그때 함께 봅니다."
         return report
     raw, _ = store.get(LEASE_KEY)

@@ -11,6 +11,7 @@ import json
 import logging
 from pathlib import Path
 import tempfile
+import time
 import uuid
 
 import jsonschema
@@ -32,7 +33,8 @@ MIN_CHANGE = 10.0       # 급등 기준: 전일 대비 상승률(%)
 MIN_TRADE_VALUE = 30.0  # 거래대금 하한(억원, 누적 거래대금) — 몇 주 체결로 뛴 종목은 해석할 사건이 아니다
 MAX_MOVERS = 15         # 화면에 싣는 종목 수
 NEW_SESSIONS = 5        # 한 실행에서 새로 판정하는 종목 수(나머지는 다음 정각에)
-WATCH_SESSIONS = 3      # 감시가 띄운 '새 종목만' 실행의 세션 수 — 한 번에 동시 실행(PARALLEL)으로 끝나 정각 조사와 겹치지 않는다
+WATCH_SESSIONS = 3      # 감시가 띄운 '새 종목만' 실행의 세션 수 — 한 묶음(PARALLEL)으로 끝낸다
+HOURLY_GUARD = range(27, 38)  # '새 종목만' 실행은 이 분에 세션을 열지 않는다 — 세션(최대 7분)이 :35 정각 조사의 잠금과 겹친다
 PARALLEL = 3            # 판정 세션 동시 실행 — 5종목 × 세션 7분 이내가 잠금(55분) 안에 든다
 FILING_DAYS = 14        # 판정 세션에 넘기는 최근 공시 기간
 NEWS_LIMIT = 15
@@ -107,6 +109,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
     mode = "new" if only_new else "research"
     run_id = f"{now.strftime('%Y%m%dT%H%M')}-{mode}-{uuid.uuid4().hex[:6]}"
     quotes, kind = quotes or Quotes(), kind or Kind()
+    started = time.monotonic()  # 지금 시각 = now + 지난 시간(now 를 넣은 재실행·시험에서도 같은 기준)
     store, public = open_store(cfg.store), open_store(cfg.publish)
     report: dict = {"runId": run_id, "mode": mode, "movers": [], "judged": [], "failed": [], "published": False}
     with lease(store, run_id, now, key=LEASE_KEY), tempfile.TemporaryDirectory(prefix="truth-research-") as tmp:
@@ -179,6 +182,10 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
         # 처음 보는 종목부터 — 한 실행의 세션 수가 정해져 있어 넘친 종목은 다음 정각에
         if only_new:
             targets = [m for m in risers if filings[m.code] is not None and m.code not in seen][:WATCH_SESSIONS]
+            # 재료 모으기가 늦어져 정각 조사에 가까워졌으면 세션을 열지 않는다(목록·시세만 게시, 판정은 정각 조사가 한다)
+            if (now + timedelta(seconds=time.monotonic() - started)).minute in HOURLY_GUARD:
+                report["skipped"] = "정각 조사가 가까워 판정을 정각 조사에 넘깁니다."
+                targets = []
         else:
             targets = sorted((m for m in risers if filings[m.code] is not None and stale(m)), key=lambda m: m.code in seen)[:NEW_SESSIONS]
 

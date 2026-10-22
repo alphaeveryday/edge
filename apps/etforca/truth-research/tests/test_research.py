@@ -418,7 +418,8 @@ def test_watch_launches_research_once_for_new_risers(cfg):
 def test_watch_waits_for_a_running_research_and_for_the_hourly_slot(cfg):
     # 조사 실행이 돌고 있으면(잠금) 띄우지 않는다. 정각 조사(:35) 전 15분도 띄우지 않는다 — 잠금이 겹치면 정각 재검토가 통째로 빠진다.
     src, launched = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), []
-    assert "정각" in _watch(cfg, src, now=NOW.replace(minute=25), launched=launched)["skipped"]
+    for minute in (20, 34, 37):  # 정각 조사 태스크가 뜨고 잠금을 잡을 때까지
+        assert "정각" in _watch(cfg, src, now=NOW.replace(minute=minute), launched=launched)["skipped"]
     LocalStore(cfg.store).put(research.LEASE_KEY, json.dumps({"runId": "x", "until": (NOW + timedelta(hours=1)).isoformat()}).encode())
     assert "돌고" in _watch(cfg, src, now=NOW.replace(minute=40), launched=launched)["skipped"]
     assert launched == []
@@ -437,3 +438,25 @@ def test_watch_does_nothing_on_holidays_and_reports_launch_failures(cfg):
     assert report["failed"] and report["launched"] is None
     # 띄우지 못했으면 기록을 지워 다음 분에 다시 시도한다(조용히 30분 묵히지 않는다)
     assert _watch(cfg, src, now=NOW.replace(minute=6), launched=launched)["launched"]
+
+
+def test_watch_relaunches_sooner_for_more_new_stocks_than_for_the_same_ones(cfg):
+    # 새 종목이 더 뜨면 6분 뒤 다시 띄운다. 같은 종목만 남았으면(공시 조회 실패 등 판정이 안 되는 종목) 30분 기다린다 — 매번 헛돈다.
+    one, launched = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), []
+    two = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9), _m("900020", "라마바바이오", 15.0)]})
+    at = NOW.replace(hour=10, minute=0)
+    _watch(cfg, one, now=at, launched=launched)
+    assert _watch(cfg, one, now=at + timedelta(minutes=7), launched=launched)["skipped"]
+    assert _watch(cfg, two, now=at + timedelta(minutes=7), launched=launched)["launched"] and len(launched) == 2
+    assert _watch(cfg, two, now=at + timedelta(minutes=14), launched=launched)["skipped"]  # 같은 둘 → 30분
+
+
+def test_new_only_run_caps_sessions_and_yields_near_the_hourly_run(cfg):
+    # 새 종목만 실행은 세션 한 묶음(3개)만 연다. 정각 조사 직전이면 세션을 열지 않고 정각 조사에 넘긴다(잠금이 겹치면 정각이 빠진다).
+    many = FakeQuotes({"KOSDAQ": [_m(f"9000{n}0", f"종목{n}", 20.0 - n) for n in range(1, 6)]})
+    runner = _judging({f"9000{n}0": "pending" for n in range(1, 6)})
+    research.run_research(cfg, quotes=many, kind=FakeKind(), session_runner=runner, now=NOW.replace(minute=5), only_new=True)
+    assert len(runner.calls) == research.WATCH_SESSIONS
+    late = _judging({f"9000{n}0": "pending" for n in range(1, 6)})
+    report = research.run_research(cfg, quotes=many, kind=FakeKind(), session_runner=late, now=NOW.replace(minute=30), only_new=True)
+    assert late.calls == [] and report["skipped"] and report["published"]

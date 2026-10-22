@@ -147,6 +147,7 @@ details[open] summary svg{transform:rotate(90deg)}
 .pop-h button:hover:not(:disabled){background:rgba(255,255,255,.1);color:var(--text)}
 .pop-h button:disabled{opacity:.3;cursor:default}
 .pop-h svg{width:14px;height:14px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .pop-track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;overscroll-behavior-x:contain}
 .pop-track::-webkit-scrollbar{display:none}
 .pop-s{flex:0 0 100%;scroll-snap-align:start;display:flex;flex-direction:column;gap:10px;padding:12px 18px 18px;min-width:0}
@@ -199,6 +200,7 @@ details[open] summary svg{transform:rotate(90deg)}
     <button type="button" id="popclose" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
   </div>
   <div class="pop-track" id="poptrack"></div>
+  <p class="sr" id="popsr" aria-live="polite"></p>
 </aside>
 
 <script src="common.js"></script>
@@ -338,6 +340,7 @@ function showNews(news, rank){
   $('poptrack').insertAdjacentHTML(open ? 'beforeend' : 'afterbegin', news.map(n => slide(n, rank)).join(''));
   if (!open) { $('pop').hidden = false; $('poptrack').scrollLeft = 0; }
   popCount();
+  $('popsr').textContent = `새 소식 ${news.length}건: ${news.map(n => `${n.it.name} ${KINDS[n.kind]}`).join(', ')}`;
 }
 const closeNews = () => { $('pop').hidden = true; $('poptrack').innerHTML = ''; };
 
