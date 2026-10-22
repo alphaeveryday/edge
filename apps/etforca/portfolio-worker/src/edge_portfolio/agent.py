@@ -157,7 +157,7 @@ class ExaEvidence:
 
 
 async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None, observe=None, market=None,
-                       on_event=None, on_checkpoint=None, prior_report=None, followup_question=None):
+                       on_event=None, on_checkpoint=None, prior_report=None, followup_question=None, conversation=None):
     started = time.monotonic()
     metrics = calculate(request)
     system = (PROMPTS / "system.md").read_text(encoding="utf8")
@@ -184,7 +184,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
         if prior_report.get('recommendation'):
             context['prior_report']['recommendation'] = {key: value for key, value in prior_report['recommendation'].items() if key != 'historical_performance'}
         context['followup_question'] = followup_question
-        context['followup_instruction'] = '후속 질문에 직접 답하고 저장된 결정을 설명하거나 보완하세요. 기존 고객 필수 제약은 유지합니다. 이전 보고서는 과거 판단이며 이번에 새로 확인한 사실과 구분합니다. 리밸런싱은 기존 추천의 실행표부터 확인하고 변경이 필요할 때만 새 후보를 제안하세요.'
+        if conversation:
+            # 고객은 채팅처럼 이어 묻는다. 앞선 질문과 답을 알아야 "그럼", "그거" 같은 질문을 이해한다.
+            context['conversation'] = conversation
+        context['followup_instruction'] = '후속 질문에 직접 답하고 저장된 결정을 설명하거나 보완하세요. 기존 고객 필수 제약은 유지합니다. 이전 보고서는 과거 판단이며 이번에 새로 확인한 사실과 구분합니다. 리밸런싱은 기존 추천의 실행표부터 확인하고 변경이 필요할 때만 새 후보를 제안하세요.' + (' conversation은 이 분석에서 앞서 주고받은 질문과 답 문단(답에서 제안한 비중이 있으면 proposed_allocations)입니다. 이번 질문이 "그럼", "그거"처럼 앞선 답을 가리키면 그 답을 기준으로 해석하세요. 앞선 답에 적힌 수치만 이어 쓰고, 적히지 않은 앞선 계산값을 지어내지 마세요. 앞선 답과 결론이 달라지면 무엇이 왜 바뀌었는지 밝히세요.' if conversation else '')
     messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
     sections, trace, published = {}, [], {}
     outlook = OutlookReader(request, datetime.fromisoformat(context['as_of']))

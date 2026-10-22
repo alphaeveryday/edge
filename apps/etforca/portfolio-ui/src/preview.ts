@@ -27,6 +27,7 @@ const report: Report = {
     historical_performance: { basis: '예시 데이터로 그린 성과 · 분배금 재투자', source_url: '', points: Array.from({ length: 24 }, (_, i) => ({ date: new Date(Date.UTC(2024, 10 + i, 1)).toISOString().slice(0, 10), recommended: 1000000 + i * 15000, current: 1000000 + i * 11000 })) } },
 };
 sample.assets.forEach((a, i) => { a.instrument_id = ['KR:360750', 'US:SCHD', 'KR:114260', 'KR:132030', 'KR:441640', 'CASH:KRW'][i]; });
+const previewChats: unknown[] = [];
 export async function previewRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const body = init?.body ? JSON.parse(String(init.body)) : null;
   let result: unknown;
@@ -56,8 +57,10 @@ export async function previewRequest<T>(path: string, init?: RequestInit): Promi
     else result = saved.workbook ? saved : { version: 0, workbook: preview === 'empty' ? null : sample };
   } else if (path.endsWith('/workbook')) result = sample;
   else if (path.endsWith('/report-request')) result = { status: 'received', delivery_status: 'not_scheduled' };
+  else if (path.endsWith('/chats')) result = { limit: 5, items: previewChats };
   else if (path.endsWith('/chat') || path.startsWith('/analyses/preview-chat-')) {
-    result = { id: path.endsWith('/chat') ? 'preview-chat-' + crypto.randomUUID() : path.split('/').at(-1), state: 'succeeded', result: { answer: { paragraphs: ['테스트 답변: 기존 테마를 유지하고 추가 투자금을 목표 비중에 맞춰 나누세요.'], evidence: [], limitations: [] }, revision: report, status: 'complete' } };
+    result = { id: path.endsWith('/chat') ? 'preview-chat-' + crypto.randomUUID() : path.split('/').at(-1), state: 'succeeded', input: body, created_at: new Date().toISOString(), result: { answer: { paragraphs: ['테스트 답변: 기존 테마를 유지하고 추가 투자금을 목표 비중에 맞춰 나누세요.'], evidence: [], limitations: [] }, revision: report, status: 'complete' } };
+    if (path.endsWith('/chat') && body?.mode !== 'recovery') previewChats.push(result);
   }
   else if (path === '/analyses/latest' && preview === 'empty') result = null;
   else if (path.startsWith('/analyses')) {

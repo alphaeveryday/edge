@@ -109,12 +109,12 @@ test('preview navigation and repeated followups remain isolated from a saved cus
   await page.getByRole('link', { name: '포트폴리오로 돌아가기' }).click();
   await expect(page).toHaveURL(/preview=input/);
   await page.goto('/portfolio/?preview=result');
-  for (const question of ['어떻게 살까요?', '한 번 더 설명해 주세요']) {
-    await page.getByRole('textbox', { name: '추가 질문', exact: true }).fill(question);
-    await page.getByRole('button', { name: '질문 보내기' }).click();
-    await expect(page.locator('.chat-answer')).toContainText('테스트 답변');
-    await expect(page.getByRole('button', { name: '질문 보내기' })).toBeEnabled();
-  }
+  await page.getByRole('textbox', { name: '추가 질문', exact: true }).fill('어떻게 살까요?');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await page.getByRole('textbox', { name: '이어서 질문' }).fill('한 번 더 설명해 주세요');
+  await page.getByRole('button', { name: '이어서 질문 보내기' }).click();
+  await expect(page.locator('.chat-bubble--ai')).toHaveCount(2);
+  await expect(page.locator('.chat-bubble--ai').last()).toContainText('테스트 답변');
   expect(calls).toEqual([]);
   expect(await page.evaluate(() => localStorage.getItem('edge-portfolio-job'))).toBe('customer-secret');
 });

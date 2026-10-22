@@ -59,6 +59,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     if (path === '/backtests' && response.status === 422) throw new Error('비중 합계가 100%인지, 조회 기간이 어제 이전인지 확인해 주세요.');
     if (path === '/workbook' && response.status === 422) throw new Error('종목·배당·월 기록의 입력값과 최대 기록 수를 확인해 주세요.');
     if (body.detail === 'CHAT_LIMIT') throw new Error('CHAT_LIMIT');
+    if (body.detail === 'CHAT_BUSY') throw new Error('CHAT_BUSY');
     if (body.detail === 'RECOVERY_LIMIT') throw new Error('RECOVERY_LIMIT');
     if (body.detail === 'NO_HOLDINGS') throw new Error('보유 ETF를 입력한 분석에서 뉴스레터를 신청해 주세요.');
     if (body.detail === 'SUBSCRIPTION_LIMIT') throw new Error('오늘 뉴스레터 신청 횟수를 모두 사용했어요. 내일 다시 신청해 주세요.');
