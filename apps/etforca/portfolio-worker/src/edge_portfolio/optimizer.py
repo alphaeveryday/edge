@@ -426,8 +426,11 @@ class Optimizer:
         target = {}
         for row in rows:
             target[row['instrument_id']] = target.get(row['instrument_id'], 0) + float(row['weight_pct'])
-        if any(target.get(key, 0) > weight + .005 for key, weight in held.items()):
-            checks.append({'kind': 'held_stock', 'status': 'fail'})
+        if held:
+            # 추가 투자금이 정해져 있으면 금액표로 순매수를 본다(같은 비중이어도 새 돈이 들어가면 더 사야 할 수 있다).
+            funded = plan_execution(request, [{**row, 'account': '일반 계좌'} for row in rows], self.decision.model_copy(update={'constraints': []}))
+            if 'HELD_STOCK_BUY' in funded['reasons'] or any(target.get(key, 0) > weight + .005 for key, weight in held.items()):
+                checks.append({'kind': 'held_stock', 'status': 'fail'})
         possible = all(any(allocation_error(self.market.catalog[row['instrument_id']], account, self.request.preferences.tax_profile) is None
                            for account in allowed) for row in rows)
         if not possible:

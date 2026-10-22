@@ -248,7 +248,7 @@ def plan_execution(request, allocations, decision=None):
             result['status'] = 'conditional'
         if interpreted.max_months is not None and result['months'] is not None and result['months'] - delay > interpreted.max_months:
             result.update(status='infeasible', reasons=['FUNDING_DURATION_EXCEEDED'], rows=[])
-    definite_failure = any(reason == 'NO_SELL_ZERO_TARGET' or reason.startswith('ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:') for reason in result['reasons'])
+    definite_failure = any(reason in ('NO_SELL_ZERO_TARGET', 'HELD_STOCK_BUY') or reason.startswith('ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:') for reason in result['reasons'])
     if funding is None and not definite_failure:
         result.update(status='needs_input', reasons=['ADDITIONAL_FUNDING_REQUIRED'], rows=[])
     return result

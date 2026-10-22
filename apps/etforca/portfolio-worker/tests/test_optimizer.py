@@ -759,3 +759,20 @@ def test_numerical_noise_cannot_override_outperform_duration_with_equal_final_re
     result = rank([rows], [['A', 'B']])
     assert result[0]['excess_pp'] == 20
     assert result[0]['duration_pct'] == 100
+
+
+def test_funded_candidates_that_would_buy_more_of_a_held_stock_are_dropped_before_ranking():
+    # 비중이 현재보다 낮아도 새 돈이 들어오면 개별주를 더 사야 할 수 있다. 그런 후보가 1위로 남으면 게시에서 거절돼 분석이 실패한다.
+    from edge_portfolio.catalog import canonicalize
+    from edge_portfolio.decision import Decision
+    request = canonicalize(AnalysisInput(holdings=[{'name': 'x', 'instrument_id': key, 'kind': kind, 'amount_krw': 500000}
+                                                   for key, kind in [('KR:005930', 'stock'), ('KR:069500', 'etf')]],
+                                         horizon='10년 이상', question='추가 100만원'))
+    optimizer = Optimizer(MarketData(request), request)
+    optimizer.decision = Decision(kind='rebalance', funding_text='추가 100만원')
+    def held(weight):
+        rows = [{'instrument_id': 'KR:005930', 'weight_pct': weight}, {'instrument_id': 'KR:069500', 'weight_pct': 100 - weight}]
+        return next((c['status'] for c in optimizer.vector_checks(rows) if c['kind'] == 'held_stock'), 'pass')
+    assert held(25) == 'pass', '₩500,000 of ₩2,000,000 keeps the stock as it is'
+    assert held(30) == 'fail', 'below the current 50% weight but still a ₩100,000 purchase'
+    assert held(60) == 'fail'
