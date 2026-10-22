@@ -32,6 +32,7 @@ MIN_CHANGE = 10.0       # 급등 기준: 전일 대비 상승률(%)
 MIN_TRADE_VALUE = 30.0  # 거래대금 하한(억원, 누적 거래대금) — 몇 주 체결로 뛴 종목은 해석할 사건이 아니다
 MAX_MOVERS = 15         # 화면에 싣는 종목 수
 NEW_SESSIONS = 5        # 한 실행에서 새로 판정하는 종목 수(나머지는 다음 정각에)
+WATCH_SESSIONS = 3      # 감시가 띄운 '새 종목만' 실행의 세션 수 — 한 번에 동시 실행(PARALLEL)으로 끝나 정각 조사와 겹치지 않는다
 PARALLEL = 3            # 판정 세션 동시 실행 — 5종목 × 세션 7분 이내가 잠금(55분) 안에 든다
 FILING_DAYS = 14        # 판정 세션에 넘기는 최근 공시 기간
 NEWS_LIMIT = 15
@@ -47,6 +48,13 @@ def _prompt(m: Mover, filings: list[dict], articles: list[news.Article], series:
             f"(전일 종가 {m.prev_close:,.0f}원, 거래대금 {m.trade_value:,.0f}억원).\n장중 흐름(30분 간격): {flow}\n\n"
             f"최근 {FILING_DAYS}일 공시·시장조치(한국거래소 KIND, 접수번호 | 시각 | 제출 | 제목 — 목록 자체는 kind-list):\n{disc}\n\n"
             f"관련 보도(최신순):\n{heads}\n\n절차대로 증거를 모으고 가설·증거 표를 채운 뒤 set_verdict 로 판정하고 finish 하세요.")
+
+
+def pick(quotes: Quotes) -> list[Mover]:
+    """오늘 화면에 싣는 급등 종목: 상승률 10%·거래대금 30억원 이상, 상승률 순 상위 15개. 매분 감시도 같은 기준을 쓴다."""
+    return sorted((m for market in ("KOSPI", "KOSDAQ") for m in quotes.risers(market, MIN_CHANGE)
+                   if m.change_pct >= MIN_CHANGE and m.trade_value >= MIN_TRADE_VALUE),
+                  key=lambda m: m.change_pct, reverse=True)[:MAX_MOVERS]
 
 
 def _articles(texts: dict[str, news.Article], name: str) -> list[news.Article]:
@@ -91,14 +99,16 @@ def _pending(reason: str) -> dict:
 
 
 def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None, session_runner=session.run,
-                 now: datetime | None = None) -> dict:
-    """한 번 실행하고 보고를 돌려준다. 장이 열리지 않은 날(그날 분봉 없음)에는 게시하지 않는다."""
+                 now: datetime | None = None, only_new: bool = False) -> dict:
+    """한 번 실행하고 보고를 돌려준다. 장이 열리지 않은 날(그날 분봉 없음)에는 게시하지 않는다.
+    only_new: 매분 감시가 띄운 실행 — 오늘 아직 판정하지 않은 종목만 본다(이미 판정한 종목의 재검토는 매시 정각 실행 몫)."""
     now = now or _now()
     today, ymd = now.date().isoformat(), now.strftime("%Y%m%d")
-    run_id = f"{now.strftime('%Y%m%dT%H%M')}-research-{uuid.uuid4().hex[:6]}"
+    mode = "new" if only_new else "research"
+    run_id = f"{now.strftime('%Y%m%dT%H%M')}-{mode}-{uuid.uuid4().hex[:6]}"
     quotes, kind = quotes or Quotes(), kind or Kind()
     store, public = open_store(cfg.store), open_store(cfg.publish)
-    report: dict = {"runId": run_id, "mode": "research", "movers": [], "judged": [], "failed": [], "published": False}
+    report: dict = {"runId": run_id, "mode": mode, "movers": [], "judged": [], "failed": [], "published": False}
     with lease(store, run_id, now, key=LEASE_KEY), tempfile.TemporaryDirectory(prefix="truth-research-") as tmp:
         raw, _ = store.get(f"movers/{today}.json")
         prior = {i["code"]: i for i in (json.loads(raw)["items"] if raw else [])}
@@ -110,9 +120,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
             return report
 
         # 1. 급등 목록 (코드)
-        risers = sorted((m for market in ("KOSPI", "KOSDAQ") for m in quotes.risers(market, MIN_CHANGE)
-                         if m.change_pct >= MIN_CHANGE and m.trade_value >= MIN_TRADE_VALUE),
-                        key=lambda m: m.change_pct, reverse=True)[:MAX_MOVERS]
+        risers = pick(quotes)
         charts: dict[str, Chart] = {}
         series_errors = 0
         for m in risers:
@@ -169,7 +177,10 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
                 return True
             return rec["verdict"]["tag"] == "pending" and bool(set(evidence[m.code]["news"]) - set(rec["news"]))
         # 처음 보는 종목부터 — 한 실행의 세션 수가 정해져 있어 넘친 종목은 다음 정각에
-        targets = sorted((m for m in risers if filings[m.code] is not None and stale(m)), key=lambda m: m.code in seen)[:NEW_SESSIONS]
+        if only_new:
+            targets = [m for m in risers if filings[m.code] is not None and m.code not in seen][:WATCH_SESSIONS]
+        else:
+            targets = sorted((m for m in risers if filings[m.code] is not None and stale(m)), key=lambda m: m.code in seen)[:NEW_SESSIONS]
 
         def judge(m: Mover) -> tuple[str, dict | None, dict, session.SessionResult]:
             found = filings[m.code] or []

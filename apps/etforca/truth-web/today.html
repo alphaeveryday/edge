@@ -134,10 +134,38 @@ details[open] summary svg{transform:rotate(90deg)}
   .live small,.live .pt{display:none}
   .live{padding:8px 14px}
 }
-@media (prefers-reduced-motion:reduce){summary svg,.spot,.mv{transition:none}.live.on .dot::after,.tick{animation:none}}
+/* 새 소식 팝업: 화면을 막지 않고 오른쪽 아래에 뜬다. 여러 건이면 옆으로 넘긴다 */
+.pop{position:fixed;z-index:800;right:24px;bottom:24px;width:min(380px,calc(100vw - 32px));border-radius:var(--r-lg);
+  background:rgba(30,30,34,.94);border:1px solid rgba(255,255,255,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 24px 60px rgba(0,0,0,.55);
+  backdrop-filter:blur(30px) saturate(160%);-webkit-backdrop-filter:blur(30px) saturate(160%);animation:pop-in .32s cubic-bezier(.16,1,.3,1)}
+@keyframes pop-in{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.pop-h{display:flex;align-items:center;gap:4px;padding:12px 10px 0 18px}
+.pop-h b{font-size:13.5px;font-weight:700}
+.pop-n{margin-left:6px;font-size:12.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.pop-h .sp{flex:1}
+.pop-h button{display:grid;place-items:center;width:30px;height:30px;border:0;border-radius:50%;background:none;color:var(--muted);cursor:pointer}
+.pop-h button:hover:not(:disabled){background:rgba(255,255,255,.1);color:var(--text)}
+.pop-h button:disabled{opacity:.3;cursor:default}
+.pop-h svg{width:14px;height:14px}
+.pop-track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;overscroll-behavior-x:contain}
+.pop-track::-webkit-scrollbar{display:none}
+.pop-s{flex:0 0 100%;scroll-snap-align:start;display:flex;flex-direction:column;gap:10px;padding:12px 18px 18px;min-width:0}
+.pop-k{align-self:flex-start;font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.1);color:var(--text)}
+.pop-k.k-changed{background:rgba(255,106,43,.18);color:var(--warn-text)}
+.pop-s .who b{font-size:15px}
+.pop-s .who .logo-c{width:32px;height:32px;font-size:14px}
+.pop-s .who .pct{font-size:18px}
+.pop-v{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12.5px;color:var(--faint)}
+.pop-v .was{text-decoration:line-through;opacity:.7}
+.pop-t{font-size:14px;line-height:1.45;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pop-go{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;font-weight:600;padding:8px 14px;
+  border-radius:999px;border:0;background:#fff;color:#000;cursor:pointer}
+.pop-go svg{width:12px;height:12px}
+@media (max-width:560px){.pop{left:12px;right:12px;bottom:12px;width:auto}}
+@media (prefers-reduced-motion:reduce){summary svg,.spot,.mv{transition:none}.live.on .dot::after,.tick,.pop{animation:none}}
 </style>
 </head>
-<body data-standalone>
+<body>
 <main class="window">
   <header class="dhead">
     <a class="brand" href="today" aria-label="오늘의 급등주 처음으로">
@@ -163,6 +191,15 @@ details[open] summary svg{transform:rotate(90deg)}
   <section class="movers" id="movers"><div class="empty">급등주 해석을 불러오는 중입니다.</div></section>
   <p class="cookie-note">방문 통계를 위해 본 페이지·클릭, 기기·브라우저 정보, 접속 IP를 PostHog(미국)로 보냅니다. 쿠키는 허용한 경우에만 쓰고 1년간 유지합니다. 허용하지 않으면 쿠키 없이 그날의 방문 수만 셉니다. <button type="button" data-consent hidden>쿠키 사용 다시 고르기</button> · <a href="privacy">개인정보 처리방침</a></p>
 </main>
+<!-- 팝업은 .window 밖에 둔다 — .window 의 backdrop-filter 가 고정 위치의 기준이 되어 화면 밖으로 밀린다 -->
+<aside class="pop" id="pop" aria-label="새 소식" hidden>
+  <div class="pop-h"><b>새 소식</b><span class="pop-n" id="popn" aria-live="polite"></span><span class="sp"></span>
+    <button type="button" id="popprev" aria-label="이전 소식"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>
+    <button type="button" id="popnext" aria-label="다음 소식"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+    <button type="button" id="popclose" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+  <div class="pop-track" id="poptrack"></div>
+</aside>
 
 <script src="common.js"></script>
 <script>
@@ -251,6 +288,69 @@ function liveState(d){
   return !at.startsWith(d.date) || now - mins(hhmm(at)) > 45 ? {cls: 'late', label: '갱신 지연'} : {cls: 'on', label: '실시간'};
 }
 
+// 새 소식: 지난번 본 목록(이 기기에 날짜별로 기억)과 비교해 새 급등주 · 분석 완료 · 판정 변경을 알린다.
+// 처음 여는 날에는 알리지 않는다(전부 새것이라). 최신 날짜를 볼 때만 센다.
+const SNAP = 'movers-seen:';
+const KINDS = {changed: '판정 변경', judged: '분석 완료', new: '새 급등주'};
+let snap = {date: null, map: null};
+const readSnap = date => { try { return JSON.parse(localStorage.getItem(SNAP + date)); } catch { return null; } };
+const writeSnap = (date, map) => {
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith(SNAP) && k !== SNAP + date) localStorage.removeItem(k);
+    localStorage.setItem(SNAP + date, JSON.stringify(map));
+  } catch { /* 저장을 못 하면 이번 창에서만 기억한다 */ }
+};
+function newsOf(d, items){
+  const prev = snap.date === d.date ? snap.map : readSnap(d.date);
+  const cur = Object.fromEntries(items.map(i => [i.code, {t: tagOf(i), j: !!i.judgedAt}]));
+  const out = [];
+  if (prev) for (const it of items) {
+    const p = prev[it.code];
+    if (!p) out.push({kind: 'new', it});
+    else if (!p.j && it.judgedAt) out.push({kind: 'judged', it});
+    else if (p.j && it.judgedAt && p.t !== tagOf(it)) out.push({kind: 'changed', it, from: p.t});
+  }
+  snap = {date: d.date, map: {...prev, ...cur}};  // 목록에서 잠깐 빠졌다 돌아온 종목을 새것으로 세지 않게 합친다
+  writeSnap(d.date, snap.map);
+  const order = {changed: 0, judged: 1, new: 2};
+  return out.sort((a, b) => order[a.kind] - order[b.kind]);
+}
+const slide = (n, rank) => {
+  const it = n.it, judged = !!it.judgedAt;
+  return `<article class="pop-s">
+    <span class="pop-k k-${n.kind}">${KINDS[n.kind]}</span>
+    <div class="who">${logo(it)}<div><b>${esc(it.name)}</b><small>${esc(it.code)} · ${esc(it.market)}</small></div>
+      <span class="pct ${it.changePct >= 0 ? 'up' : 'down'}">${signed(it.changePct)}</span></div>
+    <div class="pop-v">${n.kind === 'changed' ? `<span class="verdict v-${n.from} was">${TAGS[n.from]}</span>→` : ''}${judged ? pill(it, rank[it.code]) : '<span class="verdict v-pending">분석 중</span>'}</div>
+    <p class="pop-t">${judged ? esc(it.event?.title) : '오른 이유를 공시·보도와 대조하고 있습니다.'}</p>
+    <button type="button" class="pop-go" data-code="${esc(it.code)}">종목 보기 ${CHEVRON}</button>
+  </article>`;
+};
+const popAt = () => { const t = $('poptrack'); return Math.round(t.scrollLeft / Math.max(1, t.clientWidth)); };
+function popCount(){
+  const n = $('poptrack').children.length, i = Math.min(popAt(), n - 1);
+  $('popn').textContent = `${i + 1} / ${n}`;
+  $('popprev').disabled = i <= 0; $('popnext').disabled = i >= n - 1;
+}
+function showNews(news, rank){
+  if (!news.length) return;
+  const open = !$('pop').hidden;
+  $('poptrack').insertAdjacentHTML(open ? 'beforeend' : 'afterbegin', news.map(n => slide(n, rank)).join(''));
+  if (!open) { $('pop').hidden = false; $('poptrack').scrollLeft = 0; }
+  popCount();
+}
+const closeNews = () => { $('pop').hidden = true; $('poptrack').innerHTML = ''; };
+
+// 종목 카드로 옮겨 잠깐 표시한다. 지금 목록에 없으면 '전체'로 돌린다
+function goTo(code){
+  if (!document.getElementById(`m-${code}`)) { state.tag = 'all'; saveUrl(); render(); }
+  const el = document.getElementById(`m-${code}`);
+  if (!el) return;
+  el.scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
+  el.focus({preventScroll: true});
+  el.classList.add('lit'); setTimeout(() => el.classList.remove('lit'), 1600);
+}
+
 const card = (it, rank) => {
   const tag = tagOf(it);
   const kind = EVENT_KINDS[it.event?.kind], judged = hhmm(it.judgedAt);
@@ -325,6 +425,7 @@ function render(focusRow){
   lastDate = d.date;
   // 매분 다시 그려도 보던 자리(1위 카드·옮겨 간 종목)의 초점을 지킨다
   if (!focusRow && keep) document.getElementById(keep)?.focus({preventScroll: true});
+  if (d.date === state.latest) showNews(newsOf(d, items), rank);
 }
 
 // 날짜를 주면 그날 파일, 없으면 최신(latest.json). 없는 날짜면 최신으로 돌아간다
@@ -351,15 +452,16 @@ $('dates').addEventListener('click', e => { const b = e.target.closest('button[d
 $('tags').addEventListener('click', e => { const b = e.target.closest('button[data-tag]');
   if (b && !b.disabled && b.dataset.tag !== state.tag) { state.tag = b.dataset.tag; saveUrl(); render('tags'); } });
 // 1위 카드: 그 종목이 지금 목록에 없으면 '전체'로 돌린 뒤 카드로 옮겨 잠깐 표시한다
-$('spots').addEventListener('click', e => {
-  const b = e.target.closest('button[data-code]');
-  if (!b) return;
-  if (!document.getElementById(`m-${b.dataset.code}`)) { state.tag = 'all'; saveUrl(); render(); }
-  const el = document.getElementById(`m-${b.dataset.code}`);
-  if (!el) return;
-  el.scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
-  el.focus({preventScroll: true});
-  el.classList.add('lit'); setTimeout(() => el.classList.remove('lit'), 1600);
+$('spots').addEventListener('click', e => { const b = e.target.closest('button[data-code]'); if (b) goTo(b.dataset.code); });
+$('poptrack').addEventListener('click', e => { const b = e.target.closest('button[data-code]'); if (b) goTo(b.dataset.code); });
+$('poptrack').addEventListener('scroll', popCount, {passive: true});
+const popStep = k => { const t = $('poptrack'); t.scrollTo({left: (popAt() + k) * t.clientWidth, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'}); };
+$('popprev').addEventListener('click', () => popStep(-1));
+$('popnext').addEventListener('click', () => popStep(1));
+$('popclose').addEventListener('click', closeNews);
+$('pop').addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeNews();
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); popStep(e.key === 'ArrowLeft' ? -1 : 1); }
 });
 $('movers').addEventListener('toggle', e => { const c = e.target.dataset?.code; if (c) e.target.open ? openCodes.add(c) : openCodes.delete(c); }, true);
 
