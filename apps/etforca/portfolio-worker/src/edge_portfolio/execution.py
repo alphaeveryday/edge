@@ -331,6 +331,15 @@ def build_execution(request, allocations, *, additional_krw=0, monthly_krw=None,
             'target_krw': str(after), 'buy_krw': str(max(delta, 0) if not cash else 0),
             'sell_krw': str(max(-delta, 0) if not cash else 0),
             'cash_used_krw': str(-delta if cash else 0)})
+    # 고객이 넣은 개별주는 유지·축소만 한다. 계좌 사이 이동은 허용하되 종목 전체로 순매수가 생기면 실행할 수 없다.
+    # 모든 실행 경로(추천 게시·리밸런싱 계산·저장안 실행)가 이 함수를 거친다. 허용 오차는 원 단위 반올림(행 수).
+    stocks = {holding.instrument_id for holding in request.holdings if holding.kind == 'stock'}
+    net = {}
+    for row in result['rows']:
+        if row['instrument_id'] in stocks:
+            net[row['instrument_id']] = net.get(row['instrument_id'], 0) + int(row['buy_krw']) - int(row['sell_krw'])
+    if any(value > len(result['rows']) for value in net.values()):
+        return {**result, 'status': 'infeasible', 'reasons': ['HELD_STOCK_BUY'], 'rows': [], 'accounts': []}
     reasons = []
     tax = request.preferences.tax_profile
     known_accounts = {holding.account for holding in request.holdings}

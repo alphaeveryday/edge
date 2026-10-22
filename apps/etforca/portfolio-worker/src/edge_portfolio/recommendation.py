@@ -28,6 +28,8 @@ def selected_accounts(request):
 
 
 def allocation_error(item, account, tax):
+    if item.get('kind') == 'stock' and account in ('연금저축', 'IRP'):
+        return 'Individual stocks cannot be held in 연금저축 or IRP accounts'
     if account != '일반 계좌' and item['market'] == 'US':
         return 'US-listed ETFs cannot be allocated directly to ISA/pension accounts'
     if tax:
@@ -43,11 +45,11 @@ def held_stock_limit(rows, execution, metrics):
     if not stocks:
         return
     message = 'A held individual stock can be kept or reduced, never bought more; put new money into ETFs'
-    if execution['rows']:
-        if any(row['instrument_id'] in stocks and int(row['buy_krw']) > 0 for row in execution['rows']):
-            raise ValueError(message)
-        return
-    # 금액표가 없으면(추가 투자금 미상 등) 비중으로 본다. 늘어난 비중은 추가 매수를 뜻한다.
+    if 'HELD_STOCK_BUY' in execution['reasons']:
+        raise ValueError(message)
+    if execution['rows'] or any(holding['weight_pct'] is None for holding in metrics['holdings']):
+        return  # 금액표는 plan_execution 이 이미 검사했다. 현재 비중을 모르면(이름만 입력) 비교할 기준이 없다.
+    # 금액표가 없으면(추가 투자금 미상 등) 비중으로 본다. 계좌를 합친 비중이 늘면 추가 매수를 뜻한다.
     before = {}
     for holding in metrics['holdings']:
         before[holding['instrument_id']] = before.get(holding['instrument_id'], 0) + (holding['weight_pct'] or 0)

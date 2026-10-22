@@ -187,7 +187,7 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
       {storageError && <p role="alert">이 브라우저에서는 입력을 임시 보관할 수 없어요. 완료할 때까지 이 화면을 유지해 주세요.</p>}
       {initial && step === 0 && <div className="draft-resume"><span>입력하던 내용을 이어서 작성해요.</span><Button onClick={async () => { if (await ask('입력한 내용을 지우고 새로 시작할까요?', '새로 시작하기')) { try { sessionStorage.removeItem(inputDraftKey); sessionStorage.removeItem(legacyDraftKey); sessionStorage.removeItem(pendingKey); location.reload(); } catch { setInputError('임시 입력을 지우지 못했어요. 이 브라우저의 저장 설정을 확인해 주세요.'); restoreFocus(); } } }}>새로 작성</Button></div>}
       {inputError && <p role="alert">{inputError}</p>}
-      {step === 0 && <><span className="eyebrow holdings-eyebrow">내 구성 확인</span><h2>내 포트폴리오를<br />더 좋게 바꿔볼까요?</h2><p className="hint">보유 ETF·주식을 검색해 평가금액을 적어 주세요. 새로 담을 종목은 ETF로만 추천해요.</p><ExampleReport />
+      {step === 0 && <><span className="eyebrow holdings-eyebrow">내 구성 확인</span><h2>내 포트폴리오를<br />더 좋게 바꿔볼까요?</h2><p className="hint">보유 ETF·주식을 검색해 평가금액을 적어 주세요.</p><ExampleReport />
         {hasSaved && <Button className="reuse-link" disabled={saving} onClick={() => void reuse()}>저장된 보유 종목 불러오기</Button>}
         <div className="holdings-layout"><div className="holdings-input">
         <>

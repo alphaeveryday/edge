@@ -155,3 +155,14 @@ def test_a_held_stock_can_be_kept_or_reduced_but_never_bought_and_no_new_stock_i
     assert plan([('US:AAPL', 30), ('US:VOO', 70)])['allocations'][0]['weight_pct'] == 30
     with pytest.raises(ValueError, match='stock the customer already holds'):
         plan([('US:MSFT', 20), ('US:VOO', 80)])
+
+
+def test_unknown_current_weights_do_not_force_selling_a_held_stock():
+    # 이름만 입력해 현재 비중을 모르면 '늘렸다'고 판단할 기준이 없다. 보유 개별주를 유지하는 안을 막지 않는다.
+    from edge_portfolio.catalog import canonicalize
+    request = canonicalize(AnalysisInput(holdings=[{'name': 'x', 'instrument_id': key} for key in ['US:AAPL', 'US:VOO']],
+                                         horizon='10년 이상', input_mode='names'))
+    raw = final_payload()
+    raw['recommendation']['allocations'] = [{'instrument_id': 'US:AAPL', 'account': '일반 계좌', 'weight_pct': 50},
+                                            {'instrument_id': 'US:VOO', 'account': '일반 계좌', 'weight_pct': 50}]
+    assert publish_recommendation(FinalReport.model_validate(raw), request, calculate(request), SOURCES)['recommendation']['allocations'][0]['kind'] == 'stock'
