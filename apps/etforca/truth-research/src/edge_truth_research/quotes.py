@@ -2,7 +2,8 @@
 
 - 상승률 순위: Naver 증권 `m.stock.naver.com/api/stocks/up/{KOSPI|KOSDAQ}` (상승률 내림차순, 실제 누적 거래대금 포함).
   현재가는 넥스트레이드(NXT) 체결을 포함한다 — 장 전(08:00~)·장 뒤(~20:00)에는 KRX 정규장 가격과 다를 수 있다.
-- 당일 5분 시세: Yahoo 차트 `v8/finance/chart/{code}.KS|.KQ?interval=5m&range=1d` (봉 시각 = 구간 시작)
+- 당일 5분 시세·현재가: Yahoo 차트 `v8/finance/chart/{code}.KS|.KQ?interval=5m&range=1d` (봉 시각 = 구간 시작).
+  한국 종목은 약 20분 늦게 나온다. 화면의 가격은 이것을 쓰고 그 시각을 함께 싣는다.
 """
 from __future__ import annotations
 
@@ -34,6 +35,13 @@ class Mover:
     prev_close: float
     change_pct: float
     trade_value: float  # 억원(누적 거래대금)
+
+
+@dataclass(frozen=True)
+class Chart:
+    series: list[list]      # [구간 끝 HH:MM, 종가]
+    price: float | None     # 그날 마지막 체결가(Yahoo). 그날 체결이 없으면 None
+    at: str | None          # 그 체결 시각(ISO, KST)
 
 
 def is_common_stock(code: str, name: str, end_type: str = "stock") -> bool:
@@ -102,9 +110,9 @@ class Quotes:
         return out
 
     # ── 당일 5분 시세 ──
-    def series(self, code: str, market: str, day_ymd: str) -> list[list]:
-        """그날(day_ymd) 정규장 5분 간격 [구간 끝 HH:MM, 종가]. 휴장일에는 Yahoo 가 전 거래일 봉을 주므로 날짜가 다른 봉은 버린다
-        (빈 목록 = 그날 거래 없음). 라벨을 구간 끝으로 단다 — 09:00 봉의 종가는 09:05 시점 가격이다."""
+    def chart(self, code: str, market: str, day_ymd: str) -> Chart:
+        """그날(day_ymd) 정규장 5분 간격 [구간 끝 HH:MM, 종가]와 마지막 체결가·시각. 휴장일에는 Yahoo 가 전 거래일 봉을 주므로
+        날짜가 다른 봉·체결가는 버린다(빈 목록·None = 그날 거래 없음). 라벨을 구간 끝으로 단다 — 09:00 봉의 종가는 09:05 시점 가격이다."""
         data = self._get(YAHOO_CHART.format(symbol=f"{code}.{SUFFIX[market]}"))
         result = ((data.get("chart") or {}).get("result") or [None])[0]
         if not result:
@@ -117,4 +125,9 @@ class Quotes:
                 continue
             end = at + timedelta(minutes=5)
             out.append([end.strftime("%H:%M"), round(float(price), 2)])
-        return out
+        meta = result.get("meta") or {}
+        last, ts = _num(meta.get("regularMarketPrice"), 0.0), meta.get("regularMarketTime")
+        at = datetime.fromtimestamp(ts, KST) if isinstance(ts, (int, float)) else None
+        if last <= 0 or at is None or at.strftime("%Y%m%d") != day_ymd:
+            return Chart(out, None, None)
+        return Chart(out, round(last, 2), at.isoformat(timespec="seconds"))

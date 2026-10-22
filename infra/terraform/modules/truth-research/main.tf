@@ -182,4 +182,42 @@ resource "aws_scheduler_schedule" "this" {
   }
 }
 
+# 가격 갱신: 같은 태스크 정의를 명령만 바꿔(prices) 장중 매분 돌린다. 모델을 부르지 않아 0.25 vCPU·0.5GB 로 줄인다.
+# 판정·글은 건드리지 않고 오늘 게시한 종목의 가격·그래프만 고친다. 늦은 재시도는 다음 분 실행과 겹칠 뿐이라 두지 않는다.
+resource "aws_scheduler_schedule" "prices" {
+  name                         = "${var.name}-prices"
+  state                        = var.schedule_state
+  schedule_expression          = var.prices_schedule_expression
+  schedule_expression_timezone = "Asia/Seoul"
+
+  flexible_time_window { mode = "OFF" }
+
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:ecs:runTask"
+    role_arn = aws_iam_role.scheduler.arn
+    input = jsonencode({
+      Cluster        = var.cluster_arn
+      TaskDefinition = aws_ecs_task_definition.this.arn
+      LaunchType     = "FARGATE"
+      NetworkConfiguration = {
+        AwsvpcConfiguration = {
+          Subnets        = var.subnet_ids
+          SecurityGroups = [aws_security_group.this.id]
+          AssignPublicIp = "DISABLED"
+        }
+      }
+      Overrides = {
+        Cpu                = "256"
+        Memory             = "512"
+        ContainerOverrides = [{ Name = local.container_name, Command = ["prices"] }]
+      }
+    })
+
+    retry_policy {
+      maximum_event_age_in_seconds = 60
+      maximum_retry_attempts       = 0
+    }
+  }
+}
+
 # 실패 알림은 두지 않는다 — 실패는 로그(/ecs/${var.name})와 저장소 runs/ 실행 보고로만 본다.

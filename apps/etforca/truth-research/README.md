@@ -8,6 +8,7 @@ etforca.com/truth/today 의 데이터를 만든다. 오늘 크게 오른 종목�
 
 ```bash
 uv run --package edge-truth-research python -m edge_truth_research run                 # 한 번 실행(운영은 장중 매시 :35)
+uv run --package edge-truth-research python -m edge_truth_research prices              # 가격만 갱신(운영은 장중 매분). TRUTH_STORE·TRUTH_PUBLISH 만 쓴다
 uv run --package edge-truth-research python -m edge_truth_research tool-specs --web 1   # pi 확장이 등록하는 도구 목록
 uv run --package edge-truth-research pytest apps/etforca/truth-research/tests -q
 ```
@@ -22,4 +23,4 @@ uv run --package edge-truth-research pytest apps/etforca/truth-research/tests -q
 | `EXA_API_KEY` | | 웹 검색·원문. 없으면 웹 도구를 끈다 |
 | `TRUTH_MAX_TOOL_CALLS` · `TRUTH_WEB_CALL_LIMIT` · `TRUTH_SESSION_TIMEOUT` | | 세션당 도구 40회 · 웹 10회 · 420초 |
 
-시세(Naver 순위·Yahoo 5분봉)와 공시(KIND)는 키가 없다. 이미지는 `deploy-truth-research.yml` 이 `edge/pipeline:truth-research-latest` 로 올리고, 인프라는 `infra/terraform/modules/truth-research`.
+시세(Naver 순위·Yahoo 5분봉·현재가)와 공시(KIND)는 키가 없다. 이미지는 `deploy-truth-research.yml` 이 `edge/pipeline:truth-research-latest` 로 올리고, 인프라는 `infra/terraform/modules/truth-research`.

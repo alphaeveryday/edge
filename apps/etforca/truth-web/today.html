@@ -33,6 +33,7 @@ body{overflow-y:auto}
 .row button b{font-weight:inherit;opacity:.6;margin-left:4px}
 .row button:disabled{opacity:.4;cursor:default}
 .hint{min-height:20px;padding:4px 8px 14px;font-size:13px;color:var(--faint)}
+#status small{margin-left:4px;font-size:12px;color:var(--faint)}
 
 .movers{display:flex;flex-direction:column;gap:12px;padding:0 6px}
 .mv{display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:32px;padding:24px;border-radius:var(--r-lg)}
@@ -204,7 +205,8 @@ function render(focusRow){
   const d = state.doc, items = [...d.items].sort((a, b) => b.impact - a.impact || b.changePct - a.changePct);
   const count = t => t === 'all' ? items.length : items.filter(i => i.tag === t).length;
   const dates = [...new Set([...state.dates, state.latest, d.date].filter(Boolean))].sort().reverse().slice(0, 10);
-  $('status').innerHTML = `<b>${esc(md(d.date))}</b> ${esc(hhmm(d.generatedAt))} 기준`;
+  // 가격은 Yahoo 시세(약 20분 늦음)를 매분 싣는다 — 그 마지막 체결 시각을 쓴다(없던 때의 파일은 게시 시각)
+  $('status').innerHTML = `<b>${esc(md(d.date))}</b> 가격 ${esc(hhmm(d.pricedAt || d.generatedAt))} 기준 <small>약 20분 지연</small>`;
   $('dates').innerHTML = dates.map(x =>
     `<button type="button" data-date="${esc(x)}" aria-pressed="${x === d.date}">${x === todayKst() ? '오늘' : esc(dayLabel(x))}</button>`).join('');
   $('tags').innerHTML = ['all', 'false', 'promising', 'pending'].map(t =>
@@ -246,8 +248,8 @@ $('movers').addEventListener('toggle', e => { const c = e.target.dataset?.code; 
 
 getJson('data/movers/dates.json').then(x => { state.dates = (Array.isArray(x) ? x : []).filter(d => typeof d === 'string' && DATE_RE.test(d)); })
   .catch(() => {}).finally(() => show(state.date));
-// 최신을 보고 있을 때만 5분마다 다시 받는다. 날짜를 받는 중이면 건너뛴다(누른 날짜를 덮지 않게)
-setInterval(() => { if (!busy && (!state.doc || state.date === state.latest)) show(null); }, 5 * 60e3);
+// 최신을 보고 있을 때만 1분마다 다시 받는다(가격이 매분 바뀐다). 날짜를 받는 중이면 건너뛴다(누른 날짜를 덮지 않게)
+setInterval(() => { if (!busy && (!state.doc || state.date === state.latest)) show(null); }, 60e3);
 </script>
 </body>
 </html>

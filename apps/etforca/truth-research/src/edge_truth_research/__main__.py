@@ -1,6 +1,7 @@
 """명령줄.
 
     python -m edge_truth_research run                       # 한 번 실행(장중 매시 :35). 환경변수 설정은 config.py
+    python -m edge_truth_research prices                    # 가격만 갱신(장중 매분). TRUTH_STORE·TRUTH_PUBLISH 만 쓴다
     python -m edge_truth_research tool <이름>               # pi 확장이 부른다: 표준입력 JSON → 표준출력 글
     python -m edge_truth_research tool-specs --web 1
 """
@@ -37,6 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="edge_truth_research")
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("run", help="오늘 오른 종목 조사·게시 한 번")
+    sub.add_parser("prices", help="오늘 게시한 종목의 가격·그래프만 Yahoo 로 갱신")
     tool = sub.add_parser("tool", help="에이전트 도구 하나 실행 (pi 확장용)")
     tool.add_argument("name")
     spec = sub.add_parser("tool-specs", help="도구 목록 JSON (pi 확장용)")
@@ -50,10 +52,15 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.reconfigure(encoding="utf-8")
         print(json.dumps(specs(web=args.web == "1"), ensure_ascii=False))
         return 0
+    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
+    if args.command == "prices":  # 모델 키가 필요 없다 — Config 를 읽지 않는다
+        from .prices import refresh_prices
+        report = refresh_prices(os.environ["TRUTH_STORE"], os.environ["TRUTH_PUBLISH"])
+        logging.info(json.dumps({"event": "prices_end"} | {k: v for k, v in report.items() if k != "mode"}, ensure_ascii=False))
+        return 1 if report["failed"] else 0
     from edge_truth_agent.runner import RunBusy
     from .config import Config
     from .research import run_research
-    logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     # TRUTH_NOW(ISO, 시간대 포함): 지난 거래일을 다시 조사·검증할 때만 쓴다. 운영 스케줄은 넣지 않는다
     now = datetime.fromisoformat(os.environ["TRUTH_NOW"]) if os.environ.get("TRUTH_NOW") else None
     try:

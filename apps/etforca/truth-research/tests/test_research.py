@@ -12,7 +12,7 @@ from edge_truth_agent import corpus
 from edge_truth_agent.session import SessionResult
 from edge_truth_agent.store import LocalStore
 from edge_truth_research import logos, quotes as quotes_mod, research
-from edge_truth_research.quotes import Mover, is_common_stock
+from edge_truth_research.quotes import Chart, Mover, is_common_stock
 
 KST = timezone(timedelta(hours=9))
 NOW = datetime(2026, 10, 22, 11, 35, tzinfo=KST)
@@ -28,8 +28,10 @@ class FakeQuotes:
     def risers(self, market, min_change=0.0):
         return self.by_market.get(market, [])
 
-    def series(self, code, market, day):
-        return [["09:05", 1000.0], ["09:10", 1100.0], ["11:30", 1300.0]] if self.traded else []
+    def chart(self, code, market, day):
+        if not self.traded:
+            return Chart([], None, None)
+        return Chart([["09:05", 1000.0], ["09:10", 1100.0], ["11:30", 1300.0]], 1300.0, "2026-10-22T11:14:00+09:00")
 
 
 def _filing(no):
@@ -104,6 +106,7 @@ def test_publishes_contract_valid_ranking_with_false_first(cfg):
     top = doc["items"][0]
     assert top["tag"] == "false" and top["impact"] == round(29.9 * 0.8, 2) and doc["items"][1]["impact"] == 0
     assert top["series"][-1] == ["11:30", 1300.0] and report["published"] and sorted(runner.calls) == ["900010", "900020"]
+    assert doc["pricedAt"] == "2026-10-22T11:14:00+09:00"  # 화면이 '가격 몇 시 기준'을 쓴다
 
 
 def test_ach_table_stays_private(cfg):
@@ -229,7 +232,7 @@ def test_new_news_reopens_only_pending(cfg):
 def test_quote_outage_is_a_failure_not_a_holiday(cfg):
     # 시세가 전부 실패한 것을 휴장으로 보고하면 화면이 조용히 한 시간 묵고 원인도 틀리게 남는다.
     class Down(FakeQuotes):
-        def series(self, code, market, day):
+        def chart(self, code, market, day):
             raise RuntimeError("Yahoo 503")
     report = _run(cfg, Down({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), _judging({}))
     assert not report["published"] and report["failed"] == ["series"] and "휴장" not in report["skipped"]
@@ -240,12 +243,17 @@ def test_series_keeps_only_that_day_labelled_by_interval_end(monkeypatch):
     # 봉 시각은 구간 시작이라 끝 시각으로 옮긴다(시작 시각을 달면 그래프가 5분 앞서 보인다). 빈 봉(null)은 버린다.
     day = int(datetime(2026, 10, 22, 9, 0, tzinfo=KST).timestamp())
     ts = [day - 86400 + 6 * 3600, day, day + 300, day + 600]
-    chart = {"chart": {"result": [{"timestamp": ts, "indicators": {"quote": [{"close": [1.0, 1000.0, None, 1100.0]}]}}]}}
+    meta = {"regularMarketPrice": 1105.0, "regularMarketTime": day + 840}
+    chart = {"chart": {"result": [{"meta": meta, "timestamp": ts, "indicators": {"quote": [{"close": [1.0, 1000.0, None, 1100.0]}]}}]}}
     client = quotes_mod.Quotes()
     urls = []
     monkeypatch.setattr(client, "_get", lambda url: urls.append(url) or chart)
-    assert client.series("900010", "KOSDAQ", "20261022") == [["09:05", 1000.0], ["09:15", 1100.0]]
+    got = client.chart("900010", "KOSDAQ", "20261022")
+    assert got == Chart([["09:05", 1000.0], ["09:15", 1100.0]], 1105.0, "2026-10-22T09:14:00+09:00")
     assert urls[0].endswith("/900010.KQ?interval=5m&range=1d")
+    # 휴장일: 마지막 체결이 전 거래일이면 가격을 싣지 않는다(어제 가격을 오늘 것처럼 보이지 않게)
+    meta["regularMarketTime"] = day - 86400
+    assert client.chart("900010", "KOSDAQ", "20261022").price is None
 
 
 def test_risers_keep_common_stocks_and_stop_below_threshold(monkeypatch):
@@ -324,3 +332,48 @@ def test_trading_halt_reopens_but_warning_does_not(cfg):
     again = _judging({"900010": "pending"})
     _run(cfg, src, again, kind=Halt(), now=NOW + timedelta(hours=1))
     assert again.calls == ["900010"]
+
+
+# ── 가격 갱신(매분) ──
+class Ticking(FakeQuotes):
+    """조사 뒤 가격이 바뀐 시세."""
+    def __init__(self, price, at, *, on_call=None):
+        super().__init__({})
+        self.price, self.at, self.on_call = price, at, on_call
+
+    def chart(self, code, market, day):
+        if self.on_call:
+            self.on_call()
+        return Chart([["09:05", 1000.0], ["11:50", self.price]], self.price, self.at)
+
+
+def test_prices_update_only_price_fields_and_keep_verdicts(cfg):
+    # 가격은 Yahoo 에 나오는 대로 바로 싣되, 판정·글은 모델 실행 몫이라 건드리지 않는다. 되돌림 예상 폭은 새 상승률로 다시 센다.
+    from edge_truth_research.prices import refresh_prices
+    assert refresh_prices(cfg.store, cfg.publish, quotes=Ticking(1.0, None), now=NOW)["skipped"]  # 오늘 게시 전(장 전·휴장일)엔 하지 않는다
+    _run(cfg, FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), _judging({"900010": "false"}))
+    first = _latest(cfg)
+    before = first["items"][0]
+    report = refresh_prices(cfg.store, cfg.publish, quotes=Ticking(1200.0, "2026-10-22T11:31:00+09:00"), now=NOW + timedelta(minutes=20))
+    doc, item = _latest(cfg), _latest(cfg)["items"][0]
+    assert report["published"] and doc["pricedAt"] == "2026-10-22T11:31:00+09:00" and doc["generatedAt"] == first["generatedAt"]
+    assert item["price"] == 1200.0 and item["series"][-1] == ["11:50", 1200.0]
+    assert item["changePct"] == round((1200 / before["prevClose"] - 1) * 100, 2) and item["impact"] == round(item["changePct"] * 0.8, 2)
+    assert {k: item[k] for k in ("tag", "event", "finding", "sources")} == {k: before[k] for k in ("tag", "event", "finding", "sources")}
+    assert json.loads(LocalStore(cfg.store).get("movers/2026-10-22.json")[0]) == doc  # 다음 조사 실행이 이어 받는 원본도 같다
+
+
+def test_prices_never_overwrite_a_newer_research_publish(cfg):
+    # 가격 갱신이 읽은 뒤 조사 실행이 새 판정을 올렸으면, 옛 판정에 새 가격을 얹어 덮으면 안 된다(새 판정이 한 시간 사라진다).
+    from edge_truth_research.prices import refresh_prices
+    _run(cfg, FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), _judging({"900010": "pending"}))
+    store = LocalStore(cfg.store)
+
+    def research_publishes():
+        doc = json.loads(store.get("movers/2026-10-22.json")[0])
+        doc["items"][0]["finding"] = "새 판정"
+        store.put("movers/2026-10-22.json", json.dumps(doc, ensure_ascii=False).encode())
+    report = refresh_prices(cfg.store, cfg.publish, quotes=Ticking(1200.0, "2026-10-22T11:31:00+09:00", on_call=research_publishes),
+                            now=NOW + timedelta(minutes=20))
+    assert not report["published"] and report["skipped"]
+    assert json.loads(store.get("movers/2026-10-22.json")[0])["items"][0]["finding"] == "새 판정"
