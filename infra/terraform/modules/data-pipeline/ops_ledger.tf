@@ -275,6 +275,65 @@ resource "aws_cloudwatch_metric_alarm" "scheduler_dlq_arrivals" {
   alarm_actions = [aws_sns_topic.alarms.arn]
 }
 
+# 🔴 **PLANNER_MISSING 은 DB 행만 남았다**(ALPHA-1430). 주기 reconcile 이 예정+grace 가 지난 슬롯에서
+# 런을 못 찾으면 이슈를 열지만, 이 이슈를 보는 알람이 없어 Airflow 호스트가 멈춰 슬롯이 통째로
+# 빠져도(10-20·10-21) 아무에게도 안 갔다. Airflow `service_down` 은 태스크가 사라질 때만 운다.
+# reconcile 은 Airflow 호스트 밖 Fargate 태스크라 호스트가 멈춰도 이 경로는 산다.
+# reconciler.py 는 이슈를 **새로 열 때만** 이 문구를 남긴다 — 15분마다 오는 재발 카운트는 안 센다.
+resource "aws_cloudwatch_log_metric_filter" "planner_missing" {
+  name           = "${var.name}-planner-missing"
+  log_group_name = aws_cloudwatch_log_group.this.name
+  pattern        = "\"PLANNER_MISSING run_key=\""
+
+  # namespace 를 var.name 으로 가르는 이유는 tasks.tf raw_ingest_skipped 와 같다(dev·prod 섞임 방지).
+  metric_transformation {
+    name      = "PlannerMissing"
+    namespace = "edge/${var.name}"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "planner_missing" {
+  alarm_name        = "${var.name}-planner-missing"
+  alarm_description = "원장 슬롯이 예정 시각+30분이 지나도 런이 없다(PLANNER_MISSING 새로 열림) — 그 슬롯은 안 돌았다. Airflow 레인이면 호스트 멈춤·DAG pause 를, SFN 레인이면 스케줄을 볼 것. 어느 슬롯인지는 ops 로그의 run_key= 와 ops_reconciliation_issue."
+
+  # 🔴 `FILL(raw, 0)` 이어야 다음 누락이 다시 메일을 낸다. metric filter 는 새 이슈가 있을 때만 값을
+  # 내는데, 결측 구간을 그대로 두면 CloudWatch 가 1구간보다 넓게 조회한 범위의 실데이터를 판정에
+  # 넣는다(AWS "all real data points in the evaluation range are included") — 직전 누락의 1 이
+  # 그 범위에 남아 있는 동안 ALARM 이 유지되고, 통보는 OK→ALARM 전이 때만 나가므로 그 사이 열린
+  # 다른 슬롯은 무음이다(tasks.tf disclosure_confirmed_reject_piling 과 같은 이유).
+  # 판정 창은 1분×5 중 1개(최근 5분에 1이 하나라도 있으면 ALARM)다. 1분×1 이면 지표가 1분 넘게 늦게
+  # 도착해 이미 지난 구간에 찍힐 때 판정이 0 만 보고 넘어가는데, 로그는 이슈를 열 때 한 번뿐이라
+  # 그 메일은 영영 안 온다. 5분이면 그 지연을 견디고, reconcile 이 15분 주기라 다음 주기 전에 OK 로
+  # 돌아와 서로 다른 주기의 누락은 각자 메일을 낸다 — 한 주기에 함께 열린 슬롯들은 메일 한 통이다
+  # (로그에 run_key 가 다 있다).
+  metric_query {
+    id          = "missing"
+    expression  = "FILL(raw, 0)"
+    label       = "새로 열린 PLANNER_MISSING 수(결측 구간은 0)"
+    return_data = true
+  }
+
+  metric_query {
+    id = "raw"
+    metric {
+      namespace   = "edge/${var.name}"
+      metric_name = "PlannerMissing"
+      period      = 60
+      stat        = "Sum"
+    }
+  }
+
+  evaluation_periods  = 5
+  datapoints_to_alarm = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  # 식이 값을 못 내는 때(지표가 한 번도 안 나온 배포 직후)의 기본값이다.
+  treat_missing_data = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alarms.arn]
+}
+
 resource "aws_sqs_queue_policy" "scheduler_dlq" {
   queue_url = aws_sqs_queue.scheduler_dlq.id
   policy = jsonencode({

@@ -209,6 +209,11 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
   로 영영 RESOLVE 되지 않는다). ⚠️ 이 형제에는 위의 ENABLED 조건이 **없다** — HH:MM 이 빈 값이면
   `_due_slots` 가 그 레인을 먼저 건너뛰므로 플래그만 남아도 무해하다. 미주입이면 `False`(=평일 전용,
   종전 동작)이고, `"true"`/`"false"` 외의 값은 fail-loud 다.
+- **PLANNER_MISSING 이 새로 열리면 메일이 간다**(ALPHA-1430). `detect_planner_missing` 이 이슈를
+  **새로 열 때만** `PLANNER_MISSING run_key=<키>` ERROR 를 남기고, terraform metric filter·알람
+  `<name>-planner-missing`(`modules/data-pipeline/ops_ledger.tf`)이 alarms SNS 로 보낸다. 15분마다의
+  재발 카운트 증가는 메일을 내지 않는다. ⚠️ 그래서 위의 "꺼진 채 넣으면 참인 결측을 연다"는 이제
+  **매 슬롯 메일**이다 — 레인 env 를 켤 때(첫 정기 슬롯 전 주입·DAG pause 인 채 주입) 메일이 함께 온다.
 - 주기 Reconciler 는 레인별로 "가장 최근에 슬롯이 지난 **예정일**"의 **그날 지난 스케줄 슬롯 전부**를
   대조한다(ALPHA-591 — 뉴스의 앞 슬롯이 최신 하나에 밀려 영영 미대조되지 않게). 평일 전용 레인이면
   그 예정일이 주말을 건너뛴 직전 평일이다. ⚠️ 수동 슬롯은
