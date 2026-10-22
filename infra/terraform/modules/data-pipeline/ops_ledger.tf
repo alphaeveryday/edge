@@ -301,9 +301,12 @@ resource "aws_cloudwatch_metric_alarm" "planner_missing" {
   # 내는데, 결측 구간을 그대로 두면 CloudWatch 가 1구간보다 넓게 조회한 범위의 실데이터를 판정에
   # 넣는다(AWS "all real data points in the evaluation range are included") — 직전 누락의 1 이
   # 그 범위에 남아 있는 동안 ALARM 이 유지되고, 통보는 OK→ALARM 전이 때만 나가므로 그 사이 열린
-  # 다른 슬롯은 무음이다(tasks.tf disclosure_confirmed_reject_piling 과 같은 이유). 0 으로 채우면
-  # 새 이슈가 없는 다음 5분 창에서 OK 로 돌아온다. reconcile 이 15분 주기라 서로 다른 주기의 누락은
-  # 각자 메일을 낸다 — 한 주기에 함께 열린 슬롯들은 메일 한 통이다(로그에 run_key 가 다 있다).
+  # 다른 슬롯은 무음이다(tasks.tf disclosure_confirmed_reject_piling 과 같은 이유).
+  # 판정 창은 1분×5 중 1개(최근 5분에 1이 하나라도 있으면 ALARM)다. 1분×1 이면 지표가 1분 넘게 늦게
+  # 도착해 이미 지난 구간에 찍힐 때 판정이 0 만 보고 넘어가는데, 로그는 이슈를 열 때 한 번뿐이라
+  # 그 메일은 영영 안 온다. 5분이면 그 지연을 견디고, reconcile 이 15분 주기라 다음 주기 전에 OK 로
+  # 돌아와 서로 다른 주기의 누락은 각자 메일을 낸다 — 한 주기에 함께 열린 슬롯들은 메일 한 통이다
+  # (로그에 run_key 가 다 있다).
   metric_query {
     id          = "missing"
     expression  = "FILL(raw, 0)"
@@ -316,12 +319,13 @@ resource "aws_cloudwatch_metric_alarm" "planner_missing" {
     metric {
       namespace   = "edge/${var.name}"
       metric_name = "PlannerMissing"
-      period      = 300
+      period      = 60
       stat        = "Sum"
     }
   }
 
-  evaluation_periods  = 1
+  evaluation_periods  = 5
+  datapoints_to_alarm = 1
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
   # 식이 값을 못 내는 때(지표가 한 번도 안 나온 배포 직후)의 기본값이다.
