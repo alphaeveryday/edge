@@ -126,7 +126,8 @@ pnpm --filter portfolio-ui test:e2e
 - `POST /api/portfolio/analyses`: `Idempotency-Key` UUID, holdings/question/horizon → 202 작업.
 - `GET /api/portfolio/analyses/latest`: 소유자의 최근 분석 또는 null.
 - `GET /api/portfolio/analyses/{id}`: 소유한 작업의 queued/running/succeeded/failed 상태.
-- `POST /api/portfolio/analyses/{id}/chat`: question과 멱등 키. 무료 1회 초과는 409 CHAT_LIMIT.
+- `POST /api/portfolio/analyses/{id}/chat`: question과 멱등 키. 분석 하나당 추가 질문 5회 초과는 409 CHAT_LIMIT(실패한 질문은 세지 않음).
+- `GET /api/portfolio/analyses/{id}/chats`: 소유한 분석의 추가 질문 대화(보완 요청 제외)를 보낸 순서대로, 상한 `limit`과 함께.
 - `POST /api/portfolio/analyses/{id}/report-request`: email. 접수만 저장, 발송은 미구현.
 - `POST /api/portfolio/presence`: 방문자 쿠키로 현재 활동 기록. 화면이 보일 때 30초 주기.
 - 아래 관리자 GET API는 SSM 전용 프로세스에만 존재하며 공개 API에서는 404다.

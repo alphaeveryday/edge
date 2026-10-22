@@ -184,23 +184,33 @@ def test_api_rejects_other_origins_and_preserves_idempotency(isolated_db):
         assert client.post('/api/portfolio/analyses', json=payload, headers=headers).json()['id'] == response.json()['id']
 
 
-def test_chat_quota_is_atomic_and_failure_refunds_it(isolated_db):
+def test_each_analysis_allows_five_questions_one_at_a_time_without_using_the_analysis_allowance(isolated_db):
+    # 고객은 결과 하나를 두고 채팅처럼 여러 번 묻는다. 질문은 앞선 답을 맥락으로 받으므로 한 번에 하나씩만 돌고,
+    # 분석마다 5회를 넘지 않으며, 실패한 질문은 돌려준다. 질문이 하루 분석 3건 한도를 깎아 새 분석을 막으면 안 된다.
     parent = store.submit('owner', 'parent', {})
     store.claim(); store.finish(parent['id'], result={})
-    def submit_chat(key):
+    def submit_chat(key, parent_id=parent['id']):
         try:
-            return store.submit('owner', key, {'question': 'question'}, parent_id=parent['id'])
+            return store.submit('owner', key, {'question': key}, parent_id=parent_id)
         except ValueError as error:
             return str(error)
     with ThreadPoolExecutor(2) as pool:
-        results = list(pool.map(submit_chat, ['chat1', 'chat2']))
-    assert results.count('CHAT_LIMIT') == 1
-    chat = next(r for r in results if isinstance(r, dict))
-    store.claim(); store.finish(chat['id'], failure='ANALYSIS_FAILED')
-    retry = submit_chat('retry')
-    assert isinstance(retry, dict)
-    store.claim(); store.finish(retry['id'], failure='ANALYSIS_FAILED')
-    assert isinstance(submit_chat('second-retry'), dict)
+        results = list(pool.map(submit_chat, ['chat0', 'chat1']))
+    assert results.count('CHAT_BUSY') == 1, 'a second question waits for the first answer'
+    store.claim(); store.finish(next(r for r in results if isinstance(r, dict))['id'], failure='ANALYSIS_FAILED')
+    for number in range(store.CHAT_LIMIT):
+        chat = submit_chat(f'ok{number}')
+        assert isinstance(chat, dict), 'a failed question is refunded'
+        store.claim(); store.finish(chat['id'], result={'answer': {'paragraphs': []}})
+    assert submit_chat('over') == 'CHAT_LIMIT'
+    assert len(store.chats(parent['id'], 'owner')) == store.CHAT_LIMIT + 1, 'the failed turn stays visible in the conversation'
+    assert store.chats(parent['id'], 'other') == []
+    second = store.submit('owner', 'second', {'question': 'second'})
+    store.submit('owner', 'third', {'question': 'third'})
+    with pytest.raises(ValueError, match='REQUEST_LIMIT'):
+        store.submit('owner', 'fourth', {'question': 'fourth'})
+    store.claim(); store.finish(second['id'], result={})
+    assert isinstance(submit_chat('new-analysis', second['id']), dict), 'each analysis has its own questions'
 
 
 def test_email_is_bound_to_owned_completed_analysis(isolated_db):
@@ -219,8 +229,9 @@ def test_service_recovery_does_not_consume_the_commercial_question_and_is_bounde
         store.claim(); store.finish(recovery['id'], result={})
     with pytest.raises(ValueError, match='RECOVERY_LIMIT'):
         store.submit('owner', 'third-recovery', {'question': 'again', 'mode': 'recovery'}, parent_id=parent['id'])
-    normal = store.submit('owner', 'normal', {'question': 'new question'}, parent_id=parent['id'])
-    store.claim(); store.finish(normal['id'], result={})
+    for number in range(store.CHAT_LIMIT):
+        normal = store.submit('owner', f'normal-{number}', {'question': 'new question'}, parent_id=parent['id'])
+        store.claim(); store.finish(normal['id'], result={})
     with pytest.raises(ValueError, match='CHAT_LIMIT'):
         store.submit('owner', 'second-normal', {'question': 'again'}, parent_id=parent['id'])
 

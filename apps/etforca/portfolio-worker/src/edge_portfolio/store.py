@@ -14,6 +14,7 @@ from psycopg.types.json import Jsonb
 
 INPUT_TABLES = ('portfolio', 'funding', 'horizon', 'interests', 'notes', 'tax')
 DEPLOYMENT = Path(__file__).with_name('data') / 'deployment.json'
+CHAT_LIMIT = 5  # 분석 하나에 무료로 묻는 추가 질문 수. 실패한 질문은 세지 않는다.
 
 
 def connect():
@@ -152,11 +153,15 @@ def submit(owner, key, payload, parent_id=None, *, reuse=False):
                 if used >= 2:
                     raise ValueError('RECOVERY_LIMIT')
             else:
-                used = db.execute("SELECT id FROM portfolio_jobs WHERE owner=%s AND kind='chat' AND COALESCE(input->>'mode','question')='question' AND state IN ('queued','running','succeeded')", (owner,)).fetchone()
-                if used:
+                used = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE owner=%s AND parent_id=%s AND kind='chat' AND COALESCE(input->>'mode','question')='question' AND state IN ('queued','running','succeeded')", (owner, parent_id)).fetchone()['n']
+                if used >= CHAT_LIMIT:
                     raise ValueError("CHAT_LIMIT")
-        active = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE owner=%s AND state!='failed' AND NOT (kind='chat' AND COALESCE(input->>'mode','question')='recovery') AND (state IN ('queued','running') OR created_at>now()-interval '1 day')", (owner,)).fetchone()["n"]
-        if not recovery and active >= 3:
+                # 질문은 앞선 답을 맥락으로 받으므로 한 방문자에 하나씩만 돌린다. 하루 분석 한도에서 빠진 질문이 대기열을 채우는 것도 막는다.
+                if db.execute("SELECT 1 FROM portfolio_jobs WHERE owner=%s AND kind='chat' AND COALESCE(input->>'mode','question')='question' AND state IN ('queued','running')", (owner,)).fetchone():
+                    raise ValueError("CHAT_BUSY")
+        # 질문은 분석마다 CHAT_LIMIT 로 따로 묶이므로, 하루 3건 한도는 새 분석에만 적용한다.
+        active = db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE owner=%s AND state!='failed' AND kind='analysis' AND (state IN ('queued','running') OR created_at>now()-interval '1 day')", (owner,)).fetchone()["n"]
+        if not parent_id and active >= 3:
             raise ValueError("REQUEST_LIMIT")
         queued = queued_count(db)
         if queued >= 20:
@@ -167,6 +172,14 @@ def submit(owner, key, payload, parent_id=None, *, reuse=False):
         return db.execute("""INSERT INTO portfolio_jobs(id,owner,request_key,input,kind,parent_id,cache_key,requested_at,test_label)
             VALUES (%s,%s,%s,%s,%s,%s,%s,now(),(SELECT label FROM portfolio_test_visitors WHERE owner=%s)) RETURNING *""",
                           (uuid4().hex, owner, key, Jsonb(payload), "chat" if parent_id else "analysis", parent_id, cache_key, owner)).fetchone()
+
+
+def chats(parent_id, owner):
+    """이 분석에서 주고받은 추가 질문(보완 요청 제외)을 보낸 순서대로."""
+    with connect() as db:
+        expire(db)
+        return db.execute("""SELECT * FROM portfolio_jobs WHERE owner=%s AND parent_id=%s AND kind='chat'
+            AND COALESCE(input->>'mode','question')='question' ORDER BY created_at, id""", (owner, parent_id)).fetchall()
 
 
 def latest(owner):

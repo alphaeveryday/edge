@@ -156,7 +156,14 @@ def chat(job_id: str, body: ChatInput, request: Request, idempotency_key: UUID =
         return public(store.submit(owner(request), str(idempotency_key), body.model_dump(exclude_defaults=True), parent_id=job_id))
     except ValueError as error:
         code = str(error)
-        raise HTTPException(404 if code == "PARENT_NOT_FOUND" else 409 if code in ("CHAT_LIMIT", "RECOVERY_LIMIT", "IDEMPOTENCY_CONFLICT") else 429, code) from None
+        raise HTTPException(404 if code == "PARENT_NOT_FOUND" else 409 if code in ("CHAT_LIMIT", "CHAT_BUSY", "RECOVERY_LIMIT", "IDEMPOTENCY_CONFLICT") else 429, code) from None
+
+
+@app.get("/api/portfolio/analyses/{job_id}/chats")
+def chats(job_id: str, request: Request):
+    # 실패한 질문의 진단·중간 기록은 고객 화면에 필요 없다. 3초마다 다시 읽으므로 질문만 남긴다.
+    return {'limit': store.CHAT_LIMIT, 'items': [public(row) if row['state'] != 'failed' else {**public(row), 'result': None}
+                                                 for row in store.chats(job_id, owner(request))]}
 
 
 @app.post("/api/portfolio/analyses/{job_id}/report-request", status_code=201)

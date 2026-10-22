@@ -270,3 +270,30 @@ async def test_synchronous_dashboard_database_wait_does_not_block_analysis(monke
     monkeypatch.setattr(dashboard_work, 'work_once', dashboard)
     await worker.main()
     assert finished.is_set(), 'Shutdown must still drain the background task'
+
+
+async def test_a_question_sees_only_the_earlier_answers_of_the_same_conversation(monkeypatch, tmp_path):
+    # 채팅에서 "그럼 그건?"처럼 이어 물으면 앞선 답을 알아야 한다. 실패한 답, 나중 질문, 보완 요청은 맥락이 아니다.
+    from datetime import datetime, timedelta
+    now = datetime(2026, 10, 22)
+    def chat(question, state, minutes, mode=None):
+        return {'id': question, 'state': state, 'created_at': now + timedelta(minutes=minutes),
+                'input': {'question': question, **({'mode': mode} if mode else {})},
+                'result': {'answer': {'paragraphs': [question + ' 답']}} if state == 'succeeded' else None}
+    rows = [chat('첫 질문', 'succeeded', 0), chat('실패한 질문', 'failed', 1), chat('지금 질문', 'running', 2), chat('나중 질문', 'queued', 3)]
+    rows[0]['result']['revision'] = {'recommendation': {'allocations': [{'name': 'VOO', 'account': 'ISA', 'weight_pct': 60.0, 'instrument_id': 'US:VOO'}]}}
+    seen = []
+    async def answer(question, report, key, *, conversation, **_):
+        seen.append(conversation)
+        return {}
+    for job in (rows[2], chat('보완 요청', 'running', 2, 'recovery')):
+        monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'heartbeat')
+        monkeypatch.setattr(worker.store, 'claim', lambda job=job: {**job, 'kind': 'chat', 'parent_id': 'parent', 'owner': 'owner', 'started_at': now})
+        monkeypatch.setattr(worker.store, 'read', lambda *_: {'state': 'succeeded', 'result': {}, 'input': {}})
+        monkeypatch.setattr(worker.store, 'chats', lambda *_: rows)
+        for name in ('stage', 'finish', 'checkpoint'):
+            monkeypatch.setattr(worker.store, name, lambda *_, **__: None)
+        monkeypatch.setattr(worker, 'answer_question', answer)
+        monkeypatch.setenv('DEEPSEEK_API_KEY', 'test')
+        assert await worker.work_once() is True
+    assert seen == [[{'question': '첫 질문', 'answer': ['첫 질문 답'], 'proposed_allocations': [{'name': 'VOO', 'account': 'ISA', 'weight_pct': 60.0}]}], []]

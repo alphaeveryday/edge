@@ -6553,3 +6553,55 @@ html { scroll-padding-bottom: var(--input-cta-height, 0px); }
 .example-dialog .dialog-close { position: sticky; top: 0; float: right; margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2)) 0 0; background: var(--bg-raised); border-radius: var(--radius-pill); z-index: 1; }
 .example-dialog h2 { font-size: var(--text-heading); margin: 0 0 var(--space-2); }
 .example-dialog img { display: block; width: 100%; height: auto; margin-top: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-card); }
+
+/* 추가 질문 대화 화면: 분석 결과 위에 전체 화면으로 열리고, 위에는 돌아가기, 아래에는 입력창이 붙는다. */
+body:has(.chat-screen[open]) { overflow: hidden; }
+.chat-resume { width: 100%; margin-top: var(--space-4); justify-content: space-between; text-align: left; }
+.chat-screen {
+  box-sizing: border-box; width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; padding: 0; border: 0;
+  background: var(--color-canvas); color: var(--color-text);
+}
+.chat-screen[open] { display: flex; flex-direction: column; }
+.chat-screen::backdrop { background: var(--color-canvas); }
+.chat-screen__bar {
+  display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4);
+  padding-top: max(var(--space-3), env(safe-area-inset-top));
+  background: var(--color-surface); border-bottom: 1px solid var(--color-border);
+}
+.chat-screen__bar h2 { flex: 1; margin: 0; font-size: var(--text-body); text-align: center; }
+.chat-screen__back { flex: none; min-height: 44px; padding: 0 var(--space-2); border: 0; background: none; color: var(--color-primary); font: inherit; font-size: var(--text-label); font-weight: 600; cursor: pointer; }
+.chat-screen__count { flex: none; min-width: 9ch; text-align: right; font-size: var(--text-caption); color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.chat-screen__messages { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: var(--space-6) var(--space-4); }
+.chat-screen__messages > * { max-width: 720px; margin-left: auto; margin-right: auto; }
+.chat-screen__intro { margin-bottom: var(--space-6); font-size: var(--text-caption); color: var(--color-text-muted); text-align: center; }
+.chat-turn { display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-8); }
+.chat-bubble { margin: 0; overflow-wrap: anywhere; font-size: var(--text-label); line-height: 1.75; }
+.chat-bubble--me {
+  align-self: flex-end; max-width: 85%; padding: var(--space-3) var(--space-4); white-space: pre-wrap;
+  background: var(--color-primary); color: var(--color-on-primary); border-radius: 20px 20px 6px 20px;
+}
+.chat-bubble--ai { align-self: stretch; padding: var(--space-1) 0; }
+.chat-bubble--ai p { margin: 0 0 var(--space-3); }
+.chat-bubble--ai .followup-revision { margin-top: var(--space-2); padding: var(--space-3) var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-control); }
+.chat-bubble--ai .followup-revision summary { cursor: pointer; color: var(--color-primary); font-weight: 600; min-height: 32px; }
+.chat-bubble--failed { padding: var(--space-3) var(--space-4); background: var(--color-danger-soft); border-radius: var(--radius-control); }
+.chat-bubble--failed .ds-button { margin-top: var(--space-1); }
+.chat-bubble--waiting small { color: var(--color-text-muted); font-size: var(--text-caption); }
+.chat-dots { display: inline-flex; gap: 5px; margin-bottom: var(--space-2); }
+.chat-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--color-primary); animation: chat-dot 1.2s var(--ease) infinite; }
+.chat-dots i:nth-child(2) { animation-delay: .15s; }
+.chat-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes chat-dot { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) { .chat-dots i { animation: none; opacity: .6; } }
+.chat-screen__error { color: var(--color-danger); font-size: var(--text-caption); }
+/* 결과 화면의 .followup form/textarea 규칙이 대화 화면 안까지 내려오지 않게 한 단계 더 구체적으로 쓴다. */
+.chat-screen .chat-screen__composer {
+  display: flex; flex-direction: row; align-items: flex-end; gap: var(--space-2); width: 100%; max-width: 720px; box-sizing: border-box; margin: 0 auto;
+  padding: var(--space-3) var(--space-4); padding-bottom: max(var(--space-3), env(safe-area-inset-bottom));
+}
+.chat-screen .chat-screen__composer textarea {
+  display: block; margin: 0; flex: 1; min-width: 0; min-height: 52px; max-height: 160px; box-sizing: border-box; resize: none; field-sizing: content;
+  padding: 14px var(--space-4); border: 1px solid var(--color-border-strong); border-radius: 26px; background: var(--color-surface);
+  font: inherit; font-size: 1rem; line-height: 1.5; color: var(--color-text);
+}
+.chat-screen .chat-screen__composer .ds-button { flex: none; min-height: 52px; width: 52px; height: 52px; padding: 0; border-radius: 50%; font-size: 1.25rem; }

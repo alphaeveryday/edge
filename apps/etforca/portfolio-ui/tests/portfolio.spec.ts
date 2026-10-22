@@ -53,6 +53,7 @@ test('default account, real stages, result restoration, chat gate and email rece
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/catalog')) return route.fulfill({ json: catalog });
     if (path.endsWith('/chat')) return route.fulfill({ status: 409, json: { detail: 'CHAT_LIMIT' } });
+    if (path.endsWith('/chats')) return route.fulfill({ json: { limit: 5, items: Array.from({ length: 5 }, (_, i) => ({ id: `used-${i}`, state: 'succeeded', input: { question: '이미 물어본 질문' }, result: { answer: section } })) } });
     if (path.endsWith('/newsletter')) {
       expect(route.request().postDataJSON()).toEqual({ email: 'test@example.com', consent: true });
       return route.fulfill({ status: 201, json: { status: 'pending', delivery_ready: true } });
@@ -81,11 +82,9 @@ test('default account, real stages, result restoration, chat gate and email rece
   await expect(page.getByRole('heading', { name: '과거 성과' })).toBeVisible();
   await page.locator('.evaluation').scrollIntoViewIfNeeded();
   await page.getByRole('button', { name: '평가 팝업 닫기' }).click();
-  await page.getByLabel('추가 질문', { exact: true }).fill('다시 물어볼게요');
-  await page.getByRole('button', { name: '질문 보내기' }).click();
-  await expect(page.getByRole('dialog').filter({ hasText: '아직 준비 중' })).toBeVisible();
-  await page.getByRole('button', { name: '포트폴리오로 돌아가기' }).click();
+  // 이 분석의 질문 5회를 다 쓴 고객은 입력창이 잠기고 이유와 다음 길(새 분석)을 본다.
   await expect(page.getByRole('textbox', { name: '추가 질문', exact: true })).toBeDisabled();
+  await expect(page.locator('.followup')).toContainText('추가 질문 5회를 모두 사용했어요. 새 분석을 시작하면 다시 물을 수 있어요.');
   await page.locator('.premium').click();
   await page.getByRole('dialog', { name: '내 ETF 핵심 소식 이메일로 받기' }).getByLabel('뉴스레터 이메일').fill('test@example.com');
   await page.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
