@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import { gunzipSync } from 'node:zlib';
 import { readFileSync } from 'node:fs';
+import { blockAnalyticsHost } from '../playwright.config';
 
 type Event = { event: string; properties: Record<string, any> };
 function unpackReplay(value: any): any {
@@ -9,7 +10,7 @@ function unpackReplay(value: any): any {
   if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, unpackReplay(v)]));
   return value;
 }
-test.use({ launchOptions: { args: ['--disable-blink-features=AutomationControlled'] }, userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36' });
+test.use({ launchOptions: { args: ['--disable-blink-features=AutomationControlled', blockAnalyticsHost] }, userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36' });
 test.afterEach(async ({ page }) => { await page.unrouteAll({ behavior: 'wait' }); });
 
 test('confirmed test visitors retain events with an explicit customer-exclusion marker', async ({ page, baseURL }) => {
@@ -161,10 +162,11 @@ test('each input screen has one visit and visible dwell excludes hidden time wit
   expect(events.every(e => typeof e.properties.distinct_id === 'string' && e.properties.distinct_id !== '$posthog_cookieless')).toBe(true);
   expect((await page.context().cookies()).some(c => c.name.startsWith('ph_'))).toBe(true);
   // Anonymous cookie identity connects repeat visits without customer identity.
-  for (const event of events) expect(event.properties).toMatchObject({
-    $host: 'etforca.com',
-    $current_url: 'https://etforca.com/portfolio/' + String(event.properties.screen).replaceAll('_', '/'), $pathname: '/portfolio/' + String(event.properties.screen).replaceAll('_', '/'),
-  });
+  // 화면 이벤트는 화면별 주소로, 화면이 없는 행동 이벤트(예: 추천 시작)는 포폴 기본 주소로 남는다 — 실제 URL·쿼리·해시는 남지 않는다.
+  for (const event of events) {
+    const path = event.properties.screen ? '/portfolio/' + String(event.properties.screen).replaceAll('_', '/') : '/portfolio/';
+    expect(event.properties).toMatchObject({ $host: 'etforca.com', $current_url: 'https://etforca.com' + path, $pathname: path });
+  }
   expect(await page.evaluate(() => Object.keys(localStorage).some(k => k.startsWith('ph_')))).toBe(true);
 });
 
@@ -584,4 +586,47 @@ test('a request box that starts open on desktop is not reported as opened by the
   const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
   await expect.poll(actions).toContain('input_search_opened');
   expect(actions()).not.toContain('request_box_opened');
+});
+
+test('a no-result search is counted once per search, not once per keystroke flicker', async ({ page, baseURL }) => {
+  // 한글 조합 중에는 결과 0건이 깜빡인다. 한 번의 검색을 여러 번으로 세면 '못 찾음' 빈도가 부풀려진다.
+  const events = await instrument(page, baseURL!);
+  await page.route('https://etforca.com/api/portfolio/catalog', route => route.fulfill({ json: { counts: { KR: 0, US: 1 }, instruments: [{ id: 'US:VOO', name: 'VOO', ticker: 'VOO', code: 'VOO', market: 'US', kind: 'etf' }] } }));
+  await page.goto('https://etforca.com/portfolio/');
+  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
+  for (const text of ['V', 'Vq', 'V', 'Vq', 'V', 'Vq']) await search.fill(text);
+  await search.blur();
+  await search.fill('Vqx'); // 닫았다가 0건인 채로 이어 친 검색도 새 검색이다
+  await page.keyboard.press('Escape'); // 후보 목록이 아래 토글을 덮는다
+  await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click(); // 뒤 행동이 도착한 뒤 개수를 본다
+  const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
+  await expect.poll(actions).toContain('bulk_entry_opened');
+  expect(actions().filter(a => a === 'instrument_search_empty')).toHaveLength(2);
+});
+
+test('starting from recommendations is counted so the no-search path is visible', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await page.goto('https://etforca.com/portfolio/');
+  await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
+  // 돌아와 다시 눌러도 같은 초안의 추천 시작은 한 번이다(횟수가 부풀지 않게).
+  await page.getByRole('button', { name: '앞 질문으로' }).click();
+  await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
+  await page.getByRole('button', { name: '앞 질문으로' }).click();
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).focus(); // 뒤 행동이 도착한 뒤 개수를 본다
+  const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
+  await expect.poll(actions).toContain('input_search_opened');
+  expect(actions().filter(a => a === 'recommend_started')).toHaveLength(1);
+});
+
+test('a recommendation click that cannot save is not counted as a started recommendation', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await page.route('https://etforca.com/api/portfolio/drafts/**', route => route.fulfill({ status: 503, json: {} }));
+  await page.goto('https://etforca.com/portfolio/');
+  await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).focus(); // 뒤 행동이 도착한 뒤 부재를 본다
+  const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
+  await expect.poll(actions).toContain('input_search_opened');
+  expect(actions()).not.toContain('recommend_started');
 });

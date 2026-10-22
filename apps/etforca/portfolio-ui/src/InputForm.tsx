@@ -170,7 +170,8 @@ export function InputForm({ onSubmit, busy, initialInput }: { onSubmit: (input: 
     setSaving(true); setInputError('');
     try { await save(tax, recommend || fresh); } catch (error) { setInputError((error as Error).message); setSaving(false); return; }
     setSaving(false);
-    if (recommend) setFresh(true);
+    // 저장까지 끝나 추천 흐름이 실제로 시작된 경우만 센다(입력 오류·저장 실패로 멈춘 클릭은 시작이 아니다).
+    if (recommend) { if (!fresh) trackAction('recommend_started'); setFresh(true); } // 같은 초안에서 다시 눌러도 한 번
     if (step < 4 && !finish) { setStep(step + 1); window.scrollTo(0, 0); return; }
     if (!how || how === '매달 꾸준히' && Number(contribution) <= 0) { setInputError('투자 방법과 월 투자금액을 입력해 주세요.'); setStep(1); return; }
     onSubmit({ ...payload(), draft_id: draftId });
