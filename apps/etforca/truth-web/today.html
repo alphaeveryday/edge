@@ -206,7 +206,7 @@ function render(focusRow){
   const count = t => t === 'all' ? items.length : items.filter(i => i.tag === t).length;
   const dates = [...new Set([...state.dates, state.latest, d.date].filter(Boolean))].sort().reverse().slice(0, 10);
   // 가격은 Yahoo 시세(약 20분 늦음)를 매분 싣는다 — 그 마지막 체결 시각을 쓴다(없던 때의 파일은 게시 시각)
-  $('status').innerHTML = `<b>${esc(md(d.date))}</b> 가격 ${esc(hhmm(d.pricedAt || d.generatedAt))} 기준 <small>약 20분 지연</small>`;
+  $('status').innerHTML = `<b>${esc(md(d.date))}</b> 가격 ${esc(hhmm(d.pricedAt || d.generatedAt))} 기준${d.pricedAt ? ' <small>약 20분 지연</small>' : ''}`;
   $('dates').innerHTML = dates.map(x =>
     `<button type="button" data-date="${esc(x)}" aria-pressed="${x === d.date}">${x === todayKst() ? '오늘' : esc(dayLabel(x))}</button>`).join('');
   $('tags').innerHTML = ['all', 'false', 'promising', 'pending'].map(t =>

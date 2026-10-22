@@ -361,6 +361,10 @@ def test_prices_update_only_price_fields_and_keep_verdicts(cfg):
     assert item["changePct"] == round((1200 / before["prevClose"] - 1) * 100, 2) and item["impact"] == round(item["changePct"] * 0.8, 2)
     assert {k: item[k] for k in ("tag", "event", "finding", "sources")} == {k: before[k] for k in ("tag", "event", "finding", "sources")}
     assert json.loads(LocalStore(cfg.store).get("movers/2026-10-22.json")[0]) == doc  # 다음 조사 실행이 이어 받는 원본도 같다
+    # 급등 뒤 전일 아래로 밀리면 상승률이 음수가 된다 — 되돌림 예상 폭은 0으로 두고 게시는 계속된다(계약상 음수 불가)
+    report = refresh_prices(cfg.store, cfg.publish, quotes=Ticking(900.0, "2026-10-22T11:40:00+09:00"), now=NOW + timedelta(minutes=30))
+    item = _latest(cfg)["items"][0]
+    assert report["published"] and item["changePct"] < 0 and item["impact"] == 0
 
 
 def test_prices_never_overwrite_a_newer_research_publish(cfg):
@@ -377,3 +381,4 @@ def test_prices_never_overwrite_a_newer_research_publish(cfg):
                             now=NOW + timedelta(minutes=20))
     assert not report["published"] and report["skipped"]
     assert json.loads(store.get("movers/2026-10-22.json")[0])["items"][0]["finding"] == "새 판정"
+    assert _latest(cfg)["items"][0]["price"] == 1300.0  # 공개본에도 옛 판정+새 가격을 올리지 않았다(조사 때 가격 그대로)
