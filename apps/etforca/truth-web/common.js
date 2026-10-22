@@ -74,8 +74,8 @@ const resolvedRow = (c, i) => `
     <span class="span">${prior(c) ? elapsed(c.flaggedAt, c.resolvedAt) : '사후 정리'}</span>
   </a>`;
 
-/* 최상단 바: 로고·슬로건 | 오늘의 급등주 · 다른 서비스 버튼. 모든 페이지 공용(독립 서비스 화면 today 는 제 머리를 쓴다) */
-if (!document.body.hasAttribute('data-standalone')) document.querySelector('.window').insertAdjacentHTML('beforebegin', `
+/* 최상단 바: 로고·슬로건 | 오늘의 급등주 · 다른 서비스 버튼. 모든 페이지 공용 */
+document.querySelector('.window').insertAdjacentHTML('beforebegin', `
   <header class="topbar">
     <a class="logo" href="./">
       <img src="logo.png" alt="로고">

@@ -382,3 +382,81 @@ def test_prices_never_overwrite_a_newer_research_publish(cfg):
     assert not report["published"] and report["skipped"]
     assert json.loads(store.get("movers/2026-10-22.json")[0])["items"][0]["finding"] == "새 판정"
     assert _latest(cfg)["items"][0]["price"] == 1300.0  # 공개본에도 옛 판정+새 가격을 올리지 않았다(조사 때 가격 그대로)
+
+
+# ── 새 급등주 감시(매분) ──
+def test_new_only_run_judges_unseen_stocks_and_leaves_reviews_to_the_hourly_run(cfg):
+    # 감시가 띄운 실행은 새 종목만 본다 — 이미 판정한 종목의 새 공시 재검토는 매시 정각 실행 몫이다(세션을 새 종목에 쓴다).
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
+    _run(cfg, src, _judging({"900010": "false"}))
+    both = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9), _m("900020", "라마바바이오", 15.0)]})
+    runner = _judging({"900010": "false", "900020": "pending"})
+    report = research.run_research(cfg, quotes=both, kind=FakeKind(extra=["20261022000099"]), session_runner=runner,
+                                   now=NOW + timedelta(minutes=10), only_new=True)
+    assert runner.calls == ["900020"] and report["mode"] == "new" and report["published"]
+    assert {i["code"] for i in _latest(cfg)["items"]} == {"900010", "900020"}
+
+
+def _watch(cfg, src, *, now, launched):
+    from edge_truth_research.prices import watch_new
+    return watch_new(cfg.store, quotes=src, now=now, launch=lambda: launched.append(now) or f"task-{len(launched)}")
+
+
+def test_watch_launches_research_once_for_new_risers(cfg):
+    # 10% 넘게 오른 종목이 새로 뜨면 정각을 기다리지 않고 분석을 띄운다. 띄운 태스크가 잠금을 잡기 전(약 1분)에 매분 또 띄우면
+    # 같은 종목을 여러 번 판정하고 돈을 쓴다.
+    src, launched = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), []
+    at = NOW.replace(minute=5)
+    assert _watch(cfg, src, now=at, launched=launched)["launched"] == "task-1"
+    assert _watch(cfg, src, now=at + timedelta(minutes=1), launched=launched)["skipped"]
+    assert len(launched) == 1
+    # 판정이 끝나면 더 띄우지 않는다
+    _run(cfg, src, _judging({"900010": "false"}), now=at + timedelta(minutes=8))
+    assert _watch(cfg, src, now=at + timedelta(minutes=9), launched=launched)["new"] == [] and len(launched) == 1
+
+
+def test_watch_waits_for_a_running_research_and_for_the_hourly_slot(cfg):
+    # 조사 실행이 돌고 있으면(잠금) 띄우지 않는다. 정각 조사(:35) 전 15분도 띄우지 않는다 — 잠금이 겹치면 정각 재검토가 통째로 빠진다.
+    src, launched = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), []
+    for minute in (20, 34, 37):  # 정각 조사 태스크가 뜨고 잠금을 잡을 때까지
+        assert "정각" in _watch(cfg, src, now=NOW.replace(minute=minute), launched=launched)["skipped"]
+    LocalStore(cfg.store).put(research.LEASE_KEY, json.dumps({"runId": "x", "until": (NOW + timedelta(hours=1)).isoformat()}).encode())
+    assert "돌고" in _watch(cfg, src, now=NOW.replace(minute=40), launched=launched)["skipped"]
+    assert launched == []
+
+
+def test_watch_does_nothing_on_holidays_and_reports_launch_failures(cfg):
+    from edge_truth_research.prices import watch_new
+    launched = []
+    assert _watch(cfg, FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}, traded=False), now=NOW.replace(minute=5),
+                  launched=launched)["skipped"] and launched == []
+
+    def broken():
+        raise RuntimeError("AccessDenied")
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
+    report = watch_new(cfg.store, quotes=src, now=NOW.replace(minute=5), launch=broken)
+    assert report["failed"] and report["launched"] is None
+    # 띄우지 못했으면 기록을 지워 다음 분에 다시 시도한다(조용히 30분 묵히지 않는다)
+    assert _watch(cfg, src, now=NOW.replace(minute=6), launched=launched)["launched"]
+
+
+def test_watch_relaunches_sooner_for_more_new_stocks_than_for_the_same_ones(cfg):
+    # 새 종목이 더 뜨면 6분 뒤 다시 띄운다. 같은 종목만 남았으면(공시 조회 실패 등 판정이 안 되는 종목) 30분 기다린다 — 매번 헛돈다.
+    one, launched = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), []
+    two = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9), _m("900020", "라마바바이오", 15.0)]})
+    at = NOW.replace(hour=10, minute=0)
+    _watch(cfg, one, now=at, launched=launched)
+    assert _watch(cfg, one, now=at + timedelta(minutes=7), launched=launched)["skipped"]
+    assert _watch(cfg, two, now=at + timedelta(minutes=7), launched=launched)["launched"] and len(launched) == 2
+    assert _watch(cfg, two, now=at + timedelta(minutes=14), launched=launched)["skipped"]  # 같은 둘 → 30분
+
+
+def test_new_only_run_caps_sessions_and_yields_near_the_hourly_run(cfg):
+    # 새 종목만 실행은 세션 한 묶음(3개)만 연다. 정각 조사 직전이면 세션을 열지 않고 정각 조사에 넘긴다(잠금이 겹치면 정각이 빠진다).
+    many = FakeQuotes({"KOSDAQ": [_m(f"9000{n}0", f"종목{n}", 20.0 - n) for n in range(1, 6)]})
+    runner = _judging({f"9000{n}0": "pending" for n in range(1, 6)})
+    research.run_research(cfg, quotes=many, kind=FakeKind(), session_runner=runner, now=NOW.replace(minute=5), only_new=True)
+    assert len(runner.calls) == research.WATCH_SESSIONS
+    late = _judging({f"9000{n}0": "pending" for n in range(1, 6)})
+    report = research.run_research(cfg, quotes=many, kind=FakeKind(), session_runner=late, now=NOW.replace(minute=30), only_new=True)
+    assert late.calls == [] and report["skipped"] and report["published"]

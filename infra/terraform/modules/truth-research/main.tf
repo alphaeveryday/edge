@@ -63,6 +63,15 @@ resource "aws_iam_role_policy" "task" {
       Effect   = "Allow", Action = ["s3:PutObject"],
       Resource = ["${var.landing_bucket_arn}/${local.publish_prefix}/movers/*", "${var.landing_bucket_arn}/${local.publish_prefix}/logos/*"]
     },
+    # 매분 감시가 새 급등주를 보면 같은 태스크 정의로 '새 종목만' 조사 실행을 띄운다(이 클러스터에서만)
+    {
+      Effect    = "Allow", Action = ["ecs:RunTask"], Resource = "arn:aws:ecs:${var.region}:${local.account_id}:task-definition/${var.name}:*",
+      Condition = { ArnEquals = { "ecs:cluster" = var.cluster_arn } }
+    },
+    {
+      Effect    = "Allow", Action = ["iam:PassRole"], Resource = [aws_iam_role.execution.arn, aws_iam_role.task.arn],
+      Condition = { StringEquals = { "iam:PassedToService" = "ecs-tasks.amazonaws.com" } }
+    },
   ] })
 }
 
@@ -117,6 +126,12 @@ resource "aws_ecs_task_definition" "this" {
     environment = [for k, v in {
       TRUTH_STORE   = "s3://${var.store_bucket_name}"
       TRUTH_PUBLISH = "s3://${var.landing_bucket_name}/${local.publish_prefix}"
+      # 감시(prices)가 '새 종목만' 조사 실행을 띄울 때 쓰는 자리 — 스케줄과 같은 클러스터·네트워크
+      TRUTH_RUN_CLUSTER   = var.cluster_arn
+      TRUTH_RUN_TASK      = var.name
+      TRUTH_RUN_SUBNETS   = join(",", var.subnet_ids)
+      TRUTH_RUN_SG        = aws_security_group.this.id
+      TRUTH_RUN_CONTAINER = local.container_name
     } : { name = k, value = v }]
     # truth-agent 와 같은 시크릿·같은 키
     secrets = [for key in ["DEEPSEEK_RESIST_NEWS_API_KEY", "EXA_API_KEY"] : {
@@ -182,8 +197,8 @@ resource "aws_scheduler_schedule" "this" {
   }
 }
 
-# 가격 갱신: 같은 태스크 정의를 명령만 바꿔(prices) 장중 매분 돌린다. 모델을 부르지 않아 0.25 vCPU·0.5GB 로 줄인다.
-# 판정·글은 건드리지 않고 오늘 게시한 종목의 가격·그래프만 고친다. 늦은 재시도는 다음 분 실행과 겹칠 뿐이라 두지 않는다.
+# 가격 갱신·새 급등주 감시: 같은 태스크 정의를 명령만 바꿔(prices) 장중 매분 돌린다. 모델을 부르지 않아 0.25 vCPU·0.5GB 로 줄인다.
+# 판정·글은 건드리지 않고 오늘 게시한 종목의 가격·그래프만 고친다. 아직 판정하지 않은 급등주가 생기면 '새 종목만' 조사 실행을 띄운다. 늦은 재시도는 다음 분 실행과 겹칠 뿐이라 두지 않는다.
 resource "aws_scheduler_schedule" "prices" {
   name                         = "${var.name}-prices"
   state                        = var.schedule_state

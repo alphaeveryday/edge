@@ -8,7 +8,8 @@ etforca.com/truth/today 의 데이터를 만든다. 오늘 크게 오른 종목�
 
 ```bash
 uv run --package edge-truth-research python -m edge_truth_research run                 # 한 번 실행(운영은 장중 매시 :35)
-uv run --package edge-truth-research python -m edge_truth_research prices              # 가격만 갱신(운영은 장중 매분). TRUTH_STORE·TRUTH_PUBLISH 만 쓴다
+uv run --package edge-truth-research python -m edge_truth_research run --new           # 아직 판정하지 않은 새 종목만(매분 감시가 띄운다)
+uv run --package edge-truth-research python -m edge_truth_research prices              # 가격 갱신 + 새 급등주 감시(운영은 장중 매분). 모델 키를 쓰지 않는다
 uv run --package edge-truth-research python -m edge_truth_research tool-specs --web 1   # pi 확장이 등록하는 도구 목록
 uv run --package edge-truth-research pytest apps/etforca/truth-research/tests -q
 ```
