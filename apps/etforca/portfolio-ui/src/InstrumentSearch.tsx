@@ -34,7 +34,7 @@ export function InstrumentSearch({ account, catalog, onAdd, onOpen, includeStock
   function choose(item: Instrument) { onOpen?.(); emptyReported.current = false; const rejected = onAdd(item); if (rejected) { setError(rejected); return; } setError(''); setQuery(''); setOpen(false); setActive(0); }
   return <div className="find instrument-search"><Button type="button" className="find__plus" aria-label={account + ` ${label} 또는 현금 찾기`} onClick={() => { setOpen(!open); document.getElementById(id)?.focus(); }}>+</Button>
     <TextInput id={id} className="field" role="combobox" aria-label={account + `에 담은 ${label} 찾기`} aria-autocomplete="list" aria-expanded={open} aria-controls={id + '-list'} aria-activedescendant={open && options[active] ? id + '-' + active : undefined} autoComplete="off" placeholder={label + ' 추가하기'} value={query} onFocus={() => { setOpen(true); onOpen?.(); }} onBlur={() => { setOpen(false); emptyReported.current = false; }} onChange={e => { onOpen?.(); setQuery(e.target.value); setError(''); setOpen(true); setActive(0); }} onKeyDown={e => {
-      if (e.key === 'Escape') setOpen(false);
+      if (e.key === 'Escape') { setOpen(false); emptyReported.current = false; }
       if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setActive(Math.max(0, Math.min(active + 1, options.length - 1))); }
       if (e.key === 'ArrowUp') { e.preventDefault(); setActive(Math.max(0, active - 1)); }
       if (e.key === 'Enter' && open && options[active]) { e.preventDefault(); choose(options[active]); }

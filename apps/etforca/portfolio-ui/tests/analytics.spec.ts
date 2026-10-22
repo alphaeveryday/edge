@@ -610,3 +610,16 @@ test('starting from recommendations is counted so the no-search path is visible'
   await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
   await expect.poll(() => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action)).toContain('recommend_started');
 });
+
+test('a recommendation click that cannot save is not counted as a started recommendation', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await page.route('https://etforca.com/api/portfolio/drafts/**', route => route.fulfill({ status: 503, json: {} }));
+  await page.goto('https://etforca.com/portfolio/');
+  await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).focus(); // 뒤 행동이 도착한 뒤 부재를 본다
+  const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
+  await expect.poll(actions).toContain('input_search_opened');
+  expect(actions()).not.toContain('recommend_started');
+});
