@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>오늘의 급등주 해석 · 투자정보 기만 검증</title>
+<title>오늘의 급등주</title>
+<meta name="description" content="오늘 크게 오른 종목마다 오른 이유가 사실인지 공시·보도와 대조합니다. 가격은 장중 매분 갱신합니다.">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
 <link rel="stylesheet" href="style.css">
 <script src="intro.js"></script>
@@ -12,14 +13,41 @@
 /* list.html 처럼 창 높이를 풀고 페이지가 스크롤한다 */
 body{overflow-y:auto}
 .window{height:auto;min-height:calc(100vh - 100px)}
-.back:hover{background:rgba(255,255,255,.1)}
-:root{--up:#ff453a;--down:#4c8dff;--warn:#ff6a2b;--warn-text:#ffa77f;--ok-text:#6fe08f}
+:root{--up:#ff453a;--down:#4c8dff;--warn:#ff6a2b;--warn-text:#ffa77f;--ok:#30d158;--ok-text:#6fe08f}
 ::selection{background:rgba(255,255,255,.22)}
 :focus-visible{outline:2px solid #fff;outline-offset:2px}
 
-.lhead{padding:22px 8px 20px}
-.lhead h1{font-size:clamp(30px,4.5vw,52px);line-height:1.1;letter-spacing:-.03em;text-wrap:balance}
-.lhead p{margin-top:12px;font-size:14px;line-height:1.6;color:var(--muted);max-width:62ch}
+/* 머리: 서비스 표지 | 실시간 상태 */
+.dhead{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 4px 0 6px;min-width:0}
+.brand{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:700;letter-spacing:-.02em;white-space:nowrap;border-radius:10px}
+.brand svg{flex:none;width:32px;height:32px}
+.live{min-width:0;overflow:hidden;padding:9px 16px;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.live b{color:var(--text);font-weight:600}
+.live small{font-size:12px;color:var(--faint)}
+.dot{position:relative;flex:none;width:8px;height:8px;border-radius:50%;background:rgba(245,245,247,.4)}
+.live.on .dot{background:var(--ok)}
+.live.on .dot::after{content:"";position:absolute;inset:0;border-radius:50%;background:var(--ok);animation:ping 2s cubic-bezier(0,0,.2,1) infinite}
+.live.late .dot{background:var(--warn)}
+@keyframes ping{from{transform:scale(1);opacity:.65}to{transform:scale(2.8);opacity:0}}
+
+/* 첫 화면: 왼쪽 제목 · 오른쪽 오늘의 1위 두 장 */
+.hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,620px);gap:28px;align-items:end;padding:22px 8px 22px}
+.lhead h1{font-size:clamp(28px,3.6vw,44px);line-height:1.15;letter-spacing:-.03em;text-wrap:balance;font-variant-numeric:tabular-nums}
+.lhead p{margin-top:12px;font-size:14px;line-height:1.6;color:var(--muted);max-width:52ch}
+.spots{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.spot{display:flex;flex-direction:column;gap:12px;min-width:0;padding:16px 18px 18px;border-radius:var(--r-lg);
+  font:inherit;color:inherit;text-align:left;cursor:pointer;transition:background .2s,border-color .2s,transform .2s cubic-bezier(.2,.8,.2,1)}
+.spot:hover{background:rgba(255,255,255,.085);transform:translateY(-1px)}
+.spot.s-false{border-color:rgba(255,106,43,.34)}
+.spot.s-promising{border-color:rgba(52,199,89,.3)}
+.spot .sh{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.spot .sh .pct{font-size:18px}
+.spot .who b{font-size:15px}
+.spot .who .logo-c{width:32px;height:32px;font-size:14px}
+.spot .who>span:last-child{min-width:0;flex:1}
+.spot .t{font-size:14px;line-height:1.45;font-weight:600;letter-spacing:-.01em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.spot.none{cursor:default;justify-content:center;min-height:150px;font-size:13px;color:var(--faint)}
+.spot.none:hover{background:var(--glass);transform:none}
 
 /* 날짜 · 판정 고르기 — list.html .filters 와 같은 모양 */
 .bar{display:flex;flex-direction:column;gap:10px;padding:0 6px 8px}
@@ -33,10 +61,16 @@ body{overflow-y:auto}
 .row button b{font-weight:inherit;opacity:.6;margin-left:4px}
 .row button:disabled{opacity:.4;cursor:default}
 .hint{min-height:20px;padding:4px 8px 14px;font-size:13px;color:var(--faint)}
-#status small{margin-left:4px;font-size:12px;color:var(--faint)}
 
 .movers{display:flex;flex-direction:column;gap:12px;padding:0 6px}
-.mv{display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:32px;padding:24px;border-radius:var(--r-lg)}
+.mv{display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:32px;padding:24px;border-radius:var(--r-lg);scroll-margin-top:16px;transition:border-color .3s}
+.mv:focus:not(:focus-visible){outline:none}
+.mv.lit{border-color:rgba(255,255,255,.34)}
+
+/* 가격이 바뀌면 잠깐 물든다(상승 빨강 · 하락 파랑) — 매분 갱신이 실제로 들어왔다는 신호 */
+.tick{animation:tick 1.6s cubic-bezier(.16,1,.3,1)}
+.t-up{--tk:rgba(255,69,58,.34)}.t-down{--tk:rgba(76,141,255,.34)}
+@keyframes tick{from{background:var(--tk)}to{background:transparent}}
 
 /* 왼쪽: 종목 · 장중 그래프 */
 .who{display:flex;align-items:center;gap:12px}
@@ -46,14 +80,14 @@ body{overflow-y:auto}
 .who>div{min-width:0;flex:1}
 .who b{display:block;font-size:17px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .who small{font-size:12.5px;color:var(--faint);font-variant-numeric:tabular-nums}
-.pct{flex:none;font-size:22px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.pct{flex:none;font-size:22px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums;border-radius:6px;padding:0 4px;margin-right:-4px}
 .up{color:var(--up)}.down{color:var(--down)}
 .spark{margin-top:18px}
 .spark svg{display:block;width:100%;height:96px;overflow:visible}
 .ax{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--faint);margin-top:6px;font-variant-numeric:tabular-nums}
 .nochart{height:96px;display:grid;place-items:center;font-size:12.5px;color:var(--faint);border:1px dashed var(--line);border-radius:12px}
 .px{margin-top:12px;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
-.px b{color:var(--text);font-weight:600}
+.px b{color:var(--text);font-weight:600;border-radius:4px;padding:0 2px}
 
 /* 오른쪽: 판정 · 사건 */
 .verdict{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:999px;white-space:nowrap}
@@ -61,6 +95,8 @@ body{overflow-y:auto}
 .v-promising{background:rgba(52,199,89,.16);color:var(--ok-text)}
 .v-pending{background:rgba(255,255,255,.1);color:var(--muted)}
 .verdict small{font-size:12px;font-weight:600;opacity:.8}
+/* 순위: 판정 안에서 확신도가 높은 순서 */
+.verdict .rk{font-variant-numeric:tabular-nums;padding-right:7px;margin-right:1px;border-right:1px solid color-mix(in srgb,currentColor 30%,transparent)}
 .meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:12.5px;color:var(--faint);font-variant-numeric:tabular-nums}
 .mv h2{font-size:20px;line-height:1.4;letter-spacing:-.02em;margin-top:14px;text-wrap:balance}
 .finding{margin-top:8px;font-size:14.5px;line-height:1.65;color:rgba(245,245,247,.86);max-width:68ch}
@@ -84,25 +120,41 @@ details[open] summary svg{transform:rotate(90deg)}
 .srcs svg{flex:none;width:11px;height:11px;align-self:center}
 .impact b{color:var(--warn-text);font-variant-numeric:tabular-nums}
 
+@media (max-width:1080px){
+  .hero{grid-template-columns:minmax(0,1fr);align-items:start;gap:18px}
+}
 @media (max-width:900px){
   .mv{grid-template-columns:minmax(0,1fr);gap:20px;padding:18px 16px}
   .movers,.bar{padding-left:0;padding-right:0}
   .mv h2{font-size:18px}
-  .lhead{padding-left:4px;padding-right:4px}
+  .hero{padding-left:4px;padding-right:4px}
 }
-@media (prefers-reduced-motion:reduce){summary svg{transition:none}}
+@media (max-width:560px){
+  .spots{grid-template-columns:minmax(0,1fr)}
+  .live small,.live .pt{display:none}
+  .live{padding:8px 14px}
+}
+@media (prefers-reduced-motion:reduce){summary svg,.spot,.mv{transition:none}.live.on .dot::after,.tick{animation:none}}
 </style>
 </head>
-<body>
+<body data-standalone>
 <main class="window">
-  <header class="top">
-    <a class="back pill glass" href="./">← 홈</a>
-    <div class="score pill glass" id="status" aria-live="polite">불러오는 중</div>
+  <header class="dhead">
+    <a class="brand" href="today" aria-label="오늘의 급등주 처음으로">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#ff453a"/>
+        <path d="M7.5 21.5 13 15.5l4 3.5 7.5-8.5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M19.5 10.5h5v5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>오늘의 급등주</span>
+    </a>
+    <div class="live pill glass" id="status"><span class="dot"></span>불러오는 중</div>
   </header>
-  <div class="lhead">
-    <h1>오늘의 급등주 해석</h1>
-    <p>크게 오른 종목마다 오른 이유로 꼽힌 사건이 사실인지 공시·보도와 대조합니다. AI 판단이며 투자 권유가 아닙니다.</p>
-  </div>
+  <section class="hero">
+    <div class="lhead">
+      <h1 id="headline">오늘 크게 오른 종목</h1>
+      <p>오른 이유로 꼽힌 사건이 사실인지 공시·보도와 대조합니다. 가격은 장중 매분 갱신합니다. AI 판단이며 투자 권유가 아닙니다.</p>
+    </div>
+    <div class="spots" id="spots" role="group" aria-label="판정별 1위"></div>
+  </section>
   <nav class="bar" aria-label="보기 고르기">
     <div class="row" id="dates" role="group" aria-label="날짜"></div>
     <div class="row" id="tags" role="group" aria-label="판정"></div>
@@ -114,7 +166,7 @@ details[open] summary svg{transform:rotate(90deg)}
 
 <script src="common.js"></script>
 <script>
-// 데이터: truth-agent 가 장중 매시 게시한다 — data/movers/<날짜>.json, 날짜 목록 data/movers/dates.json (docs/design/truth-movers.md §4)
+// 데이터: 조사 에이전트(truth-research)가 장중 매시 판정을 게시하고 가격은 매분 고친다 — data/movers/<날짜>.json, 날짜 목록 data/movers/dates.json (docs/design/truth-movers.md §4)
 const TAGS = {false: '허위매물', promising: '유망주', pending: '판단 보류'};
 const TAG_HINT = {
   all: '되돌림 예상 폭이 큰 순서입니다. 허위매물이 위로 옵니다.',
@@ -159,8 +211,48 @@ function chart(it){
 }
 
 const isTag = t => Object.hasOwn(TAGS, t);
-const card = it => {
-  const tag = isTag(it.tag) ? it.tag : 'pending';
+const tagOf = it => isTag(it.tag) ? it.tag : 'pending';
+// 판정별 순위: 확신도가 높은 순, 같으면 상승률 순
+const byRank = (a, b) => b.confidence - a.confidence || b.changePct - a.changePct;
+const ranksOf = items => {
+  const r = {};
+  for (const t of Object.keys(TAGS)) items.filter(i => tagOf(i) === t).sort(byRank).forEach((it, n) => { r[it.code] = n + 1; });
+  return r;
+};
+const kstNow = () => new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false}).format(new Date());
+const mins = t => +t.slice(0, 2) * 60 + +t.slice(3, 5);
+
+// 가격이 바뀐 종목만 잠깐 물들인다. 같은 날짜 안에서만 비교한다
+const lastPx = new Map();
+let lastDate = null;
+const tick = it => {
+  const was = lastPx.get(it.code);
+  return was == null || was === it.price ? '' : ` tick ${it.price > was ? 't-up' : 't-down'}`;
+};
+const conf = it => tagOf(it) === 'pending' ? '' : `확신도 ${Math.round(it.confidence * 100)}%`;
+const pill = (it, rank) => `<span class="verdict v-${tagOf(it)}" role="img" aria-label="${TAGS[tagOf(it)]} ${rank}위${conf(it) && `, ${conf(it)}`}">
+    <span class="rk">${rank}위</span><span>${TAGS[tagOf(it)]}${conf(it) && ` <small>${conf(it)}</small>`}</span></span>`;
+
+// 오늘의 1위(허위매물 · 유망주) — 누르면 그 종목 카드로 간다
+const spot = (tag, it) => it ? `
+  <button type="button" class="spot glass s-${tag}" id="spot-${tag}" data-code="${esc(it.code)}">
+    <span class="sh">${pill(it, 1)}<span class="pct ${it.changePct >= 0 ? 'up' : 'down'}${tick(it)}">${signed(it.changePct)}</span></span>
+    <span class="who">${logo(it)}<span><b>${esc(it.name)}</b><small>${esc(it.code)} · ${esc(it.market)}</small></span></span>
+    <span class="t">${esc(it.event?.title)}</span>
+  </button>`
+  : `<div class="spot glass none">${esc(md(state.doc.date))}에는 ${TAGS[tag]}로 판정한 종목이 없습니다.</div>`;
+
+// 실시간 표시: 오늘 · 평일 · 가격 갱신이 도는 9~16시에만 '실시간'. 가격이 45분 넘게 멈춰 있으면 '갱신 지연'
+function liveState(d){
+  const wd = new Date(d.date + 'T00:00:00Z').getUTCDay(), now = mins(kstNow());
+  if (d.date !== todayKst()) return {cls: '', label: '지난 기록'};
+  if (wd === 0 || wd === 6 || now < 9 * 60 || now >= 16 * 60) return {cls: '', label: '장 마감'};
+  const at = d.pricedAt || d.generatedAt || '';
+  return !at.startsWith(d.date) || now - mins(hhmm(at)) > 45 ? {cls: 'late', label: '갱신 지연'} : {cls: 'on', label: '실시간'};
+}
+
+const card = (it, rank) => {
+  const tag = tagOf(it);
   const kind = EVENT_KINDS[it.event?.kind], judged = hhmm(it.judgedAt);
   const more = [
     it.claim && `<div><h3>내세운 주장</h3><p>${esc(it.claim)}</p></div>`,
@@ -170,17 +262,17 @@ const card = it => {
     tag === 'false' && it.impact > 0 && `<p class="impact">되돌림 예상 폭 <b>약 ${it.impact.toFixed(1)}%</b>. 상승률에 확신도를 곱한 근사값으로, 순서를 정할 때만 씁니다.</p>`,
   ].filter(Boolean);
   return `
-  <article class="mv glass">
+  <article class="mv glass" id="m-${esc(it.code)}" tabindex="-1">
     <div>
       <div class="who">${logo(it)}
         <div><b>${esc(it.name)}</b><small>${esc(it.code)} · ${esc(it.market)}</small></div>
-        <span class="pct ${it.changePct >= 0 ? 'up' : 'down'}">${signed(it.changePct)}</span>
+        <span class="pct ${it.changePct >= 0 ? 'up' : 'down'}${tick(it)}">${signed(it.changePct)}</span>
       </div>
       <div class="spark">${chart(it)}</div>
-      <p class="px">주가 <b>${krw(it.price)}</b> · 전일 ${krw(it.prevClose)} · 거래대금 ${Math.round(it.tradeValue).toLocaleString('ko-KR')}억원</p>
+      <p class="px">주가 <b class="${tick(it).trim()}">${krw(it.price)}</b> · 전일 ${krw(it.prevClose)} · 거래대금 ${Math.round(it.tradeValue).toLocaleString('ko-KR')}억원</p>
     </div>
     <div>
-      <div class="meta"><span class="verdict v-${tag}">${TAGS[tag]}${tag === 'pending' ? '' : ` <small>확신도 ${Math.round(it.confidence * 100)}%</small>`}</span>
+      <div class="meta">${pill(it, rank)}
         ${[kind, judged && `판정 ${judged}`].filter(Boolean).map(esc).join(' · ')}</div>
       <h2>${esc(it.event?.title)}</h2>
       <p class="finding">${esc(it.finding)}</p>
@@ -202,11 +294,18 @@ const saveUrl = () => {
 };
 
 function render(focusRow){
-  const d = state.doc, items = [...d.items].sort((a, b) => b.impact - a.impact || b.changePct - a.changePct);
+  const d = state.doc, items = [...d.items].sort((a, b) => b.impact - a.impact || b.changePct - a.changePct), rank = ranksOf(items);
+  const keep = document.activeElement?.id;
+  if (d.date !== lastDate) lastPx.clear();
   const count = t => t === 'all' ? items.length : items.filter(i => i.tag === t).length;
   const dates = [...new Set([...state.dates, state.latest, d.date].filter(Boolean))].sort().reverse().slice(0, 10);
   // 가격은 Yahoo 시세(약 20분 늦음)를 매분 싣는다 — 그 마지막 체결 시각을 쓴다(없던 때의 파일은 게시 시각)
-  $('status').innerHTML = `<b>${esc(md(d.date))}</b> 가격 ${esc(hhmm(d.pricedAt || d.generatedAt))} 기준${d.pricedAt ? ' <small>약 20분 지연</small>' : ''}`;
+  const lv = liveState(d);
+  $('status').className = `live pill glass ${lv.cls}`;
+  $('status').innerHTML = `<span class="dot"></span><b>${lv.label}</b><span><span class="pt">가격 </span>${esc(hhmm(d.pricedAt || d.generatedAt))}<span class="pt"> 기준</span></span>${d.pricedAt ? '<small>약 20분 지연</small>' : ''}`;
+  $('headline').textContent = `${d.date === todayKst() ? '오늘' : md(d.date)} 크게 오른 ${items.length}종목`;
+  const first = t => items.filter(i => tagOf(i) === t).sort(byRank)[0];
+  $('spots').innerHTML = spot('false', first('false')) + spot('promising', first('promising'));
   $('dates').innerHTML = dates.map(x =>
     `<button type="button" data-date="${esc(x)}" aria-pressed="${x === d.date}">${x === todayKst() ? '오늘' : esc(dayLabel(x))}</button>`).join('');
   $('tags').innerHTML = ['all', 'false', 'promising', 'pending'].map(t =>
@@ -216,10 +315,16 @@ function render(focusRow){
   if (focusRow) $(focusRow).querySelector('[aria-pressed=true]')?.focus();
   const behind = d.date === state.latest && d.date !== todayKst() ? ` 오늘은 아직 장이 열리지 않아 ${md(d.date)} 결과를 보여 줍니다.` : '';
   $('hint').textContent = TAG_HINT[state.tag] + behind;
-  const shown = state.tag === 'all' ? items : items.filter(i => i.tag === state.tag);
-  $('movers').innerHTML = shown.length ? shown.map(card).join('')
+  // 전체는 되돌림 예상 폭 순, 판정을 고르면 그 판정의 순위(확신도) 순
+  const shown = state.tag === 'all' ? items : items.filter(i => tagOf(i) === state.tag).sort(byRank);
+  $('movers').innerHTML = shown.length ? shown.map(it => card(it, rank[it.code])).join('')
     : `<div class="empty">${items.length ? `${esc(md(d.date))}에는 ${TAGS[state.tag]}로 판정한 종목이 없습니다.`
       : `${esc(md(d.date))}에는 10% 넘게 오른 종목이 없거나 장이 열리지 않았습니다.`}</div>`;
+  lastPx.clear();
+  for (const it of items) lastPx.set(it.code, it.price);
+  lastDate = d.date;
+  // 매분 다시 그려도 보던 자리(1위 카드·옮겨 간 종목)의 초점을 지킨다
+  if (!focusRow && keep) document.getElementById(keep)?.focus({preventScroll: true});
 }
 
 // 날짜를 주면 그날 파일, 없으면 최신(latest.json). 없는 날짜면 최신으로 돌아간다
@@ -237,13 +342,25 @@ async function show(date, focusRow){
   } catch {
     if (mine !== token) return;
     if (!state.doc) $('movers').innerHTML = '<div class="empty">급등주 해석을 불러오지 못했습니다. 잠시 뒤 다시 열어 주세요.</div>';
-    $('status').textContent = state.doc ? '새로 받지 못함 · 이전 결과' : '불러오지 못함';
+    $('status').className = 'live pill glass late';
+    $('status').innerHTML = `<span class="dot"></span>${state.doc ? '새로 받지 못함 · 이전 결과' : '불러오지 못함'}`;
   } finally { if (mine === token) busy = false; }
 }
 
 $('dates').addEventListener('click', e => { const b = e.target.closest('button[data-date]'); if (b && b.dataset.date !== state.date) show(b.dataset.date, 'dates'); });
 $('tags').addEventListener('click', e => { const b = e.target.closest('button[data-tag]');
   if (b && !b.disabled && b.dataset.tag !== state.tag) { state.tag = b.dataset.tag; saveUrl(); render('tags'); } });
+// 1위 카드: 그 종목이 지금 목록에 없으면 '전체'로 돌린 뒤 카드로 옮겨 잠깐 표시한다
+$('spots').addEventListener('click', e => {
+  const b = e.target.closest('button[data-code]');
+  if (!b) return;
+  if (!document.getElementById(`m-${b.dataset.code}`)) { state.tag = 'all'; saveUrl(); render(); }
+  const el = document.getElementById(`m-${b.dataset.code}`);
+  if (!el) return;
+  el.scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
+  el.focus({preventScroll: true});
+  el.classList.add('lit'); setTimeout(() => el.classList.remove('lit'), 1600);
+});
 $('movers').addEventListener('toggle', e => { const c = e.target.dataset?.code; if (c) e.target.open ? openCodes.add(c) : openCodes.delete(c); }, true);
 
 getJson('data/movers/dates.json').then(x => { state.dates = (Array.isArray(x) ? x : []).filter(d => typeof d === 'string' && DATE_RE.test(d)); })
