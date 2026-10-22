@@ -4,12 +4,12 @@ import { readFileSync } from 'node:fs';
 const catalog = JSON.parse(readFileSync(new URL('../../portfolio-worker/src/edge_portfolio/data/etf_catalog.json', import.meta.url), 'utf8'));
 
 // 운영과 같은 화면(미리보기 막대 없음)에서 API 만 흉내 낸다.
-async function open(page: Page, saved: unknown = null) {
+async function open(page: Page, saved: unknown = null, latest: unknown = null) {
   await page.route('**/api/portfolio/**', route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/catalog')) return route.fulfill({ json: catalog });
     if (path.endsWith('/workbook')) return route.fulfill({ json: { version: saved ? 1 : 0, workbook: saved } });
-    if (path.endsWith('/analyses/latest')) return route.fulfill({ json: null });
+    if (path.endsWith('/analyses/latest')) return route.fulfill({ json: latest });
     return route.fulfill({ json: {} });
   });
   await page.goto('/portfolio/');
@@ -121,6 +121,13 @@ test('a first-time visitor is asked before going to an empty dashboard', async (
 test('a dashboard check that fails never traps the visitor on the input screen', async ({ page }) => {
   await open(page);
   await page.route('**/api/portfolio/workbook', route => route.fulfill({ status: 503, json: {} }));
+  await page.getByRole('link', { name: '내 포트폴리오 ↗' }).click();
+  await expect(page).toHaveURL(/view=dashboard/);
+});
+
+test('a visitor with an earlier analysis but no saved holdings goes straight to the dashboard', async ({ page }) => {
+  // 대시보드는 최근 분석도 보여준다 — 분석을 해 본 사람에게 '처음'이라고 묻지 않는다.
+  await open(page, null, { id: 'earlier', state: 'succeeded' });
   await page.getByRole('link', { name: '내 포트폴리오 ↗' }).click();
   await expect(page).toHaveURL(/view=dashboard/);
 });
