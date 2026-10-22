@@ -296,16 +296,35 @@ resource "aws_cloudwatch_log_metric_filter" "planner_missing" {
 resource "aws_cloudwatch_metric_alarm" "planner_missing" {
   alarm_name        = "${var.name}-planner-missing"
   alarm_description = "원장 슬롯이 예정 시각+30분이 지나도 런이 없다(PLANNER_MISSING 새로 열림) — 그 슬롯은 안 돌았다. Airflow 레인이면 호스트 멈춤·DAG pause 를, SFN 레인이면 스케줄을 볼 것. 어느 슬롯인지는 ops 로그의 run_key= 와 ops_reconciliation_issue."
-  namespace         = "edge/${var.name}"
-  metric_name       = "PlannerMissing"
 
-  statistic           = "Sum"
-  period              = 300
+  # 🔴 `FILL(raw, 0)` 이어야 다음 누락이 다시 메일을 낸다. metric filter 는 새 이슈가 있을 때만 값을
+  # 내는데, 결측 구간을 그대로 두면 CloudWatch 가 1구간보다 넓게 조회한 범위의 실데이터를 판정에
+  # 넣는다(AWS "all real data points in the evaluation range are included") — 직전 누락의 1 이
+  # 그 범위에 남아 있는 동안 ALARM 이 유지되고, 통보는 OK→ALARM 전이 때만 나가므로 그 사이 열린
+  # 다른 슬롯은 무음이다(tasks.tf disclosure_confirmed_reject_piling 과 같은 이유). 0 으로 채우면
+  # 새 이슈가 없는 다음 5분 창에서 OK 로 돌아온다. reconcile 이 15분 주기라 서로 다른 주기의 누락은
+  # 각자 메일을 낸다 — 한 주기에 함께 열린 슬롯들은 메일 한 통이다(로그에 run_key 가 다 있다).
+  metric_query {
+    id          = "missing"
+    expression  = "FILL(raw, 0)"
+    label       = "새로 열린 PLANNER_MISSING 수(결측 구간은 0)"
+    return_data = true
+  }
+
+  metric_query {
+    id = "raw"
+    metric {
+      namespace   = "edge/${var.name}"
+      metric_name = "PlannerMissing"
+      period      = 300
+      stat        = "Sum"
+    }
+  }
+
   evaluation_periods  = 1
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
-  # 새 이슈가 없는 창은 지표가 아예 안 나온다 — 그게 평상시다. 다음 창에서 OK 로 돌아와
-  # 다음 누락이 다시 전이(=메일)를 낸다.
+  # 식이 값을 못 내는 때(지표가 한 번도 안 나온 배포 직후)의 기본값이다.
   treat_missing_data = "notBreaching"
 
   alarm_actions = [aws_sns_topic.alarms.arn]
