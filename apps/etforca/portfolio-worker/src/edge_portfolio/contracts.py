@@ -155,6 +155,13 @@ class Evaluation(StrictModel):
 class RecommendationEvaluation(Evaluation):
     scores: Scores
 
+    @model_validator(mode='after')
+    def recommended_floor(self):
+        # 직접 추천한 구성은 세 항목 평균 4점 이상(4~5점 안에서 근거대로 차등)으로 보여 준다
+        if self.scores.leadership + self.scores.profitability + self.scores.stability < 12:
+            raise ValueError('RECOMMENDED_SCORE_BELOW_FOUR: recommendation.evaluation.scores must average 4.0~5.0; rescore within that range by the same evidence')
+        return self
+
 
 class Allocation(StrictModel):
     instrument_id: str = Field(min_length=1, max_length=32)

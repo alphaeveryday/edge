@@ -52,13 +52,24 @@ def test_recommended_rating_is_required():
         FinalReport.model_validate(raw)
 
 
-def test_suitable_recommendation_keeps_honest_scores_below_four():
+def test_recommendation_scores_stay_between_four_and_five_but_vary():
+    # AI가 직접 고른 추천 구성은 4점 아래로 보여 주지 않는다. 4~5점 안의 차등은 그대로 살린다.
     raw = final_payload()
-    scores = {'leadership': 3, 'profitability': 3.5, 'stability': 4.5}
-    raw['recommendation']['evaluation']['scores'] = scores
-    result = publish(raw)
-    assert result['recommendation']['evaluation']['scores'] == scores
-    assert result['recommendation']['evaluation']['overall'] == 3.7
+    raw['recommendation']['evaluation']['scores'] = {'leadership': 3, 'profitability': 3.5, 'stability': 4.5}
+    with pytest.raises(ValueError, match='RECOMMENDED_SCORE_BELOW_FOUR'):
+        FinalReport.model_validate(raw)
+    for scores, overall in (({'leadership': 4, 'profitability': 4, 'stability': 4}, 4),
+                            ({'leadership': 5, 'profitability': 4.5, 'stability': 3.5}, 4.3),
+                            ({'leadership': 5, 'profitability': 5, 'stability': 5}, 5)):
+        raw['recommendation']['evaluation']['scores'] = scores
+        assert publish(raw)['recommendation']['evaluation']['overall'] == overall
+
+
+def test_current_portfolio_keeps_scores_below_four():
+    # 하한은 추천 구성에만 있다. 사용자가 지금 가진 구성은 근거대로 낮게 매길 수 있어야 비교가 된다.
+    raw = final_payload()
+    raw['current_evaluation']['scores'] = {'leadership': 1, 'profitability': 1.5, 'stability': 2}
+    assert publish(raw)['current_evaluation']['overall'] == 1.5
 
 
 def test_cash_current_rating_can_be_absent_without_hiding_recommended_stars():
