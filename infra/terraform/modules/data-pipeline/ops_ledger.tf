@@ -164,6 +164,12 @@ resource "aws_iam_role_policy" "ops_task" {
         Resource  = ["*"]
         Condition = { ArnEquals = { "ecs:cluster" = var.cluster_arn } }
       },
+      {
+        # 장전 감시(ALPHA-1431)가 이 모듈의 컨테이너 로그 그룹에서 universe 성공 문구를 찾는다.
+        Effect   = "Allow"
+        Action   = ["logs:FilterLogEvents"]
+        Resource = ["${aws_cloudwatch_log_group.this.arn}:*"]
+      },
     ]
   })
 }
@@ -225,6 +231,8 @@ resource "aws_ecs_task_definition" "ops" {
       # 원천 관측 레인(ALPHA-1140) — Airflow 전용이라 cron 변수가 없다. 시각은 DAG 와 테스트로 묶는다(위 locals).
       OPS_SOURCE_DAILY_SCHED_HHMM    = local.source_daily_schedule_hhmm
       OPS_SOURCE_DAILY_SCHED_WEEKEND = "true"
+      # 장전 레인 실행 누락 감시(ALPHA-1431) — 장전 컨테이너가 쓰는 로그 그룹. 빈 값이면 감시 없음.
+      OPS_PREMARKET_LOG_GROUP = aws_cloudwatch_log_group.this.name
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"
@@ -386,4 +394,56 @@ resource "aws_scheduler_schedule" "reconcile" {
     }
     dead_letter_config { arn = aws_sqs_queue.scheduler_dlq.arn }
   }
+}
+
+# 🔴 **장전 레인은 원장 밖이라 PLANNER_MISSING 이 없다**(ALPHA-1431). premarket_pipeline.tf 의 알람
+# 셋은 전부 SFN 이 실행을 시도해야 운다 — 실행 주체가 Airflow 면 SFN 스케줄이 DISABLED 라 영영 조용하다.
+# 주기 reconcile(Airflow 호스트 밖)이 거래일 07:30~09:00 에 그날 07:30 까지의 universe 성공 로그를 찾고,
+# 없으면 `PREMARKET_MISSING`, 조회가 실패하면 `PREMARKET_WATCH_FAILED` 를 남긴다(ops/premarket_watch.py).
+resource "aws_cloudwatch_log_metric_filter" "premarket_missing" {
+  name           = "${var.name}-premarket-missing"
+  log_group_name = aws_cloudwatch_log_group.this.name
+  pattern        = "?\"PREMARKET_MISSING\" ?\"PREMARKET_WATCH_FAILED\""
+
+  metric_transformation {
+    name      = "PremarketMissing"
+    namespace = "edge/${var.name}"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "premarket_missing" {
+  alarm_name        = "${var.name}-premarket-missing"
+  alarm_description = "거래일 장전 유니버스 배치가 07:30 까지 성공하지 못했다(안 돌았거나·실패했거나·늦었다) 또는 감시가 로그를 조회하지 못했다 — 그날 분봉 세션은 어제 유니버스로 돈다. ops 로그의 PREMARKET_MISSING/PREMARKET_WATCH_FAILED 줄과 Airflow edge_premarket·SFN premarket 실행을 볼 것."
+
+  # 감시는 같은 날 07:30~09:00 의 매 reconcile(15분)마다 ERROR 를 낸다 — 하루 한 통이어야 한다.
+  # 판정 = 최근 90분(5분×18) 안에 1 이 하나라도 있으면 ALARM. 07:3x 첫 ERROR 에서 전이(메일)하고
+  # 08:4x 마지막 ERROR 까지 ALARM 이 이어져 다시 통보하지 않는다. 다음 날 07:3x 전에 OK 로 돌아온다.
+  # `FILL(raw, 0)` 은 결측 구간이 판정 범위를 넓혀 전날 1 을 끌어들이지 않게 한다(planner_missing·
+  # tasks.tf disclosure_confirmed_reject_piling 과 같은 이유). 늦게 도착한 지표도 90분 안이면 본다.
+  metric_query {
+    id          = "missing"
+    expression  = "FILL(raw, 0)"
+    label       = "장전 성공 없음·감시 실패 로그 수(결측 구간은 0)"
+    return_data = true
+  }
+
+  metric_query {
+    id = "raw"
+    metric {
+      namespace   = "edge/${var.name}"
+      metric_name = "PremarketMissing"
+      period      = 300
+      stat        = "Sum"
+    }
+  }
+
+  evaluation_periods  = 18
+  datapoints_to_alarm = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  # 식이 값을 못 내는 때(지표가 한 번도 안 나온 배포 직후)의 기본값이다.
+  treat_missing_data = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alarms.arn]
 }

@@ -248,6 +248,9 @@ def main(argv: list[str] | None = None) -> int:
                  # 운영 원장(ALPHA-530): plan-run=EventBridge→Planner(원장 기록+SFN 시작),
                  # reconcile=주기 대조. 둘 다 원장 DB 필수, storage/수집창과 무관.
                  "plan-run", "reconcile",
+                 # 장전 레인 실행 누락 감시만 단독으로(ALPHA-1431) — reconcile 도 매 주기 부른다.
+                 # 원장 DB 를 안 쓴다(실환경 시험용).
+                 "premarket-watch",
                  # 1분 파이프라인(ALPHA-670): relay=outbox→SQS 발행 상주 루프. 원장 DB +
                  # minute_relay 큐 매핑 필수, storage/수집창과 무관.
                  "relay",
@@ -621,6 +624,8 @@ def main(argv: list[str] | None = None) -> int:
         return ops_entry.plan_run_cli(settings)
     if args.step == "reconcile":
         return ops_entry.reconcile_cli(settings)
+    if args.step == "premarket-watch":
+        return ops_entry.premarket_watch_cli()
     if args.step == "relay":
         return relay_cli(settings, max_ticks=args.max_ticks)
     if args.step == "dlq-reconcile":

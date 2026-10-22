@@ -1264,10 +1264,10 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
   - 전환 변수: `envs/dev/main.tf` 의 `premarket_orchestrator`. `"AIRFLOW"` 면 스케줄이 DISABLED 가 된다.
   - 경계: 07:00 run 이 끝난 뒤, 다음 거래일 07:00 전에 바꾼다.
 - **알림이 달라진다.** SFN 의 실패·시간 초과 알람 대신 run 실패 SNS 한 통이 나간다(dagrun_timeout 포함).
-  - ⚠️ **감시 공백.** SFN 의 스케줄러 DLQ 알람("실행이 아예 안 생김")을 대신할 것이 없다.
-  - Airflow 서비스가 죽으면 서비스 정지 경보가 운다.
-  - 서비스는 살아 있는데 run 이 안 생기면(DAG import 오류·pause) 아무것도 울지 않는다. 원장 밖이라 PLANNER_MISSING 도 없다.
-  - 전환 전에 받아들일지, 레인별 실행 누락 감시를 둘지 정한다.
+  - **실행 누락 감시(ALPHA-1431).** SFN 의 스케줄러 DLQ 알람("실행이 아예 안 생김")은 스케줄이 DISABLED 면 안 운다. 대신 주기 reconcile(Airflow 호스트 밖 Fargate)이 거래일 07:30~09:00 에 그날 07:30 까지의 universe 성공 로그(`universe 무변경`/`universe 갱신`)를 찾는다(`ops/premarket_watch.py`).
+    - 없으면 알람 `edge-dev-data-pipeline-premarket-missing` 이 하루 한 통 메일을 보낸다. 안 돈 것(호스트 멈춤·pause·import 오류)·실패·07:30 넘김이 다 여기 걸린다. 실행 주체(SFN·Airflow)와 무관하다.
+    - 있으면 ops 로그에 `premarket ok day=…` 가 남는다.
+    - 원장 밖이라 PLANNER_MISSING 은 여전히 없다. Airflow 서비스가 죽으면 서비스 정지 경보도 운다.
 - 07:30 교체 마감이 있다(`build-minute-universe` 가 스스로 거부). dagrun_timeout 은 SFN 과 같은 1500초다. 실측(SFN 최근 40회): p50 217초, 최대 376초, FAILED 8회.
 
 ## 뉴스 레인(news, ALPHA-1409)
