@@ -1,5 +1,5 @@
 import { Button, TextInput } from './design-system/components';
-import { useEffect, useId, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { Catalog, Instrument } from './api';
 import { trackAction } from './analytics';
 
@@ -20,7 +20,9 @@ export function InstrumentSearch({ account, catalog, onAdd, onOpen, includeStock
   }, [query, catalog, includeStocks]);
   const empty = !!catalog && !!query.trim() && !options.length;
   // Counts searches that found nothing (e.g. individual stocks) without sending what was typed.
-  useEffect(() => { if (empty) trackAction('instrument_search_empty'); }, [empty]);
+  // 검색 한 번(열고 고르거나 닫을 때까지)에 한 번만 센다 — 한글 조합 중에는 결과 0건이 깜빡여 같은 검색이 여러 번 잡혔다.
+  const emptyReported = useRef(false);
+  useEffect(() => { if (empty && !emptyReported.current) { emptyReported.current = true; trackAction('instrument_search_empty'); } }, [empty]);
   useEffect(() => {
     const option = open ? document.getElementById(id + '-' + active) : null;
     const list = option?.closest<HTMLElement>('.sug');
@@ -29,9 +31,9 @@ export function InstrumentSearch({ account, catalog, onAdd, onOpen, includeStock
     if (row.top < bounds.top) list.scrollTop -= bounds.top - row.top;
     else if (row.bottom > bounds.bottom) list.scrollTop += row.bottom - bounds.bottom;
   }, [active, open, id]);
-  function choose(item: Instrument) { onOpen?.(); const rejected = onAdd(item); if (rejected) { setError(rejected); return; } setError(''); setQuery(''); setOpen(false); setActive(0); }
+  function choose(item: Instrument) { onOpen?.(); emptyReported.current = false; const rejected = onAdd(item); if (rejected) { setError(rejected); return; } setError(''); setQuery(''); setOpen(false); setActive(0); }
   return <div className="find instrument-search"><Button type="button" className="find__plus" aria-label={account + ` ${label} 또는 현금 찾기`} onClick={() => { setOpen(!open); document.getElementById(id)?.focus(); }}>+</Button>
-    <TextInput id={id} className="field" role="combobox" aria-label={account + `에 담은 ${label} 찾기`} aria-autocomplete="list" aria-expanded={open} aria-controls={id + '-list'} aria-activedescendant={open && options[active] ? id + '-' + active : undefined} autoComplete="off" placeholder={label + ' 추가하기'} value={query} onFocus={() => { setOpen(true); onOpen?.(); }} onBlur={() => setOpen(false)} onChange={e => { onOpen?.(); setQuery(e.target.value); setError(''); setOpen(true); setActive(0); }} onKeyDown={e => {
+    <TextInput id={id} className="field" role="combobox" aria-label={account + `에 담은 ${label} 찾기`} aria-autocomplete="list" aria-expanded={open} aria-controls={id + '-list'} aria-activedescendant={open && options[active] ? id + '-' + active : undefined} autoComplete="off" placeholder={label + ' 추가하기'} value={query} onFocus={() => { setOpen(true); onOpen?.(); }} onBlur={() => { setOpen(false); emptyReported.current = false; }} onChange={e => { onOpen?.(); setQuery(e.target.value); setError(''); setOpen(true); setActive(0); }} onKeyDown={e => {
       if (e.key === 'Escape') setOpen(false);
       if (e.key === 'ArrowDown') { e.preventDefault(); setOpen(true); setActive(Math.max(0, Math.min(active + 1, options.length - 1))); }
       if (e.key === 'ArrowUp') { e.preventDefault(); setActive(Math.max(0, active - 1)); }
