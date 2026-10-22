@@ -59,10 +59,12 @@ def research_inventory(request, decision, published, coverage=(), considered_ids
     rejected = optimization.get('reason') in {'RATING_BELOW_MINIMUM', 'EXECUTION_INFEASIBLE', 'CUSTOMER_CONSTRAINT_NOT_SATISFIED'}
     calculation_only = not recommendation and bool(published.get('scenarios') or decision.execute_saved_target and optimization.get('reason') == 'SAVED_TARGET_ONLY')
     active = set() if calculation_only else holdings | selected | (eligible if not recommendation and not rejected else set())
+    # 구조·구성종목·보수·분배는 ETF 조사 항목이다. 고객이 넣은 개별주에는 요구하지 않는다.
+    stocks = {row.instrument_id for row in request.holdings if row.kind == 'stock'}
     return [{'instrument_id': key, 'field': field, 'status': by_key.get((key, field), {}).get('status', 'missing'),
              'roles': [role for role, ids in [('holding', holdings), ('candidate', candidates), ('selected', selected)] if key in ids],
              'required': key in active}
-            for key in sorted((holdings | selected | candidates | {key for key, _ in by_key}) - {'CASH:KRW'}) for field in fields]
+            for key in sorted((holdings | selected | candidates | {key for key, _ in by_key}) - {'CASH:KRW'} - stocks) for field in fields]
 
 
 def assess_completion(final, request, decision, published, sources, as_of, *, considered_ids=()):

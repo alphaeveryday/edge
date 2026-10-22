@@ -11,6 +11,7 @@ from .market_data import fetch_prices, normalized_prices, comparison_bounds, exp
 from .recommendation import selected_accounts, allocation_error
 from .decision import Decision, check_constraints
 from .execution import plan_execution
+from .catalog import price_symbol
 from .market_data import comparison_method, comparison_column
 
 PRICE_TIMEOUT_SECONDS = 65
@@ -198,8 +199,7 @@ class Optimizer:
         if missing:
             self.result.update(reason='CURRENT_INSTRUMENT_UNAVAILABLE', missing_instrument_ids=missing)
             return self.result
-        needed = {key: self.market.catalog[key]['ticker'] + ('.KS' if self.market.catalog[key]['market'] == 'KR' else '')
-                  for key in ids - {'CASH:KRW'}}
+        needed = {key: price_symbol(key) for key in ids - {'CASH:KRW'}}
         if any(self.market.catalog[key]['market'] == 'US' for key in ids - {'CASH:KRW'}):
             needed['FX'] = 'KRW=X'
         priority = set(self.market.current) - {'CASH:KRW'}

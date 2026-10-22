@@ -35,7 +35,7 @@ test('input guidance describes the current decision and the optional selection l
   await addCash(page);
   await page.getByRole('button', { name: '비율', exact: true }).click();
   await page.getByLabel('현금 비율').fill('100');
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).fill('VOO');
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).fill('VOO');
   await page.getByRole('option').filter({ hasText: 'Vanguard S&P 500 ETF' }).click();
   await expect(page.locator('#step-guidance')).toHaveText('각 종목의 비중을 입력해 주세요.');
   await page.getByLabel('Vanguard S&P 500 ETF 비율', { exact: true }).fill('1');

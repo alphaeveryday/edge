@@ -47,7 +47,7 @@ test('cancelling optional tax details never makes them a prerequisite', async ({
 test('duplicate ETF selection explains rejection and keeps the search for correction', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
   await addCash(page);
-  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
+  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' });
   await search.fill('현금');
   await page.getByRole('option', { name: '현금 원화 현금' }).click();
   await expect(page.getByRole('alert')).toContainText('이미 담은 종목');
@@ -58,7 +58,7 @@ test('duplicate ETF selection explains rejection and keeps the search for correc
 test('removing an account with holdings can be cancelled without losing its values', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
   await page.getByRole('button', { name: '+ISA', exact: true }).click();
-  await page.getByRole('combobox', { name: 'ISA에 담은 ETF 찾기' }).fill('VOO');
+  await page.getByRole('combobox', { name: 'ISA에 담은 종목 찾기' }).fill('VOO');
   await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
   await page.getByLabel('Vanguard S&P 500 ETF 금액', { exact: true }).fill('200');
   await page.getByRole('button', { name: 'ISA 지우기' }).click();
@@ -70,7 +70,7 @@ test('malformed stored form does not prevent a new analysis', async ({ page }) =
   await page.addInitScript(() => sessionStorage.setItem('edge-preview-form-v2', '{"step":2,"holdings":null}'));
   await page.goto('/portfolio/?preview=input');
   await expect(page.locator('.rows .row')).toHaveCount(0);
-  await expect(page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' })).toBeVisible();
+  await expect(page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' })).toBeVisible();
 });
 
 test('Escape offers to keep unsaved asset edits and saving preserves them', async ({ page }) => {
@@ -90,12 +90,12 @@ test('Escape offers to keep unsaved asset edits and saving preserves them', asyn
 test('catalog retry keeps entered values and recovers search without refreshing', async ({ page }) => {
   let fail = true;
   await page.route('**/api/portfolio/session', r => r.fulfill({ json: {} }));
-  await page.route('**/api/portfolio/catalog', r => fail ? r.fulfill({ status: 503, json: {} }) : r.fulfill({ json: { counts: { KR: 0, US: 1 }, instruments: [{ id: 'US:VOO', name: 'VOO', ticker: 'VOO', code: 'VOO', market: 'US', kind: 'etf' }] } }));
+  await page.route('**/api/portfolio/workbook/catalog', r => fail ? r.fulfill({ status: 503, json: {} }) : r.fulfill({ json: { counts: { KR: 0, US: 1 }, instruments: [{ id: 'US:VOO', name: 'VOO', ticker: 'VOO', code: 'VOO', market: 'US', kind: 'etf' }] } }));
   await page.goto('/portfolio/');
   await addCash(page, '250');
   fail = false;
   await page.getByRole('button', { name: '목록 다시 불러오기' }).click();
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).fill('VOO');
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).fill('VOO');
   await expect(page.getByRole('option')).toContainText('VOO');
   await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('250');
 });
@@ -122,7 +122,7 @@ test('the 20-holding limit is visible instead of silently rejecting a selection'
     sessionStorage.setItem(key, JSON.stringify(draft));
   });
   await page.reload();
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).fill('VOO');
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).fill('VOO');
   await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
   await expect(page.getByRole('alert')).toContainText('최대 20종목');
   await expect(page.locator('.rows .row')).toHaveCount(20);
@@ -155,7 +155,7 @@ test('storage failure preserves retry identity and still reaches an accepted ana
 test('confirming account removal does not resurrect values when it is added again', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
   await page.getByRole('button', { name: '+ISA', exact: true }).click();
-  await page.getByRole('combobox', { name: 'ISA에 담은 ETF 찾기' }).fill('VOO');
+  await page.getByRole('combobox', { name: 'ISA에 담은 종목 찾기' }).fill('VOO');
   await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
   await page.getByLabel('Vanguard S&P 500 ETF 금액', { exact: true }).fill('200');
   await page.getByRole('button', { name: '비율', exact: true }).click();
@@ -163,7 +163,7 @@ test('confirming account removal does not resurrect values when it is added agai
   await page.getByRole('button', { name: '삭제하기', exact: true }).click();
   await expect(page.locator('.step')).toBeFocused();
   await page.getByRole('button', { name: '+ISA', exact: true }).click();
-  await page.getByRole('combobox', { name: 'ISA에 담은 ETF 찾기' }).fill('VOO');
+  await page.getByRole('combobox', { name: 'ISA에 담은 종목 찾기' }).fill('VOO');
   await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
   await page.getByRole('button', { name: '금액', exact: true }).click();
   await expect(page.getByLabel('Vanguard S&P 500 ETF 금액', { exact: true })).toHaveValue('');

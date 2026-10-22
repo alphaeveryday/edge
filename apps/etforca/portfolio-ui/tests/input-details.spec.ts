@@ -3,7 +3,7 @@ import { test, expect } from '@playwright/test';
 for (const width of [320, 390, 1280]) test(`holdings input groups accounts and shows the portfolio first on mobile at ${width}px`, async ({ page }) => {
   await page.setViewportSize({ width, height: 1000 });
   await page.goto('/portfolio/?preview=input');
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기', exact: true }).fill('069500');
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기', exact: true }).fill('069500');
   await page.getByRole('option', { name: /KODEX 200/ }).click();
   await page.getByLabel('KODEX 200 금액', { exact: true }).fill('100');
   await page.getByRole('button', { name: '+ISA', exact: true }).click();

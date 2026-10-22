@@ -13,7 +13,7 @@ async function open(page: Page, saved: unknown = null, latest: unknown = null) {
     return route.fulfill({ json: {} });
   });
   await page.goto('/portfolio/');
-  return page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
+  return page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' });
 }
 
 async function aboveBar(page: Page, element: ReturnType<Page['locator']>) {
@@ -83,7 +83,7 @@ test('the optional request box is folded on phones and open on desktop', async (
 });
 
 async function addHolding(page: Page) {
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).fill('VOO');
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).fill('VOO');
   await page.keyboard.press('Enter');
   await page.keyboard.type('1000000');
 }

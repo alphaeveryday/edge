@@ -1,5 +1,5 @@
 export async function fillForm(page, { interests = ['균형 잡힌 분산'] } = {}) {
-  const find = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
+  const find = page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' });
   await find.fill('069500');
   await page.getByRole('option').filter({ hasText: '069500' }).click();
   await page.getByRole('textbox', { name: 'KODEX 200 금액' }).fill('7000000');

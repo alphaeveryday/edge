@@ -35,7 +35,7 @@ uv run python -m edge_portfolio.worker
 `/portfolio/?view=dashboard`는 같은 브라우저 세션의 보유 자산·배당 전망·자동 일별 기록·조합 백테스트·최근 AI 분석을 관리한다.
 대시보드·백테스트의 `GET /api/portfolio/workbook/catalog`는 기존 ETF와 국내 KOSPI·KOSDAQ 및 미국 상장 주식 목록을 함께 반환한다. `stock_catalog.json`은 KRX·Nasdaq Trader 원본의 기준시각과 출처를 보존한다. 목록 갱신 스크립트 `scripts/refresh_catalog.py`는 기존 ETF 모드에 `--stocks` 모드를 추가하며 KRX 로그인 환경변수 `KRX_ID`·`KRX_PS`를 사용한다. 2026-10-21 스냅샷의 주식은 국내 2,762개·미국 6,496개다. 미국 목록에서 ETF·테스트 종목·워런트·권리·유닛·채무증권을 제외한다.
 개별주도 기존 `portfolio_dashboard_prices`·`portfolio_quote_refresh`·`portfolio_market_preload`를 사용하며 KIS나 별도 DB를 추가하지 않는다. 카탈로그의 시세 심볼로 KOSDAQ `.KQ`와 미국 클래스 주식(`BRK.B` → `BRK-B`)을 구분한다. 국내 주식 NAVER 대체 자료는 배당 재투자가 확인된 총수익률로 취급하지 않는다. 고객 보유 시세 갱신이 선적재보다 우선하므로 목록 등록은 모든 종목의 데이터 적재 완료를 뜻하지 않는다.
-AI 추천 분석의 `/api/portfolio/catalog`는 ETF·현금 범위를 유지한다. 개별주가 포함된 저장 포트폴리오는 AI 입력으로 조용히 변환하지 않고 분석할 ETF를 직접 선택하도록 안내하며 보유 문서는 보존한다.
+AI 분석 입력은 ETF·주식·현금 목록(`/api/portfolio/workbook/catalog`)에서 고르며, 개별주는 `kind: stock`으로 그대로 받는다. 분석이 고를 수 있는 종목은 `analysis_catalog(request)` = ETF 전부 + 이 고객이 넣은 개별주다. 그래서 비교 조합·결정 검증·실행표·추천 게시 어디서도 새 개별주를 쓸 수 없다. 보유 개별주는 유지·축소·매도만 가능하고 추가 매수는 거절한다(`held_stock_limit`). 모델의 종목 검색 도구(`search_etfs`)와 `/api/portfolio/catalog`는 ETF만 돌려준다.
 메인 화면은 자산 요약, 자산 구성·월별 배당, 보유 목록 순서다. 차트와 진행 단계 모션은 `prefers-reduced-motion`을 따른다.
 자산 구성은 투자 지역·테마 도넛으로 전환한다. 상장 시장과 투자 지역을 구분하며 확인되지 않은 이름은 미분류로 남긴다. 보유 목록은 비중순 표(모바일에서는 카드)로 주식수·평단가·최근 종가·평가액·손익률·배당률·예상 연배당금·관측 배당주기를 제공한다. 해외 가격은 현재 환율의 원화와 원통화를 함께 표시한다.
 배당 분석은 향후 12개월 예상 현금을 재투자 없이 합산한다. 연간 배당 내역은 계좌·연도별 종목×12개월 표와 차트를 제공하며 예상과 저장된 실수령을 분리한다. 이력이 부족하거나 조회 범위 밖인 달은 0원과 구분한다. 주기는 완전한 최근 1년 지급 이력에서 계산하며 주 단위·불규칙 지급을 월배당으로 단정하지 않는다.

@@ -16,7 +16,7 @@ test('converted weights always total exactly 100 with no zero holding', () => {
 test('switching to percent converts amounts and shows the running total as typed', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
   await addCash(page, '3000000');
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).fill('VOO');
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).fill('VOO');
   await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
   await page.keyboard.type('1000000');
   await page.getByRole('button', { name: '비율', exact: true }).click();
@@ -71,13 +71,13 @@ test('a pasted decimal amount keeps its won value instead of shifting 100x', asy
 test('the preview legend keeps small and large amounts readable instead of rounding them away', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
   await addCash(page, '15000');
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).fill('VOO');
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).fill('VOO');
   await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
   // VOO is still empty, so the legend shows amounts rather than weights.
   await expect(page.locator('.portfolio-preview li').filter({ hasText: '현금' })).toContainText('1.5만 원');
   await page.getByRole('button', { name: 'Vanguard S&P 500 ETF 빼기' }).click();
   await expect(page.locator('.portfolio-preview .donut__c')).toContainText('1.5만');
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).fill('VOO');
+  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).fill('VOO');
   await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
   await page.getByLabel('현금 금액', { exact: true }).fill('99999999');
   await expect(page.locator('.portfolio-preview li').filter({ hasText: '현금' })).toContainText('1억 원');

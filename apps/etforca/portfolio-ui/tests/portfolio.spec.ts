@@ -36,7 +36,7 @@ test('external search throttling is distinguished from the visitors trial quota'
 });
 
 test('an unavailable saved analysis can return to input without clearing browser storage manually', async ({ page }) => {
-  await page.route('**/api/portfolio/catalog', route => route.fulfill({ json: catalog }));
+  await page.route('**/api/portfolio/workbook/catalog', route => route.fulfill({ json: catalog }));
   await page.route('**/api/portfolio/analyses/missing-job', route => route.fulfill({ status: 404, json: {} }));
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'missing-job'));
   await page.goto('/portfolio/');
@@ -99,14 +99,14 @@ test('default account, real stages, result restoration, chat gate and email rece
 test('empty start, keyboard holding entry, live donut, ETF-only search and direct recommendation flow', async ({ page }) => {
   await page.route('**/api/portfolio/session', route => route.fulfill({ json: {} }));
   await page.route('**/api/portfolio/drafts/**', route => route.fulfill({ json: { status: 'saved' } }));
-  await page.route('**/api/portfolio/catalog', route => route.fulfill({ json: catalog }));
+  await page.route('**/api/portfolio/workbook/catalog', route => route.fulfill({ json: catalog }));
   await page.goto('/portfolio/');
   // No invented cash: the visitor starts from their own holdings.
   await expect(page.locator('.rows .row')).toHaveCount(0);
   await expect(page.locator('.portfolio-preview')).toHaveCount(0);
   // 보유 없이 '종목부터 추천받기'로 가는 방문자도 계좌 전략을 정할 수 있어야 해서 첫 화면부터 보인다.
   await expect(page.getByRole('button', { name: '최적의 ISA, IRP 등 세금 혜택과 투자전략까지 정리해드릴까요?' })).toBeVisible();
-  const firstSearch = page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' });
+  const firstSearch = page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' });
   await firstSearch.fill('VOO');
   await page.getByRole('option').filter({ hasText: 'Vanguard S&P 500 ETF' }).click();
   // Pick → type → Enter → next search, without reaching for the pointer.
@@ -121,14 +121,14 @@ test('empty start, keyboard holding entry, live donut, ETF-only search and direc
   await expect(page.locator('.portfolio-preview li').filter({ hasText: '현금' })).toContainText('100만 원');
   await expect(page.locator('.portfolio-preview li').filter({ hasText: 'Vanguard' })).toContainText('미입력');
   await firstSearch.fill('에코프로');
-  await expect(page.locator('.sug')).toContainText('개별 주식은 아직 분석하지 않으니');
+  await expect(page.locator('.sug')).toContainText('국내·미국 주식, ETF, 현금을 담을 수 있어요');
   await firstSearch.fill('');
   await page.getByRole('button', { name: 'Vanguard S&P 500 ETF 빼기' }).click();
   await expect(page.getByRole('button', { name: '계좌별로 추천받기' })).toHaveCount(0);
   await page.getByRole('button', { name: '현금 빼기' }).click();
   await expect(page.locator('.portfolio-preview')).toHaveCount(0);
   await page.getByRole('button', { name: '+ISA', exact: true }).click();
-  const find = page.getByRole('combobox', { name: 'ISA에 담은 ETF 찾기' });
+  const find = page.getByRole('combobox', { name: 'ISA에 담은 종목 찾기' });
   await find.fill('VOO');
   await page.getByRole('option').filter({ hasText: 'Vanguard S&P 500 ETF' }).click();
   await expect(page.locator('.acct').filter({ hasText: 'ISA' })).toContainText('Vanguard S&P 500 ETF');
