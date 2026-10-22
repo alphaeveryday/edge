@@ -6545,3 +6545,11 @@ html { scroll-padding-bottom: var(--input-cta-height, 0px); }
 }
 .bulk-entry > summary { min-height: 44px; padding-block: var(--space-3); cursor: pointer; }
 .bulk-entry .field { margin-block: var(--space-2); }
+
+/* 예시 결과: 긴 이미지를 대화상자 안에서 스크롤하고, 닫기는 위에 붙여 언제든 누를 수 있게 한다. */
+.step .hint + .example-link { margin-top: calc(-1 * var(--space-4)); } /* 안내 바로 아래에서만 간격을 줄인다(360×640 첫 화면) */
+.step .example-link { align-self: flex-start; min-height: 44px; padding: 0; border: 0; background: none; font-size: var(--text-label); font-weight: 600; color: var(--color-primary); text-decoration: underline; text-underline-offset: 3px; }
+.example-dialog { width: calc(100% - var(--space-4)); max-width: 720px; max-height: calc(100dvh - 40px); overflow-y: auto; overscroll-behavior: contain; padding: var(--space-4); }
+.example-dialog .dialog-close { position: sticky; top: 0; float: right; margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2)) 0 0; background: var(--bg-raised); border-radius: var(--radius-pill); z-index: 1; }
+.example-dialog h2 { font-size: var(--text-heading); margin: 0 0 var(--space-2); }
+.example-dialog img { display: block; width: 100%; height: auto; margin-top: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-card); }

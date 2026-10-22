@@ -18,7 +18,7 @@ export function setAnalyticsEnabled(enabled: boolean) {
   } else if (enabled) initialize();
   window.dispatchEvent(new Event('orca-analytics-change'));
 }
-export function trackAction(action: 'holding_add_opened' | 'holding_edit_opened' | 'holdings_saved' | 'holdings_save_failed' | 'backtest_requested' | 'backtest_completed' | 'backtest_failed' | 'portfolio_saved' | 'newsletter_requested' | 'instrument_search_empty' | 'input_search_opened' | 'input_holding_added' | 'bulk_entry_opened' | 'bulk_entry_added' | 'bulk_entry_failed' | 'request_box_opened' | 'recommend_started') {
+export function trackAction(action: 'holding_add_opened' | 'holding_edit_opened' | 'holdings_saved' | 'holdings_save_failed' | 'backtest_requested' | 'backtest_completed' | 'backtest_failed' | 'portfolio_saved' | 'newsletter_requested' | 'instrument_search_empty' | 'input_search_opened' | 'input_holding_added' | 'bulk_entry_opened' | 'bulk_entry_added' | 'bulk_entry_failed' | 'request_box_opened' | 'recommend_started' | 'example_report_opened') {
   const send = () => { try { posthog.capture('portfolio_action', { action }); } catch { /* Optional analytics. */ } };
   if (initialize()) return send();
   if (preview || !analyticsEnabled() || !servedHere()) return;

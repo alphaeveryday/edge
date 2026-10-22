@@ -630,3 +630,10 @@ test('a recommendation click that cannot save is not counted as a started recomm
   await expect.poll(actions).toContain('input_search_opened');
   expect(actions()).not.toContain('recommend_started');
 });
+
+test('opening the example result is counted', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  await page.goto('https://etforca.com/portfolio/');
+  await page.getByRole('button', { name: '예시 결과 보기' }).click();
+  await expect.poll(() => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action)).toContain('example_report_opened');
+});
