@@ -398,7 +398,7 @@ resource "aws_scheduler_schedule" "reconcile" {
 
 # 🔴 **장전 레인은 원장 밖이라 PLANNER_MISSING 이 없다**(ALPHA-1431). premarket_pipeline.tf 의 알람
 # 셋은 전부 SFN 이 실행을 시도해야 운다 — 실행 주체가 Airflow 면 SFN 스케줄이 DISABLED 라 영영 조용하다.
-# 주기 reconcile(Airflow 호스트 밖)이 거래일 07:30~09:00 에 그날 07:30 까지의 universe 성공 로그를 찾고,
+# 주기 reconcile(Airflow 호스트 밖)이 거래일 07:32~09:00 에 그날 07:00~07:30 의 universe 성공 로그를 찾고,
 # 없으면 `PREMARKET_MISSING`, 조회가 실패하면 `PREMARKET_WATCH_FAILED` 를 남긴다(ops/premarket_watch.py).
 resource "aws_cloudwatch_log_metric_filter" "premarket_missing" {
   name           = "${var.name}-premarket-missing"
@@ -416,7 +416,7 @@ resource "aws_cloudwatch_metric_alarm" "premarket_missing" {
   alarm_name        = "${var.name}-premarket-missing"
   alarm_description = "거래일 장전 유니버스 배치가 07:30 까지 성공하지 못했다(안 돌았거나·실패했거나·늦었다) 또는 감시가 로그를 조회하지 못했다 — 그날 분봉 세션은 어제 유니버스로 돈다. ops 로그의 PREMARKET_MISSING/PREMARKET_WATCH_FAILED 줄과 Airflow edge_premarket·SFN premarket 실행을 볼 것."
 
-  # 감시는 같은 날 07:30~09:00 의 매 reconcile(15분)마다 ERROR 를 낸다 — 하루 한 통이어야 한다.
+  # 감시는 같은 날 07:32~09:00 의 매 reconcile(15분)마다 ERROR 를 낸다 — 하루 한 통이어야 한다.
   # 판정 = 최근 90분(5분×18) 안에 1 이 하나라도 있으면 ALARM. 07:3x 첫 ERROR 에서 전이(메일)하고
   # 08:4x 마지막 ERROR 까지 ALARM 이 이어져 다시 통보하지 않는다. 다음 날 07:3x 전에 OK 로 돌아온다.
   # `FILL(raw, 0)` 은 결측 구간이 판정 범위를 넓혀 전날 1 을 끌어들이지 않게 한다(planner_missing·

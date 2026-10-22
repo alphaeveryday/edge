@@ -52,23 +52,24 @@ def test_success_on_a_later_page_is_ok():
 
 def test_no_success_by_cutoff_is_missing_and_logs_alarm_phrase(caplog):
     with caplog.at_level("ERROR", logger=premarket_watch.__name__):
-        assert _check(_at(THU, "07:31"), FakeLogs()) == "missing"
+        assert _check(_at(THU, "07:32"), FakeLogs()) == "missing"
     assert [r.getMessage().split(" ")[0] for r in caplog.records] == [premarket_watch.MISSING_LOG]
 
 
-def test_query_ends_at_cutoff_so_a_late_success_still_alarms():
-    # "07:30 까지 끝나지 않음"도 잡아야 한다 — 08:00 에 봐도 조회 끝은 07:30, 시작은 그날 00:00(KST).
+def test_query_is_the_0700_slot_to_cutoff_so_late_or_earlier_success_still_alarms():
+    # "07:30 까지 끝나지 않음"도 잡아야 한다 — 08:00 에 봐도 조회 끝은 07:30. 시작은 07:00(KST):
+    # 새벽 수동 실행의 성공이 그날 07:00 누락을 가리면 안 된다.
     logs = FakeLogs()
     _check(_at(THU, "08:00"), logs)
     (call,) = logs.calls
-    assert call["startTime"] == int(_at(THU, "00:00").timestamp() * 1000)
+    assert call["startTime"] == int(_at(THU, "07:00").timestamp() * 1000)
     assert call["endTime"] == int(_at(THU, "07:30").timestamp() * 1000)
 
 
-@pytest.mark.parametrize("now", [_at(THU, "07:29"), _at(THU, "09:00"),
+@pytest.mark.parametrize("now", [_at(THU, "07:31"), _at(THU, "09:00"),
                                  _at(HOLIDAY, "07:40"), _at("2026-10-24", "07:40")])
 def test_outside_window_or_non_trading_day_does_not_query(now):
-    # 07:30 전·09:00 이후·휴장일(한글날)·토요일 — 장전이 안 도는 게 정상이니 묻지도 않는다.
+    # 07:32 전(07:29 성공 로그가 아직 수집 중일 수 있다)·09:00 이후·휴장일(한글날)·토요일 — 묻지 않는다.
     logs = FakeLogs()
     assert _check(now, logs) == "skip"
     assert logs.calls == []
@@ -131,3 +132,13 @@ def test_periodic_reconcile_runs_the_watch_even_when_the_lock_is_taken(monkeypat
     monkeypatch.setenv("OPS_RUN_KEY", "investor-intraday:2026-09-22T09:35")
     entry.reconcile_cli(object())
     assert len(seen) == 1
+
+
+def test_watch_slot_matches_the_premarket_schedules():
+    # 장전 시각을 옮기면 감시 구간도 함께 — 안 그러면 조회가 실제 실행을 비껴가 매일 거짓 알람이다.
+    root = pathlib.Path(__file__).resolve().parents[4]
+    tf = (root / "infra/terraform/modules/data-pipeline/variables.tf").read_text(encoding="utf-8")
+    dag = (root / "apps/engine/airflow/dags/edge_premarket.py").read_text(encoding="utf-8")
+    assert premarket_watch.PREMARKET_SLOT_KST.isoformat() == "07:00:00"
+    assert 'default     = "cron(0 7 ? * MON-FRI *)"' in tf
+    assert 'CRONS = ("0 7 * * 1-5",)' in dag
