@@ -180,9 +180,10 @@ test('entry campaign tags follow the visitor and a new channel replaces all of t
   await page.goto('https://etforca.com/portfolio/');
   await expect.poll(() => pageviews().length).toBe(2);
   expect(pageviews()[1].properties).toMatchObject({ utm_source: 'fmkorea', utm_content: '1022' });
-  await page.goto('https://etforca.com/portfolio/?utm_source=threads');
+  await page.goto(`https://etforca.com/portfolio/?utm_source=threads&utm_campaign=${'x'.repeat(150)}`);
   await expect.poll(() => pageviews().length).toBe(3);
-  expect(pageviews()[2].properties.utm_source).toBe('threads');
+  expect(pageviews()[2].properties).toMatchObject({ utm_source: 'threads', utm_campaign: 'x'.repeat(100) });
+  expect(pageviews()[2].properties).not.toHaveProperty('utm_medium');
   expect(pageviews()[2].properties).not.toHaveProperty('utm_content');
 });
 
