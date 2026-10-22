@@ -446,7 +446,7 @@ class Optimizer:
             return None
         if final.recommendation is None and final.selected_candidate_id is None and final.return_forecast is None:
             if getattr(final, 'withheld_reason', None) == 'quality_failed':
-                raise ValueError('Rating is not a recommendation threshold: select a customer-compliant candidate and report its honest scores')
+                raise ValueError('Rating is not a recommendation threshold: select a customer-compliant candidate and score it 4.0~5.0 on average by the same evidence')
             return None  # Exact customer constraints and execution still require validation.
         candidate = next((row for row in candidates if row['candidate_id'] == final.selected_candidate_id), None)
         if candidate is None or final.recommendation is None:
