@@ -170,6 +170,23 @@ test('each input screen has one visit and visible dwell excludes hidden time wit
   expect(await page.evaluate(() => Object.keys(localStorage).some(k => k.startsWith('ph_')))).toBe(true);
 });
 
+// 채널별 퍼널의 근거다 — 꼬리표가 빠지면 커뮤니티 유입이 direct 로 섞이고, 이전 채널 값이 남으면 다른 채널의 성과로 잘못 잡힌다.
+test('entry campaign tags follow the visitor and a new channel replaces all of them', async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  const pageviews = () => events.filter(e => e.event === '$pageview');
+  await page.goto('https://etforca.com/portfolio/?utm_source=fmkorea&utm_medium=post&utm_campaign=portfolio_check&utm_content=1022');
+  await expect.poll(() => pageviews().length).toBe(1);
+  expect(pageviews()[0].properties).toMatchObject({ utm_source: 'fmkorea', utm_medium: 'post', utm_campaign: 'portfolio_check', utm_content: '1022' });
+  await page.goto('https://etforca.com/portfolio/');
+  await expect.poll(() => pageviews().length).toBe(2);
+  expect(pageviews()[1].properties).toMatchObject({ utm_source: 'fmkorea', utm_content: '1022' });
+  await page.goto(`https://etforca.com/portfolio/?utm_source=threads&utm_campaign=${'x'.repeat(150)}`);
+  await expect.poll(() => pageviews().length).toBe(3);
+  expect(pageviews()[2].properties).toMatchObject({ utm_source: 'threads', utm_campaign: 'x'.repeat(100) });
+  expect(pageviews()[2].properties).not.toHaveProperty('utm_medium');
+  expect(pageviews()[2].properties).not.toHaveProperty('utm_content');
+});
+
 test('real navigation hands final scroll, dwell and leave events to browser beacons', async ({ page, baseURL }) => {
   const events = await instrument(page, baseURL!);
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'private-analysis-id'));

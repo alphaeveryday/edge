@@ -4,7 +4,11 @@ import { ensureVisitorSession } from './api';
 
 export type Screen = 'input_holdings' | 'input_funding' | 'input_horizon' | 'input_interests' | 'input_question' | 'loading' | 'queued' | 'running' | 'result' | 'failed' | 'dashboard_overview' | 'dashboard_dividends' | 'dashboard_returns' | 'dashboard_backtest';
 const events = new Set(['$pageview', '$pageleave', 'portfolio_screen_engagement', 'portfolio_scroll_pause', 'portfolio_feedback', 'portfolio_action']);
-const properties = new Set(['token', 'distinct_id', '$lib', '$lib_version', '$device_type', '$browser', '$os', '$viewport_height', '$viewport_width', '$screen_height', '$screen_width', '$process_person_profile', '$cookieless_mode', 'screen', 'section', 'visible_seconds', 'pause_seconds', 'scroll_y', 'scroll_depth_pct', 'max_scroll_depth_pct', 'action', 'rating']);
+const campaignKeys = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content'];
+const properties = new Set(['token', 'distinct_id', '$lib', '$lib_version', '$device_type', '$browser', '$os', '$viewport_height', '$viewport_width', '$screen_height', '$screen_width', '$process_person_profile', '$cookieless_mode', 'screen', 'section', 'visible_seconds', 'pause_seconds', 'scroll_y', 'scroll_depth_pct', 'max_scroll_depth_pct', 'action', 'rating', ...campaignKeys]);
+// 유입 채널 꼬리표는 화면 이동이 주소를 바꾸기 전에 첫 진입 주소에서 읽는다. 꼬리표가 하나라도 있으면 네 개를 통째로 바꿔 이전 채널 값이 섞이지 않게 한다.
+const entry = new URLSearchParams(location.search);
+const campaign = campaignKeys.some(key => entry.get(key)) ? campaignKeys.map(key => [key, entry.get(key)?.slice(0, 100) || ''] as const) : [];
 let initialized = false;
 let testVisitor: boolean | null = null;
 let classifying = false;
@@ -63,7 +67,11 @@ function initialize() {
           recordHeaders: false, recordBody: false, recordCrossOriginIframes: false,
           maskCapturedNetworkRequestFn: data => Object.keys(data).length === 1 ? { ...data, name: 'https://etforca.com/portfolio/' } : null,
         },
-        loaded: instance => { instance.opt_in_capturing(); instance.startSessionRecording(true); },
+        loaded: instance => {
+          // 꼬리표는 익명 식별자와 같은 저장소에 남아, 꼬리표 없이 다시 와도 마지막 채널로 집계된다.
+          campaign.forEach(([key, value]) => value ? instance.register({ [key]: value }) : instance.unregister(key));
+          instance.opt_in_capturing(); instance.startSessionRecording(true);
+        },
         advanced_disable_feature_flags: true, enable_heatmaps: false, capture_dead_clicks: false,
         before_send: event => {
           if (testVisitor === null) return null;

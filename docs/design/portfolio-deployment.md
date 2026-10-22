@@ -16,7 +16,7 @@
 
 포트폴리오 UI는 기존 [PostHog 웹 프로젝트 658097](https://us.posthog.com/project/658097)에 수집한다. `analytics.ts`의 공개 프로젝트 키는 랜딩과 같고, 개인 API 키나 추가 서버 환경변수는 필요 없다. `etforca.com/portfolio/`와 www 도메인의 같은 경로에서만 실행한다. 로컬 미리보기·관리자 진입점에서는 수집하지 않는다. SDK의 봇 제외는 유지한다.
 
-Web analytics의 Top paths에서 `/portfolio/`로 시작하는 경로를 선택하면 랜딩(`/`)과 분리한다. 화면 이름을 `/portfolio/input/holdings`, `/portfolio/dashboard/overview` 등의 논리 경로로 보내며 www도 `etforca.com`으로 합쳐 집계한다. 쿼리·해시는 보내지 않는다. 경로가 안 보이면 프로젝트·조회 기간·호스트 필터와 실제 `$pageview` 적재를 확인한다. 브라우저 전송 테스트나 수집 API의 성공 응답만으로 집계 완료를 판정하지 않는다.
+Web analytics의 Top paths에서 `/portfolio/`로 시작하는 경로를 선택하면 랜딩(`/`)과 분리한다. 화면 이름을 `/portfolio/input/holdings`, `/portfolio/dashboard/overview` 등의 논리 경로로 보내며 www도 `etforca.com`으로 합쳐 집계한다. 쿼리·해시는 보내지 않는다(유입 채널 꼬리표 네 개만 값으로 따로 싣는다 — 아래 표). 경로가 안 보이면 프로젝트·조회 기간·호스트 필터와 실제 `$pageview` 적재를 확인한다. 브라우저 전송 테스트나 수집 API의 성공 응답만으로 집계 완료를 판정하지 않는다.
 
 PostHog **Product analytics → New insight → Trends**에서 아래 이벤트와 속성을 사용한다. 화면 이벤트는 `screen`, 조작 이벤트는 `portfolio_action`과 고정된 `action` 값으로 구분한다.
 
@@ -30,6 +30,7 @@ PostHog **Product analytics → New insight → Trends**에서 아래 이벤트�
 | 정체 위치·도달 깊이 | 정체 이벤트의 `scroll_y`(뷰포트 상단 px), `scroll_depth_pct`(뷰포트 하단 기준 %), 체류 이벤트의 `max_scroll_depth_pct` |
 | 보유 편집·저장·백테스트 흐름 | `portfolio_action`, Breakdown `action`: `holding_add_opened`, `holding_edit_opened`, `holdings_saved`, `holdings_save_failed`, `portfolio_saved`, `newsletter_requested`, `backtest_requested`, `backtest_completed`, `backtest_failed`, `instrument_search_empty`(결과 0건이 나온 검색 수 — 검색 한 번에 한 번, 검색어는 수집하지 않음) |
 | 입력 시작 퍼널 | `portfolio_action`: `input_search_opened`(입력 화면을 열 때마다 방문자가 처음 검색칸을 누른 1회, 코드가 옮긴 포커스는 세지 않음) → `input_holding_added`(종목 추가마다) → `screen = input_funding`. 일괄 입력은 `bulk_entry_opened`·`bulk_entry_added`·`bulk_entry_failed`. 모바일에서 접힌 요청사항을 방문자가 펼치면 `request_box_opened`(내용은 보내지 않음). '종목부터 추천받기'로 추천 흐름이 실제로 시작되면(저장 성공 뒤) `recommend_started`. 입력 1단계의 '예시 결과 보기'를 열면 `example_report_opened`. `instrument_search_empty`는 검색 한 번(열고 고르거나 Escape·칸 이탈로 닫을 때까지)에 한 번만 센다(칸을 닫지 않고 지웠다 다시 친 없는 이름은 같은 검색으로 본다). 검색어·금액은 보내지 않는다. 방문자 분류(시험·고객) 전에 일어난 행동은 분류 뒤 한 번 보낸다. 보유 저장(`holdings_saved`)이 있는 방문은 관리 목적이라 신규 분석 이탈에서 뺀다 |
+| 유입 채널 | 모든 이벤트의 `utm_source`·`utm_medium`·`utm_campaign`·`utm_content`로 Breakdown. 첫 진입 주소의 꼬리표를 익명 식별자 저장소에 남겨, 꼬리표 없이 다시 와도 마지막 채널로 집계한다. 새 꼬리표로 들어오면 네 값을 통째로 바꾼다(빠진 값은 지움). 값은 100자까지. 꼬리표가 없는 첫 방문은 비어 있다. Web analytics의 채널 분류도 이 보존된 꼬리표를 따른다(`save_referrer: false`라 참조 주소 분류는 없다). 다른 꼬리표로 연 탭 두 개를 오가면 나중에 이벤트를 보낸 탭의 값이 남을 수 있다. 채널별 퍼널은 Funnels에서 `$pageview screen = input_holdings` → `portfolio_action`(`input_holding_added`·`recommend_started`·`bulk_entry_added`) → `$pageview screen = input_funding` → `$pageview screen ∈ loading·queued·running` → `$pageview screen = result` → `portfolio_action` `portfolio_saved`, 7일 창, `is_test = false`, Breakdown `utm_source`(글별은 `utm_content`) |
 | 화면 조작 재생 | Session replay에서 `/portfolio/` 방문을 선택. 화면 본문·입력값과 스크롤·클릭·이동을 재생 |
 
 시험 브라우저는 `*.posthog.com` 이름 풀이가 막혀 운영 분석에 닿지 못한다(`playwright.config.ts`의 `blockAnalyticsHost`). 막기 전인 2026-10-21~22에는 시험 실행이 운영으로 새어 'Chrome/Windows, 화면 폭 390·1280'·`/portfolio/result`·`/portfolio/loading` 방문자 약 410명이 섞였다. 이 기간을 집계할 때는 이 조합을 빼고 본다.
