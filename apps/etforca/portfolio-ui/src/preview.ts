@@ -5,7 +5,7 @@ export const jobKey = preview ? 'edge-preview-job' : 'edge-portfolio-job';
 export const pendingKey = preview ? 'edge-preview-pending' : 'edge-portfolio-pending';
 const workbookKey = preview === 'empty' ? 'edge-preview-empty-workbook' : 'edge-preview-workbook';
 const startedAt = new Date(Date.now() - 45000).toISOString();
-const section = { paragraphs: ['미국 주식의 성장 방향을 유지하면서 채권과 현금으로 추가매수 여력을 확보하세요.'], evidence: [], limitations: [] };
+const section = { paragraphs: ['미국 주식의 성장 방향을 유지하면서 현금 30%로 추가매수 여력을 남겨 두세요.'], evidence: [], limitations: [] };
 export const sample: Workbook = {
   title: '내 포트폴리오', fx: 1360,
   assets: [
@@ -24,7 +24,7 @@ const report: Report = {
   recommendation: { title: '성장 방향을 유지하는 분산 구성', total_krw: '25586400', evaluation: { scores: { leadership: 4, profitability: 4, stability: 3 }, overall: 4, method: '예시', reason: section },
     allocations: [{ instrument_id: 'US:VOO', name: '미국시장 ETF 예시', ticker: 'VOO', kind: 'etf', account: 'ISA', weight_pct: 70, amount_krw: '17910480' }, { instrument_id: 'CASH:KRW', name: '현금', ticker: 'KRW', kind: 'cash', account: '일반 계좌', weight_pct: 30, amount_krw: '7675920' }],
     actions: [{ instrument_id: 'US:VOO', name: '미국시장 ETF 예시', ticker: 'VOO', account: 'ISA', before_pct: 60, after_pct: 70, action: '비중 확대', buy_krw: '1000000' }], expected_return_1y: null, dividend_yield_1y: 1.5, unavailable_reason: '',
-    historical_performance: { basis: '화면 확인용 가상 성과 · 분배금 재투자', source_url: '', points: Array.from({ length: 24 }, (_, i) => ({ date: new Date(Date.UTC(2024, 10 + i, 1)).toISOString().slice(0, 10), recommended: 1000000 + i * 15000, current: 1000000 + i * 11000 })) } },
+    historical_performance: { basis: '예시 데이터로 그린 성과 · 분배금 재투자', source_url: '', points: Array.from({ length: 24 }, (_, i) => ({ date: new Date(Date.UTC(2024, 10 + i, 1)).toISOString().slice(0, 10), recommended: 1000000 + i * 15000, current: 1000000 + i * 11000 })) } },
 };
 sample.assets.forEach((a, i) => { a.instrument_id = ['KR:360750', 'US:SCHD', 'KR:114260', 'KR:132030', 'KR:441640', 'CASH:KRW'][i]; });
 export async function previewRequest<T>(path: string, init?: RequestInit): Promise<T> {

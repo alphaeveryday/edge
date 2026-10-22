@@ -9,6 +9,7 @@ async function open(page: Page, saved: unknown = null) {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/catalog')) return route.fulfill({ json: catalog });
     if (path.endsWith('/workbook')) return route.fulfill({ json: { version: saved ? 1 : 0, workbook: saved } });
+    if (path.endsWith('/analyses/latest')) return route.fulfill({ json: null });
     return route.fulfill({ json: {} });
   });
   await page.goto('/portfolio/');
@@ -114,6 +115,13 @@ test('a first-time visitor is asked before going to an empty dashboard', async (
   await expect(page).not.toHaveURL(/view=dashboard/);
   await page.getByRole('link', { name: '내 포트폴리오 ↗' }).click();
   await page.getByRole('button', { name: '대시보드로 가기' }).click();
+  await expect(page).toHaveURL(/view=dashboard/);
+});
+
+test('a dashboard check that fails never traps the visitor on the input screen', async ({ page }) => {
+  await open(page);
+  await page.route('**/api/portfolio/workbook', route => route.fulfill({ status: 503, json: {} }));
+  await page.getByRole('link', { name: '내 포트폴리오 ↗' }).click();
   await expect(page).toHaveURL(/view=dashboard/);
 });
 

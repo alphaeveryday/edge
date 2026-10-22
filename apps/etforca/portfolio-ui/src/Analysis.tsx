@@ -27,14 +27,23 @@ export function Analysis({ embedded = false, active = true }: { embedded?: boole
   const [elapsed, setElapsed] = useState(0);
   const { ask, confirmation } = useConfirmation();
   // 처음 온 방문자는 저장한 포트폴리오도 분석도 없어 대시보드가 비어 있다 — 첫 행동 대신 빈 화면으로 빠지지 않게 한 번 묻는다.
+  const checkingDashboard = useRef(false);
   async function openDashboard(e: React.MouseEvent<HTMLAnchorElement>) {
     if (jobId || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return; // 새 탭 열기 등은 그대로 둔다
     e.preventDefault();
-    const href = e.currentTarget.href;
-    let saved = true;
-    try { await ensureVisitorSession(); saved = !!(await request<Saved>('/workbook')).workbook?.assets?.length; }
-    catch { /* 확인하지 못하면 이동을 막지 않는다. */ }
-    if (saved || await ask('아직 처음이라 저장된 포트폴리오가 없어요. 그래도 내 포트폴리오 대시보드로 갈까요?', '대시보드로 가기')) location.href = href;
+    if (checkingDashboard.current) return;
+    checkingDashboard.current = true;
+    const link = e.currentTarget, href = link.href;
+    let empty = false;
+    try {
+      // 대시보드에 보일 것(저장한 보유·최근 분석)이 하나라도 있으면 묻지 않는다. 3초 안에 확인하지 못해도 이동을 막지 않는다.
+      empty = await Promise.race([
+        ensureVisitorSession().then(() => Promise.all([request<Saved>('/workbook'), request<Job | null>('/analyses/latest')]))
+          .then(([saved, latest]) => !saved.workbook?.assets?.length && !latest),
+        new Promise<boolean>(done => setTimeout(() => done(false), 3000))]);
+    } catch { /* 확인하지 못하면 이동을 막지 않는다. */ }
+    checkingDashboard.current = false;
+    if (!empty || await ask('아직 처음이라 저장된 포트폴리오가 없어요. 그래도 내 포트폴리오 대시보드로 갈까요?', '대시보드로 가기', link)) location.href = href;
   }
   const pendingRestored = useRef(false);
   useEffect(() => {

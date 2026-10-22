@@ -6,6 +6,7 @@ import { Holdings } from '../Holdings';
 import { sample } from '../preview';
 import { NewsletterSignup } from '../NewsletterSignup';
 import { AppDownloadSheet } from '../AppDownloadSheet';
+import { ExampleReport } from '../ExampleReport';
 import { InstrumentSearch } from '../InstrumentSearch';
 import { TaxAccounts, type TaxProfile } from '../TaxAccounts';
 
@@ -27,6 +28,7 @@ export function DesignCatalog() {
     </section>
     <section id="controls"><SectionHeading title="행동이 분명한 버튼과 입력" />
       <InstrumentSearch includeStocks account="예시 계좌" catalog={{ fetched_at: '2026-10-21', counts: { KR: 1, US: 1 }, instruments: [{ id: 'KR:005930', market: 'KR', ticker: '005930', code: '005930', name: '삼성전자', kind: 'stock' }, { id: 'US:AAPL', market: 'US', ticker: 'AAPL', code: 'AAPL', name: 'Apple', kind: 'stock' }] }} onAdd={() => {}} />
+      <div className="step"><ExampleReport /></div>
       <div className="ds-examples"><Button variant="primary" type="button">포트폴리오 저장하기</Button><Button variant="secondary" type="button">다시 확인하기</Button><Button variant="danger" type="button">기록 삭제하기</Button><Button variant="primary" loading type="button">저장 중</Button><Button variant="primary" disabled type="button">선택 후 계속하기</Button></div>
       <form onSubmit={e=>{e.preventDefault();setSubmitted(true);}}>
         <label htmlFor="ds-email">이메일 주소<TextInput id="ds-email" type="email" value={email} onChange={e=>{setEmail(e.target.value);setSubmitted(false);}} placeholder="name@example.com" required /></label>
