@@ -460,3 +460,10 @@ def test_new_only_run_caps_sessions_and_yields_near_the_hourly_run(cfg):
     late = _judging({f"9000{n}0": "pending" for n in range(1, 6)})
     report = research.run_research(cfg, quotes=many, kind=FakeKind(), session_runner=late, now=NOW.replace(minute=30), only_new=True)
     assert late.calls == [] and report["skipped"] and report["published"]
+
+
+def test_watch_stops_at_the_regular_session_close(cfg):
+    # 15:30 뒤 Naver 순위는 넥스트레이드 시간외 체결로 움직인다 — 정규장에서 오르지 않은 종목을 새 급등주로 분석하지 않는다.
+    src, launched = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), []
+    assert "정규장" in _watch(cfg, src, now=NOW.replace(hour=15, minute=30), launched=launched)["skipped"]
+    assert _watch(cfg, src, now=NOW.replace(hour=15, minute=19), launched=launched)["launched"] and len(launched) == 1

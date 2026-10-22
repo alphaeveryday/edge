@@ -62,6 +62,9 @@ def watch_new(store_uri: str, *, quotes: Quotes | None = None, now: datetime | N
     report["new"] = new = [m.code for m in risers if m.code not in seen]
     if not new:
         return report
+    if (now.hour, now.minute) >= (15, 30):  # 장 마감 뒤 순위에는 넥스트레이드(시간외) 체결이 섞인다 — 정규장 급등만 본다
+        report["skipped"] = "정규장이 끝났습니다."
+        return report
     if 20 <= now.minute < 38:
         report["skipped"] = "정각 조사 직전이라 그때 함께 봅니다."
         return report
