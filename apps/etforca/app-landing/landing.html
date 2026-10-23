@@ -17,7 +17,7 @@
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://etforca.com/#website","name":"ETF Orca","url":"https://etforca.com/","inLanguage":"ko","publisher":{"@id":"https://etforca.com/#organization"}},{"@type":"Organization","@id":"https://etforca.com/#organization","name":"ETF Orca","url":"https://etforca.com/","logo":"https://etforca.com/assets/icon.png","sameAs":["https://www.instagram.com/etf_orca/"]},{"@type":"MobileApplication","@id":"https://etforca.com/#app","name":"ETF Orca","operatingSystem":"iOS","applicationCategory":"FinanceApplication","description":"국내 주식형 ETF의 한 달 전망과 그 근거를 매일 정리해요. 뉴스와 공시, 수급을 읽고 이유를 문장으로 보여주는 무료 앱이에요.","url":"https://etforca.com/","installUrl":"https://apps.apple.com/kr/app/etf-orca/id6816826436","offers":{"@type":"Offer","price":"0","priceCurrency":"KRW"},"publisher":{"@id":"https://etforca.com/#organization"}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebSite","@id":"https://etforca.com/#website","name":"ETF Orca","url":"https://etforca.com/","inLanguage":"ko","publisher":{"@id":"https://etforca.com/#organization"}},{"@type":"Organization","@id":"https://etforca.com/#organization","name":"ETF Orca","url":"https://etforca.com/","logo":"https://etforca.com/assets/icon.png","sameAs":["https://www.instagram.com/etf_orca/"]},{"@type":"MobileApplication","@id":"https://etforca.com/#app","name":"ETF Orca","operatingSystem":"iOS, Android","applicationCategory":"FinanceApplication","description":"국내 주식형 ETF의 한 달 전망과 그 근거를 매일 정리해요. 뉴스와 공시, 수급을 읽고 이유를 문장으로 보여주는 무료 앱이에요.","url":"https://etforca.com/","installUrl":"https://apps.apple.com/kr/app/etf-orca/id6816826436","offers":{"@type":"Offer","price":"0","priceCurrency":"KRW"},"publisher":{"@id":"https://etforca.com/#organization"}}]}</script>
 <!--
   Claude Artifact용 조각 문서입니다. 게시할 때 doctype, head, body가 자동으로 감싸집니다.
   B안: PokeClip의 이야기 순서를 따른다. 약속 → 조건(다루는 ETF와 종목 찾기) → 공감(ETF 투자자의 큰 문제 넷) → 문제마다 해결 섹션 하나씩(ETF 단위 분석, 한 달 전망, 오늘 움직임, 커뮤니티) → 걱정 해소 → 행동.
@@ -177,7 +177,6 @@ strong{font-weight:700;color:var(--t1)}
 .qr p{margin-top:.5rem;font-size:max(calc(var(--tk) * 13.6),.875rem);line-height:1.55;color:var(--t2)}
 .qr__code{width:12.75rem;margin:1.25rem auto 0;padding:.75rem;border-radius:1rem;background:#fff}
 .qr__code svg{display:block;width:100%;height:auto}
-.qr .qr__note{margin-top:.875rem;font-size:max(calc(var(--tk) * 12.8),.8125rem);color:var(--t3)}
 .qr__link{display:inline-block;margin-top:.625rem;font-size:max(calc(var(--tk) * 13.6),.875rem);font-weight:600;color:var(--accent-300);text-decoration:underline;text-underline-offset:.1875rem}
 .qr__x{position:absolute;top:.625rem;right:.625rem;width:2.25rem;height:2.25rem;border:0;border-radius:50%;background:transparent;color:var(--t2);font-size:max(calc(var(--tk) * 18.7),1.375rem);line-height:1;cursor:pointer}
 .qr__x:hover{background:var(--surface);color:var(--t1)}
@@ -662,8 +661,6 @@ a[role="button"]{cursor:pointer}
 .cta__orca{width:clamp(7.5rem,6.25rem + 8vw,12.5rem);height:auto;animation:bob 4.5s var(--ease-inout) infinite alternate;filter:drop-shadow(0 1.25rem 2.5rem var(--shadow))}
 .cta .display{margin:.5rem 0 1.125rem}
 .cta .hero__ctas{margin-top:2.125rem}
-.cta__note{margin-top:1.375rem;font-size:max(calc(var(--tk) * 13.6),.875rem);font-weight:600;color:var(--t3)}
-.btn--soon{opacity:.6;pointer-events:none}
 .find{width:min(100%,32.5rem);margin:0 auto 1.875rem}
 .find label{display:block;margin-bottom:.5rem}
 .find__hint{margin:0 0 1rem;color:var(--t1);font-size:max(calc(var(--tk) * 14.3),.9375rem)}
@@ -808,12 +805,12 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     </div>
     <div class="hero__shade" aria-hidden="true"></div>
     <div class="hero__copy" data-cta-zone>
-      <span class="chip chip--launch">App Store 출시</span>
+      <span class="chip chip--launch">iOS · Android 출시</span>
       <h1 class="display">ETF 한 달 전망,<br>이유까지 보여드려요.</h1>
       <p class="lead"><span class="nw">뉴스와 공시, 수급을 매일 읽고</span> <span class="nw"><strong>전망의 근거</strong>를 문장으로 정리해요.</span></p>
       <div class="hero__ctas">
         <a class="btn btn--point btn--lg" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store에서 다운로드</a>
-        <span class="btn btn--ghost btn--lg btn--soon" data-play-soon>Google Play 곧 출시</span>
+        <a class="btn btn--ghost btn--lg" href="https://play.google.com/store/apps/details?id=com.alphaeveryday.etforca&amp;hl=ko" target="_blank" rel="noopener" data-play>Google Play에서 다운로드</a>
         <a class="btn btn--ghost btn--lg" href="#find" data-preview>미리 보기</a>
       </div>
     </div>
@@ -1186,7 +1183,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
       </details>
       <details>
         <summary>Android에서도 쓸 수 있나요?</summary>
-        <p>지금은 iPhone에서 쓸 수 있어요. Android 버전은 출시를 준비하고 있습니다.</p>
+        <p>네. Google Play에서 받을 수 있어요.</p>
       </details>
     </div>
   </div>
@@ -1199,10 +1196,9 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     <h2 class="display">관심 ETF만 담아 두세요.<br>전망은 Orca가 챙길게요.</h2>
     <div class="hero__ctas">
       <a class="btn btn--point btn--lg" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store에서 다운로드</a>
-      <span class="btn btn--ghost btn--lg btn--soon" data-play-soon>Google Play 곧 출시</span>
+      <a class="btn btn--ghost btn--lg" href="https://play.google.com/store/apps/details?id=com.alphaeveryday.etforca&amp;hl=ko" target="_blank" rel="noopener" data-play>Google Play에서 다운로드</a>
       <a class="btn btn--ghost btn--lg" href="#find" data-preview>미리 보기</a>
     </div>
-    <p class="cta__note">Android는 곧 출시돼요.</p>
   </div>
 </section>
 
@@ -1227,15 +1223,15 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
   <a class="btn btn--ghost" href="#find" data-preview>미리 보기</a>
 </div>
 
-<!-- 데스크톱에서 다운로드를 누르면 스토어로 보내지 않고 이 창을 띄운다(휴대폰으로 찍어 받도록). QR은 App Store 링크를 미리 그려 둔 것이라, 링크가 바뀌면 다시 만들어야 한다 -->
+<!-- 데스크톱에서 App Store 다운로드를 누르면 스토어로 보내지 않고 이 창을 띄운다(휴대폰으로 찍어 받도록). QR은 App Store 링크를 미리 그려 둔 것이라, 링크가 바뀌면 다시 만들어야 한다. Google Play 단추는 웹 스토어로 바로 간다(웹에서 폰으로 설치할 수 있다) -->
 <dialog class="qr" id="qr" aria-labelledby="qr-title">
   <div class="qr__in">
     <button class="qr__x" type="button" aria-label="닫기" data-qr-close>×</button>
     <h2 id="qr-title">휴대폰으로 받으세요</h2>
     <p>iPhone 카메라로 QR을 비추면 App Store로 이동해요.</p>
     <div class="qr__code"><svg viewBox="0 0 37 37" shape-rendering="crispEdges" role="img" aria-label="ETF Orca App Store 링크 QR 코드"><path d="M2 2h7v1h-7zM10 2h3v1h-3zM14 2h3v1h-3zM18 2h3v1h-3zM23 2h2v1h-2zM28 2h7v1h-7zM2 3h1v1h-1zM8 3h1v1h-1zM10 3h2v1h-2zM15 3h2v1h-2zM20 3h2v1h-2zM23 3h2v1h-2zM26 3h1v1h-1zM28 3h1v1h-1zM34 3h1v1h-1zM2 4h1v1h-1zM4 4h3v1h-3zM8 4h1v1h-1zM10 4h2v1h-2zM15 4h4v1h-4zM22 4h4v1h-4zM28 4h1v1h-1zM30 4h3v1h-3zM34 4h1v1h-1zM2 5h1v1h-1zM4 5h3v1h-3zM8 5h1v1h-1zM11 5h4v1h-4zM16 5h1v1h-1zM18 5h1v1h-1zM20 5h6v1h-6zM28 5h1v1h-1zM30 5h3v1h-3zM34 5h1v1h-1zM2 6h1v1h-1zM4 6h3v1h-3zM8 6h1v1h-1zM10 6h1v1h-1zM13 6h3v1h-3zM17 6h2v1h-2zM23 6h2v1h-2zM26 6h1v1h-1zM28 6h1v1h-1zM30 6h3v1h-3zM34 6h1v1h-1zM2 7h1v1h-1zM8 7h1v1h-1zM11 7h2v1h-2zM14 7h6v1h-6zM21 7h1v1h-1zM24 7h2v1h-2zM28 7h1v1h-1zM34 7h1v1h-1zM2 8h7v1h-7zM10 8h1v1h-1zM12 8h1v1h-1zM14 8h1v1h-1zM16 8h1v1h-1zM18 8h1v1h-1zM20 8h1v1h-1zM22 8h1v1h-1zM24 8h1v1h-1zM26 8h1v1h-1zM28 8h7v1h-7zM11 9h1v1h-1zM13 9h3v1h-3zM17 9h2v1h-2zM24 9h1v1h-1zM26 9h1v1h-1zM2 10h1v1h-1zM5 10h7v1h-7zM14 10h1v1h-1zM16 10h1v1h-1zM19 10h2v1h-2zM26 10h2v1h-2zM30 10h1v1h-1zM32 10h3v1h-3zM2 11h1v1h-1zM5 11h2v1h-2zM9 11h1v1h-1zM15 11h3v1h-3zM19 11h3v1h-3zM23 11h1v1h-1zM25 11h2v1h-2zM30 11h3v1h-3zM3 12h4v1h-4zM8 12h2v1h-2zM12 12h4v1h-4zM17 12h1v1h-1zM23 12h1v1h-1zM25 12h1v1h-1zM27 12h1v1h-1zM30 12h3v1h-3zM34 12h1v1h-1zM2 13h6v1h-6zM10 13h1v1h-1zM14 13h2v1h-2zM18 13h1v1h-1zM20 13h2v1h-2zM24 13h1v1h-1zM26 13h4v1h-4zM32 13h1v1h-1zM34 13h1v1h-1zM2 14h3v1h-3zM6 14h5v1h-5zM13 14h3v1h-3zM17 14h1v1h-1zM19 14h1v1h-1zM21 14h2v1h-2zM24 14h2v1h-2zM28 14h2v1h-2zM34 14h1v1h-1zM2 15h1v1h-1zM4 15h1v1h-1zM7 15h1v1h-1zM9 15h2v1h-2zM14 15h1v1h-1zM16 15h1v1h-1zM19 15h4v1h-4zM24 15h4v1h-4zM31 15h1v1h-1zM2 16h1v1h-1zM5 16h2v1h-2zM8 16h2v1h-2zM11 16h1v1h-1zM13 16h2v1h-2zM16 16h2v1h-2zM19 16h1v1h-1zM21 16h1v1h-1zM23 16h2v1h-2zM26 16h1v1h-1zM28 16h1v1h-1zM30 16h3v1h-3zM2 17h1v1h-1zM6 17h2v1h-2zM10 17h1v1h-1zM18 17h1v1h-1zM21 17h1v1h-1zM24 17h1v1h-1zM26 17h2v1h-2zM30 17h3v1h-3zM34 17h1v1h-1zM3 18h1v1h-1zM6 18h3v1h-3zM10 18h1v1h-1zM13 18h1v1h-1zM17 18h2v1h-2zM22 18h1v1h-1zM24 18h1v1h-1zM27 18h5v1h-5zM7 19h1v1h-1zM9 19h1v1h-1zM13 19h1v1h-1zM17 19h1v1h-1zM19 19h4v1h-4zM28 19h1v1h-1zM30 19h1v1h-1zM32 19h1v1h-1zM34 19h1v1h-1zM2 20h1v1h-1zM4 20h2v1h-2zM7 20h2v1h-2zM10 20h1v1h-1zM12 20h1v1h-1zM16 20h2v1h-2zM19 20h4v1h-4zM24 20h4v1h-4zM29 20h1v1h-1zM31 20h2v1h-2zM34 20h1v1h-1zM3 21h1v1h-1zM13 21h1v1h-1zM16 21h1v1h-1zM26 21h1v1h-1zM28 21h1v1h-1zM30 21h5v1h-5zM2 22h1v1h-1zM4 22h1v1h-1zM8 22h3v1h-3zM13 22h1v1h-1zM16 22h3v1h-3zM20 22h1v1h-1zM22 22h1v1h-1zM24 22h1v1h-1zM29 22h1v1h-1zM31 22h1v1h-1zM2 23h1v1h-1zM4 23h3v1h-3zM10 23h3v1h-3zM16 23h1v1h-1zM19 23h1v1h-1zM21 23h2v1h-2zM25 23h2v1h-2zM29 23h3v1h-3zM2 24h1v1h-1zM4 24h1v1h-1zM6 24h4v1h-4zM12 24h1v1h-1zM15 24h2v1h-2zM20 24h1v1h-1zM23 24h1v1h-1zM25 24h2v1h-2zM28 24h1v1h-1zM30 24h1v1h-1zM33 24h2v1h-2zM2 25h1v1h-1zM6 25h2v1h-2zM9 25h1v1h-1zM11 25h1v1h-1zM13 25h2v1h-2zM17 25h1v1h-1zM19 25h1v1h-1zM21 25h1v1h-1zM24 25h1v1h-1zM27 25h1v1h-1zM30 25h1v1h-1zM32 25h3v1h-3zM2 26h4v1h-4zM8 26h1v1h-1zM10 26h2v1h-2zM15 26h1v1h-1zM18 26h1v1h-1zM21 26h2v1h-2zM25 26h6v1h-6zM33 26h2v1h-2zM10 27h3v1h-3zM15 27h1v1h-1zM17 27h3v1h-3zM22 27h1v1h-1zM25 27h2v1h-2zM30 27h1v1h-1zM32 27h1v1h-1zM2 28h7v1h-7zM10 28h5v1h-5zM16 28h2v1h-2zM19 28h1v1h-1zM21 28h2v1h-2zM25 28h2v1h-2zM28 28h1v1h-1zM30 28h1v1h-1zM32 28h1v1h-1zM2 29h1v1h-1zM8 29h1v1h-1zM10 29h3v1h-3zM15 29h1v1h-1zM17 29h1v1h-1zM19 29h2v1h-2zM24 29h3v1h-3zM30 29h5v1h-5zM2 30h1v1h-1zM4 30h3v1h-3zM8 30h1v1h-1zM10 30h1v1h-1zM13 30h1v1h-1zM18 30h2v1h-2zM25 30h6v1h-6zM33 30h2v1h-2zM2 31h1v1h-1zM4 31h3v1h-3zM8 31h1v1h-1zM10 31h1v1h-1zM13 31h1v1h-1zM15 31h2v1h-2zM18 31h4v1h-4zM23 31h1v1h-1zM25 31h3v1h-3zM29 31h1v1h-1zM31 31h4v1h-4zM2 32h1v1h-1zM4 32h3v1h-3zM8 32h1v1h-1zM13 32h1v1h-1zM15 32h1v1h-1zM17 32h1v1h-1zM20 32h4v1h-4zM25 32h2v1h-2zM29 32h3v1h-3zM33 32h2v1h-2zM2 33h1v1h-1zM8 33h1v1h-1zM11 33h2v1h-2zM14 33h1v1h-1zM16 33h1v1h-1zM20 33h2v1h-2zM25 33h1v1h-1zM28 33h7v1h-7zM2 34h7v1h-7zM10 34h2v1h-2zM15 34h7v1h-7zM26 34h2v1h-2zM29 34h2v1h-2z"/></svg></div>
-    <p class="qr__note">Android는 곧 출시돼요.</p>
     <a class="qr__link" href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store 페이지 열기</a>
+    <a class="qr__link" href="https://play.google.com/store/apps/details?id=com.alphaeveryday.etforca&amp;hl=ko" target="_blank" rel="noopener">Google Play 페이지 열기</a>
   </div>
 </dialog>
 
@@ -1250,7 +1246,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
   const mode = root.dataset.mode || 'lite';
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-  const android = /Android/i.test(navigator.userAgent); // 안드로이드 앱은 아직 없다. 스토어로 보내는 단추를 안내로 바꾼다(ALPHA-1356)
+  const android = /Android/i.test(navigator.userAgent); // 안드로이드에서는 다운로드 단추를 Google Play 로 보낸다(ALPHA-1440)
   const clamp01 = (v) => Math.min(1, Math.max(0, v));
   const seg = (p, a, b) => clamp01((p - a) / (b - a)); // 진행률 p를 [a,b] 구간의 0..1로
   const ease = (t) => 1 - Math.pow(1 - clamp01(t), 3);
@@ -1608,7 +1604,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
 
   // 데스크톱(마우스로 쓰는 화면)에서는 다운로드 버튼이 스토어로 가는 대신 QR 창을 띄운다. 휴대폰에서는 그대로 스토어로 간다
   const qr = $('#qr');
-  // 안드로이드는 제외한다 — QR 은 iOS 기기로 찍으라는 창이고, 먼저 href 를 떼면 아래 '곧 출시' 치환이 그 단추를 못 찾는다
+  // 안드로이드는 제외한다 — QR 은 iOS 기기로 찍으라는 창이고, 먼저 href 를 떼면 아래 Google Play 치환이 그 단추를 못 찾는다
   if (!android && qr.showModal && matchMedia('(hover: hover) and (pointer: fine)').matches) {
     $$('a[href*="apps.apple.com"]').forEach((a) => {
       if (qr.contains(a)) return;
@@ -1634,11 +1630,10 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
   const el = (tag, cls, text) => { const n = document.createElement(tag); n.className = cls; n.textContent = text; return n; };
   let missT, cardSeq = 0;
   if (android) {
-    // 눌러 본 뒤에야 iOS 전용임을 알게 되는 일을 없앤다. 히어로 배지·스토어 단추 전부를 '곧 출시'로 바꾸고 마지막 CTA 의 작은 안내는 뺀다
-    $('.chip--launch').textContent = 'Android 곧 출시';
-    $$('a[href*="apps.apple.com"]').forEach((a) => a.replaceWith(el('span', a.className + ' btn--soon', 'Android 곧 출시')));
-    $('.cta__note').textContent = 'iOS 앱은 App Store에 있어요.';
-    $$('[data-play-soon]').forEach((b) => b.remove());
+    // App Store 단추 전부를 Google Play 로 보낸다. 따로 둔 Google Play 단추는 겹치므로 뺀다
+    const play = $('[data-play]').href;
+    $$('a[href*="apps.apple.com"]').forEach((a) => { a.href = play; a.textContent = a.textContent.replace('App Store', 'Google Play'); });
+    $$('[data-play]').forEach((b) => b.remove());
   }
   // 전망은 같은 도메인의 outlook/<코드>.json 에서 읽는다. 매일 08:00에 그날 발행된 앱 화면 응답이 그대로 올라온다(infra/terraform/modules/landing-export).
   // 파일이 없으면 null. 읽다 실패하면(통신 오류, 깨진 파일) 던진다 — 어느 쪽이든 카드가 준비 중이라고 알린다
@@ -1690,9 +1685,9 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
       if (d) report = [reportOf(d), el('p', 'find__meta', `ETF Orca AI · ${asOf(d.publication.analysis_at)} 기준 · 투자 추천이 아니에요.`)];
     } catch { /* 깨졌거나 모양이 다른 파일은 없는 파일처럼 다룬다 — 뼈대 화면을 남기지 않는다 */ }
     if (seq !== cardSeq) return; // 기다리는 사이에 다른 것을 찾았다
-    const go = el(android ? 'span' : 'button', android ? 'btn btn--point btn--soon' : 'btn btn--point', android ? 'Android 곧 출시' : '앱에서 매일 새 전망 보기');
+    const go = el('button', 'btn btn--point', '앱에서 매일 새 전망 보기');
     go.type = 'button';
-    go.onclick = () => $('.cta .btn--point').click(); // 다운로드 버튼과 같은 길: 휴대폰은 스토어, 데스크톱은 QR 창
+    go.onclick = () => $('.cta .btn--point').click(); // 다운로드 버튼과 같은 길: 휴대폰은 스토어(안드로이드는 Google Play), 데스크톱은 QR 창
     card.replaceChildren(head, ...(report || [el('p', 'find__meta', '오늘 전망을 준비하고 있어요. 앱에서는 바로 볼 수 있어요.')]), go);
     if (window.ScrollTrigger) window.ScrollTrigger.refresh(); // 리포트만큼 길어졌으니 아래쪽 위치를 다시 잰다
   };
