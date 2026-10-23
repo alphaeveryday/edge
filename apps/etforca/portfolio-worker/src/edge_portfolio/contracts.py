@@ -70,7 +70,31 @@ class TaxProfile(StrictModel):
         return self
 
 
-class DraftInput(StrictModel):
+class ConstraintChip(StrictModel):
+    """8차: 고객이 칩으로 고른 조건만 지킬 조건이다. 글(질문·원하는 포트폴리오)은 참고일 뿐 조건이 되지 않는다."""
+    kind: Literal['no_leverage', 'some_bonds', 'dividend', 'max_positions', 'no_sell', 'kr_listed_etf_only']
+    value: int | None = Field(default=None, ge=1, le=20, strict=True)
+
+    @model_validator(mode='after')
+    def value_only_for_count(self):
+        if (self.kind == 'max_positions') != (self.value is not None):
+            raise ValueError('max_positions needs value 1..20; other chips take no value')
+        return self
+
+
+class V8Fields(StrictModel):
+    monthly_krw: int | None = Field(default=None, ge=0, le=10**13, strict=True)
+    goal_text: str = Field(default='', max_length=1000)
+    constraints: list[ConstraintChip] = Field(default_factory=list, max_length=6)
+
+    @model_validator(mode='after')
+    def distinct_chips(self):
+        if len({chip.kind for chip in self.constraints}) != len(self.constraints):
+            raise ValueError('Duplicate constraint chip')
+        return self
+
+
+class DraftInput(V8Fields):
     holdings: list[Holding] = Field(max_length=20)
     question: str = Field(default='', max_length=1000)
     horizon: Literal['', '3년 안', '3~10년', '10년 이상', '정한 때 없음'] = ''
@@ -85,7 +109,7 @@ class DraftInput(StrictModel):
         return self
 
 
-class AnalysisInput(StrictModel):
+class AnalysisInput(V8Fields):
     draft_id: UUID | None = None
     holdings: list[Holding] = Field(max_length=20)
     question: str = Field(default="", max_length=1000)

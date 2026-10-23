@@ -155,6 +155,15 @@ def funding_assumptions(funding):
 
 
 def resolve_funding(request, decision=None):
+    """8차: 입력 칸의 월 납입(monthly_krw)이 있으면 글 해석보다 먼저 쓴다."""
+    funding = resolve_text_funding(request, decision)
+    monthly = getattr(request, 'monthly_krw', None)
+    if monthly is None:
+        return funding
+    return {'additional_krw': Decimal(0), **(funding or {}), 'monthly_krw': Decimal(monthly)}
+
+
+def resolve_text_funding(request, decision=None):
     if decision and decision.funding is not None:
         funding = decision.funding
         return {'additional_krw': Decimal(funding.additional_krw),
@@ -246,7 +255,7 @@ def plan_execution(request, allocations, decision=None):
     rules = [rule for rule in decision.constraints if rule.kind == 'no_sell'] if decision else []
     no_sell_ids = set().union(*(set(rule.instrument_ids) for rule in rules)) if rules and all(rule.instrument_ids for rule in rules) else set()
     result = build_execution(request, allocations, monthly_krw=funding.get('monthly_krw'), no_sell=bool(rules), no_sell_ids=no_sell_ids)
-    if result['monthly_plan'] and decision and decision.funding is not None:
+    if result['monthly_plan'] and decision and decision.funding is not None and getattr(request, 'monthly_krw', None) is None:
         result['assumptions'].extend(funding_assumptions(decision.funding))  # 추정한 월 납입은 가정이라고 적는다
     return result
 
@@ -310,6 +319,15 @@ def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no
     if len(target) != len(allocations) or not target or sum(target.values()) != 100 or any(not w.is_finite() or w <= 0 for w in target.values()):
         raise ValueError('INVALID_EXECUTION_ALLOCATION')
     stocks = {holding.instrument_id for holding in request.holdings if holding.kind == 'stock'}
+    # 매달 넣는 돈은 칩이 막은 종목(레버리지, 국내 상장이 아닌 것)에 넣지 않는다. 팔지 않기로 남긴 레버리지는 이렇게 몫이 줄어든다
+    chips = {chip.kind for chip in getattr(request, 'constraints', [])}
+    no_monthly = set(stocks)
+    if chips & {'no_leverage', 'kr_listed_etf_only'}:
+        from .catalog import instruments, traits
+        for key in target:
+            item = instruments().get(key[0], {})
+            if 'no_leverage' in chips and 'leverage' in traits(item) or 'kr_listed_etf_only' in chips and item.get('market') != 'KR':
+                no_monthly.add(key[0])
     def monthly_plan(deposits):
         if monthly:
             room_left = {}
@@ -318,7 +336,7 @@ def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no
                 if room is not None:  # 연금 두 계좌는 같은 한도에서 두 계좌에 넣은 돈을 함께 뺀다
                     group = limit_group(account)
                     room_left[group] = room - sum(value for name, value in deposits.items() if limit_group(name) == group)
-            result['monthly_plan'] = split_monthly(monthly, target, room_left, stocks)
+            result['monthly_plan'] = split_monthly(monthly, target, room_left, no_monthly)
             if not result['monthly_plan']:
                 # 금액은 알고 있다. 받을 계좌가 없을 뿐이니 입력을 다시 묻지 말고 배치를 고치게 한다
                 return ['MONTHLY_CONTRIBUTION_LIMIT_EXCEEDED']

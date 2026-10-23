@@ -225,7 +225,8 @@ async def test_scenario_followup_uses_verified_principal_and_retains_original_co
         question = {True: '앞서 말한 원금은 취소합니다. ', 'uncertain': '원금은 1000만원입니다. 원금은 확인 필요합니다. ', 'unknown': '원금은 모릅니다. ', 'negated': '원금은 확정된 금액이 아니에요. ', 'unsupported': '원금은 1천만원입니다. ', 'unlabeled': '앞서 말한 1000만원은 취소합니다. '}[withdrawn] + question
     if withdrawn == 'context_unknown': question = '이 돈은 아직 수중에 없습니다. ' + question
     report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
-        'horizon': '10년 이상', 'question': '매도 금지', 'preferences': {'contribution': '이미 다 매수한 상태에요', 'interests': ['성장']}}, 'as_of': '2026-10-12',
+        'horizon': '10년 이상', 'question': '매도 금지', 'constraints': [{'kind': 'no_sell'}],
+        'preferences': {'contribution': '이미 다 매수한 상태에요', 'interests': ['성장']}}, 'as_of': '2026-10-12',
         'sources': Evidence.sources, 'decision': {'constraints': [{'kind': 'no_sell', 'source': '매도 금지'}]}}
     if not has_principal:
         report['input'].update(holdings=[], planning=True, preferences={'contribution': '매월 10만원'})
@@ -316,7 +317,7 @@ async def test_saved_target_is_checked_without_aborting_recovery(monkeypatch, av
         monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
     question = '기존 목표로 리밸런싱하려면 어떻게 해야 하나요? 매도 금지'
     report = {'input': {'holdings': [{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
-        'horizon': '10년 이상'}, 'sources': Evidence.sources, 'completion': {'status': 'complete'}, 'recommendation': {'allocations': [
+        'horizon': '10년 이상', 'constraints': [{'kind': 'no_sell'}]}, 'sources': Evidence.sources, 'completion': {'status': 'complete'}, 'recommendation': {'allocations': [
         {'instrument_id': 'US:VOO' if available else 'US:REMOVED', 'account': '일반 계좌', 'weight_pct': 100}]}}
     stages = []
     async def model(payload):
@@ -396,27 +397,6 @@ async def test_model_decides_whether_a_saved_target_satisfies_a_semantic_conditi
         assert result['status'] == 'complete'
 
 
-@pytest.mark.parametrize('prior_kind', ['review', 'new_money'])
-async def test_followup_retains_twenty_existing_rules_without_inventing_no_sell(prior_kind):
-    import json
-    from report_fixtures import final_payload
-    from test_agent import Evidence
-    rules = [{'kind': 'unverified', 'source': f'기존 필수 조건 {i}'} for i in range(20)]
-    report = {'input': {'holdings': [], 'planning': True, 'horizon': '10년 이상',
-        'question': '\n'.join(rule['source'] for rule in rules)}, 'decision': {'kind': prior_kind, 'constraints': rules}, 'sources': Evidence.sources}
-    stages = []
-    async def model(payload):
-        if stages[-1] != 'question':
-            active = json.loads(payload['messages'][1]['content'])['active_decision']['constraints']
-            assert len(active) == 21
-            assert {rule['source'] for rule in active} == {*(rule['source'] for rule in rules), '새 필수 조건'}
-            raise RuntimeError('MERGE_CHECKED')
-        content = {**final_payload()['question'], 'decision': {'scenario_requested': True, 'kind': 'scenario', 'constraints': [rules[0], {'kind': 'unverified', 'source': '새 필수 조건'}]}}
-        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
-    with pytest.raises(RuntimeError, match='MERGE_CHECKED'):
-        await answer_question('새 필수 조건', report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
-
-
 async def test_distinct_followup_questions_keep_separate_completion_tasks():
     import json
     from report_fixtures import final_payload
@@ -432,34 +412,6 @@ async def test_distinct_followup_questions_keep_separate_completion_tasks():
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     with pytest.raises(RuntimeError, match='QUESTIONS_CHECKED'):
         await answer_question(first + ' ' + second, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
-
-
-@pytest.mark.parametrize('same_source,still_unknown', [(True, False), (False, False), (True, True)])
-async def test_recovery_resolves_only_the_exact_inherited_unknown_condition(same_source, still_unknown):
-    import json
-    from report_fixtures import final_payload
-    from test_agent import Evidence
-    original, other = 'VOO를 반드시 포함해 주세요.', '다른 조건도 지켜 주세요.'
-    report = {'input': {'holdings': [], 'planning': True, 'horizon': '10년 이상', 'question': original + other},
-        'decision': {'constraints': [{'kind': 'unverified', 'source': original}, {'kind': 'unverified', 'source': other}]},
-        'sources': Evidence.sources}
-    stages = []
-    followup = 'VOO는 미국 Vanguard S&P 500 ETF입니다.'
-    async def model(payload):
-        if stages[-1] != 'question':
-            rules = json.loads(payload['messages'][1]['content'])['active_decision']['constraints']
-            assert len(rules) == (2 if same_source and not still_unknown else 3)
-            unknown = {rule['source'] for rule in rules if rule['kind'] == 'unverified'}
-            assert unknown == ({other} if same_source and not still_unknown else {original, other})
-            assert any(rule['kind'] == 'require' and rule['instrument_ids'] == ['US:VOO'] for rule in rules)
-            raise RuntimeError('RESOLUTION_CHECKED')
-        content = {**final_payload()['question'], 'decision': {'scenario_requested': True, 'kind': 'scenario', 'constraints': [
-            {'kind': 'require', 'source': original if same_source else followup, 'instrument_ids': ['US:VOO']}]}}
-        if still_unknown:
-            content['decision']['constraints'].append({'kind': 'unverified', 'source': original})
-        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
-    with pytest.raises(RuntimeError, match='RESOLUTION_CHECKED'):
-        await answer_question(followup, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
 
 
 async def test_invalid_question_prose_cannot_leave_a_scenario_optimization_exemption():
@@ -481,23 +433,25 @@ async def test_invalid_question_prose_cannot_leave_a_scenario_optimization_exemp
     assert len(attempts) == 2
 
 
-@pytest.mark.parametrize('explicit_limit', [False, True])
-async def test_followup_does_not_restore_misclassified_interest_constraints(explicit_limit):
+@pytest.mark.parametrize('chips', [[], [{'kind': 'max_positions', 'value': 3}]])
+async def test_followup_constraints_come_only_from_the_saved_input_chips(chips):
+    # 8차: 옛 보고서가 글에서 뽑은 조건도, 후속 질문 글도 지킬 조건이 되지 않는다. 저장된 입력의 칩만 이어진다
     import json
     from report_fixtures import final_payload
     from test_agent import Evidence
-    report = {'input': {'holdings': [], 'planning': True, 'horizon': '10년 이상',
+    report = {'input': {'holdings': [], 'planning': True, 'horizon': '10년 이상', 'constraints': chips,
                        'preferences': {'interests': ['반도체']}},
-              'decision': {'constraints': [{'kind': 'unverified', 'source': '반도체'}]},
+              'decision': {'constraints': [{'kind': 'unverified', 'source': '반도체'}, {'kind': 'no_sell', 'source': '매도 금지'}]},
               'sources': Evidence.sources}
     stages = []
-    followup = '반도체 비중은 20% 이하로 제한해 주세요.' if explicit_limit else '추천을 다시 검토해 주세요.'
+    followup = '반도체 비중은 20% 이하로 제한해 주세요.'
     async def model(payload):
         if stages[-1] != 'question':
             rules = json.loads(payload['messages'][1]['content'])['active_decision']['constraints']
-            assert len(rules) == int(explicit_limit)
+            assert [rule['kind'] for rule in rules] == [chip['kind'] for chip in chips]
             raise RuntimeError('PREFERENCE_CHECKED')
-        content = {**final_payload()['question'], 'decision': {'scenario_requested': True, 'kind': 'scenario'}}
+        content = {**final_payload()['question'], 'decision': {'scenario_requested': True, 'kind': 'scenario',
+                   'constraints': [{'kind': 'unverified', 'source': followup}]}}
         return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
     with pytest.raises(RuntimeError, match='PREFERENCE_CHECKED'):
         await answer_question(followup, report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
