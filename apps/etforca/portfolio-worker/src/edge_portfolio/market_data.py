@@ -415,7 +415,7 @@ def past_amounts(history, total):
     points = history['points']
     total = Decimal(str(total))
     def amounts(name):
-        values = [point[name] for point in points]
+        values = [point.get(name) for point in points]
         if any(value is None for value in values):
             return None, None
         peak, drawdown = values[0], 0.0
@@ -658,7 +658,7 @@ async def enrich_report(published, final, market, sources):
     plan['dividend_basis'] = '최근 12개월 세전 분배금 수익률 · 추천 비중 가중 평균 · 미래 배당 보장 아님' if covered else '추천 ETF의 최근 12개월 배당률을 웹 자료에서 모두 확인하지 못했어요.'
     if result['status'] == 'available':
         plan['historical_performance'] = {**result['history'], 'baseline_kind': market.baseline_kind}
-        if result['history'].get('points'):
+        if result['history'].get('start_date') and result['history'].get('points'):  # 실제 비교 결과에는 늘 있다
             published['period'] = comparison_period(result['history'], market.records)
             if market.total:
                 published['past'] = past_amounts(result['history'], market.total)
