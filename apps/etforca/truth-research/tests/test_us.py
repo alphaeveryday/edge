@@ -144,6 +144,141 @@ def test_routine_us_filings_do_not_reopen_a_settled_verdict(cfg):
     assert [c[0] for c in again.calls] == ["TANH"]
 
 
+def _web(url, published="2026-10-22T13:00:00.000Z"):
+    from edge_truth_agent.tools import _web_id
+    return {"id": _web_id(url), "url": url, "title": "Tantech soars on deal", "publishedDate": published, "kind": "web",
+            "text": "Tantech Holdings Ltd announced a supply agreement", "full": True}
+
+
+def _seed_korean_news(cfg):
+    a = article("[美특징주] 탄테크 홀딩스 급등", "탄테크 홀딩스가 올랐다", aid="e" * 64, published="2026-10-22 22:10:00")
+    corpus.save(LocalStore(cfg.store), {a.id: a})
+    return a
+
+
+def _reading(tag="pending"):
+    """조사 세션 대신: 첫 메시지와 작업 폴더(받은 원문·국내 기사)를 기록하고 판정을 남긴다."""
+    seen = []
+
+    def run(cfg, ws, *, code, prompt, corpus_path):
+        ids = [line[2:].split(" | ")[0] for line in prompt.splitlines() if line.startswith("- web-")]
+        seen.append({"prompt": prompt, "inbox": ws.inbox(), "snap": {w: ws.snapshot(w) for w in ids}})
+        return _judging({code: tag})(cfg, ws, code=code, prompt=prompt, corpus_path=corpus_path)
+    run.seen = seen
+    return run
+
+
+def test_us_news_comes_from_exa_first_and_is_readable_without_web_budget(cfg):
+    # 미국 종목은 국내 수집 기사(빅카인즈)에 거의 없다 — 영어 보도를 코드가 먼저 모아 첫 메시지에 싣는다.
+    # 원문을 작업 폴더에 넣어 두어야 모델이 세션 웹 예산(10회)을 목록 찾는 데 쓰지 않고 바로 읽는다.
+    _seed_korean_news(cfg)
+    asked, runner = [], _reading()
+    web = [_web("https://www.globenewswire.com/a"), _web("https://www.reuters.com/b", "2026-10-22T12:00:00.000Z")]
+    _run(cfg, FakeQuotes({"NASDAQ": [_m("TANH", "탄테크 홀딩스", 181.8)]}), runner,
+         web_news=lambda m, since: asked.append((m.code, since)) or web)
+    got = runner.seen[0]
+    assert asked == [("TANH", "2026-10-08")]
+    assert "영어 웹 보도" in got["prompt"] and web[0]["id"] in got["prompt"] and "news-" not in got["prompt"]
+    assert got["inbox"] == [] and got["snap"][web[0]["id"]]["full"]  # 웹 보도가 있으면 국내 기사는 싣지 않는다
+
+
+def test_exa_news_drops_pages_outside_the_window(monkeypatch):
+    # 기간 조건을 걸어도 Exa 가 몇 년 전 시세 페이지를 섞어 준다(실측) — 그대로 실으면 모델이 옛 글을 오늘 급등 이유로 읽는다
+    from edge_truth_agent import web as web_mod
+    sent = {}
+
+    def post(self, path, body):
+        sent.update(body)
+        about = "Tantech (NASDAQ:TANH) shares jumped"
+        return {"results": [{"url": "https://a.com/mid", "title": "m", "publishedDate": "2026-10-20T10:00:00.000Z", "text": about},
+                            {"url": "https://a.com/new", "title": "n", "publishedDate": "2026-10-22T10:00:00.000Z", "text": about},
+                            {"url": "https://a.com/old", "title": "o", "publishedDate": "2017-05-23T00:00:00.000Z", "text": about},
+                            {"url": "https://a.com/nodate", "title": "Tantech Holdings wins order", "text": "x"},
+                            {"url": "https://a.com/other", "title": "Other Corp", "publishedDate": "2026-10-22T11:00:00.000Z",
+                             "text": "Other Corp (NYSE:OTH) rose"},
+                            {"url": "https://a.com/empty", "title": "e", "publishedDate": "2026-10-21T00:00:00.000Z", "text": ""}]}
+    monkeypatch.setattr(web_mod.Exa, "_post", post)
+    mover = Mover(code="TANH", name="탄테크 홀딩스", market="NASDAQ", price=24.83, prev_close=8.81, change_pct=181.8, trade_value=50.9,
+                  name_eng="Tantech Holdings Ltd")
+    got = research.exa_news("k", mover, "2026-10-08")
+    # 최신순(입력 순서와 다르게), 날짜 모름은 뒤. 다른 회사 글은 버린다 — 하나라도 남으면 빅카인즈 대신을 막아 엉뚱한 보도만 싣게 된다
+    assert [w["url"] for w in got] == ["https://a.com/new", "https://a.com/mid", "https://a.com/nodate"] and all(w["full"] for w in got)
+    assert sent["startPublishedDate"] == "2026-10-08T00:00:00.000Z" and sent["category"] == "news"
+
+
+def _fail(m, since):
+    raise RuntimeError("Exa 429")
+
+
+@pytest.mark.parametrize("search", [lambda m, s: [], _fail, None])
+def test_us_falls_back_to_korean_news_only_without_exa_results(cfg, search):
+    # Exa 가 비거나 실패하거나 키가 없으면(cfg.exa_key 없음 → None) 그 종목은 빅카인즈 기사로 대신한다 — 보도 없이 판정하지 않게.
+    # 대신한 사실은 실행 보고에 남긴다.
+    a = _seed_korean_news(cfg)
+    runner = _reading()
+    report = _run(cfg, FakeQuotes({"NASDAQ": [_m("TANH", "탄테크 홀딩스", 181.8)]}), runner, web_news=search)
+    got = runner.seen[0]
+    assert a.source_id in got["prompt"] and "국내 수집 기사로 대신" in got["prompt"] and report["newsFallback"] == ["TANH"]
+    assert [x["id"] for x in got["inbox"]] == [a.id]
+
+
+def test_us_pending_reopens_only_for_web_news_published_after_the_verdict(cfg):
+    # 웹 검색은 같은 질의에도 매번 결과가 조금씩 바뀐다 — 그것만으로 보류 판정을 매시 다시 열면 세션을 다 쓴다.
+    # 판정 뒤에 새로 발행된 보도가 나왔을 때만 다시 본다.
+    src = FakeQuotes({"NASDAQ": [_m("TANH", "탄테크 홀딩스", 181.8)]})
+    first = [_web("https://www.globenewswire.com/a")]
+    _run(cfg, src, _reading("pending"), web_news=lambda m, s: first)
+    again = _reading("pending")
+    older = first + [_web("https://www.reuters.com/older", "2026-10-22T14:00:00.000Z")]  # 판정(11:35 EDT = 15:35Z) 전 발행
+    _run(cfg, src, again, web_news=lambda m, s: older, now=NOW + timedelta(hours=1))
+    assert again.seen == []
+    newer = first + [_web("https://www.reuters.com/newer", "2026-10-22T16:10:00.000Z")]  # 판정 뒤 발행
+    _run(cfg, src, again, web_news=lambda m, s: newer, now=NOW + timedelta(hours=2))
+    assert len(again.seen) == 1
+
+
+def test_us_pending_does_not_reopen_when_the_news_source_switches(cfg):
+    # Exa 가 한 번 막혀 빅카인즈로 대신하면 기사 id 가 통째로 달라진다 — 그것을 '새 보도'로 세면 Exa 가 흔들릴 때마다 보류가 매시 다시 열린다
+    _seed_korean_news(cfg)  # 22:10 KST = 09:10 EDT 발행 — 판정(11:35 EDT) 전
+    src = FakeQuotes({"NASDAQ": [_m("TANH", "탄테크 홀딩스", 181.8)]})
+    _run(cfg, src, _reading("pending"), web_news=lambda m, s: [_web("https://www.globenewswire.com/a")])
+    again = _reading("pending")
+    report = _run(cfg, src, again, web_news=_fail, now=NOW + timedelta(hours=1))
+    assert again.seen == [] and report["newsFallback"] == ["TANH"] and "web-news" in report["failed"]  # 전면 장애는 실패로 드러낸다
+
+
+def test_us_web_news_times_are_shown_in_new_york_time(cfg):
+    # 첫 메시지는 '시각은 뉴욕 현지'라고 한다 — UTC 를 그대로 자르면 13:00Z(=09:00 EDT) 기사가 13:00 으로 보여 급등 전후가 뒤집힌다
+    runner = _reading()
+    _run(cfg, FakeQuotes({"NASDAQ": [_m("TANH", "탄테크 홀딩스", 181.8)]}), runner,
+         web_news=lambda m, s: [_web("https://www.reuters.com/b", "2026-10-22T13:00:00.000Z") | {"title": "Tantech\nsoars"}])
+    line = next(x for x in runner.seen[0]["prompt"].splitlines() if x.startswith("- web-"))
+    assert "| 2026-10-22 09:00 |" in line and line.endswith("Tantech soars")
+    # 시간대 없는 값(날짜만 등)은 바꾸지 않는다 — 실행 컴퓨터 시각으로 읽혀 전날로 밀리면 급등 전 기사처럼 보인다
+    assert research._local("2026-10-22", US) == "2026-10-22" and research._local("2026-10-22T13:00:00", US) == "2026-10-22"
+
+
+def test_us_searches_news_only_for_movers_that_can_get_a_session(cfg):
+    # 확정 판정은 보도로 다시 열지 않으니 검색해도 쓰이지 않는다 — 매 실행 15종목 검색은 비용만 든다(매분 감시는 6분마다 실행을 띄운다)
+    src = FakeQuotes({"NASDAQ": [_m("TANH", "탄테크 홀딩스", 181.8), _m("XLAB", "엑사스케일", 73.2)]})
+    _run(cfg, src, _judging({"TANH": "false", "XLAB": "pending"}), web_news=lambda m, s: [])
+    asked = []
+    _run(cfg, src, _judging({"XLAB": "pending"}), web_news=lambda m, s: asked.append(m.code) or [], now=NOW + timedelta(hours=1))
+    assert asked == ["XLAB"]  # 허위로 확정된 TANH 는 찾지 않는다(새 공시가 나오면 그때 다시 찾는다)
+
+
+def test_kr_runs_never_call_exa(cfg):
+    # 국내는 빅카인즈가 그대로 주 출처다 — 미국 웹 검색이 국내 실행에 끼면 비용만 들고 첫 메시지가 바뀐다.
+    from test_research import FakeKind, FakeQuotes as KrQuotes, _m as kr_m
+
+    def boom(m, since):
+        raise AssertionError("국내 실행이 Exa 를 불렀다")
+    report = research.run_research(cfg, quotes=KrQuotes({"KOSDAQ": [kr_m("900010", "가나다전자", 29.9)]}), kind=FakeKind(),
+                                   session_runner=_judging({"900010": "false"}), now=datetime(2026, 10, 22, 11, 35, tzinfo=KST),
+                                   web_news=boom)
+    assert report["published"] and "newsFallback" not in report
+
+
 def test_us_filing_outage_defers_and_fails_loudly(cfg):
     # SEC 를 못 읽은 종목을 '최근 공시 없음'으로 판정하면 테마로 몬다 — 보류로 싣고, 전부 실패면 실행을 실패로 남긴다.
     runner = _judging({})
