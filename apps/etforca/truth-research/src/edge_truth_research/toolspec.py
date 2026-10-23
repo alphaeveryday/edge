@@ -1,7 +1,7 @@
 """도구의 모델용 설명과 매개변수 스키마. pi 확장(pi/extension.ts)이 이 목록을 그대로 등록한다(단일 정본)."""
 from __future__ import annotations
 
-from .ach import KINDS, MARKS
+from .ach import KINDS, MARKS, STATUSES
 
 _STR = {"type": "string"}
 
@@ -32,6 +32,17 @@ SPECS = [
            "marks": {"type": "object", "additionalProperties": {"type": "string", "enum": list(MARKS)},
                      "description": "가설 id → C·I·N (예: {\"H1\": \"I\", \"H2\": \"C\"})"}},
           ["source_id", "note", "weight", "marks"])),
+    ("set_premises", "전제 검증 단계(첫 메시지가 그렇다고 할 때)에서만. 급등을 이끈 주장을 핵심 전제 2~4개로 쪼개고 전제마다 상태를 하나 고른다. "
+     "다시 부르면 전제를 통째로 바꾼다.",
+     _obj({"premises": {"type": "array", "minItems": 2, "maxItems": 4, "items": _obj(
+         {"text": {**_STR, "description": "전제 한 줄 (예: '아이폰 듀오 힌지 공급사로 확정됐다')"},
+          "about": {"type": "string", "enum": ["company", "market"], "description": "company 회사에 관한 사실 · market 업종·수급·시장 반응"},
+          "core": {"type": "boolean", "description": "주가가 이 전제에 기대는가(회사 전제만)"},
+          "status": {"type": "string", "enum": list(STATUSES), "description": " · ".join(f"{k}: {v}" for k, v in STATUSES.items())},
+          "spread_as_fact": {"type": "boolean", "description": "주장·보도가 이 전제를 확정된 사실처럼 말했는가"},
+          "sources": {"type": "array", "items": _STR, "description": "상태의 근거가 된 읽은 출처 id"},
+          "note": {**_STR, "description": "출처가 이 전제에 대해 말하는 것 한 줄"}},
+         ["text", "about", "core", "status", "spread_as_fact", "sources", "note"])}}, ["premises"])),
     ("set_verdict", "표로 태그·확신도를 코드가 정하고, 사건·주장·확인 결과 글과 함께 판정을 남긴다. 결과가 증거와 어긋나면 증거를 보태고 다시 부른다.",
      _obj({"event_title": {**_STR, "description": "왜 올랐는지 한 줄(32자 이내, 시스템 지시의 제목 규칙)"},
            "event_kind": {"type": "string", "enum": ["disclosure", "earnings", "contract", "policy", "news", "rumor", "unknown"]},

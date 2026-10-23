@@ -33,6 +33,9 @@ class Config:
     session_timeout: int
     max_tool_calls: int
     web_calls: int             # 세션당 웹 검색·원문 가져오기 횟수
+    premise_timeout: int = 300     # 전제 검증 세션(ACH 동점일 때 한 번 더)의 추가 예산: 시간(초)
+    premise_tool_calls: int = 24   # ·도구 호출 수
+    premise_web_calls: int = 6     # ·웹 검색·원문 가져오기 횟수
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -50,4 +53,7 @@ class Config:
             session_timeout=int(os.environ.get("TRUTH_SESSION_TIMEOUT", "420")),
             max_tool_calls=int(os.environ.get("TRUTH_MAX_TOOL_CALLS", "40")),
             web_calls=int(os.environ.get("TRUTH_WEB_CALL_LIMIT", "10")),
+            premise_timeout=int(os.environ.get("TRUTH_PREMISE_TIMEOUT", "300")),
+            premise_tool_calls=int(os.environ.get("TRUTH_PREMISE_TOOL_CALLS", "24")),
+            premise_web_calls=int(os.environ.get("TRUTH_PREMISE_WEB_CALLS", "6")),
         )

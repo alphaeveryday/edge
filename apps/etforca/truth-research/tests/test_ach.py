@@ -245,3 +245,48 @@ def test_same_article_by_another_route_counts_once(ws):
     tools.add_evidence(ws, {"source_id": "web-a", "note": "계약 보도", "weight": "mid", "marks": {"H1": "C"}})
     with pytest.raises(ToolError, match="이미"):
         tools.add_evidence(ws, {"source_id": "web-b", "note": "같은 기사", "weight": "mid", "marks": {"H1": "C"}})
+
+
+# ── 전제 검증(ACH 동점 뒤) ──
+def _p(status, *, core=True, about="company", fact=False):
+    return {"id": "P1", "text": "전제", "about": about, "core": core, "status": status, "spreadAsFact": fact, "sources": [], "note": "근거"}
+
+
+def test_premises_decide_by_core_claims_not_by_how_many_outlets_repeat_them():
+    # 원인 가설이 동시에 참이라 동점이 나면, 오르게 만든 주장의 핵심 전제가 원문으로 서는지로 가른다.
+    # 반박·확정처럼 퍼진 추정은 과장(허위매물), 모두 원문 확인은 실제 사건(유망주), 확인 못 한 것은 보류다.
+    assert ach.decide_premises([_p("refuted"), _p("confirmed")])["tag"] == "false"
+    assert ach.decide_premises([_p("estimate", fact=True), _p("confirmed")])["tag"] == "false"
+    assert ach.decide_premises([_p("estimate", fact=False), _p("confirmed")])["tag"] == "pending"  # 전망을 전망으로 말한 것은 과장이 아니다
+    assert ach.decide_premises([_p("confirmed"), _p("refuted", core=False, about="market")])["tag"] == "promising"  # 시장 반응은 가르지 않는다
+    assert ach.decide_premises([_p("confirmed"), _p("unverified")])["tag"] == "pending"
+    with pytest.raises(ach.AchError):
+        ach.decide_premises([_p("confirmed", core=False)])
+
+
+def _premises(ws, *items):
+    return tools.set_premises(ws, {"premises": [{"text": t, "about": a, "core": c, "status": s, "spread_as_fact": f, "sources": src,
+                                                 "note": "출처가 말하는 것"} for t, a, c, s, f, src in items]})
+
+
+def test_premise_status_needs_an_original_source_not_reports(ws):
+    # 보도 여러 건으로 '확인'을 붙이면 메아리를 세는 것이다 — 원문 확인·반박은 원 출처가 있어야 하고, 전제 검증 단계에서만 쓴다.
+    _table(ws)
+    tools.view_news(ws, {"id": "c" * 64})
+    news = "news-" + "c" * 16
+    with pytest.raises(ToolError, match="전제 검증 단계"):
+        _premises(ws, ("계약이 맺어졌다", "company", True, "confirmed", True, [news]), ("업종이 올랐다", "market", False, "unverified", False, []))
+    state = ws.state
+    state["premiseStage"] = True
+    ws.save_state(state)
+    with pytest.raises(ToolError, match="원문"):
+        _premises(ws, ("계약이 맺어졌다", "company", True, "confirmed", True, [news]), ("업종이 올랐다", "market", False, "unverified", False, []))
+    with pytest.raises(ToolError, match="core"):
+        _premises(ws, ("업종이 올랐다", "market", True, "estimate", False, [news]), ("계약 보도", "company", False, "unverified", False, []))
+    _read_web(ws, "web-krx", "official", "거래소가 시가총액 미달 관리종목 상장폐지 절차를 유예한다")
+    _premises(ws, ("상장폐지 절차가 유예됐다", "company", False, "confirmed", True, ["web-krx"]),
+              ("퇴출 위험이 사라졌다", "company", True, "refuted", True, ["web-krx"]))
+    tools.set_verdict(ws, TEXT)
+    state = ws.state
+    assert state["moverVerdict"]["tag"] == "false" and state["premiseDecision"]["method"] == "premises"
+    assert state["moverVerdict"]["sources"][0]["url"] == "https://www.web-krx.co.kr/a"  # 공개 출처는 핵심 전제의 원문부터
