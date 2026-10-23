@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "오늘의 급등주 해석 공개 데이터 (truth/data/movers/latest.json)",
+  "title": "오늘의 급등주 해석 공개 데이터 (truth/data/movers/latest.json, 미국 truth/data/movers/us/latest.json)",
   "description": "설계: docs/design/truth-movers.md §4",
   "type": "object",
   "additionalProperties": false,
@@ -18,14 +18,14 @@
       "required": ["code", "name", "market", "logo", "price", "prevClose", "changePct", "tradeValue", "series", "tag",
                    "confidence", "event", "claim", "finding", "reasons", "sources", "impact", "judgedAt"],
       "properties": {
-        "code": {"type": "string", "pattern": "^[0-9A-Z]{6}$"},
+        "code": {"type": "string", "pattern": "^([0-9A-Z]{6}|[A-Z][A-Z0-9]{0,5}(\\.[A-Z])?)$", "description": "국내 종목코드 6자리 · 미국 티커"},
         "name": {"type": "string", "minLength": 1, "maxLength": 40},
-        "market": {"enum": ["KOSPI", "KOSDAQ", "KONEX"]},
-        "logo": {"type": ["string", "null"], "pattern": "^data/logos/[0-9A-Z]{6}\\.(png|jpg|ico|webp)$"},
-        "price": {"type": "number", "exclusiveMinimum": 0},
+        "market": {"enum": ["KOSPI", "KOSDAQ", "KONEX", "NASDAQ", "NYSE", "AMEX"]},
+        "logo": {"type": ["string", "null"], "pattern": "^data/logos/([0-9A-Z]{6}|us/[A-Z][A-Z0-9]{0,5}(\\.[A-Z])?)\\.(png|jpg|ico|webp)$"},
+        "price": {"type": "number", "exclusiveMinimum": 0, "description": "국내 원 · 미국 달러"},
         "prevClose": {"type": "number", "exclusiveMinimum": 0},
         "changePct": {"type": "number"},
-        "tradeValue": {"type": "number", "minimum": 0},
+        "tradeValue": {"type": "number", "minimum": 0, "description": "누적 거래대금: 국내 억원 · 미국 백만 달러"},
         "series": {"type": "array", "maxItems": 90, "items": {
           "type": "array", "prefixItems": [{"type": "string", "pattern": "^\\d{2}:\\d{2}$"}, {"type": "number"}], "minItems": 2, "maxItems": 2}},
         "tag": {"enum": ["promising", "false", "pending"]},

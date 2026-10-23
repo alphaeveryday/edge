@@ -49,6 +49,16 @@ def icon_candidates(page: str, base: str) -> list[str]:
     return touch + icons + [urllib.parse.urljoin(base, "/favicon.ico")]
 
 
+def fetch_image(url: str, *, timeout: float = 8.0) -> tuple[str, bytes] | None:
+    """이미지 주소 하나를 그대로 받는다(미국: 순위가 주는 Naver 로고 PNG). 형식·크기 검사는 홈페이지 아이콘과 같다."""
+    try:
+        data = _get(url, timeout, MAX_BYTES)
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+        return None
+    kind = image_kind(data) if len(data) <= MAX_BYTES else None
+    return (kind, data) if kind else None
+
+
 def fetch_logo(homepage: str, *, timeout: float = 8.0) -> tuple[str, bytes] | None:
     """(확장자, 바이트) 또는 찾지 못하면 None. 실패는 조용히 None(로고는 없어도 글자 배지로 대신한다)."""
     try:

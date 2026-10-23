@@ -24,14 +24,16 @@ from edge_truth_agent.workspace import Workspace
 
 from . import logos, session
 from .kind import Kind, is_market_warning
+from .markets import KR, US, Market, of_exchange
 from .quotes import Chart, Mover, Quotes
+from .sec import Sec
 
 log = logging.getLogger(__name__)
-LEASE_KEY = "state/lease-movers.json"
-LOGO_TRIED_KEY = "state/logo-tried.json"
-DATES_KEY = "movers/dates.json"  # 게시한 날짜 목록(비공개 원본 → 공개 사본, 화면의 날짜 선택)
+LEASE_KEY = KR.lease_key  # 국내. 미국은 Market.lease_key(state/us/…) — 장 시간이 겹치지 않아도 잠금은 따로 둔다
+LOGO_TRIED_KEY = "state/logo-tried.json"  # 두 시장 공용(국내 6자리 코드와 미국 티커는 겹치지 않는다)
+DATES_KEY = KR.dates_key  # 게시한 날짜 목록(비공개 원본 → 공개 사본, 화면의 날짜 선택)
 MIN_CHANGE = 10.0       # 급등 기준: 전일 대비 상승률(%)
-MIN_TRADE_VALUE = 30.0  # 거래대금 하한(억원, 누적 거래대금) — 몇 주 체결로 뛴 종목은 해석할 사건이 아니다
+# 거래대금 하한(누적 거래대금, Market.min_trade_value: 국내 30억원 · 미국 200만 달러) — 몇 주 체결로 뛴 종목은 해석할 사건이 아니다
 MAX_MOVERS = 15         # 화면에 싣는 종목 수
 NEW_SESSIONS = 5        # 한 실행에서 새로 판정하는 종목 수(나머지는 다음 정각에)
 WATCH_SESSIONS = 3      # 감시가 띄운 '새 종목만' 실행의 세션 수 — 한 묶음(PARALLEL)으로 끝낸다
@@ -48,17 +50,30 @@ def _filing_lines(filings: list[dict]) -> str:
     return "\n".join(f"- {f['acptno']} | {f['at']} | {f['submitter']} | {f['title']}" for f in filings) or "- (최근 공시·시장조치 없음)"
 
 
-def _prompt(m: Mover, filings: list[dict], articles: list[news.Article], series: list[list]) -> str:
-    flow = ", ".join(f"{t} {p:,.0f}" for t, p in series[::6]) or "(장중 시세 없음)"
+def _money(v: float, market: Market) -> str:
+    return f"${v:,.2f}" if market is US else f"{v:,.0f}원"
+
+
+def _filing_head(market: Market) -> str:
+    """첫 메시지의 공시 목록 머리글 — 출처와 목록 id."""
+    if market is US:
+        return f"최근 {FILING_DAYS}일 공시(미국 SEC EDGAR, 접수번호 | 접수 시각(뉴욕) | 회사 | 서식·내용 — 목록 자체는 sec-list)"
+    return f"최근 {FILING_DAYS}일 공시·시장조치(한국거래소 KIND, 접수번호 | 시각 | 제출 | 제목 — 목록 자체는 kind-list)"
+
+
+def _prompt(m: Mover, filings: list[dict], articles: list[news.Article], series: list[list], market: Market = KR) -> str:
+    flow = ", ".join(f"{t} {_money(p, market)}" for t, p in series[::6]) or "(장중 시세 없음)"
     disc = _filing_lines(filings)
     heads = "\n".join(f"- {a.source_id} | {a.published[:16]} | {a.publisher} | {a.title}" for a in articles) or "- (수집된 보도 없음)"
-    return (f"오늘 급등한 종목: {m.name}({m.code}, {m.market}) 현재가 {m.price:,.0f}원, 전일 대비 {m.change_pct:+.2f}% "
-            f"(전일 종가 {m.prev_close:,.0f}원, 거래대금 {m.trade_value:,.0f}억원).\n장중 흐름(30분 간격): {flow}\n\n"
-            f"최근 {FILING_DAYS}일 공시·시장조치(한국거래소 KIND, 접수번호 | 시각 | 제출 | 제목 — 목록 자체는 kind-list):\n{disc}\n\n"
+    value = f"{m.trade_value:,.1f}백만 달러" if market is US else f"{m.trade_value:,.0f}억원"
+    where = "미국 종목, 시각은 뉴욕 현지" if market is US else "국내 종목"
+    return (f"오늘 급등한 종목({where}): {m.name}({m.code}, {m.market}) 현재가 {_money(m.price, market)}, 전일 대비 {m.change_pct:+.2f}% "
+            f"(전일 종가 {_money(m.prev_close, market)}, 거래대금 {value}).\n장중 흐름(30분 간격): {flow}\n\n"
+            f"{_filing_head(market)}:\n{disc}\n\n"
             f"관련 보도(최신순):\n{heads}\n\n절차대로 증거를 모으고 가설·증거 표를 채운 뒤 set_verdict 로 판정하고 finish 하세요.")
 
 
-def _premise_prompt(m: Mover, state: dict, filings: list[dict]) -> str:
+def _premise_prompt(m: Mover, state: dict, filings: list[dict], market: Market = KR) -> str:
     t, v = state["ach"], state["moverVerdict"]
     hyp = "\n".join(f"- {h['id']} [{h['kind']}] {h['text']}" for h in t["hypotheses"])
     ev = "\n".join(f"- {e['source']} | {e['weight']} | {e['note']} | " + " ".join(f"{k}={x}" for k, x in e["marks"].items())
@@ -66,7 +81,7 @@ def _premise_prompt(m: Mover, state: dict, filings: list[dict]) -> str:
     return (f"전제 검증 단계입니다. {m.name}({m.code}) 의 앞 판정은 가장 덜 어긋나는 설명이 둘 이상이라(동점) 판단 보류였습니다.\n"
             f"앞에서 정리한 급등 이유(claim): {v['claim'] or '(없음)'}\n앞 확인 결과: {v['finding']}\n\n"
             f"앞 세션의 가설:\n{hyp}\n\n앞 세션의 증거(출처 | 무게 | 내용 | 표시):\n{ev}\n\n"
-            f"최근 {FILING_DAYS}일 공시·시장조치(한국거래소 KIND, 접수번호 | 시각 | 제출 | 제목 — 목록 자체는 kind-list, 원문은 read_disclosure):\n"
+            f"{_filing_head(market)[:-1]}, 원문은 read_disclosure):\n"
             f"{_filing_lines(filings)}\n\n"
             "시스템 지시의 '전제 검증' 절차대로 급등을 이끈 주장을 핵심 전제로 쪼개 원 출처로 확인하고 "
             "set_premises → set_verdict → finish 하세요. 위 출처는 다시 읽지 않고 쓸 수 있습니다.")
@@ -77,10 +92,11 @@ def _tied(state: dict) -> bool:
     return (state.get("achDecision") or {}).get("margin", 1) < 1
 
 
-def pick(quotes: Quotes) -> list[Mover]:
-    """오늘 화면에 싣는 급등 종목: 상승률 10%·거래대금 30억원 이상, 상승률 순 상위 15개. 매분 감시도 같은 기준을 쓴다."""
-    return sorted((m for market in ("KOSPI", "KOSDAQ") for m in quotes.risers(market, MIN_CHANGE)
-                   if m.change_pct >= MIN_CHANGE and m.trade_value >= MIN_TRADE_VALUE),
+def pick(quotes: Quotes, market: Market = KR) -> list[Mover]:
+    """오늘 화면에 싣는 급등 종목: 상승률 10%·거래대금 하한(국내 30억원 · 미국 200만 달러) 이상, 미국은 1달러 이상,
+    상승률 순 상위 15개. 매분 감시도 같은 기준을 쓴다."""
+    return sorted((m for ex in market.exchanges for m in quotes.risers(ex, MIN_CHANGE)
+                   if m.change_pct >= MIN_CHANGE and m.trade_value >= market.min_trade_value and m.price >= market.min_price),
                   key=lambda m: m.change_pct, reverse=True)[:MAX_MOVERS]
 
 
@@ -89,23 +105,28 @@ def _articles(texts: dict[str, news.Article], name: str) -> list[news.Article]:
     return sorted(hits, key=lambda a: a.published, reverse=True)[:NEWS_LIMIT]
 
 
-def _logo(public, kind: Kind, code: str, prior: str | None, tried: dict, today: str) -> str | None:
-    """이미 받은 로고를 다시 쓰고, 없으면 하루 한 번만 회사 홈페이지(KIND 회사 개요)에서 받아 본다."""
+def _logo(public, kind, m: Mover, prior: str | None, tried: dict, today: str) -> str | None:
+    """이미 받은 로고를 다시 쓰고, 없으면 하루 한 번만 받아 본다. 국내는 회사 홈페이지(KIND 회사 개요)의 아이콘,
+    미국은 순위가 주는 Naver 로고 PNG(logos/us/ 아래)."""
+    code = m.code
     if prior:
         return prior
     if tried.get(code) == today:
         return None
     tried[code] = today
-    try:
-        home = kind.homepage(code)
-    except Exception:  # noqa: BLE001 - 로고는 장식이다. 없으면 이니셜로 그린다
-        return None
-    got = logos.fetch_logo(home) if home else None
+    if of_exchange(m.market) is US:  # SEC 에는 회사 홈페이지가 없다 — 순위가 준 로고만 쓴다
+        got, path = (logos.fetch_image(m.logo_url) if m.logo_url else None), f"logos/us/{code}"
+    else:
+        try:
+            home = kind.homepage(code)
+        except Exception:  # noqa: BLE001 - 로고는 장식이다. 없으면 이니셜로 그린다
+            return None
+        got, path = (logos.fetch_logo(home) if home else None), f"logos/{code}"
     if not got:
         return None
     ext, data = got
-    public.put(f"logos/{code}.{ext}", data, content_type=_LOGO_TYPES[ext], cache_control="public,max-age=86400")
-    return f"data/logos/{code}.{ext}"
+    public.put(f"{path}.{ext}", data, content_type=_LOGO_TYPES[ext], cache_control="public,max-age=86400")
+    return f"data/{path}.{ext}"
 
 
 def impact(item: dict) -> float:
@@ -133,30 +154,31 @@ def _marks(rec: dict) -> list[dict]:
     return [{"tag": v["tag"], "at": v["judgedAt"], "price": None}]
 
 
-def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None, session_runner=session.run,
-                 now: datetime | None = None, only_new: bool = False) -> dict:
+def run_research(cfg, *, quotes: Quotes | None = None, kind=None, session_runner=session.run,
+                 now: datetime | None = None, only_new: bool = False, market: Market = KR) -> dict:
     """한 번 실행하고 보고를 돌려준다. 장이 열리지 않은 날(그날 분봉 없음)에는 게시하지 않는다.
-    only_new: 매분 감시가 띄운 실행 — 오늘 아직 판정하지 않은 종목만 본다(이미 판정한 종목의 재검토는 매시 정각 실행 몫)."""
-    now = now or _now()
+    only_new: 매분 감시가 띄운 실행 — 오늘 아직 판정하지 않은 종목만 본다(이미 판정한 종목의 재검토는 매시 정각 실행 몫).
+    market: 국내(KR, 공시 KIND) · 미국(US, 공시 SEC). 날짜·시각은 그 시장 현지 시각이다. kind 는 그 시장의 공시 조회기다."""
+    now = (now or _now()).astimezone(market.tz)
     today, ymd = now.date().isoformat(), now.strftime("%Y%m%d")
-    mode = "new" if only_new else "research"
+    mode = ("new" if only_new else "research") + ("-us" if market is US else "")
     run_id = f"{now.strftime('%Y%m%dT%H%M')}-{mode}-{uuid.uuid4().hex[:6]}"
-    quotes, kind = quotes or Quotes(), kind or Kind()
+    quotes, kind = quotes or Quotes(), kind or (Sec() if market is US else Kind())
     started = time.monotonic()  # 지금 시각 = now + 지난 시간(now 를 넣은 재실행·시험에서도 같은 기준)
     store, public = open_store(cfg.store), open_store(cfg.publish)
     report: dict = {"runId": run_id, "mode": mode, "movers": [], "judged": [], "failed": [], "published": False}
-    with lease(store, run_id, now, key=LEASE_KEY), tempfile.TemporaryDirectory(prefix="truth-research-") as tmp:
-        raw, _ = store.get(f"movers/{today}.json")
+    with lease(store, run_id, now, key=market.lease_key), tempfile.TemporaryDirectory(prefix="truth-research-") as tmp:
+        raw, _ = store.get(f"{market.data}/{today}.json")
         prior = {i["code"]: i for i in (json.loads(raw)["items"] if raw else [])}
 
         # 0. 휴장일(그날 체결 없음)에는 게시하지 않는다 — 순위는 전 거래일 값을 그대로 준다
-        if quotes.session_day() != ymd:
+        if quotes.session_day(market.exchanges[0]) != ymd:
             report["skipped"] = "그날 체결이 없습니다(휴장일 또는 장 시작 전)."
             log.info(json.dumps({"event": "movers_skipped", "reason": report["skipped"]}, ensure_ascii=False))
             return report
 
         # 1. 급등 목록 (코드)
-        risers = pick(quotes)
+        risers = pick(quotes, market)
         charts: dict[str, Chart] = {}
         series_errors = 0
         for m in risers:
@@ -185,10 +207,10 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
                 log.warning(json.dumps({"event": "mover_deferred", "code": m.code, "reason": f"공시 조회 실패: {str(error)[:200]}"},
                                        ensure_ascii=False))
         if risers and len(report["deferred"]) == len(risers):  # 공시 전면 장애는 실패로 남긴다(보류만 게시하고 성공으로 끝내지 않는다)
-            report["failed"].append("kind")
+            report["failed"].append(market.filings)
         raw, _ = store.get(LOGO_TRIED_KEY)
         tried = json.loads(raw) if raw else {}
-        logo = {m.code: _logo(public, kind, m.code, (prior.get(m.code) or {}).get("logo"), tried, today)
+        logo = {m.code: _logo(public, kind, m, (prior.get(m.code) or {}).get("logo"), tried, today)
                 for m in risers}
         store.put(LOGO_TRIED_KEY, _json(tried))
         texts = corpus.load(store)
@@ -198,7 +220,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
         #    급등주마다 붙는 거래소 투자주의·경고는 다시 열지 않는다 — 매시 판정이 뒤집히고 세션만 쓴다. 매매정지·관리종목은 다시 연다),
         #    보류였는데 새 보도가 나온 종목. 새 보도만으로 확정 판정을 다시 열지 않는다(특징주 기사가 매시 나와 세션을 다 쓴다).
         #    공시를 못 본 종목은 판정하지 않는다. 판정과 그때 본 근거 id 는 비공개 상태에 둔다 — 목록에서 빠졌다 돌아온 종목도 이어 쓴다.
-        seen_key = f"state/movers-seen/{today}.json"
+        seen_key = market.seen_key(today)
         raw, _ = store.get(seen_key)
         seen: dict[str, dict] = json.loads(raw) if raw else {}
         arts = {m.code: _articles(texts, m.name) for m in risers}
@@ -226,9 +248,10 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
             found = filings[m.code] or []
             ws = Workspace.prepare(Path(tmp) / "sessions" / m.code, mode="research", case=None, inbox=[a.to_dict() for a in arts[m.code]],
                                    index=[], today=today, now=now.isoformat(),
-                                   mover={"code": m.code, "name": m.name, "filings": found})
+                                   mover={"code": m.code, "name": m.name, "market": m.market, "filings": found})
             try:
-                result = session_runner(cfg, ws, code=m.code, prompt=_prompt(m, found, arts[m.code], charts[m.code].series), corpus_path=corpus_path)
+                result = session_runner(cfg, ws, code=m.code, prompt=_prompt(m, found, arts[m.code], charts[m.code].series, market),
+                                        corpus_path=corpus_path)
             except Exception as error:  # noqa: BLE001 - 한 종목의 실패로 나머지 게시를 버리지 않는다. 보고에 남는다
                 result = session.SessionResult(case_id=m.code, done=False, error=f"{type(error).__name__}: {error}")
             premise = None
@@ -239,7 +262,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
                 try:
                     with ws.lock():
                         state = ws.state
-                        prompt = _premise_prompt(m, state, found)
+                        prompt = _premise_prompt(m, state, found, market)
                         state.update(done=False, premiseStage=True, webCalls=0, disclosureReads=0)
                         ws.save_state(state)
                     extra = replace(cfg, session_timeout=cfg.premise_timeout, max_tool_calls=cfg.premise_tool_calls,
@@ -299,18 +322,18 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
         priced = [charts[i["code"]].at for i in items if charts[i["code"]].at]
         doc = {"date": today, "generatedAt": now.isoformat(timespec="seconds"), "pricedAt": max(priced) if priced else None, "items": items}
         body = finish_doc(doc)
-        store.put(f"movers/{today}.json", body)
-        public.put("movers/latest.json", body, cache_control="no-cache")
-        public.put(f"movers/{today}.json", body, cache_control="no-cache")
+        store.put(f"{market.data}/{today}.json", body)
+        public.put(f"{market.data}/latest.json", body, cache_control="no-cache")
+        public.put(f"{market.data}/{today}.json", body, cache_control="no-cache")
         store.put(seen_key, _json(seen))  # 게시 뒤에 — 게시 전에 죽으면 근거를 '본 것'으로 남기지 않고 다음 정각에 다시 판정한다
         report.update(published=True, movers=[i["code"] for i in items])
         # 화면의 날짜 선택용 목록(최신순). 원본은 비공개 저장소에 둔다(태스크는 공개 버킷을 읽을 권한이 없다).
         # 마지막에 두고 실패해도 위의 게시·상태는 남긴다 — 실패는 보고에 올려 태스크를 실패로 끝낸다
         try:
-            raw, _ = store.get(DATES_KEY)
+            raw, _ = store.get(market.dates_key)
             dates = sorted(set(json.loads(raw) if raw else []) | {today}, reverse=True)
-            store.put(DATES_KEY, _json(dates))
-            public.put(DATES_KEY, _json(dates), cache_control="no-cache")
+            store.put(market.dates_key, _json(dates))
+            public.put(market.dates_key, _json(dates), cache_control="no-cache")
         except Exception as error:  # noqa: BLE001
             report["failed"].append("dates")
             log.warning(json.dumps({"event": "movers_dates_failed", "error": str(error)[:200]}, ensure_ascii=False))
