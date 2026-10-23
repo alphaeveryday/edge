@@ -415,3 +415,11 @@ def test_followup_that_stops_contributions_overrides_the_saved_monthly_amount(fu
     req = FollowupInput(holdings=[], planning=True, horizon='10년 이상', monthly_krw=300000,
                         question='처음\n\n후속 질문: ' + question, funding_questions=['처음', question])
     assert resolve_funding(req, Decision(funding=Funding(**funding)))['monthly_krw'] == expected
+
+
+def test_leverage_names_without_issuer_prefix_and_ultra_short_bond_funds():
+    # 목록에는 발행사 없이 'UltraPro MidCap400'(UMDD)처럼 적힌 레버리지가 있다. 'Ultra-Short' 채권 펀드는 레버리지가 아니다
+    from edge_portfolio.catalog import instruments, traits
+    every = instruments()
+    assert all('leverage' in traits(every[key]) for key in ('US:UMDD', 'US:SMDD', 'US:QLD', 'US:SQQQ'))
+    assert not any('leverage' in traits(every[key]) for key in ('US:VOO', 'US:BND', 'US:JPST', 'US:ICSH'))

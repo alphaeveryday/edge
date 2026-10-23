@@ -26,7 +26,7 @@ def instruments():
 TRAITS = {
     # (국내 상장 이름, 미국 상장 이름)
     'leverage': (r'레버리지|인버스|[1-9]X(?![A-Za-z])',
-                 r'\b[1-9](?:\.\d+)?x\b|\bLeveraged\b|\bInverse\b|^ProShares (?:Ultra|Short)|^Direxion Daily'),
+                 r'\b[1-9](?:\.\d+)?x\b|\bLeveraged\b|\bInverse\b|\bUltraPro\b|^ProShares (?:Ultra|Short)|^Direxion Daily'),
     'bond': (r'채(?!굴)', r'\bBonds?\b|Treasur|Fixed Income|Municipal|\bMuni\b|T-Bill|\bTIPS\b|Mortgage|Aggregate|Investment Grade|High Yield'),
     'gold': (r'금현물|골드|금선물|금채굴|금은', r'\bGold\b'),
     'dividend': (r'배당|인컴|커버드콜|프리미엄|리츠', r'Dividend|Income|Yield|Covered Call|Premium|\bREIT'),
