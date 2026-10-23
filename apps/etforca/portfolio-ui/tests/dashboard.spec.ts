@@ -2,18 +2,6 @@ import { test, expect } from '@playwright/test';
 import { cost, performance, purchases, value, type Asset } from '../src/workbook';
 
 const asset: Asset = { id: 'a', name: 'ETF', account: 'ISA', category: '주식', currency: 'USD', quantity: 80, average: 25, price: 28, cost_fx: 1300, amount: null, weight: null, target: 100, fee: 5000, price_date: null };
-test('save popup shows the actual dashboard preview and newsletter needs only email and submit', async ({ page }) => {
-  await page.goto('/portfolio/?preview=result');
-  await page.locator('.evaluation').scrollIntoViewIfNeeded();
-  const popup = page.locator('.report-feedback');
-  const preview = popup.getByRole('img', { name: /대시보드 예시/ });
-  await expect(preview).toBeVisible();
-  await expect.poll(() => preview.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1200);
-  await expect(popup.getByRole('checkbox')).toHaveCount(0);
-  await popup.getByLabel('뉴스레터 이메일').fill('preview@example.test');
-  await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
-  await expect(popup.getByRole('status')).toContainText('확인 메일');
-});
 test('chart motion respects reduced motion and monthly bars open the chosen month', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
   await expect(page.locator('.allocation-donut').first()).toHaveCSS('animation-name', 'none');
@@ -90,14 +78,6 @@ test('preview edits and reloads without sending customer API or analytics traffi
   expect(calls).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
-test('result can save original holdings into the dashboard without analysis', async ({ page }) => {
-  await page.goto('/portfolio/?preview=result');
-  await page.locator('.feedback-anchor > .save-portfolio button').click();
-  await expect(page).toHaveURL(/preview=dashboard/);
-  await expect(page.locator('.holdings-table')).toContainText('금 ETF 예시');
-  await expect(page.locator('.dashboard-stats')).toContainText('25,586,400원');
-});
-
 test('preview navigation and repeated followups remain isolated from a saved customer job', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'customer-secret'));
   const calls: string[] = [];
@@ -109,7 +89,7 @@ test('preview navigation and repeated followups remain isolated from a saved cus
   await page.getByRole('link', { name: '포트폴리오로 돌아가기' }).click();
   await expect(page).toHaveURL(/preview=input/);
   await page.goto('/portfolio/?preview=result');
-  await page.getByRole('textbox', { name: '추가 질문', exact: true }).fill('어떻게 살까요?');
+  await page.getByRole('textbox', { name: '직접 물어보기', exact: true }).fill('어떻게 살까요?');
   await page.getByRole('button', { name: '질문 보내기' }).click();
   await page.getByRole('textbox', { name: '이어서 질문' }).fill('한 번 더 설명해 주세요');
   await page.getByRole('button', { name: '이어서 질문 보내기' }).click();

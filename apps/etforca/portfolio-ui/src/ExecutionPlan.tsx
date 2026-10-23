@@ -2,7 +2,7 @@ import type { Execution } from './api';
 import { hasTradeAmounts, TradeAmount } from './TradeAmount';
 
 const money = (value: string) => `${Number(value).toLocaleString('ko-KR')}원`;
-const reasons: Record<string, string> = {
+export const executionReasons: Record<string, string> = {
   SAVED_TARGET_UNAVAILABLE: '기존 목표의 종목이나 계좌를 현재 조건으로 사용할 수 없어 대안을 다시 확인해야 해요.',
   CUSTOMER_CONSTRAINT_NOT_SATISFIED: '기존 목표가 현재 고객 필수 조건을 만족하는지 확인해야 해요.',
   CURRENT_AMOUNTS_REQUIRED: '보유 종목별 현재 평가금액이 필요해요.',
@@ -20,7 +20,7 @@ export function ExecutionDetails({ plan }: { plan: Execution }) {
   const actionable = plan.status === 'ready' || plan.status === 'conditional';
   return <>
     {!actionable && <p className="notice">{plan.status === 'infeasible' ? '현재 조건으로는 이 목표를 실행할 수 없어요.' : '실행 전에 아래 정보를 확인해야 해요.'}</p>}
-    {plan.reasons.map(reason => { const [code, account] = reason.split(':'); return <p className="notice" key={reason}>{account && `${account} · `}{code === 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' && plan.status === 'infeasible' ? '기존 목표가 요청하신 조건에 맞지 않아 실행할 수 없어요.' : reasons[code] || '실행 조건을 더 확인해야 해요.'}</p>; })}
+    {plan.reasons.map(reason => { const [code, account] = reason.split(':'); return <p className="notice" key={reason}>{account && `${account} · `}{code === 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' && plan.status === 'infeasible' ? '기존 목표가 요청하신 조건에 맞지 않아 실행할 수 없어요.' : executionReasons[code] || '실행 조건을 더 확인해야 해요.'}</p>; })}
     {Number(plan.additional_krw) > 0 && <p className="funding-summary">{actionable ? '추가 현금' : '계산에 사용한 추가 현금'} <strong>{money(plan.additional_krw)}{actionable && ' 투입'}</strong>{plan.months != null && plan.monthly_krw != null && <span> · 매월 {money(plan.monthly_krw)}씩 {plan.months}개월</span>}</p>}
     {!actionable && plan.required_additional_krw != null && <p>{plan.required_additional_is_minimum === false ? '매도 없이 목표를 달성할 추가 자금의 상한' : '목표에 필요한 최소 추가 자금'}: <strong>{money(plan.required_additional_krw)}</strong></p>}
     {actionable && plan.months != null && plan.months > 1 && <p className="notice">{plan.months}개월 계획의 총 거래 금액이에요.</p>}

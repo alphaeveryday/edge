@@ -3,9 +3,14 @@ import { preview } from './preview';
 import { ensureVisitorSession } from './api';
 
 export type Screen = 'input_holdings' | 'input_funding' | 'input_horizon' | 'input_interests' | 'input_question' | 'loading' | 'queued' | 'running' | 'result' | 'failed' | 'dashboard_overview' | 'dashboard_dividends' | 'dashboard_returns' | 'dashboard_backtest';
-const events = new Set(['$pageview', '$pageleave', 'portfolio_screen_engagement', 'portfolio_scroll_pause', 'portfolio_feedback', 'portfolio_action']);
+// 8차 결과 측정 이벤트(계획 '측정' 절). 어느 칸을 읽었는지는 data-analytics-section 으로 따로 남는다.
+export type ResultEvent = 'result_shown' | 'survey_shown' | 'survey_answered' | 'evidence_opened' | 'ask_suggested_clicked' | 'recommendation_saved'
+  | 'app_alert_clicked' | 'store_link_clicked' | 'type_card_shared' | 'result_mail_requested' | 'result_link_copied';
+const resultEvents: ResultEvent[] = ['result_shown', 'survey_shown', 'survey_answered', 'evidence_opened', 'ask_suggested_clicked', 'recommendation_saved',
+  'app_alert_clicked', 'store_link_clicked', 'type_card_shared', 'result_mail_requested', 'result_link_copied'];
+const events = new Set(['$pageview', '$pageleave', 'portfolio_screen_engagement', 'portfolio_scroll_pause', 'portfolio_action', ...resultEvents]);
 const campaignKeys = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content'];
-const properties = new Set(['token', 'distinct_id', '$lib', '$lib_version', '$device_type', '$browser', '$os', '$viewport_height', '$viewport_width', '$screen_height', '$screen_width', '$process_person_profile', '$cookieless_mode', 'screen', 'section', 'visible_seconds', 'pause_seconds', 'scroll_y', 'scroll_depth_pct', 'max_scroll_depth_pct', 'action', 'rating', ...campaignKeys]);
+const properties = new Set(['token', 'distinct_id', '$lib', '$lib_version', '$device_type', '$browser', '$os', '$viewport_height', '$viewport_width', '$screen_height', '$screen_width', '$process_person_profile', '$cookieless_mode', 'screen', 'section', 'visible_seconds', 'pause_seconds', 'scroll_y', 'scroll_depth_pct', 'max_scroll_depth_pct', 'action', 'analysis_id', 'question', 'answer', 'text', 'method', ...campaignKeys]);
 // 유입 채널 꼬리표는 화면 이동이 주소를 바꾸기 전에 첫 진입 주소에서 읽는다. 꼬리표가 하나라도 있으면 네 개를 통째로 바꿔 이전 채널 값이 섞이지 않게 한다.
 const entry = new URLSearchParams(location.search);
 const campaign = campaignKeys.some(key => entry.get(key)) ? campaignKeys.map(key => [key, entry.get(key)?.slice(0, 100) || ''] as const) : [];
@@ -22,7 +27,7 @@ export function setAnalyticsEnabled(enabled: boolean) {
   } else if (enabled) initialize();
   window.dispatchEvent(new Event('orca-analytics-change'));
 }
-export function trackAction(action: 'holding_add_opened' | 'holding_edit_opened' | 'holdings_saved' | 'holdings_save_failed' | 'backtest_requested' | 'backtest_completed' | 'backtest_failed' | 'portfolio_saved' | 'newsletter_requested' | 'instrument_search_empty' | 'input_search_opened' | 'input_holding_added' | 'bulk_entry_opened' | 'bulk_entry_added' | 'bulk_entry_failed' | 'request_box_opened' | 'recommend_started' | 'example_report_opened' | 'followup_asked' | 'followup_chat_opened') {
+export function trackAction(action: 'holding_add_opened' | 'holding_edit_opened' | 'holdings_saved' | 'holdings_save_failed' | 'backtest_requested' | 'backtest_completed' | 'backtest_failed' | 'newsletter_requested' | 'instrument_search_empty' | 'input_search_opened' | 'input_holding_added' | 'bulk_entry_opened' | 'bulk_entry_added' | 'bulk_entry_failed' | 'request_box_opened' | 'recommend_started' | 'example_report_opened' | 'followup_asked' | 'followup_chat_opened') {
   const send = () => { try { posthog.capture('portfolio_action', { action }); } catch { /* Optional analytics. */ } };
   if (initialize()) return send();
   if (preview || !analyticsEnabled() || !servedHere()) return;
@@ -30,12 +35,12 @@ export function trackAction(action: 'holding_add_opened' | 'holding_edit_opened'
   void ensureVisitorSession().then(() => { if (initialize()) send(); }).catch(() => { /* 분류 실패면 고객 여부를 모르니 보내지 않는다. */ });
 }
 
-export type FeedbackRating = 'good' | 'okay' | 'needs_improvement';
-export function trackFeedback(action: 'shown' | 'dismissed' | 'submitted', rating?: FeedbackRating) {
-  if (!initialize()) return;
-  try {
-    posthog.capture('portfolio_feedback', { screen: 'result', section: 'feedback', action, ...(rating ? { rating } : {}) }, { send_instantly: true });
-  } catch { /* Analytics must not interrupt reading the report. */ }
+// 결과 화면 이벤트. 시험 방문 분류·미리보기·운영 주소 밖 차단은 trackAction 과 같은 길을 쓴다.
+export function trackResult(event: ResultEvent, values: { analysis_id?: string; question?: string; answer?: string; text?: string; method?: string } = {}) {
+  const send = () => { try { posthog.capture(event, { screen: 'result', ...values }, { send_instantly: true }); } catch { /* Optional analytics. */ } };
+  if (initialize()) return send();
+  if (preview || !analyticsEnabled() || !servedHere()) return;
+  void ensureVisitorSession().then(() => { if (initialize()) send(); }).catch(() => { /* 분류 실패면 고객 여부를 모르니 보내지 않는다. */ });
 }
 
 const servedHere = () => ['etforca.com', 'www.etforca.com'].includes(location.hostname) && location.pathname === '/portfolio/';

@@ -23,8 +23,9 @@ test('timeout explains interruption and preserved input without blaming customer
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'timed-out'));
   await page.route('**/api/portfolio/**', route => route.fulfill({ json: { id: 'timed-out', state: 'failed', failure: 'TIMED_OUT' } }));
   await page.goto('/portfolio/');
-  await expect(page.locator('.ans')).toContainText('입력한 내용은 그대로 보관');
-  await expect(page.locator('.ans')).not.toContainText('5분 안에');
+  await expect(page.locator('.r8-failed')).toContainText('입력한 내용은 그대로 있어요');
+  await expect(page.locator('.r8-failed')).toContainText('오래 걸려 멈췄어요');
+  await expect(page.locator('.r8-failed')).not.toContainText('5분 안에');
 });
 
 test('external search throttling is distinguished from the visitors trial quota', async ({ page }) => {
@@ -32,7 +33,7 @@ test('external search throttling is distinguished from the visitors trial quota'
   await page.route('**/api/portfolio/analyses/search-limited', route => route.fulfill({ json: { id: 'search-limited', state: 'failed', failure: 'SEARCH_RATE_LIMIT' } }));
   await page.goto('/portfolio/');
   await expect(page.getByText(/자료 조회가 잠시 지연/)).toBeVisible();
-  await expect(page.locator('.ans')).not.toContainText('오늘 체험 횟수');
+  await expect(page.locator('.r8-failed')).not.toContainText('오늘 체험 횟수');
 });
 
 test('an unavailable saved analysis can return to input without clearing browser storage manually', async ({ page }) => {
@@ -46,7 +47,7 @@ test('an unavailable saved analysis can return to input without clearing browser
   expect(await page.evaluate(() => localStorage.getItem('edge-portfolio-job'))).toBeNull();
 });
 
-test('default account, real stages, result restoration, chat gate and email receipt', async ({ page }) => {
+test('default account, real stages, result restoration and chat gate', async ({ page }) => {
   let ready = false;
   const section = { paragraphs: ['검증용 포트폴리오 설명이에요.', '검증용 판단 조건이에요.'], evidence: [], limitations: [] };
   await page.route('**/api/portfolio/**', async route => {
@@ -76,21 +77,13 @@ test('default account, real stages, result restoration, chat gate and email rece
   await page.screenshot({ path: `test-results/progress-${test.info().project.name}.png`, fullPage: true });
   ready = true;
   await page.reload();
-  await expect(page.getByRole('heading', { name: '핵심 평가 정리' })).toBeVisible();
-  await expect(page.locator('.evaluation section')).toHaveCount(4);
-  await expect(page.locator('.fee')).toContainText('100만 원');
-  await expect(page.getByRole('heading', { name: '과거 성과' })).toBeVisible();
-  await page.locator('.evaluation').scrollIntoViewIfNeeded();
-  await page.getByRole('button', { name: '평가 팝업 닫기' }).click();
+  // 추천이 없는 옛 보고서도 같은 칸 차례로 열리고, 지금 가진 구성을 최종 칸에 그대로 보여 준다.
+  await expect(page.locator('.r8-headline')).toHaveText('이번에는 추천을 만들지 못했어요');
+  await expect(page.locator('[data-analytics-section=final]')).toContainText('VOO');
+  await expect(page.locator('[data-analytics-section=analysis] .r8-item')).toHaveCount(3);
   // 이 분석의 질문 5회를 다 쓴 고객은 입력창이 잠기고 이유와 다음 길(새 분석)을 본다.
-  await expect(page.getByRole('textbox', { name: '추가 질문', exact: true })).toBeDisabled();
-  await expect(page.locator('.followup')).toContainText('추가 질문 5회를 모두 사용했어요. 새 분석을 시작하면 다시 물을 수 있어요.');
-  await page.locator('.premium').click();
-  await page.getByRole('dialog', { name: '내 ETF 핵심 소식 이메일로 받기' }).getByLabel('뉴스레터 이메일').fill('test@example.com');
-  await page.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
-  await expect(page.getByRole('dialog', { name: '내 ETF 핵심 소식 이메일로 받기' })).toContainText('확인 메일의 링크');
-  await expect(page.getByRole('dialog', { name: '내 ETF 핵심 소식 이메일로 받기' })).not.toContainText('1일 이내');
-  await page.getByRole('button', { name: '닫기', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: '직접 물어보기', exact: true })).toBeDisabled();
+  await expect(page.locator('[data-analytics-section=ask]')).toContainText('이 분석의 질문 5번을 모두 썼어요. 새 분석에서 다시 물을 수 있어요.');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `test-results/report-${test.info().project.name}.png`, fullPage: true });
 });

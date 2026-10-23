@@ -4,6 +4,7 @@ import { request, ensureVisitorSession, type Input, type Job } from './api';
 import { inputDraftKey, readInputDraft, restoreInputDraft } from './inputDraft';
 import { InputForm } from './InputForm';
 import { ReportView } from './ReportView';
+import { FailedView, ResultView } from './ResultView';
 import { Followup } from './Followup';
 import { ProgressView } from './ProgressView';
 import { startPresence } from './presence';
@@ -143,11 +144,13 @@ export function Analysis({ embedded = false, active = true }: { embedded?: boole
   return <Container className="app">{!embedded && <a className="dashboard-link" href={preview ? '?preview=dashboard' : '?view=dashboard'} onClick={e => void openDashboard(e)}>내 포트폴리오 ↗</a>}{confirmation}{embedded && jobId && <div className="card-heading"><h2>최근 AI 포폴 분석</h2><Button onClick={reset}>새로 분석하기</Button></div>}{jobId && <div className="nav"><div className="nav__pill"><span className="nav__logo">ETF Orca</span></div></div>}
     {storageWarning && <Notice>{storageWarning}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}
-    {!jobId ? <InputForm onSubmit={submit} busy={busy} initialInput={rejectedInput} /> : job?.state === 'succeeded' && job.result ? <><ReportView report={job.result} feedbackJobId={jobId} /><Followup jobId={jobId} /><Button variant="secondary" className="secondary" onClick={reset}>새 포트폴리오 분석하기</Button></> : job?.state === 'failed' ? <><article className="ans"><h1>분석을 마치지 못했어요.</h1><p>{job.failure === 'SEARCH_RATE_LIMIT' ? '자료 조회가 잠시 지연됐어요.' : job.failure === 'TIMED_OUT' ? '분석이 예상보다 오래 걸려 중단됐어요.' : '분석을 마무리하는 중 문제가 생겼어요.'} 입력한 내용은 그대로 보관돼 있어요.</p>{job.input && <Button variant="primary" loading={busy} onClick={retry}>같은 입력으로 다시 분석</Button>}<Button variant="secondary" disabled={busy} onClick={reset}>입력 수정하기</Button></article>
-      {job.result?.partial_report && Object.keys(job.result.partial_report.sections || {}).length > 0 && <details><summary>중단 전 작성된 분석 보기</summary><ReportView report={{ ...job.result.partial_report, recommendation: null,
-        completion: { tasks: [], missing_research: [], ...job.result.partial_report.completion, status: 'partial',
-          missing_inputs: [...(job.result.partial_report.completion?.missing_inputs || []), '분석이 중단되어 최종 검토가 끝나지 않았어요.'] } }} /></details>}
-      <Followup jobId={jobId} recoveryOnly />
-    </> : <><ProgressView job={job} elapsed={elapsed} />{error && <Button variant="secondary" className="secondary" onClick={reset}>입력 화면으로</Button>}</>}
+    {!jobId ? <InputForm onSubmit={submit} busy={busy} initialInput={rejectedInput} /> : job?.state === 'succeeded' && job.result ? <><ResultView report={job.result} jobId={jobId} input={job.input} active={active} /><Button variant="secondary" className="secondary" onClick={reset}>새 포트폴리오 분석하기</Button></> : job?.state === 'failed' ? <>
+      <FailedView failure={job.failure} partial={job.result?.partial_report} canRetry={!!job.input} busy={busy} onRetry={retry} onEdit={reset}>
+        {job.result?.partial_report && Object.keys(job.result.partial_report.sections || {}).length > 0 && <ReportView report={{ ...job.result.partial_report, recommendation: null,
+          completion: { tasks: [], missing_research: [], ...job.result.partial_report.completion, status: 'partial',
+            missing_inputs: [...(job.result.partial_report.completion?.missing_inputs || []), '분석이 중단되어 최종 검토가 끝나지 않았어요.'] } }} />}
+      </FailedView>
+      <Followup jobId={jobId} />
+    </> :<><ProgressView job={job} elapsed={elapsed} />{error && <Button variant="secondary" className="secondary" onClick={reset}>입력 화면으로</Button>}</>}
   </Container>;
 }

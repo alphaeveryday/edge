@@ -24,7 +24,6 @@ async function setup(page: Page, initial: Saved = { version: 0, workbook: null }
   });
   return writes;
 }
-const saveButton = (page: Page) => page.locator('.feedback-anchor > .save-portfolio').getByRole('button', { name: '입력한 내 포트폴리오 저장하기' });
 
 test('dashboard analysis reconciles tab-local pending input before restoring the latest report', async ({ page }) => {
   await setup(page, { version: 1, workbook });
@@ -42,7 +41,7 @@ test('dashboard analysis reconciles tab-local pending input before restoring the
   await page.getByRole('button', { name: 'AI 포폴 분석', exact: true }).click();
   await expect.poll(() => submitted).toBe(true);
   await expect(page.locator('.progress')).toBeVisible();
-  await expect(page.locator('#report')).toHaveCount(0);
+  await expect(page.locator('#result')).toHaveCount(0);
 });
 
 test('pending quotes appear promptly and polling slows down after they arrive', async ({ page }) => {
@@ -77,49 +76,13 @@ test('an empty portfolio does not enter fast quote polling', async ({ page }) =>
   expect(calls).toBe(1);
 });
 
-test('saving input opens usable holdings while the first quote is pending', async ({ page }) => {
-  const writes = await setup(page);
-  await page.goto('/portfolio/');
-  await saveButton(page).click();
-  await expect(page).toHaveURL(/view=dashboard/);
-  await expect(page.locator('.holding-edit')).toContainText('KODEX 200');
-  await expect(page.getByRole('status').filter({ hasText: '시세' })).toBeVisible();
-  expect(writes).toHaveLength(1);
-  await page.getByRole('button', { name: '취소', exact: true }).click();
-  await page.getByRole('button', { name: 'AI 포폴 분석', exact: true }).click();
-  await expect(page.locator('#report')).toContainText('내 분석 결과');
-});
-
-test('a pending save disables repeat submission and preserves the existing screen', async ({ page }) => {
-  const writes = await setup(page, { version: 2, workbook });
-  let release!: () => void;
-  const held = new Promise<void>(resolve => { release = resolve; });
-  await page.route('**/api/portfolio/workbook', async r => { if (r.request().method() === 'POST') await held; await r.fallback(); });
-  await page.goto('/portfolio/');
-  await saveButton(page).click();
-  await expect(page.locator('.feedback-anchor > .save-portfolio button')).toBeDisabled();
-  await expect(page.locator('#report')).toBeVisible();
-  expect(writes).toHaveLength(0);
-  release();
-  await expect(page).toHaveURL(/view=dashboard/);
-  expect(writes).toHaveLength(1);
-});
-
-test('incomplete legacy weights can be saved and corrected without an impossible seed form', async ({ page }) => {
-  await setup(page, undefined, { ...workbook, assets: [{ ...asset, amount: null, weight: 60 }] });
-  await page.goto('/portfolio/');
-  await saveButton(page).click();
-  await expect(page).toHaveURL(/view=dashboard/);
-  await expect(page.getByLabel('보유 수량', { exact: true })).toBeEditable();
-});
-
 test('a failed workbook read does not block the independent saved analysis', async ({ page }) => {
   await setup(page);
   await page.route('**/api/portfolio/workbook', r => r.fulfill({ status: 503, json: {} }));
   await page.goto('/portfolio/?view=dashboard');
   await expect(page.getByRole('alert')).toBeVisible();
   await page.getByRole('button', { name: 'AI 포폴 분석', exact: true }).click();
-  await expect(page.locator('#report')).toContainText('내 분석 결과');
+  await expect(page.locator('#result')).toContainText('내 분석 결과');
 });
 
 test('catalog failure can be retried from the backtest without opening a holding editor', async ({ page }) => {
@@ -132,16 +95,6 @@ test('catalog failure can be retried from the backtest without opening a holding
   await page.getByRole('button', { name: '목록 다시 불러오기' }).click();
   await page.getByRole('combobox', { name: /백테스트에 담은 종목/ }).fill('069500');
   await expect(page.getByRole('option', { name: /KODEX 200/ })).toBeVisible();
-});
-
-test('offline saving gives a readable recovery message and preserves the report', async ({ page }) => {
-  await setup(page);
-  await page.goto('/portfolio/');
-  await page.route('**/api/portfolio/workbook', r => r.abort('internetdisconnected'));
-  await saveButton(page).click();
-  await expect(page.locator('.feedback-anchor > .save-portfolio [role=alert]')).toContainText('연결');
-  await expect(page.locator('#report')).toBeVisible();
-  await expect(saveButton(page)).toBeEnabled();
 });
 
 test('dashboard read has a motion state and remains usable after a failed retry', async ({ page }) => {
@@ -170,32 +123,13 @@ test('another tab updating holdings offers reload instead of endless quote prepa
   await expect(page.getByRole('button', { name: '최신 보유 목록 불러오기' })).toBeVisible();
 });
 
-test('direct saving replaces the input portfolio without an extra confirmation', async ({ page }) => {
-  const writes = await setup(page, { version: 2, workbook }, { ...workbook, title: '새 보유 목록' });
-  await page.goto('/portfolio/');
-  await saveButton(page).click();
-  await expect(page.getByRole('heading', { name: '새 보유 목록', exact: true })).toBeVisible();
-  expect(writes).toHaveLength(1);
-});
-
-test('valid percent input asks for money once and preserves the allocation on arrival', async ({ page }) => {
-  const writes = await setup(page, undefined, { ...workbook, assets: [{ ...asset, amount: null, weight: 100 }] });
-  await page.goto('/portfolio/');
-  await saveButton(page).click();
-  const form = page.locator('.feedback-anchor > .save-portfolio');
-  await form.getByLabel('총 투자금액 (원)').fill('1234567');
-  await form.getByRole('button', { name: '금액 적용하고 저장' }).click();
-  await expect(page.locator('.holding-edit')).toContainText('KODEX 200');
-  expect(writes).toMatchObject([{ workbook: { assets: [{ amount: 1234567, weight: null }] } }]);
-});
-
 for (const tab of ['AI 포폴 분석', '배당 달력', '수익 기록', '백테스트']) test(`refresh preserves the selected screen: ${tab}`, async ({ page }) => {
   await setup(page, { version: 1, workbook });
   await page.goto('/portfolio/?view=dashboard');
   await page.getByRole('button', { name: tab, exact: true }).click();
   await page.reload();
   await expect(page.getByRole('button', { name: tab, exact: true })).toHaveAttribute('aria-current', 'page');
-  if (tab === 'AI 포폴 분석') await expect(page.locator('#report')).toContainText('내 분석 결과');
+  if (tab === 'AI 포폴 분석') await expect(page.locator('#result')).toContainText('내 분석 결과');
 });
 
 for (const status of [401, 503]) test(`session failure can be retried without losing the saved holdings: ${status}`, async ({ page }) => {
@@ -226,19 +160,7 @@ test('latest analysis failure can recover independently of the workbook', async 
   await expect(page.getByRole('button', { name: '다시 불러오기', exact: true })).toBeVisible();
   await page.unroute('**/api/portfolio/analyses/latest');
   await page.getByRole('button', { name: '다시 불러오기', exact: true }).click();
-  await expect(page.locator('#report')).toContainText('내 분석 결과');
-});
-
-test('saving failure preserves the entered seed amount for retry', async ({ page }) => {
-  await setup(page, undefined, { ...workbook, assets: [{ ...asset, amount: null, weight: 100 }] });
-  await page.route('**/api/portfolio/workbook', r => r.request().method() === 'POST' ? r.fulfill({ status: 503, json: {} }) : r.fallback());
-  await page.goto('/portfolio/');
-  await saveButton(page).click();
-  const form = page.locator('.feedback-anchor > .save-portfolio');
-  await form.getByLabel('총 투자금액 (원)').fill('1234567');
-  await form.getByRole('button', { name: '금액 적용하고 저장' }).click();
-  await expect(form.getByRole('alert')).toBeVisible();
-  await expect(form.getByLabel('총 투자금액 (원)')).toHaveValue('1234567');
+  await expect(page.locator('#result')).toContainText('내 분석 결과');
 });
 
 test('empty dashboard offers addition without pretending to collect nonexistent quotes', async ({ page }) => {

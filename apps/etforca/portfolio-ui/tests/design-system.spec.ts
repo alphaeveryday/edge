@@ -98,17 +98,3 @@ test('destructive confirmation can cancel without losing assets and confirms onl
   await page.reload();
   await expect(page.locator('.holding-edit')).toHaveCount(5);
 });
-
-test('saving the entered portfolio replaces holdings directly without a second confirmation', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.locator('.holding-edit').filter({ hasText: '미국시장 ETF 예시' }).click();
-  await page.getByLabel('보유 수량', { exact: true }).fill('999');
-  await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
-  await expect(page.getByRole('dialog')).toHaveCount(0);
-  await page.goto('/portfolio/?preview=result');
-  const save = page.locator('.feedback-anchor .save-portfolio button').first();
-  await save.click();
-  await expect(page).toHaveURL(/preview=dashboard/);
-  await page.locator('.holding-edit').filter({ hasText: '미국시장 ETF 예시' }).click();
-  await expect(page.getByLabel('보유 수량', { exact: true })).toHaveValue('400');
-});

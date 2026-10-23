@@ -9,7 +9,7 @@ export type Input = { draft_id?: string; holdings: Holding[]; question: string; 
 export type Section = { paragraphs: string[]; evidence: { source_id: string; quote: string }[]; limitations: string[] };
 export type Evaluation = { scores: { leadership: number; profitability: number; stability: number } | null; overall: number | null; reason: Section; method: string; rubric_version?: number };
 export type Allocation = { instrument_id: string; name: string; ticker: string; kind: 'cash' | 'etf' | 'stock'; account: string; weight_pct: number; amount_krw: string | null };
-export type Execution = { status: 'ready' | 'conditional' | 'needs_input' | 'infeasible'; reasons: string[]; assumptions: string[]; additional_krw: string; monthly_krw: string | null; required_additional_krw: string | null; required_additional_is_minimum?: boolean; months: number | null; rows: { instrument_id: string; name?: string; account: string; before_krw: string; target_krw: string; buy_krw: string; sell_krw: string; cash_used_krw: string }[]; accounts: { account: string; deposit_krw: string; withdrawal_krw: string }[] };
+export type Execution = { status: 'ready' | 'conditional' | 'needs_input' | 'infeasible'; reasons: string[]; assumptions: string[]; additional_krw: string; monthly_krw: string | null; required_additional_krw: string | null; required_additional_is_minimum?: boolean; months: number | null; rows: { instrument_id: string; name?: string; account: string; before_krw: string; target_krw: string; buy_krw: string; sell_krw: string; cash_used_krw: string }[]; accounts: { account: string; deposit_krw: string; withdrawal_krw: string }[]; monthly_plan?: { account: string; instrument_id: string; krw: string }[] };
 export type History = { points: { date: string; recommended: number; current: number | null }[]; basis: string; source_url: string; baseline_kind?: 'new_cash' | 'current_holdings' | 'unknown_weights'; current_unavailable_reason?: string; interval?: '1d'; currency?: 'KRW'; initial_krw?: number; method?: string; sources?: { instrument_id: string; url: string }[] };
 export type Recommendation = { title: string; execution?: Execution; allocations: Allocation[]; evaluation: Evaluation; total_krw: string | null; actions: { instrument_id: string; name: string; ticker: string; account: string; before_pct: number | null; after_pct: number; action: string; buy_krw?: string; sell_krw?: string; cash_used_krw?: string }[]; expected_return_1y: number | null; dividend_yield_1y: number | null; historical_performance: History | null; unavailable_reason: string; target_return_1y?: number; dividend_basis?: string; return_forecast?: { kind?: 'upper_sigma_1y'; reason: string; method: string }; dividend_observations?: { instrument_id: string; as_of: string; trailing_yield_pct: number; source_url?: string; method?: string; evidence: { url: string; quote: string }[] }[] };
 export type Report = {
@@ -26,6 +26,16 @@ export type Report = {
   metrics: { holdings: { name: string; account: string; weight_pct: number | null }[]; total_krw: string | null; unavailable_reason: string };
   sources: { id: string; url: string; fetched_at: string }[];
   model: string; as_of: string; elapsed_seconds: number;
+  // 8차 결과 칸에 바로 꽂는 필드. 옛 보고서에는 없으므로 화면은 없을 때 위의 기존 필드로 대신한다.
+  verdict?: { kind: 'keep' | 'one' | 'rebuild' | 'start'; headline: string };
+  answer?: string;
+  constraint_results?: { kind: string; status: 'kept' | 'substituted'; note: string }[];
+  final_note?: string;
+  period?: { start: string; end: string; label: string; shortest_instrument_id?: string };
+  past?: { rec_end_krw: string; cur_end_krw: string; rec_max_loss_krw: string; cur_max_loss_krw: string };
+  analysis?: { title: string; paragraphs: string[]; evidence: Section['evidence']; limitations: string[] }[];
+  suggested_questions?: string[];
+  type_card?: { key: string; stats?: unknown };
 };
 export type Job = { id: string; state: 'queued' | 'running' | 'succeeded' | 'failed'; stage: Role | null; input?: Input; result: Report | null; failure: string | null; started_at: string | null };
 

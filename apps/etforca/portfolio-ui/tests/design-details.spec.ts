@@ -90,9 +90,11 @@ test('the desktop action follows the form while the mobile action leaves scroll 
 });
 
 test('a wide performance chart stays readable and pointer selection tracks the same data after resizing', async ({ page }) => {
-  await page.goto('/portfolio/?preview=result');
-  await page.locator('.performance').scrollIntoViewIfNeeded();
-  if (await page.locator('.report-feedback').isVisible()) await page.getByLabel('평가 팝업 닫기').click();
+  // 결과 화면은 8차 지난 기간 칸으로 바뀌었고, 같은 성과 그래프(PerformanceChart)는 대시보드 백테스트에 남는다.
+  await page.goto('/portfolio/?preview=dashboard');
+  await page.getByRole('button', { name: '백테스트', exact: true }).click();
+  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
+  await page.getByRole('button', { name: '과거 수익률 조회', exact: true }).click();
   const chart = page.locator('.report-history svg');
   const box = await chart.boundingBox();
   expect(box!.height).toBeLessThanOrEqual(301);

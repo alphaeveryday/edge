@@ -257,28 +257,6 @@ test('a percent-only dashboard asks for seed once and derives values and account
   await expect(page.locator('.holdings-table tbody tr')).toContainText('100.0%');
 });
 
-test('saving a percent analysis pauses for seed before navigating or writing', async ({ page }) => {
-  let writes = 0;
-  let version = 0;
-  await mock(page);
-  await page.route('**/api/portfolio/workbook', r => { if (r.request().method() === 'POST') { writes++; expect(r.request().postDataJSON().workbook.assets[0].amount).toBe(1000000); if (writes === 1) { version = 2; return r.fulfill({ status: 409, json: { detail: 'WORKBOOK_CONFLICT' } }); } expect(r.request().postDataJSON().version).toBe(2); return r.fulfill({ json: {} }); } return r.fulfill({ json: { version, workbook: version ? workbook : null } }); });
-  await page.route('**/api/portfolio/analyses/*/workbook', r => r.fulfill({ json: { ...workbook, assets: [{ ...asset, quantity: null, weight: 100 }] } }));
-  await page.goto('/portfolio/?preview=result');
-  // The real SavePortfolio component is exercised with fetch through the normal report route below.
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'seed-test'));
-  await page.route('**/api/portfolio/analyses/seed-test', r => r.fulfill({ json: { id: 'seed-test', state: 'succeeded', result: { sections: { question: { paragraphs: [], evidence: [], limitations: [] }, portfolio: { paragraphs: [], evidence: [], limitations: [] }, outlook: { paragraphs: [], evidence: [], limitations: [] }, opinion: { paragraphs: [], evidence: [], limitations: [] } }, metrics: { holdings: [], total_krw: null, unavailable_reason: '' }, sources: [], as_of: '2026-10-18', model: 'test', elapsed_seconds: 0 } } }));
-  await page.goto('/portfolio/');
-  await page.locator('.feedback-anchor .save-portfolio button').first().click();
-  expect(writes).toBe(0);
-  await page.locator('.feedback-anchor').getByLabel('총 투자금액 (원)').fill('1000000');
-  await page.locator('.feedback-anchor').getByRole('button', { name: '금액 적용하고 저장' }).click();
-  await expect(page.locator('.feedback-anchor').getByRole('alert')).toContainText('다른 탭');
-  await expect(page.locator('.feedback-anchor').getByLabel('총 투자금액 (원)')).toHaveValue('1000000');
-  await page.locator('.feedback-anchor').getByRole('button', { name: '금액 적용하고 저장' }).click();
-  await expect(page).toHaveURL(/view=dashboard/);
-  expect(writes).toBe(2);
-});
-
 test('a pending save keeps the edited holding locked until the response arrives', async ({ page }) => {
   await mock(page);
   let release: (() => void) | undefined;
@@ -424,11 +402,11 @@ test('removing a holding retains manual dividend records with its original name'
 test('the AI tab shows the original report and can start another analysis without losing tab drafts', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
   await page.getByRole('button', { name: 'AI 포폴 분석', exact: true }).click();
-  await expect(page.locator('#report')).toBeVisible();
-  await expect(page.locator('.report-history')).toBeVisible();
+  await expect(page.locator('#result')).toBeVisible();
+  await expect(page.locator('.r8-past-chart')).toBeVisible();
   await page.getByRole('button', { name: '새로 분석하기', exact: true }).click();
   await expect(page.locator('.step').first()).toBeVisible();
-  await expect(page.locator('#report')).toHaveCount(0);
+  await expect(page.locator('#result')).toHaveCount(0);
   await page.getByRole('button', { name: '한눈에', exact: true }).click();
   await page.getByRole('button', { name: 'AI 포폴 분석', exact: true }).click();
   await expect(page.locator('.step').first()).toBeVisible();

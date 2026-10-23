@@ -1,493 +1,321 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
+import { deepestFall, futureValue, legacyNote, won } from '../src/resultMath';
 
-const section = { paragraphs: ['사용자의 투자 기간을 기준으로 판단해요.', '추천 구성에 영향을 주는 근거를 확인해요.', '전망이 달라지면 추천 비중도 다시 검토해요.'], evidence: [], limitations: [] };
-const evaluation = { scores: { leadership: 5, profitability: 4, stability: 3 }, overall: 4, reason: section, method: 'AI 정성 평가', rubric_version: 1 };
-const report = {
-  schema_version: 2, sections: { opinion: section, outlook: section, question: section, portfolio: section },
-  sources: [], as_of: '2026-10-12T00:00:00Z', current_evaluation: evaluation,
-  metrics: { total_krw: '1000000', holdings: [{ name: '이전 VOO', account: '일반 계좌', weight_pct: 100 }], unavailable_reason: '검증된 자료 부족' },
-  recommendation: { title: '분산 구성', evaluation, allocations: [
-    { instrument_id: 'US:QQQ', name: 'Invesco QQQ', ticker: 'QQQ', kind: 'etf', account: '일반 계좌', weight_pct: 60, amount_krw: '600000' },
-    { instrument_id: 'CASH:KRW', name: '현금', ticker: 'KRW', kind: 'cash', account: '일반 계좌', weight_pct: 40, amount_krw: '400000' }],
-    total_krw: '1000000', actions: [{ instrument_id: 'US:QQQ', name: 'Invesco QQQ', ticker: 'QQQ', account: '일반 계좌', before_pct: 0, after_pct: 60, action: '새로 담기' }],
-    expected_return_1y: -3, dividend_yield_1y: .8, unavailable_reason: '검증된 자료 부족',
-    historical_performance: { basis: '최근 1년 · 100만 원을 넣었다면 (원)', source_url: 'https://example.com/history', interval: '1d', currency: 'KRW', points: Array.from({ length: 366 }, (_, i) => ({ date: new Date(Date.UTC(2025, 9, 12 + i)).toISOString().slice(0, 10), recommended: 1000000 + i * 100, current: 1000000 - i * 100 })) } },
-  insights: [{ title: '결혼 자금은 따로 확보하세요', content: section }]
-};
+// 8차 결과(ResultView): 누구에게나 같은 일곱 칸, 같은 차례. 서버가 새 필드를 아직 내지 않은 옛 보고서도
+// 기존 필드로 같은 칸을 채워야 한다(운영의 지난 보고서가 그대로 다시 열린다).
+const section = (paragraphs: string[], evidence: { source_id: string; quote: string }[] = []) => ({ paragraphs, evidence, limitations: [] as string[] });
+const row = (id: string, name: string, account: string, before: number, target: number) => ({ instrument_id: id, name, account, before_krw: String(before), target_krw: String(target),
+  buy_krw: String(Math.max(0, target - before)), sell_krw: String(Math.max(0, before - target)), cash_used_krw: '0' });
+const evaluation = (overall: number | null, scores: Record<string, number> | null, reason = section(['평가 이유'])) => ({ overall, scores, reason, method: 'AI 정성 평가', rubric_version: 1 });
+// 1,000,000 에서 시작하는 옛 기록(initial_krw 100만 원) — 화면은 고객의 실제 금액(1,250만 원)에 맞춰 늘려 보여야 한다.
+const points = [['2022-10-24', 1000000, 1000000], ['2023-10-24', 800000, 700000], ['2024-10-24', 1300000, 1100000], ['2025-10-22', 1500000, 1200000]]
+  .map(([date, recommended, current]) => ({ date, recommended, current }));
+const base = () => ({
+  schema_version: 3, as_of: '2026-10-23T03:00:00Z', model: 'x', elapsed_seconds: 1,
+  sources: [{ id: 's1', url: 'https://example.com/a', fetched_at: '2026-10-23' }],
+  sections: { question: section(['반도체 ETF만 S&P500으로 옮기세요.']), portfolio: section(['포트폴리오 이유']), outlook: section(['전망 문단']),
+    opinion: section(['##### 판 날 같은 계좌에서 사세요.', '| 종목 | 비중 |']) },
+  current_evaluation: evaluation(3.2, { leadership: 3.5, profitability: 3.5, stability: 2.5 }, section(['지금 구성 이유'], [{ source_id: 's1', quote: '근거 문장' }])),
+  metrics: { total_krw: '12500000', holdings: [{ name: 'TIGER 미국S&P500', account: 'ISA', weight_pct: 40 }], unavailable_reason: '' },
+  optimization: { status: 'available', selected_candidate_id: 'c1' },
+  recommendation: { title: '반도체만 바꾸기', total_krw: '12500000', unavailable_reason: '', expected_return_1y: null, dividend_yield_1y: null, actions: [],
+    evaluation: evaluation(4.4, { leadership: 4.5, profitability: 4.5, stability: 4.2 }, section(['추천 이유'])),
+    allocations: [{ instrument_id: 'KR:360750', name: 'TIGER 미국S&P500', ticker: '360750', kind: 'etf', account: 'ISA', weight_pct: 64, amount_krw: '8000000' },
+      { instrument_id: 'KR:360750', name: 'TIGER 미국S&P500', ticker: '360750', kind: 'etf', account: '일반 계좌', weight_pct: 20, amount_krw: '2500000' },
+      { instrument_id: 'KR:005930', name: '삼성전자', ticker: '005930', kind: 'stock', account: '일반 계좌', weight_pct: 16, amount_krw: '2000000' }],
+    historical_performance: { basis: '수정 종가 기준 분배금 재투자', source_url: '', interval: '1d', currency: 'KRW', initial_krw: 1000000, baseline_kind: 'current_holdings', points },
+    execution: { status: 'ready', reasons: [], assumptions: [], additional_krw: '0', monthly_krw: '300000', required_additional_krw: null, months: null, accounts: [],
+      rows: [row('KR:360750', 'TIGER 미국S&P500', 'ISA', 8000000, 8000000), row('KR:446770', 'ACE 글로벌반도체TOP4 Plus', '일반 계좌', 2500000, 0),
+        row('KR:360750', 'TIGER 미국S&P500', '일반 계좌', 0, 2500000), row('KR:005930', '삼성전자', '일반 계좌', 2000000, 2000000)] } },
+  insights: [{ title: '겹치는 종목이 많아요', content: section(['S&P500과 나스닥100은 애플이 겹쳐요.']) }],
+} as any);
 
-test('calculated upper sigma is labelled as a scenario instead of an AI expectation', async ({ page }) => {
-  const scenario = structuredClone(report);
-  Object.assign(scenario.recommendation, { expected_return_1y: 24.5,
-    return_forecast: { kind: 'upper_sigma_1y', reason: '과거 수익률 10% + 연환산 표준편차 14.5%p', method: '과거 기반 시나리오' } });
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'sigma'));
-  await page.route('**/api/portfolio/analyses/sigma', route => route.fulfill({ json: { id: 'sigma', state: 'succeeded', result: scenario } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.forecast')).toContainText('1년 수익률 · 1σ 상단 시나리오');
-  await expect(page.locator('.forecast')).toContainText('+24.5%');
-  await page.getByText('수익률·배당률 산정 근거', { exact: true }).click();
-  await expect(page.getByText('과거 수익률 10% + 연환산 표준편차 14.5%p', { exact: true })).toBeVisible();
+// 화면과 떼어 둔 금융 계산(resultMath). 고객이 읽는 금액이 틀리면 화면이 맞게 그려져도 소용없다.
+test('money words, deepest fall, five-percent projection and account transfers are computed exactly', () => {
+  expect([won(0), won(9999), won(10000), won(7675920), won(100000000), won(127800000), won(-2610000), won(25551824, true)])
+    .toEqual(['0원', '9,999원', '1만 원', '767만 5,920원', '1억 원', '1억 2,780만 원', '-261만 원', '2,555만 원']);
+  // 금액과 비율은 같은 구간에서: 100→50(50만 원, 50%) 뒤 300→200(100만 원, 33.3%)이면 가장 많이 줄어든 돈은 뒤 구간.
+  const fall = deepestFall([1000000, 500000, 3000000, 2000000]);
+  expect(fall.amount).toBe(1000000);
+  expect(fall.ratio).toBeCloseTo(1 / 3);
+  // 연 5% 복리: 1,000만 원은 15년 뒤 약 2,079만 원, 매달 넣는 돈만 있으면 넣은 돈보다 커진다.
+  expect(Math.round(futureValue(10000000, 0, 15))).toBe(20789282);
+  expect(futureValue(0, 300000, 15)).toBeGreaterThan(300000 * 12 * 15);
+  // 한 계좌에서 판 돈은 다른 계좌의 매수 대금이 되지 않는다 — 옮길 돈을 밝힌다.
+  expect(legacyNote({ status: 'ready', reasons: [], assumptions: [], additional_krw: '0', monthly_krw: null, required_additional_krw: null, months: null, rows: [],
+    accounts: [{ account: '일반 계좌', deposit_krw: '0', withdrawal_krw: '3000000' }, { account: 'ISA', deposit_krw: '3000000', withdrawal_krw: '0' }] }))
+    .toBe('계좌 사이 옮길 돈: 일반 계좌에서 300만 원 빼기, ISA에 300만 원 넣기.');
+  // 확인할 것이 남은 옛 추천은 그 조건을 먼저 보인다(예전 ExecutionDetails 가 하던 일).
+  expect(legacyNote({ status: 'needs_input', reasons: ['ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED:ISA'], assumptions: [], additional_krw: '0', monthly_krw: null, required_additional_krw: null, months: null, rows: [], accounts: [] }))
+    .toBe('실행하기 전에 확인할 것이 있어요. ISA · 금융사에서 남은 납입 한도를 확인해야 해요.');
 });
 
-test('small positive allocations remain visible in composition and account totals', async ({ page }) => {
-  const small = structuredClone(report);
-  small.recommendation.allocations[0] = { ...small.recommendation.allocations[0], weight_pct: .004, amount_krw: null as any };
-  small.recommendation.allocations[1] = { ...small.recommendation.allocations[1], weight_pct: 99.996, account: 'ISA', amount_krw: null as any };
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'small'));
-  await page.route('**/api/portfolio/analyses/small', route => route.fulfill({ json: { id: 'small', state: 'succeeded', result: small } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.mixviz li').first()).toContainText('0.01% 미만');
-  await expect(page.locator('.account-plan').first().locator('.account-total')).toContainText('0.01% 미만');
-});
-
-test('evaluation labels reflow without clipping when report text is enlarged', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'large-type'));
-  await page.route('**/api/portfolio/analyses/large-type', route => route.fulfill({ json: { id: 'large-type', state: 'succeeded', result: report } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.grade').first()).toBeVisible();
-  await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
-  expect(await page.locator('.grade').first().evaluate(el => {
-    const bounds = el.getBoundingClientRect();
-    return [...el.children].every(child => { const r = child.getBoundingClientRect(); return r.left >= bounds.left && r.right <= bounds.right + 1 && child.scrollWidth <= child.clientWidth; });
-  })).toBe(true);
-  expect(await page.locator('.report-history svg text').evaluateAll(labels => labels.every(label => {
-    const box = (label as SVGGraphicsElement).getBBox();
-    const view = (label as SVGGraphicsElement).ownerSVGElement!.viewBox.baseVal;
-    return box.x >= 0 && box.x + box.width <= view.width && box.y >= 0 && box.y + box.height <= view.height;
-  }))).toBe(true);
-  await expect(page.locator('.history-values')).toContainText('1,036,500원');
-});
-
-test('failed overwrite restores keyboard focus after the save button is enabled again', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'overwrite-failure'));
-  await page.route('**/api/portfolio/**', async route => {
+async function open(page: Page, result: unknown, input: unknown = { question: '이 구성으로 계속 들고 가도 돼요?', horizon: '10년 이상', holdings: [] }) {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'r8'));
+  await page.route('**/api/portfolio/**', route => {
     const path = new URL(route.request().url()).pathname;
-    const workbook = { title: '기존 구성', fx: null, assets: [], dividends: [], months: [] };
-    if (path === '/api/portfolio/workbook' && route.request().method() === 'POST') {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      return route.fulfill({ status: 503, json: {} });
-    }
-    if (path === '/api/portfolio/workbook') return route.fulfill({ json: { version: 1, workbook } });
-    if (path.endsWith('/workbook')) return route.fulfill({ json: workbook });
-    if (path.endsWith('/overwrite-failure')) return route.fulfill({ json: { id: 'overwrite-failure', state: 'succeeded', result: report } });
+    if (path.endsWith('/chats')) return route.fulfill({ json: { limit: 5, items: [] } });
+    if (path.endsWith('/analyses/r8')) return route.fulfill({ json: { id: 'r8', state: 'succeeded', input, result } });
     return route.fulfill({ json: {} });
   });
   await page.goto('/portfolio/');
-  const save = page.locator('.feedback-anchor>.save-portfolio>button');
-  await save.click();
-  await expect(page.locator('.feedback-anchor .save-portfolio [role=alert]')).toBeVisible();
-  await expect(save).toBeEnabled();
-  await expect(save).toBeFocused();
-});
-
-for (const fallbackFont of [false, true]) test(`large balances with small changes keep distinct, unclipped performance ticks (fallback font: ${fallbackFont})`, async ({ page }) => {
-  if (fallbackFont) await page.route('**/*.woff2', route => route.abort());
-  const result = structuredClone(report);
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'precise-ticks'));
-  await page.route('**/api/portfolio/analyses/precise-ticks', route => route.fulfill({ json: { id: 'precise-ticks', state: 'succeeded', result } }));
-  for (const difference of [1000000, 1]) {
-    result.recommendation.historical_performance.points = Array.from({ length: 3 }, (_, i) => ({ date: `2026-10-${10 + i}`, recommended: 101000000 + difference * i / 2, current: 101000000 }));
-    await page.goto('/portfolio/');
-    const ticks = page.locator('.report-history svg g text');
-    await expect(ticks).toHaveCount(3);
-    expect(new Set(await ticks.allTextContents()).size).toBe(3);
-    await page.evaluate(() => document.fonts.ready);
-    await expect.poll(() => ticks.evaluateAll(nodes => nodes.every(node => (node as SVGGraphicsElement).getBBox().x >= 0))).toBe(true);
-    await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
-    await expect.poll(() => ticks.evaluateAll(nodes => nodes.every(node => (node as SVGGraphicsElement).getBBox().x >= 0))).toBe(true);
-    await page.locator('.report-history').evaluate(el => { el.style.width = '240px'; });
-    await expect.poll(async () => (await page.locator('.report-history svg').getAttribute('viewBox'))?.split(' ')[3]).toBe('180');
-    expect(await page.locator('.report-history svg polyline.b').evaluate(node => {
-      const points = (node as SVGPolylineElement).points;
-      return points.getItem(points.numberOfItems - 1).x - points.getItem(0).x;
-    })).toBeGreaterThanOrEqual(80);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await expect.poll(() => page.locator('.report-history svg>text').evaluateAll(nodes => nodes.every((node, i) => {
-      if (!i) return true;
-      const previous = (nodes[i - 1] as SVGGraphicsElement).getBBox(), current = (node as SVGGraphicsElement).getBBox();
-      return previous.x + previous.width + 4 <= current.x;
-    }))).toBe(true);
-  }
-});
-
-test('rebalance instructions show cash amounts and hide transactions when execution is infeasible', async ({ page }) => {
-  const execution = { status: 'ready', reasons: [], assumptions: ['입력 평가금액 기준이에요.'],
-    additional_krw: '0', monthly_krw: null, required_additional_krw: null, months: null,
-    accounts: [{ account: '일반 계좌', deposit_krw: '0', withdrawal_krw: '0' }],
-    rows: [{ instrument_id: 'US:QQQ', name: 'Invesco QQQ', account: '일반 계좌', before_krw: '0',
-      target_krw: '600000', buy_krw: '600000', sell_krw: '0', cash_used_krw: '0' },
-      { instrument_id: 'CASH:KRW', name: '현금', account: '일반 계좌', before_krw: '200000',
-        target_krw: '0', buy_krw: '0', sell_krw: '0', cash_used_krw: '200000' },
-      { instrument_id: 'US:VOO', name: 'Vanguard S&P 500 ETF', account: '일반 계좌', before_krw: '1000000', target_krw: '600000', buy_krw: '0', sell_krw: '400000', cash_used_krw: '0' }] };
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'execution'));
-  await page.route('**/api/portfolio/analyses/execution', route => route.fulfill({ json: {
-    id: 'execution', state: 'succeeded', result: { ...report, recommendation: { ...report.recommendation, execution } }
-  } }));
-  await page.goto('/portfolio/');
-  const trades = page.locator('.improvements .improvement-list');
-  await expect(page.locator('.execution-plan table')).toHaveCount(0);
-  await expect(trades.locator('li').filter({ hasText: 'QQQ' })).toContainText('600,000원매수');
-  await expect(trades.locator('li').filter({ hasText: 'VOO' })).toContainText('400,000원매도');
-  await expect(trades.locator('li').filter({ hasText: '현금' })).toContainText('200,000원현금 투입');
-  await expect(trades.locator('[data-trade="buy"]')).toHaveCSS('color', 'rgb(210, 32, 48)');
-  await expect(trades.locator('[data-trade="sell"]')).toHaveCSS('color', 'rgb(27, 100, 218)');
-  await expect(page.locator('.improvements .trade-amount')).toHaveText(['600,000원매수', '200,000원현금 투입', '400,000원매도']);
-  await expect(page.getByRole('heading', { name: '내 포트폴리오에서 바꿀 것' })).toHaveCount(1);
-  await expect(page.getByRole('heading', { name: '매수·매도 계획' })).toHaveCount(0);
-  await expect(page.locator('.improvements .weight-change')).toHaveCount(0);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
-  await page.locator('.improvements').screenshot({ path: `test-results/rebalance-${test.info().project.name}.png` });
-  execution.rows[0].buy_krw = '10000000000';
-  await page.reload();
-  await expect(page.locator('.improvements [data-trade=buy]')).toContainText('10,000,000,000원');
-  await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
-  expect(await page.locator('.improvements [data-trade=buy]').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  execution.rows[0].buy_krw = '600000';
-  execution.status = 'infeasible';
-  execution.reasons = ['NO_SELL_ZERO_TARGET'];
-  await page.reload();
-  await expect(page.locator('.improvements')).toContainText('이미 보유한 종목의 목표를 0%로 만들려면 매도가 필요해요.');
-  await expect(page.locator('.improvements .trade-amount')).toHaveCount(0);
-  await expect(page.locator('.improvements .trade-amount')).toHaveCount(0);
-  await expect(page.locator('.improvements .weight-change')).toContainText('60%');
-  // Older non-actionable reports may not have saved execution rows at all.
-  execution.status = 'needs_input';
-  Object.assign(execution, { rows: undefined });
-  await page.reload();
-  await expect(page.locator('.improvements .weight-change')).toContainText('60%');
-  await expect(page.locator('.improvements .trade-amount')).toHaveCount(0);
-});
-
-test('saved trade amounts take priority over weight direction and monthly totals stay explicit', async ({ page }) => {
-  const result = structuredClone(report);
-  result.recommendation.actions[0].before_pct = 80;
-  result.recommendation.actions[0].action = '줄이기';
-  Object.assign(result.recommendation.actions[0], { buy_krw: '300000', sell_krw: '0', cash_used_krw: '0' });
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'trade-priority'));
-  await page.route('**/api/portfolio/analyses/trade-priority', route => route.fulfill({ json: { id: 'trade-priority', state: 'succeeded', result } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.improvements .trade-amount')).toHaveText('300,000원매수');
-  await expect(page.locator('.improvements [data-trade="buy"]')).toHaveCSS('color', 'rgb(210, 32, 48)');
-  await expect(page.locator('.improvements')).not.toContainText('줄이기');
-  Object.assign(result.recommendation, { execution: { status: 'conditional', reasons: [], assumptions: [],
-    monthly_krw: '50000', months: 6, additional_krw: '300000', required_additional_krw: '300000', accounts: [],
-    rows: [{ instrument_id: 'US:QQQ', name: 'QQQ', account: '일반 계좌', before_krw: '800000', target_krw: '1100000', buy_krw: '300000', sell_krw: '0', cash_used_krw: '0' }] } });
-  await page.reload();
-  await expect(page.locator('.improvements')).toContainText('6개월 계획의 총 거래 금액');
-  await expect(page.locator('.improvements')).toContainText('매월 50,000원씩 6개월');
-  await expect(page.locator('.funding-summary')).toContainText('300,000원 투입');
-  await expect(page.locator('.improvements .trade-amount')).toHaveText('300,000원매수');
-  Object.assign((result.recommendation as unknown as { execution: Record<string, unknown> }).execution, { status: 'needs_input', reasons: ['ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED:ISA'] });
-  await page.reload();
-  await expect(page.locator('.funding-summary')).toContainText('계산에 사용한 추가 현금 300,000원');
-  await expect(page.locator('.funding-summary')).toContainText('매월 50,000원씩 6개월');
-  await expect(page.locator('.improvements .trade-amount')).toHaveCount(0);
-});
-
-test('a lump-sum cash deposit and execution-only trades appear in the single changes card', async ({ page }) => {
-  const result = structuredClone(report);
-  result.recommendation.actions = [];
-  Object.assign(result.recommendation, { execution: { status: 'ready', reasons: [], assumptions: [],
-    monthly_krw: null, months: null, additional_krw: '200000', required_additional_krw: null,
-    accounts: [{ account: '일반 계좌', deposit_krw: '200000', withdrawal_krw: '0' }],
-    rows: [{ instrument_id: 'US:QQQ', name: 'QQQ', account: '일반 계좌', before_krw: '400000', target_krw: '600000', buy_krw: '200000', sell_krw: '0', cash_used_krw: '0' }] } });
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'cash-deposit'));
-  await page.route('**/api/portfolio/analyses/cash-deposit', route => route.fulfill({ json: { id: 'cash-deposit', state: 'succeeded', result } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.improvements')).toHaveCount(1);
-  await expect(page.locator('.improvements .trade-amount')).toHaveText('200,000원매수');
-  await expect(page.locator('.funding-summary')).toHaveText('추가 현금 200,000원 투입');
-  await expect(page.locator('.improvements')).not.toContainText('현재 구성을 유지');
-  await expect(page.locator('.execution-plan')).toHaveCount(0);
-});
-
-for (const invalid of [undefined, '']) {
-  test(`weights remain percentages without usable trade amounts (${invalid})`, async ({ page }) => {
-    const result = structuredClone(report);
-    Object.assign(result.metrics, { total_krw: null });
-    Object.assign(result.recommendation, { total_krw: null });
-    result.recommendation.allocations.forEach(a => Object.assign(a, { amount_krw: null }));
-    Object.assign(result.recommendation.actions[0], { before_pct: 80, buy_krw: invalid, sell_krw: invalid, cash_used_krw: invalid });
-    await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'weight-only'));
-    await page.route('**/api/portfolio/analyses/weight-only', route => route.fulfill({ json: { id: 'weight-only', state: 'succeeded', result } }));
-    await page.goto('/portfolio/');
-    await expect(page.locator('.improvements .weight-change')).toHaveText('80%→60%');
-    await expect(page.locator('.improvements .trade-amount')).toHaveCount(0);
-    await expect(page.locator('.improvements')).not.toContainText('원');
-    await expect(page.locator('#report')).not.toContainText('NaN');
-  });
+  await expect(page.locator('.r8-hero')).toBeVisible();
 }
+const sections = (page: Page) => page.locator('.r8 > [data-analytics-section]').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-analytics-section')));
 
-test('the same ETF in different accounts keeps its own trade and cash is not a sale', async ({ page }) => {
-  const result = structuredClone(report);
-  result.recommendation.actions = ['ISA', '일반 계좌'].map(account => ({ ...report.recommendation.actions[0], instrument_id: 'KR:069500', name: 'KODEX 200', ticker: '069500', account }));
-  Object.assign(result.recommendation, { execution: { status: 'ready', reasons: [], assumptions: [],
-    monthly_krw: null, months: null, additional_krw: '0', required_additional_krw: null, accounts: [], rows: [
-      { instrument_id: 'KR:069500', name: 'KODEX 200', account: '일반 계좌', before_krw: '100000', target_krw: '70000', buy_krw: '0', sell_krw: '30000', cash_used_krw: '0' },
-      { instrument_id: 'KR:069500', name: 'KODEX 200', account: 'ISA', before_krw: '200000', target_krw: '250000', buy_krw: '50000', sell_krw: '0', cash_used_krw: '0' },
-      { instrument_id: 'CASH:KRW', name: '현금', account: '일반 계좌', before_krw: '0', target_krw: '30000', buy_krw: '0', sell_krw: '0', cash_used_krw: '-30000' },
-      { instrument_id: 'US:VT', name: 'VT', account: '일반 계좌', before_krw: '100000', target_krw: '100000', buy_krw: '0', sell_krw: '0', cash_used_krw: '0' },
-    ] } });
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'accounts'));
-  await page.route('**/api/portfolio/analyses/accounts', route => route.fulfill({ json: { id: 'accounts', state: 'succeeded', result } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.improvements .trade-amount')).toHaveText(['50,000원매수', '30,000원매도', '30,000원현금 확보', '보유 유지']);
-  await expect(page.locator('.improvements .action-note')).toHaveText(['ISA', '일반 계좌', '일반 계좌', '일반 계좌']);
-  const cash = page.locator('.improvements li').filter({ hasText: '현금' });
-  await expect(cash).toContainText('30,000원현금 확보');
-  await expect(cash.locator('[data-trade="sell"]')).toHaveCount(0);
-  await expect(page.locator('.improvements li').filter({ hasText: 'VT' })).toContainText('보유 유지');
+test('every customer gets the same seven cells in the same order, then the survey', async ({ page }) => {
+  await open(page, base());
+  // 칸 이름은 PostHog 칸별 체류 집계(계획 '측정' 표)의 열쇠라 바뀌면 전후 비교가 끊긴다.
+  expect(await sections(page)).toEqual(['answer', 'final', 'monthly', 'past', 'future', 'analysis', 'ask', 'survey']);
+  // 만족도 팝업·입력 보유 저장·면책 문구·겹침 통찰은 결과에서 빠졌다(사용자 결정).
+  await expect(page.locator('.report-feedback, .save-portfolio, .feedback-anchor')).toHaveCount(0);
+  await expect(page.locator('.r8')).not.toContainText('겹치는 종목');
+  await expect(page.locator('.r8')).not.toContainText('#####');
+  await expect(page.locator('.r8')).not.toContainText('| 종목');
+  await expect(page.locator('.r8')).not.toContainText('NaN');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.screenshot({ path: `test-results/result-v8-${test.info().project.name}.png`, fullPage: true });
 });
 
-test('an execution rejection explains funding or account constraints without blaming ratings', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'blocked-execution'));
-  await page.route('**/api/portfolio/analyses/blocked-execution', route => route.fulfill({ json: {
-    id: 'blocked-execution', state: 'succeeded', result: { ...report, recommendation: null,
-      optimization: { status: 'available', reason: 'EXECUTION_INFEASIBLE' } }
-  } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.ans:not(.lead)')).toContainText('매도·추가 자금 또는 계좌 한도를 만족하는 실행 방법');
-  await expect(page.locator('.ans:not(.lead)')).not.toContainText('종합 4점');
+test('an old report without verdict fields still answers, recommends and compares in money', async ({ page }) => {
+  await open(page, base());
+  const hero = page.locator('.r8-hero');
+  await expect(hero.locator('.r8-score-value b')).toHaveText('3.2');
+  await expect(hero.locator('.r8-grades [data-on]')).toHaveText('보통');
+  await expect(hero.locator('q')).toHaveText('이 구성으로 계속 들고 가도 돼요?');
+  // 판정은 실행표에서 정한다: 바뀌는 종목이 둘(반도체 팔고 S&P500 사기)이면 '다시 짜야 해요'.
+  await expect(hero.locator('.r8-headline')).toHaveText('다시 짜야 해요');
+  await expect(hero.locator('.r8-answer')).toHaveText('반도체 ETF만 S&P500으로 옮기세요.');
+  await expect(hero.locator('.r8-meta')).toHaveText('10월 23일 기준 · 종목 3개 · 1,250만 원 · 매달 30만 원');
+
+  const final = page.locator('[data-analytics-section=final]');
+  await expect(final.locator('.r8-rating b')).toHaveText('4.4');
+  const sold = final.locator('.r8-final-row').filter({ hasText: 'ACE' });
+  await expect(sold).toHaveAttribute('data-gone', 'true');
+  await expect(sold.locator('.r8-change')).toHaveText('250만 원→0원전부 팔기');
+  await expect(final.locator('.r8-final-row').filter({ hasText: '0원→' }).locator('.r8-change b')).toHaveText('250만 원');
+  await expect(final.locator('.r8-total b')).toHaveText('1,250만 원');
+  // 매수는 빨강, 매도는 파랑(디자인 시스템의 금융 색 규칙).
+  await expect(final.locator('.r8-change b[data-tone=buy]')).toHaveCSS('color', 'rgb(210, 32, 48)');
+  await expect(final.locator('.r8-change b[data-tone=sell]')).toHaveCSS('color', 'rgb(27, 100, 218)');
+
+  // 월 납입 배분(monthly_plan)이 없는 옛 보고서는 같은 칸에 비율로.
+  await expect(page.locator('[data-analytics-section=monthly] h2')).toHaveText('매달 30만 원은 이 비율로');
+  await expect(page.locator('[data-analytics-section=monthly] .r8-row-value')).toHaveText(['76.2%', '23.8%']);
+
+  // 100만 원 기준 기록을 고객 금액 1,250만 원에 맞춘다: 추천 1,875만 원, 지금 그대로 1,500만 원 → 375만 원 더.
+  const past = page.locator('[data-analytics-section=past]');
+  await expect(past.locator('.r8-eyebrow').first()).toHaveText('지난 3년, 이렇게 했다면');
+  await expect(past.locator('h2')).toHaveText('375만 원 더 벌었어요');
+  // 가장 크게 떨어졌을 때는 고점에서 저점까지 실제로 줄어든 돈: 지금 그대로 1,250만→875만 -375만 원(-30%, 더 잃는 쪽만 빨강),
+  // 추천 1,250만→1,000만 -250만 원(-20%). 다음 고점 뒤 낙폭이 아니라 가장 깊은 낙폭이어야 한다.
+  await expect(past.locator('.r8-loss-box b')).toHaveText(['-375만 원', '-250만 원']);
+  await expect(past.locator('.r8-loss-box span:last-child')).toHaveText(['-30.0%', '-20.0%']);
+  await expect(past.locator('.r8-loss-box[data-worse]')).toContainText('지금 그대로');
+  await expect(past.locator('.r8-strong')).toHaveText('추천이 125만 원 덜 잃었어요');
+
+  // 앞으로 내 돈: 1,250만 원 + 매달 30만 원, 연 5% 가정을 칸에 적는다.
+  const future = page.locator('[data-analytics-section=future]');
+  await expect(future).toContainText('연 5%');
+  await expect(future.locator('.r8-bar-col')).toHaveCount(3);
+
+  const analysis = page.locator('[data-analytics-section=analysis]');
+  await expect(analysis.locator('h3').first()).toHaveText('왜 3.2점이에요?');
+  await expect(analysis.locator('.r8-score-line').first()).toContainText('3.5');
+  await expect(analysis.locator('.r8-score-line').first()).toContainText('4.5');
+  await expect(page.locator('[data-analytics-section=ask] .r8-ask-row')).toHaveCount(4);
 });
 
-test('optional research gaps preserve a clear recommendation while unfinished questions remain visible', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'partial'));
-  await page.route('**/api/portfolio/analyses/partial', route => route.fulfill({ json: {
-    id: 'partial', state: 'succeeded', result: { ...report, completion: { status: 'partial',
-      tasks: [{ question: '어떻게 리밸런싱하나요?', status: 'partial', answer: '', missing: ['QUESTION_NOT_ANSWERED'] }],
-      missing_inputs: [], missing_research: [{ instrument_id: 'US:QQQ', field: 'holdings', status: 'stale' }] } }
-  } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.completion-summary')).toContainText('이 질문에 답하기 위한 확인이 남아 있어요.');
-  await expect(page.locator('.headrow').first()).toContainText('분석 결론');
-  await expect(page.locator('.recommendation-label')).toHaveText('추천 포트폴리오');
-  await page.getByText('추가로 확인할 상품 자료', { exact: true }).click();
-  await expect(page.locator('.completion-summary')).toContainText('Invesco QQQ · 보유내역 · 최신 자료 필요');
+test('an old report with several questions keeps every answer', async ({ page }) => {
+  // 예전 결과는 질문마다 답을 보였다. 맨 위 답 칸에는 첫 답만 들어가므로 나머지는 오르카의 분석에 남아야 한다.
+  await open(page, { ...base(), completion: { status: 'partial', missing_inputs: [], missing_research: [], tasks: [
+    { question: '첫 질문은요?', status: 'answered', answer: '첫 답이에요.', missing: [] },
+    { question: '두 번째 질문은요?', status: 'answered', answer: '두 번째 답이에요.', missing: [] },
+    { question: '세 번째 질문은요?', status: 'partial', answer: '', missing: ['ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED:ISA', '남은 납입 한도를 알려 주세요.'] }] } });
+  await expect(page.locator('.r8-answer')).toHaveText('첫 답이에요.');
+  const analysis = page.locator('[data-analytics-section=analysis]');
+  await expect(analysis.locator('h3')).toContainText(['두 번째 질문은요?', '세 번째 질문은요?']);
+  await expect(analysis).toContainText('두 번째 답이에요.');
+  await expect(analysis).not.toContainText('첫 답이에요.');
+  await expect(analysis).not.toContainText('ACCOUNT_CONTRIBUTION');
 });
 
-test('missing optional yields stay blank and input codes never appear to customers', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'optional-yields'));
-  await page.route('**/api/portfolio/analyses/optional-yields', route => route.fulfill({ json: {
-    id: 'optional-yields', state: 'succeeded', result: { ...report,
-      recommendation: { ...report.recommendation, expected_return_1y: null, dividend_yield_1y: null },
-      completion: { status: 'needs_input', tasks: [], missing_research: [],
-        missing_inputs: ['ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED:ISA', 'INTERNAL_UNKNOWN_REASON', '요청 조건 확인: NASDAQ_100 비중을 확인해 주세요'] } }
-  } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.completion-summary')).toContainText('ISA의 남은 납입 가능 금액');
-  await expect(page.locator('.completion-summary')).toContainText('NASDAQ_100 비중을 확인해 주세요');
-  await expect(page.locator('#report')).not.toContainText('ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED');
-  await expect(page.locator('#report')).not.toContainText('INTERNAL_UNKNOWN_REASON');
-  await expect(page.locator('.forecast')).toHaveCount(0);
-  await expect(page.locator('.recommendation-label')).toBeVisible();
+test('new server fields take priority over the fallbacks', async ({ page }) => {
+  const result = { ...base(), verdict: { kind: 'one', headline: '하나만 바꾸면 돼요' }, answer: '반도체 ETF 250만 원만 옮기세요. 지난 3년이었다면 287만 원을 더 벌었어요.',
+    constraint_results: [{ kind: 'no_leverage', status: 'kept', note: '' }, { kind: 'no_sell', status: 'substituted', note: '월 납입으로 줄여요' }],
+    final_note: '판 날 같은 계좌에서 바로 사세요.', period: { start: '2025-06-23', end: '2025-10-22', label: '상장 뒤 4개월' },
+    past: { rec_end_krw: '15370000', cur_end_krw: '14500000', rec_max_loss_krw: '2050000', cur_max_loss_krw: '2610000' },
+    analysis: [{ title: '왜 반도체 ETF만 바꿔요?', paragraphs: ['반도체 ETF는 크게 오르내려요.'], evidence: [{ source_id: 's1', quote: '반도체 -38%' }], limitations: [] }],
+    suggested_questions: ['채권을 조금 넣으면?', '나스닥100 하나만 사면?', '조금 더 공격적으로', '다시 바꿀 때는 언제?'] };
+  result.recommendation.execution.monthly_plan = [{ account: 'ISA', instrument_id: 'KR:360750', krw: '200000' }, { account: 'ISA', instrument_id: 'KR:379810', krw: '100000' }];
+  await open(page, result);
+  await expect(page.locator('.r8-headline [data-tone=warn]')).toHaveText('하나만 바꾸면 돼요');
+  await expect(page.locator('.r8-answer')).toHaveText(result.answer);
+  await expect(page.locator('.r8-final .r8-badge[data-tone=success]')).toHaveText('레버리지 빼기 · 지켰어요');
+  await expect(page.locator('.r8-final .r8-badge[data-tone=warning]')).toHaveText('갖고 있는 건 팔지 않기 · 대신했어요');
+  await expect(page.locator('.r8-callout')).toHaveText('판 날 같은 계좌에서 바로 사세요.');
+  await expect(page.locator('[data-analytics-section=monthly] h2')).toHaveText('매달 30만 원은 여기에');
+  await expect(page.locator('[data-analytics-section=monthly] .r8-row-value')).toHaveText(['20만 원', '10만 원']);
+  await expect(page.getByRole('button', { name: /매달 넣는 날 알림 받기/ })).toBeVisible();
+  // 기록이 짧으면 머리말이 기간을 숨기지 않는다(계획 '위험: 짧은 기간').
+  await expect(page.locator('[data-analytics-section=past] .r8-eyebrow').first()).toHaveText('상장 뒤 4개월, 이렇게 했다면');
+  await expect(page.locator('[data-analytics-section=past] h2')).toHaveText('87만 원 더 벌었어요');
+  // 요약(past)의 기간과 다른 옛 기록으로는 그래프를 그리지 않는다 — 제목과 그래프 숫자가 어긋나면 안 된다.
+  await expect(page.locator('.r8-past-chart')).toHaveCount(0);
+  await expect(page.locator('[data-analytics-section=analysis] h3')).toHaveText(['왜 반도체 ETF만 바꿔요?']);
+  await expect(page.locator('.r8-ask-row')).toHaveText(result.suggested_questions);
 });
 
-test('missing allocation weights are distinguished from missing market prices', async ({ page }) => {
-  let reason = 'CURRENT_WEIGHTS_REQUIRED';
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'specific-reason'));
-  await page.route('**/api/portfolio/analyses/specific-reason', route => route.fulfill({ json: {
-    id: 'specific-reason', state: 'succeeded', result: { ...report, recommendation: null,
-      optimization: { status: 'unavailable', reason } }
-  } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.ans:not(.lead)')).toContainText('종목별 평가금액 또는 보유 비중');
-  reason = 'NO_COMMON_PRICE_HISTORY';
+test('an old multi-month plan says its target includes money still to be added', async ({ page }) => {
+  // 8차 전 실행표는 추가 자금·여러 달 납입을 목표 금액에 넣었다. 안내가 없으면 목표 금액을 지금 할 거래로 읽는다.
+  const result = base();
+  Object.assign(result.recommendation.execution, { status: 'conditional', additional_krw: '3000000', monthly_krw: '500000', months: 6 });
+  await open(page, result);
+  await expect(page.locator('.r8-final .r8-callout')).toHaveText('추천 금액에는 새로 넣을 300만 원이 들어 있어요. 매달 50만 원씩 6개월 넣어 맞추는 계획이에요.');
+});
+
+test('adding money in the same proportions is not a rebuild', async ({ page }) => {
+  // 옛 실행표는 돈을 더 넣으면 모든 종목 금액이 늘었다. 비중이 같으면 '이대로 가도 돼요'여야 한다.
+  const result = base();
+  result.recommendation.execution.rows = [row('KR:360750', 'TIGER 미국S&P500', 'ISA', 5000000, 5500000), row('KR:379810', 'KODEX 미국나스닥100', 'ISA', 5000000, 5500000)];
+  await open(page, result);
+  await expect(page.locator('.r8-headline')).toHaveText('이대로 가도 돼요');
+});
+
+test('selling part of a holding into cash is a change, not keep', async ({ page }) => {
+  // 현금으로 돌리라는 계획을 '이대로 가도 돼요'로 말하면 실행표와 판정이 모순된다.
+  const result = base();
+  result.recommendation.execution.rows = [row('KR:360750', 'TIGER 미국S&P500', 'ISA', 1000000, 500000), row('CASH:KRW', '현금', 'ISA', 0, 500000)];
+  await open(page, result);
+  await expect(page.locator('.r8-headline')).toHaveText('하나만 바꾸면 돼요');
+});
+
+test('a requested scenario calculation is shown instead of the five-percent assumption', async ({ page }) => {
+  // 고객이 '연 7%면 10년 뒤 얼마?'처럼 물어 서버가 계산한 표는 결과에서 사라지면 안 된다(추천 없는 계산 전용 보고서 포함).
+  await open(page, { ...base(), recommendation: null, scenarios: { status: 'available', principal_krw: '10000000', monthly_krw: '300000', assumptions: ['매달 말에 넣는다고 놓고 계산했어요.'],
+    rows: [{ annual_return_pct: '7', years: 10, paid_krw: '46000000', future_krw: '71500000' }] } });
+  const future = page.locator('[data-analytics-section=future]');
+  await expect(future.locator('h2')).toHaveText('물어보신 계산');
+  await expect(future.locator('.r8-list-row')).toContainText('연 7% · 10년 뒤');
+  await expect(future.locator('.r8-row-value')).toHaveText('7,150만 원');
+  await expect(future).not.toContainText('연 5%');
+});
+
+test('a first-time investor sees Orca instead of a score and compares with cash', async ({ page }) => {
+  const result = base();
+  result.current_evaluation = evaluation(null, null);
+  result.recommendation.historical_performance.baseline_kind = 'new_cash';
+  result.recommendation.execution.rows = [row('CASH:KRW', '현금', 'ISA', 12500000, 0), row('KR:360750', 'TIGER 미국S&P500', 'ISA', 0, 12500000)];
+  await open(page, result, { question: '', horizon: '10년 이상', holdings: [{ name: '현금', account: 'ISA', amount_krw: '12500000', kind: 'cash', instrument_id: 'CASH:KRW' }] });
+  await expect(page.locator('.r8-hero-orca')).toBeVisible();
+  await expect(page.locator('.r8-score')).toHaveCount(0);
+  await expect(page.locator('.r8-headline')).toHaveText('이렇게 시작하세요');
+  await expect(page.locator('.r8-hero q')).toHaveText('이대로 가도 될까요?');
+  await expect(page.locator('.r8-meta')).toContainText('처음 시작');
+  await expect(page.locator('[data-analytics-section=past] h2')).toHaveText('현금보다 625만 원 더 벌었어요');
+  await expect(page.locator('[data-analytics-section=past] .r8-loss-box').first()).toContainText('현금');
+});
+
+test('weights without amounts stay percentages and never invent money', async ({ page }) => {
+  const result = base();
+  result.metrics.total_krw = null; result.recommendation.total_krw = null;
+  result.recommendation.execution = undefined;
+  result.recommendation.allocations.forEach((a: any) => { a.amount_krw = null; });
+  await open(page, result);
+  await expect(page.locator('.r8-final .r8-row-value')).toHaveText(['64%', '20%', '16%']);
+  await expect(page.locator('.r8-final .r8-total')).toHaveCount(0);
+  await expect(page.locator('[data-analytics-section=past]')).toHaveCount(0);
+  await expect(page.locator('[data-analytics-section=future]')).toHaveCount(0);
+  await expect(page.locator('.r8')).not.toContainText('NaN');
+});
+
+test('a withheld recommendation still shows the final cell with the current holdings and the reason', async ({ page }) => {
+  await open(page, { ...base(), recommendation: null, optimization: { status: 'available', reason: 'CUSTOMER_CONSTRAINT_NOT_SATISFIED', selected_candidate_id: null } });
+  await expect(page.locator('.r8-headline')).toHaveText('이번에는 추천을 만들지 못했어요');
+  await expect(page.locator('[data-analytics-section=final]')).toContainText('TIGER 미국S&P500');
+  await expect(page.locator('.r8-callout')).toContainText('고르신 조건을 모두 지키는 구성을 찾지 못했어요.');
+  expect(await sections(page)).toEqual(['answer', 'final', 'analysis', 'ask', 'survey']);
+});
+
+test('very large amounts and enlarged text do not overflow the phone width', async ({ page }) => {
+  const result = base();
+  result.recommendation.execution.rows[0] = row('KR:360750', 'TIGER 미국S&P500', 'ISA', 1234567890123, 1234567890123);
+  await open(page, result);
+  const size = () => page.locator('.r8-answer').evaluate(el => parseFloat(getComputedStyle(el).fontSize));
+  const before = await size();
+  await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+  // 고객이 글자를 키우면 결과 글도 커져야 한다(고정 px 이면 그대로라 확대가 무시된다).
+  expect(await size()).toBeGreaterThan(before * 1.5);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(page.locator('.r8-final-row').first().locator('.r8-row-value')).toHaveText('12,345억 6,789만 123원');
+});
+
+test('a broken saved survey step falls back to the first question instead of breaking the result', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-survey:r8', 'constructor'));
+  await open(page, base());
+  await expect(page.locator('[data-analytics-section=survey] h3')).toContainText('얼마나 반영했나요?');
+});
+
+test('the survey asks one question at a time, asks why only when worry grew, and never returns', async ({ page }) => {
+  await open(page, base());
+  const survey = page.locator('[data-analytics-section=survey]');
+  await survey.getByRole('button', { name: '어느 정도 반영했어요' }).click();
+  await expect(survey.locator('h3')).toContainText('고민은 어떻게 달라졌나요?');
+  await expect(survey.locator('h3')).toBeFocused();
+  await survey.getByRole('button', { name: '늘었어요' }).click();
+  await expect(survey.locator('h3')).toHaveText('어떤 점 때문에 고민이 늘었나요?');
+  await survey.getByRole('button', { name: '몰랐던 문제를 알게 됐어요' }).click();
+  await expect(survey.getByRole('button', { name: '몰랐던 문제를 알게 됐어요' })).toHaveAttribute('aria-pressed', 'true');
+  await survey.getByRole('button', { name: '보내기' }).click();
+  await expect(survey).toContainText('답해 주셔서 고마워요');
+  // 분석 하나에 한 번: 다시 열면 설문 칸이 없다.
   await page.reload();
-  await expect(page.locator('.ans:not(.lead)')).toContainText('겹치는 가격 이력');
-  await expect(page.locator('.ans:not(.lead)')).not.toContainText('평가금액 또는 보유 비중');
+  await expect(page.locator('.r8-hero')).toBeVisible();
+  await expect(page.locator('[data-analytics-section=survey]')).toHaveCount(0);
 });
 
-test('a newly listed ETF displays both series over their actual common period', async ({ page }) => {
-  const history = { ...report.recommendation.historical_performance,
-    basis: '2026-07-07 ~ 2026-10-09 · 공통 자료 기간 · 100만 원을 넣었다면 (원)',
-    points: [{ date: '2026-07-07', recommended: 1000000, current: 1000000 },
-      { date: '2026-10-09', recommended: 1100000, current: 950000 }] };
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'short-history'));
-  await page.route('**/api/portfolio/analyses/short-history', route => route.fulfill({ json: {
-    id: 'short-history', state: 'succeeded', result: { ...report,
-      recommendation: { ...report.recommendation, historical_performance: history } }
-  } }));
+test('a suggested question opens the chat and sends it as the customer question', async ({ page }) => {
+  const sent: string[] = [];
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'r8'));
+  await page.route('**/api/portfolio/**', async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/chat')) { sent.push(route.request().postDataJSON().question); return route.fulfill({ json: { id: 'c1', state: 'queued' } }); }
+    if (path.endsWith('/chats')) return route.fulfill({ json: { limit: 5, items: [] } });
+    if (path.endsWith('/analyses/r8')) return route.fulfill({ json: { id: 'r8', state: 'succeeded', input: { question: 'q', horizon: '', holdings: [] }, result: { ...base(), suggested_questions: ['채권을 조금 넣으면?', 'b', 'c', 'd'] } } });
+    return route.fulfill({ json: {} });
+  });
   await page.goto('/portfolio/');
-  await expect(page.getByRole('img', { name: '2026-07-07부터 2026-10-09까지 추천 구성과 현재 구성의 과거 성과' })).toBeVisible();
-  await expect(page.locator('.report-history figcaption')).toHaveText(history.basis);
-  await expect(page.locator('.history-line')).toHaveCount(2);
-  await expect(page.locator('.report-history')).not.toContainText('최근 1년');
+  await page.getByRole('button', { name: '채권을 조금 넣으면?' }).click();
+  await expect(page.locator('dialog.chat-screen')).toBeVisible();
+  expect(sent).toEqual(['채권을 조금 넣으면?']);
 });
 
-test('new portfolio history labels its hypothetical cash baseline explicitly', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'new-cash'));
-  await page.route('**/api/portfolio/analyses/new-cash', route => route.fulfill({ json: {
-    id: 'new-cash', state: 'succeeded', result: { ...report,
-      recommendation: { ...report.recommendation, historical_performance: {
-        ...report.recommendation.historical_performance, baseline_kind: 'new_cash' } } }
-  } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.history-legend')).toContainText('투자 전 현금');
-  await expect(page.locator('.history-values')).toContainText('투자 전 현금');
-  await expect(page.locator('.history-legend')).not.toContainText('현재 구성');
-});
-
-test('a cash-only current portfolio does not hide the recommended total and three star ratings', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'cash-rating'));
-  await page.route('**/api/portfolio/analyses/cash-rating', route => route.fulfill({ json: { id: 'cash-rating', state: 'succeeded', result: {
-    ...report, current_evaluation: { ...evaluation, scores: null, overall: null }
-  } } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.recommended-rating b')).toHaveText('4');
-  await expect(page.locator('.recommended-axes .stars')).toHaveCount(3);
-  await expect(page.locator('.recommended-axes .pending-score')).toHaveCount(0);
-});
-
-test('older scores are not relabeled as having used the restored rubric', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'old-rubric'));
-  await page.route('**/api/portfolio/analyses/old-rubric', route => route.fulfill({ json: { id: 'old-rubric', state: 'succeeded', result: {
-    ...report, current_evaluation: { ...evaluation, rubric_version: undefined }
-  } } }));
-  await page.goto('/portfolio/');
-  await page.getByLabel('판단 기준 보기').click();
-  await expect(page.locator('.crit')).toContainText('이전 평가 기준');
-  await expect(page.locator('.crit')).not.toContainText('사용자의 선호는 점수에 넣지');
-});
-
-test('withholding a backtest winner below the rating threshold explains rating rather than missing prices', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'rating-withheld'));
-  await page.route('**/api/portfolio/analyses/rating-withheld', route => route.fulfill({ json: { id: 'rating-withheld', state: 'succeeded', result: {
-    ...report, recommendation: null, optimization: { status: 'available', reason: 'RATING_BELOW_MINIMUM', selected_candidate_id: null }
-  } } }));
-  await page.goto('/portfolio/');
-  await expect(page.getByText('검토한 후보 중 시장 주도성·수익성·안정성 평가의 추천 기준을 충족한 구성을 찾지 못했어요.')).toBeVisible();
-  await expect(page.locator('.portfolio-hero')).toHaveCount(0);
-});
-
-test('customer constraint rejection is not mislabeled as a low star rating', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'customer-constraint'));
-  await page.route('**/api/portfolio/analyses/customer-constraint', route => route.fulfill({ json: {
-    id: 'customer-constraint', state: 'succeeded', result: { ...report, recommendation: null,
-      optimization: { status: 'available', candidates: [{}], reason: 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' } }
-  } }));
-  await page.goto('/portfolio/');
-  await expect(page.getByText('검토한 후보에서 요청하신 필수 조건을 모두 만족하는 구성을 찾지 못했어요.')).toBeVisible();
-  await expect(page.getByText('검토한 후보 중 시장 주도성·수익성·안정성 평가의 추천 기준을 충족한 구성을 찾지 못했어요.')).toHaveCount(0);
-});
-
-test('an unselected recommendation does not invent a constraint or rating failure', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'withheld'));
-  await page.route('**/api/portfolio/analyses/withheld', route => route.fulfill({ json: {
-    id: 'withheld', state: 'succeeded', result: { ...report, recommendation: null,
-      optimization: { status: 'available', candidates: [{}], reason: 'RECOMMENDATION_WITHHELD' } }
-  } }));
-  await page.goto('/portfolio/');
-  await expect(page.getByText('이번 분석에서 추천 구성을 완성하지 못했어요.')).toBeVisible();
-  await expect(page.getByText('검토한 후보에서 요청하신 필수 조건을 모두 만족하는 구성을 찾지 못했어요.')).toHaveCount(0);
-});
-
-test('a batch without eligible candidates publishes analysis without a recommendation or invented chart', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'no-match'));
-  await page.route('**/api/portfolio/analyses/no-match', route => route.fulfill({ json: { id: 'no-match', state: 'succeeded',
-    result: { ...report, schema_version: 3, recommendation: null, optimization: { status: 'no_match', selected_candidate_id: null } } } }));
-  await page.goto('/portfolio/');
-  await expect(page.getByText('이번 비교에서 추천 기준을 충족한 구성을 찾지 못했어요.')).toBeVisible();
-  await expect(page.locator('.portfolio-hero')).toHaveCount(0);
-  await expect(page.locator('.performance')).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: '핵심 평가 정리' })).toBeVisible();
-});
-
-test('recommended holdings and final amounts are distinct from input; opinion then outlook then free insights', async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'v2'));
-  await page.route('**/api/portfolio/analyses/v2', route => route.fulfill({ json: { id: 'v2', state: 'succeeded', result: report } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.portfolio-hero')).toContainText('QQQ');
-  await expect(page.locator('.portfolio-hero')).not.toContainText('이전 VOO');
-  await expect(page.locator('.account-plan td')).toHaveText(['60만 원', '40만 원']);
-  await expect(page.locator('.recommended-rating b')).toHaveText('4');
-  await expect(page.locator('.portfolio-hero .axes li')).toHaveCount(3);
-  await expect(page.locator('.portfolio-hero .axes .stars')).toHaveCount(3);
-  await expect(page.locator('.portfolio-hero .axes .stars').first()).toBeVisible();
-  await page.getByLabel('판단 기준 보기').click();
-  await expect(page.locator('.crit')).toContainText('시가총액 상위 기업');
-  await expect(page.locator('.crit')).toContainText('나쁜 해의 하락 폭');
-  await expect(page.locator('.crit')).not.toContainText('AI 정성 평가');
-  await page.getByLabel('판단 기준 보기').click();
-  await expect(page.locator('.forecast b')).toHaveText(['-3%', '0.8%']);
-  await expect(page.locator('.evaluation__part h4')).toHaveText(['최종 투자 의견과 실행할 행동', '앞으로의 전망', '결혼 자금은 따로 확보하세요']);
-  await expect(page.locator('.evaluation__part').first().locator('li')).toHaveCount(3);
-  await expect(page.locator('.donut-enter circle').first()).toHaveCSS('animation-name', 'donut-reveal');
-  await expect(page.locator('.report-history')).not.toHaveClass(/is-visible/);
-  await page.locator('.report-history').scrollIntoViewIfNeeded();
-  await expect(page.locator('.report-history')).toHaveClass(/is-visible/);
-  await expect(page.locator('.report-history svg text').last()).toHaveCSS('text-anchor', 'end');
-  expect((await page.locator('polyline.b').getAttribute('points'))!.split(' ')).toHaveLength(366);
-  await page.getByRole('slider', { name: '과거 성과 날짜 선택' }).fill('100');
-  await expect(page.locator('.history-values')).toContainText('1,010,000원');
-  await expect(page.locator('.history-values')).toContainText('990,000원');
-  await page.emulateMedia({ reducedMotion: 'reduce' });
-  await expect(page.locator('.donut-enter circle').first()).toHaveCSS('animation-name', 'none');
-  await expect(page.locator('.history-line').first()).toHaveCSS('stroke-dashoffset', '0px');
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  await page.screenshot({ path: `test-results/report-v2-${test.info().project.name}.png`, fullPage: true });
-});
-
-test('unknown budget and unconnected history do not fabricate amounts or performance', async ({ page }) => {
-  const unavailable = structuredClone(report);
-  Object.assign(unavailable.recommendation, { total_krw: null, expected_return_1y: null, dividend_yield_1y: null, historical_performance: null });
-  unavailable.recommendation.allocations.forEach(h => Object.assign(h, { amount_krw: null }));
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'unknown'));
-  await page.route('**/api/portfolio/analyses/unknown', route => route.fulfill({ json: { id: 'unknown', state: 'succeeded', result: unavailable } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.account-plan td')).toHaveText(['60%', '40%']);
-  await expect(page.locator('.forecast')).toHaveCount(0);
-  await expect(page.locator('.performance')).toContainText('검증된 자료 부족');
-  await expect(page.locator('.performance svg')).toHaveCount(0);
-});
-
-test('neutral report surfaces keep financial labels readable at both viewport sizes', async ({ page }) => {
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'design'));
-  await page.route('**/api/portfolio/analyses/design', route => route.fulfill({ json: { id: 'design', state: 'succeeded', result: report } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.portfolio-hero')).toBeVisible();
-  for (const selector of ['.recommendation-label', '.forecast span', '.forecast b', '.account-plan td strong', '.recommended-axes b', '.recommended-axes em', '.rating-denominator', '.history-date', '.report-chat button']) {
-    const ratio = await page.locator(selector).first().evaluate(node => {
-      const luminance = (color: string) => {
-        const channels = color.match(/[\d.]+/g)!.slice(0, 3).map(v => Number(v) / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
-        return channels[0] * .2126 + channels[1] * .7152 + channels[2] * .0722;
-      };
-      let surface: Element | null = node;
-      while (surface && getComputedStyle(surface).backgroundColor === 'rgba(0, 0, 0, 0)') surface = surface.parentElement;
-      const a = luminance(getComputedStyle(node).color), b = luminance(getComputedStyle(surface!).backgroundColor);
-      return (Math.max(a, b) + .05) / (Math.min(a, b) + .05);
-    });
-    expect(ratio, selector).toBeGreaterThanOrEqual(4.5);
-  }
-  await expect(page.locator('.portfolio-hero')).toHaveCSS('background-image', 'none');
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-});
-
-test('legacy index values keep their units and account transfers stay identifiable', async ({ page }) => {
-  const legacy = structuredClone(report);
-  Object.assign(legacy.recommendation.historical_performance, { currency: undefined, interval: undefined, basis: '기준 100 지수', points: [
-    { date: '2022-01-01', recommended: 100, current: 100 }, { date: '2024-01-01', recommended: 110, current: 108 }] });
-  legacy.recommendation.actions = [
-    { ...legacy.recommendation.actions[0], name: '국내 ETF', instrument_id: 'KR:069500', ticker: '069500', account: 'ISA', before_pct: 50, after_pct: 0, action: '줄이기' },
-    { ...legacy.recommendation.actions[0], name: '국내 ETF', instrument_id: 'KR:069500', ticker: '069500', account: '일반 계좌', before_pct: 0, after_pct: 50, action: '늘리기' }];
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'legacy-chart'));
-  await page.route('**/api/portfolio/analyses/legacy-chart', route => route.fulfill({ json: { id: 'legacy-chart', state: 'succeeded', result: legacy } }));
-  await page.goto('/portfolio/');
-  await expect(page.locator('.history-values')).toContainText('110');
-  await expect(page.locator('.history-values')).not.toContainText('원');
-  await expect(page.locator('.action-note')).toHaveText(['ISA', '일반 계좌']);
+test('the type card row appears only when the server picked a known type', async ({ page }) => {
+  await open(page, { ...base(), type_card: { key: 'lev', stats: [['레버리지', '45%'], ['주로 담은 것', '나스닥 2배']] } });
+  await page.getByRole('button', { name: /내 투자 유형 카드 만들기/ }).click();
+  const sheet = page.locator('dialog.r8-type-sheet');
+  await expect(sheet.locator('.r8-type-name b')).toHaveText('레버리지 질주형');
+  await expect(sheet.locator('.r8-type-stats')).toContainText('45%');
+  // 금액은 카드에 나오지 않는다.
+  await expect(sheet.locator('.r8-type-card')).not.toContainText('원');
+  await sheet.getByRole('button', { name: '유형 카드 닫기' }).click();
+  await expect(sheet).toBeHidden();
+  await page.unrouteAll({ behavior: 'wait' });
+  await open(page, { ...base(), type_card: { key: 'unknown-type' } });
+  await expect(page.getByRole('button', { name: /내 투자 유형 카드 만들기/ })).toHaveCount(0);
 });
 
 test('interrupted analysis exposes saved work without publishing its draft recommendation', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'interrupted'));
   await page.route('**/api/portfolio/analyses/interrupted', route => route.fulfill({ json: {
-    id: 'interrupted', state: 'failed', failure: 'WORKER_INTERRUPTED', result: { partial_report: { ...report,
+    id: 'interrupted', state: 'failed', failure: 'WORKER_INTERRUPTED', result: { partial_report: { ...base(),
       completion: { status: 'partial', tasks: [{ question: '매수 금액은 얼마인가요?', status: 'partial', answer: '납입 가능 금액을 확인하고 있어요.', missing: [] }],
         missing_research: [], missing_inputs: ['현재 납입 가능 금액을 확인해야 해요.'] } } },
   } }));
   await page.goto('/portfolio/');
-  await page.getByText('중단 전 작성된 분석 보기').click();
-  await expect(page.locator('.completion-summary')).toBeVisible();
+  await expect(page.getByRole('heading', { name: /끝내지 못했어요/ })).toBeVisible();
+  await expect(page.getByText('횟수는 줄지 않았어요')).toBeVisible();
+  await page.getByText('멈추기 전까지 본 것').click();
   await expect(page.locator('.completion-summary')).toContainText('매수 금액은 얼마인가요?');
   await expect(page.locator('.completion-summary')).toContainText('현재 납입 가능 금액을 확인해야 해요.');
   await expect(page.locator('.portfolio-hero')).toHaveCount(0);
