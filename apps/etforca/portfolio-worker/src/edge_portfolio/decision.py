@@ -171,13 +171,13 @@ def chip_status(rule, weights, request, catalog, rows=()):
         if not no_sell or held is None:
             return 'fail'
         kept = {key for key in held if key != 'CASH:KRW'}
-        cap = next((chip.value for chip in request.constraints if chip.kind == 'max_positions'), None)
-        if cap is not None and len(kept) >= cap:
-            # 종목 수 칩 때문에 새 종목도 더할 수 없다. 현금은 가진 같은 성격 종목에만 더 넣을 수 있다
-            owned = sum((held[key] for key in kept if has(key, trait)), Decimal(0))
-            best = owned + (held.get('CASH:KRW', 0) if owned else 0)
-        else:
-            best = 100 - sum((held[key] for key in kept if not has(key, trait)), Decimal(0))
+        chips = {chip.kind: chip.value for chip in request.constraints}
+        def blocked(key):  # 다른 칩 때문에 더 살 수 없는 종목
+            return ('kr_listed_etf_only' in chips and catalog.get(key, {}).get('market') != 'KR'
+                    or 'no_leverage' in chips and has(key, 'leverage'))
+        # 현금은 새 종목(종목 수 칩이 허락할 때)이나 더 살 수 있는 가진 같은 성격 종목에만 넣을 수 있다
+        room = 'max_positions' not in chips or len(kept) < chips['max_positions'] or any(has(key, trait) and not blocked(key) for key in kept)
+        best = sum((held[key] for key in kept if has(key, trait)), Decimal(0)) + (held.get('CASH:KRW', 0) if room else 0)
         return 'substituted' if best < minimum else 'fail'
     # max_positions: 서로 다른 종목 수(현금 제외). 팔지 않기로 이미 n개를 넘게 가졌으면 새 종목만 더하지 않는다
     count = sum(value > 0 for key, value in weights.items() if key != 'CASH:KRW')

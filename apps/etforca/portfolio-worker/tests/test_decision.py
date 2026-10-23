@@ -380,3 +380,24 @@ def test_no_sell_with_a_position_cap_substitutes_bonds_instead_of_blocking_every
     # 종목 수 제한이 없으면 현금 10%로 채권 10%를 채울 수 있으니 대신하지 않는다
     free = holder([('KR:360750', 900), ('CASH:KRW', 100)], [{'kind': 'no_sell'}, {'kind': 'some_bonds'}])
     assert chip_checks(free, [('KR:360750', 100)])['some_bonds'] == 'fail'
+
+
+def test_bond_and_dividend_reachability_respects_the_other_buy_blocking_chips():
+    # 미국 배당 ETF는 국내 상장 칩 때문에, 새 배당 ETF는 종목 수 칩 때문에 더 못 산다. 배당은 대신 지켜야 추천이 남는다
+    catalog = {**CATALOG, 'US:SCHD': {'name': 'Schwab US Dividend Equity ETF', 'market': 'US', 'kind': 'etf'}}
+    req = holder([('US:SCHD', 400), ('KR:360750', 400), ('CASH:KRW', 200)],
+                 [{'kind': 'no_sell'}, {'kind': 'max_positions', 'value': 2}, {'kind': 'dividend'}, {'kind': 'kr_listed_etf_only'}])
+    decision = validate_decision(Decision(), req, catalog)
+    checks = check_constraints(decision, [{'instrument_id': 'US:SCHD', 'weight_pct': 40}, {'instrument_id': 'KR:360750', 'weight_pct': 60}], req, catalog)
+    assert {check['kind']: check['status'] for check in checks}['dividend'] == 'substituted'
+
+
+def test_followup_principal_only_funding_keeps_the_saved_monthly_amount():
+    # 원금만 다시 말한 후속 질문이 저장된 월 납입을 지우면 매달 칸이 사라진다
+    from edge_portfolio.decision import Funding
+    from edge_portfolio.execution import resolve_funding
+    from edge_portfolio.followup import FollowupInput
+    req = FollowupInput(holdings=[], planning=True, horizon='10년 이상', monthly_krw=300000,
+                        question='처음\n\n후속 질문: 원금은 1000만원입니다', funding_questions=['처음', '원금은 1000만원입니다'])
+    principal = Decision(funding=Funding(source='원금은 1000만원입니다', principal_krw=10000000))
+    assert resolve_funding(req, principal)['monthly_krw'] == 300000

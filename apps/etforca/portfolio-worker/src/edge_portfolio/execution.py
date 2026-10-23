@@ -157,7 +157,8 @@ def funding_assumptions(funding):
 def uses_text_funding(request, decision=None):
     """8차: 입력 칸의 월 납입(monthly_krw)이 글 해석보다 먼저다. 후속 질문이 납입을 새로 정하면(검증된 funding) 그 값이 먼저다.
     후속 질문은 이 경우 저장된 funding 을 물려받지 않는다(agent.py)."""
-    return getattr(request, 'monthly_krw', None) is None or bool(getattr(request, 'funding_questions', None) and decision and decision.funding is not None)
+    return getattr(request, 'monthly_krw', None) is None or bool(getattr(request, 'funding_questions', None) and decision and decision.funding is not None
+                                                                   and decision.funding.monthly_krw is not None)
 
 
 def resolve_funding(request, decision=None):
