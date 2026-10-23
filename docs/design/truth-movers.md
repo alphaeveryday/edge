@@ -83,7 +83,8 @@ etforca.com/truth/today. 오늘 급등한 국내 주식마다 **왜 올랐는지
     "reasons": ["공시 없이 보도자료로만 알렸다", "상대 기관 원문이 없다"],
     "sources": [{"title": "…", "publisher": "…", "url": "https://…", "kind": "news", "publishedAt": "2026-10-22"}],
     "impact": 21.0,
-    "judgedAt": "2026-10-22T11:03:10+09:00"
+    "judgedAt": "2026-10-22T11:03:10+09:00",
+    "marks": [{"at": "10:35", "tag": "pending", "price": 5100}, {"at": "11:03", "tag": "false", "price": 5480}]
   }]
 }
 ```
@@ -91,6 +92,8 @@ etforca.com/truth/today. 오늘 급등한 국내 주식마다 **왜 올랐는지
 - `tradeValue` 단위는 억원(누적 거래대금), `series` 는 오늘 5분 간격 `[시각, 종가]`.
 - `pricedAt` 은 가격(Yahoo)의 마지막 체결 시각이다. 화면은 '가격 HH:MM 기준'으로 쓴다(이 필드가 없는 예전 파일은 `generatedAt`).
 - `logo` 는 사이트 기준 상대 경로이고 없으면 null(화면이 글자 배지로 대신한다).
+- `marks` 는 그날 판정 이력(최근 12개)이다. `price` 는 판정 세션에 보여 준 가격(Naver 순위 가격 — 넥스트레이드 체결이 섞일 수 있어 Yahoo 그래프 선에서 조금 떨어질 수 있다)이고, 이력을 남기기 전 판정은 null 이다. 화면은 그래프에 판정마다 점을 찍는다(price 가 null 이면 그 시각까지의 마지막 시세, 필드가 없는 예전 파일은 `judgedAt` 하나).
+- `sources[].publishedAt` 은 게시일(날짜만)이다. 없으면 화면은 판정한 날을 '확인'으로 적는다.
 
 ## 5. 비밀값
 

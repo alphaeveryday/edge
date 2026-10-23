@@ -52,7 +52,12 @@
           }
         }},
         "impact": {"type": "number", "minimum": 0},
-        "judgedAt": {"type": ["string", "null"]}
+        "judgedAt": {"type": ["string", "null"]},
+        "marks": {"type": "array", "maxItems": 12, "description": "오늘 판정 이력(그래프의 점). price 는 판정 때 본 가격, null 이면 그 시각 시세로 찍는다",
+                  "items": {"type": "object", "additionalProperties": false, "required": ["at", "tag", "price"], "properties": {
+                    "at": {"type": "string", "pattern": "^\\d{2}:\\d{2}$"},
+                    "tag": {"enum": ["promising", "false", "pending"]},
+                    "price": {"type": ["number", "null"], "exclusiveMinimum": 0}}}}
       }
     }
   }
