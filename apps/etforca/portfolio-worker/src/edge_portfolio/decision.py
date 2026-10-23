@@ -6,13 +6,11 @@ from pydantic import Field, model_validator
 
 from .catalog import traits
 from .contracts import Section, StrictModel
-from .execution import allocate_amounts, plan_execution
+from .execution import CHIP_MIN_PCT, allocate_amounts, plan_execution
 
 # 8차: 지킬 조건은 입력의 칩(request.constraints)뿐이다. 글은 참고로만 모델에 넘긴다.
 CHIP_LABELS = {'no_leverage': '레버리지 빼기', 'some_bonds': '채권도 조금', 'dividend': '배당 받기',
                'max_positions': '종목 {n}개 이하', 'no_sell': '갖고 있는 건 팔지 않기', 'kr_listed_etf_only': '국내 상장 ETF만'}
-# 칩의 뜻(계약 기본값 1번): 채권 ETF 합계 10% 이상, 배당 ETF 합계 50% 이상
-CHIP_MIN_PCT = {'some_bonds': ('bond', Decimal(10)), 'dividend': ('dividend', Decimal(50))}
 # 후보·추천이 통과한 검사 결과. substituted 는 '팔지 않기'를 먼저 지키느라 다른 칩을 대신 지킨 것이다
 ACCEPTED = {'pass', 'model_review', 'substituted'}
 
@@ -67,6 +65,8 @@ class Decision(StrictModel):
     missing_inputs: list[str] = Field(default_factory=list, max_length=10)
     funding_text: str = Field(default='', max_length=100)
     funding: Funding | None = None
+    # 후속 질문의 견주기('QLD를 팔면?')가 이번 계산에서만 풀어 보는 칩. 저장된 입력의 칩은 그대로 남는다
+    relaxed_constraints: list[Literal['no_leverage', 'some_bonds', 'dividend', 'max_positions', 'no_sell', 'kr_listed_etf_only']] = Field(default_factory=list, max_length=6)
 
     @model_validator(mode='after')
     def meaningful_missing_inputs(self):
@@ -106,6 +106,9 @@ def validate_decision(decision, request, catalog, *, question_text=None):
             # Preserve all customer context without asking the model to copy it again.
             decision.questions = [original]
     decision.constraints = chip_constraints(request)  # 모델이 글에서 뽑은 조건은 버린다
+    if not getattr(request, 'funding_questions', None):
+        decision.relaxed_constraints = []  # 첫 분석은 고른 칩을 모두 지킨다. 견주기는 후속 질문에서만
+    decision.constraints = [rule for rule in decision.constraints if rule.kind not in decision.relaxed_constraints]
     if decision.funding is None and decision.funding_text and decision.funding_text not in text:
         raise ValueError('CUSTOMER_FUNDING_SOURCE: quote explicit additional money, not current holdings')
     if decision.funding is not None:

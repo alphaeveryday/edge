@@ -250,6 +250,9 @@ def resolve_text_funding(request, decision=None):
     return funding
 
 
+# 칩의 뜻(계약 기본값 1번): 채권 ETF 합계 10% 이상, 배당 ETF 합계 50% 이상
+CHIP_MIN_PCT = {'some_bonds': ('bond', Decimal(10)), 'dividend': ('dividend', Decimal(50))}
+
 # 2026년 연 납입 한도(만 원). 남은 한도를 입력하지 않으면 이 한도에서 올해 낸 돈을 뺀다.
 # 연금저축과 IRP 는 합쳐서 1,800만 원이다
 ANNUAL_LIMIT_MAN = {'ISA': 2000, '연금저축': 1800, 'IRP': 1800}
@@ -330,12 +333,20 @@ def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no
     # 매달 넣는 돈은 칩이 막은 종목(레버리지, 국내 상장이 아닌 것)에 넣지 않는다. 팔지 않기로 남긴 레버리지는 이렇게 몫이 줄어든다
     chips = {chip.kind for chip in getattr(request, 'constraints', [])}
     no_monthly = set(stocks)
-    if chips & {'no_leverage', 'kr_listed_etf_only'}:
+    if chips & {'no_leverage', 'kr_listed_etf_only', *CHIP_MIN_PCT}:
         from .catalog import instruments, traits
+        found = {key[0]: traits(instruments().get(key[0], {})) for key in target}
         for key in target:
-            item = instruments().get(key[0], {})
-            if 'no_leverage' in chips and 'leverage' in traits(item) or 'kr_listed_etf_only' in chips and item.get('market') != 'KR':
+            if 'no_leverage' in chips and 'leverage' in found[key[0]] or 'kr_listed_etf_only' in chips and instruments().get(key[0], {}).get('market') != 'KR':
                 no_monthly.add(key[0])
+        # 팔지 않기 때문에 채권·배당 비중을 못 채웠으면(substituted) 매달 넣는 돈을 그 종목에만 넣어 채운다
+        short = set()
+        for kind, (trait, minimum) in CHIP_MIN_PCT.items():
+            keys = {key[0] for key in target if trait in found[key[0]]} - no_monthly
+            if kind in chips and 'no_sell' in chips and keys and sum(w for key, w in target.items() if key[0] in keys) < minimum:
+                short |= keys
+        if short:
+            no_monthly |= {key[0] for key in target} - short
     def monthly_plan(deposits):
         if monthly and not any(key[0] != 'CASH:KRW' and key[0] not in no_monthly for key in target) \
                 and any(key[0] != 'CASH:KRW' and key[0] not in stocks for key in target):
