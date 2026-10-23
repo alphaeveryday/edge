@@ -291,3 +291,13 @@ def test_calculation_answers_may_use_verified_scenario_amounts():
                                'rows': [{'annual_return_pct': '5', 'years': 10, 'future_krw': '93470527', 'paid_krw': '70000000'}]},
                  'answer': '10년 뒤 9,347만 원이에요. 넣은 돈 7,000만 원에 2,347만 원이 불어나요.'}
     assert answer_amount_error(published, request) is None
+
+
+@pytest.mark.parametrize('answer', ['천만 원을 사세요.', '1억 천만 원이 돼요.', '백만 원을 더 넣으세요.'])
+def test_amounts_with_an_omitted_one_are_checked(answer):
+    # '천만 원'처럼 앞의 1을 빼고 쓴 금액도 검사를 피하지 못한다
+    request = holder([('KR:069500', 5000000, '일반 계좌')])
+    published = {'recommendation': {'execution': {'rows': [row('KR:069500', 5000000, 5000000)]}}, 'answer': answer}
+    assert answer_amount_error(published, request)
+    published['answer'] = '5백만 원은 그대로예요.'
+    assert answer_amount_error(published, request) is None
