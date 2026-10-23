@@ -18,16 +18,17 @@ import os
 from edge_truth_agent.runner import _now
 from edge_truth_agent.store import ABSENT, ConflictError, open_store
 
+from .markets import KR, US, Market
 from .quotes import Quotes
-from .research import LEASE_KEY, finish_doc, impact, pick
+from .research import finish_doc, impact, pick
 
 log = logging.getLogger(__name__)
-LAUNCH_KEY = "state/watch-launch.json"  # 마지막으로 띄운 시각·종목 — 띄운 태스크가 잠금을 잡기 전(약 1분)에 또 띄우지 않는다
+LAUNCH_KEY = KR.launch_key  # 마지막으로 띄운 시각·종목(시장마다 Market.launch_key) — 띄운 태스크가 잠금을 잡기 전(약 1분)에 또 띄우지 않는다
 RELAUNCH = timedelta(minutes=6)         # 새 종목이 더 생겼을 때 다시 띄우는 간격
 SAME_AGAIN = timedelta(minutes=30)      # 같은 종목만 남아 있으면(공시 조회 실패 등) 이만큼 기다린다
 
 
-def launch_research() -> str:
+def launch_research(market: Market = KR) -> str:
     """같은 태스크 정의로 '새 종목만' 조사 실행을 띄운다(설정은 태스크 환경변수 TRUTH_RUN_*)."""
     import boto3
     env = os.environ
@@ -35,44 +36,47 @@ def launch_research() -> str:
         cluster=env["TRUTH_RUN_CLUSTER"], taskDefinition=env["TRUTH_RUN_TASK"], launchType="FARGATE", count=1,
         networkConfiguration={"awsvpcConfiguration": {"subnets": env["TRUTH_RUN_SUBNETS"].split(","),
                                                       "securityGroups": [env["TRUTH_RUN_SG"]], "assignPublicIp": "DISABLED"}},
-        overrides={"containerOverrides": [{"name": env["TRUTH_RUN_CONTAINER"], "command": ["run", "--new"]}]})
+        overrides={"containerOverrides": [{"name": env["TRUTH_RUN_CONTAINER"],
+                                           "command": ["run", "--new"] + (["--market", market.key] if market is not KR else [])}]})
     if res.get("failures") or not res.get("tasks"):
         raise RuntimeError(f"조사 실행을 띄우지 못했습니다: {res.get('failures')}")
     return res["tasks"][0]["taskArn"]
 
 
-def watch_new(store_uri: str, *, quotes: Quotes | None = None, now: datetime | None = None, launch=launch_research) -> dict:
+def watch_new(store_uri: str, *, quotes: Quotes | None = None, now: datetime | None = None, launch=None, market: Market = KR) -> dict:
     """새 급등주가 있으면 조사 실행을 띄우고 보고를 돌려준다. :20~:37 에는 띄우지 않는다 — 새 종목만 실행은 기동·세션 한 묶음·전제 검증까지
     15분 남짓 걸리고, 정각 조사(:35)는 태스크가 뜬 뒤에야 잠금을 잡는다. 잠금이 겹치면 정각 조사가 통째로 건너뛰어진다
-    (새 종목은 정각 조사가 함께 본다)."""
-    now, quotes = now or _now(), quotes or Quotes()
+    (새 종목은 정각 조사가 함께 본다). 시각은 그 시장 현지 시각이다(미국 정각 조사도 뉴욕 :35)."""
+    now, quotes = (now or _now()).astimezone(market.tz), quotes or Quotes()
+    launch = launch or (lambda: launch_research(market))
     today = now.date().isoformat()
     store = open_store(store_uri)
     report: dict = {"new": [], "launched": None, "failed": []}
     try:
-        if quotes.session_day() != now.strftime("%Y%m%d"):
+        if quotes.session_day(market.exchanges[0]) != now.strftime("%Y%m%d"):
             report["skipped"] = "그날 체결이 없습니다."
             return report
-        risers = pick(quotes)
+        risers = pick(quotes, market)
     except Exception as error:  # noqa: BLE001 - 순위 장애는 실패로 남긴다(가격 갱신은 이미 끝났다)
         report["failed"].append(f"순위: {str(error)[:200]}")
         return report
-    raw, _ = store.get(f"state/movers-seen/{today}.json")
+    raw, _ = store.get(market.seen_key(today))
     seen = json.loads(raw) if raw else {}
     report["new"] = new = [m.code for m in risers if m.code not in seen]
     if not new:
         return report
-    if (now.hour, now.minute) >= (15, 30):  # 장 마감 뒤 순위에는 넥스트레이드(시간외) 체결이 섞인다 — 정규장 급등만 본다
+    # 국내는 장 마감 뒤 순위에 넥스트레이드(시간외) 체결이 섞이고, 미국은 마감 뒤 새 급등이 없다 — 정규장 급등만 본다
+    if now.strftime("%H%M") >= market.close:
         report["skipped"] = "정규장이 끝났습니다."
         return report
     if 20 <= now.minute < 38:
         report["skipped"] = "정각 조사 직전이라 그때 함께 봅니다."
         return report
-    raw, _ = store.get(LEASE_KEY)
+    raw, _ = store.get(market.lease_key)
     if raw and datetime.fromisoformat(json.loads(raw)["until"]) > now:
         report["skipped"] = "조사 실행이 돌고 있습니다."
         return report
-    raw, etag = store.get(LAUNCH_KEY)
+    raw, etag = store.get(market.launch_key)
     if raw:
         last = json.loads(raw)
         wait = SAME_AGAIN if set(last["codes"]) >= set(new) else RELAUNCH
@@ -80,25 +84,26 @@ def watch_new(store_uri: str, *, quotes: Quotes | None = None, now: datetime | N
             report["skipped"] = "방금 조사 실행을 띄웠습니다."
             return report
     try:  # 같은 분에 겹친 다른 감시가 먼저 기록했으면 그쪽이 띄운다
-        store.put(LAUNCH_KEY, json.dumps({"at": now.isoformat(), "codes": new}).encode(), if_match=etag or ABSENT)
+        store.put(market.launch_key, json.dumps({"at": now.isoformat(), "codes": new}).encode(), if_match=etag or ABSENT)
     except ConflictError:
         report["skipped"] = "다른 감시가 먼저 띄웠습니다."
         return report
     try:
         report["launched"] = launch()
     except Exception as error:  # noqa: BLE001 - 실패로 남기고 기록을 지워 다음 분에 다시 띄운다
-        store.delete(LAUNCH_KEY)
+        store.delete(market.launch_key)
         report["failed"].append(f"띄우기: {str(error)[:200]}")
     return report
 
 
-def refresh_prices(store_uri: str, publish_uri: str, *, quotes: Quotes | None = None, now: datetime | None = None) -> dict:
+def refresh_prices(store_uri: str, publish_uri: str, *, quotes: Quotes | None = None, now: datetime | None = None,
+                   market: Market = KR) -> dict:
     """한 번 고치고 보고를 돌려준다. 오늘 게시가 없으면(장 시작 전·휴장일) 아무것도 하지 않는다."""
-    now, quotes = now or _now(), quotes or Quotes()
+    now, quotes = (now or _now()).astimezone(market.tz), quotes or Quotes()
     today, ymd = now.date().isoformat(), now.strftime("%Y%m%d")
     store, public = open_store(store_uri), open_store(publish_uri)
-    report: dict = {"mode": "prices", "date": today, "updated": [], "failed": [], "published": False}
-    key = f"movers/{today}.json"
+    report: dict = {"mode": "prices" + ("-us" if market is US else ""), "date": today, "updated": [], "failed": [], "published": False}
+    key = f"{market.data}/{today}.json"
     raw, etag = store.get(key)
     if raw is None:
         report["skipped"] = "오늘 게시한 급등주가 없습니다."
@@ -128,7 +133,7 @@ def refresh_prices(store_uri: str, publish_uri: str, *, quotes: Quotes | None = 
     except ConflictError:
         report["skipped"] = "조사 실행이 방금 새로 게시했습니다. 다음 분에 고칩니다."
         return report
-    public.put("movers/latest.json", body, cache_control="no-cache")
+    public.put(f"{market.data}/latest.json", body, cache_control="no-cache")
     public.put(key, body, cache_control="no-cache")
     report["published"] = True
     return report

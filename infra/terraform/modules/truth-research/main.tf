@@ -1,8 +1,9 @@
 # 오늘 오른 종목 조사 에이전트(truth-research) — truth-agent 와 같은 구조(pi 하네스 + DeepSeek, ECS Fargate 단발 태스크).
 # 장중 매시 :35 에 돈다(truth-agent 사건 갱신 :05 와 30분 어긋나게). 저장소 버킷·실행 키는 truth-agent 것을 함께 쓴다.
 #
-# 스케줄러 → ecs:RunTask(worker 클러스터). 태스크는 상승률 상위·5분 시세(Naver·Yahoo, 키 없음)·KIND 공시(키 없음)를 모으고,
-# 판정이 필요한 종목만 ACH 조사 세션을 연 뒤 랜딩 버킷 truth/data/movers/ 에 게시한다. 겹친 실행은 런타임 잠금이 막는다.
+# 스케줄러 → ecs:RunTask(worker 클러스터). 태스크는 상승률 상위·5분 시세(Naver·Yahoo, 키 없음)·공시(KIND·SEC, 키 없음)를 모으고,
+# 판정이 필요한 종목만 ACH 조사 세션을 연 뒤 랜딩 버킷 truth/data/movers/(미국 movers/us/) 에 게시한다. 겹친 실행은 런타임 잠금이 막는다.
+# 국내는 Asia/Seoul, 미국은 같은 태스크 정의를 --market us 로 America/New_York 스케줄에 돌린다(아래 aws_scheduler_schedule.us).
 data "aws_caller_identity" "current" {}
 
 locals {
@@ -132,6 +133,8 @@ resource "aws_ecs_task_definition" "this" {
       TRUTH_RUN_SUBNETS   = join(",", var.subnet_ids)
       TRUTH_RUN_SG        = aws_security_group.this.id
       TRUTH_RUN_CONTAINER = local.container_name
+      # 미국 공시(SEC EDGAR)는 연락처가 든 User-Agent 를 요구한다
+      TRUTH_SEC_CONTACT = var.sec_contact
     } : { name = k, value = v }]
     # truth-agent 와 같은 시크릿·같은 키
     secrets = [for key in ["DEEPSEEK_RESIST_NEWS_API_KEY", "EXA_API_KEY"] : {
@@ -231,6 +234,51 @@ resource "aws_scheduler_schedule" "prices" {
     retry_policy {
       maximum_event_age_in_seconds = 60
       maximum_retry_attempts       = 0
+    }
+  }
+}
+
+# 미국: 같은 태스크 정의를 --market us 로, 뉴욕 시간대(서머타임 자동)로 돌린다. 장중 매시 :35 조사 + 매분 가격 갱신·새 급등주 감시.
+# 공개 데이터는 truth/data/movers/us/, 상태는 저장소 state/us/ 에 따로 둔다(docs/design/truth-movers.md §6).
+locals {
+  us_schedules = {
+    run    = { name = "${var.name}-us", expression = var.us_schedule_expression, command = ["run", "--market", "us"], overrides = {}, max_age = 900, retries = 2 }
+    prices = { name = "${var.name}-us-prices", expression = var.us_prices_schedule_expression, command = ["prices", "--market", "us"], overrides = { Cpu = "256", Memory = "512" }, max_age = 60, retries = 0 }
+  }
+}
+
+resource "aws_scheduler_schedule" "us" {
+  for_each                     = local.us_schedules
+  name                         = each.value.name
+  state                        = var.schedule_state
+  schedule_expression          = each.value.expression
+  schedule_expression_timezone = "America/New_York"
+
+  flexible_time_window { mode = "OFF" }
+
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:ecs:runTask"
+    role_arn = aws_iam_role.scheduler.arn
+    input = jsonencode({
+      Cluster        = var.cluster_arn
+      TaskDefinition = aws_ecs_task_definition.this.arn
+      LaunchType     = "FARGATE"
+      NetworkConfiguration = {
+        AwsvpcConfiguration = {
+          Subnets        = var.subnet_ids
+          SecurityGroups = [aws_security_group.this.id]
+          AssignPublicIp = "DISABLED"
+        }
+      }
+      Overrides = merge(each.value.overrides, {
+        ContainerOverrides = [{ Name = local.container_name, Command = each.value.command }]
+      })
+    })
+
+    # 조사는 늦은 재시도가 다음 시각 실행과 겹칠 뿐이라 짧게, 매분 가격 갱신은 두지 않는다(국내와 같다)
+    retry_policy {
+      maximum_event_age_in_seconds = each.value.max_age
+      maximum_retry_attempts       = each.value.retries
     }
   }
 }

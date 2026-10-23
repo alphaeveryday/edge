@@ -1,7 +1,8 @@
-"""조사 에이전트 도구. 보기·찾기·웹 도구는 truth-agent 것을 그대로 쓰고, 공시(KIND)와 ACH 도구만 여기 둔다.
+"""조사 에이전트 도구. 보기·찾기·웹 도구는 truth-agent 것을 그대로 쓰고, 공시(국내 KIND · 미국 SEC)와 ACH 도구만 여기 둔다.
 
 규칙(코드가 강제):
-- 출처·증거는 이 세션에서 실제로 읽은 것(news-·web-·kind-)이나 첫 메시지의 공시 목록(kind-list)만 쓴다.
+- 출처·증거는 이 세션에서 실제로 읽은 것(news-·web-·공시 kind-·sec-)이나 첫 메시지의 공시 목록(kind-list·sec-list)만 쓴다.
+  공시 id 접두어는 종목의 시장으로 정한다(국내 kind · 미국 sec). 한 세션은 한 시장이다.
 - 가설·증거는 모델이 채우고, 점수·승자·태그·확신도는 코드(ach.decide)가 정한다.
 - 판정은 게시 형식(movers.schema.json)을 세션 안에서 통과해야 남는다.
 """
@@ -21,10 +22,12 @@ from edge_truth_agent.workspace import Workspace
 
 from . import ach
 from .kind import Kind, KindError, is_market_notice
+from .markets import US, of_exchange
+from .sec import Sec, SecError
 
 DISCLOSURE_READ_LIMIT = 8
 EVENT_KINDS = ("disclosure", "earnings", "contract", "policy", "news", "rumor", "unknown")
-LIST_ID = "kind-list"  # 첫 메시지의 공시·시장조치 목록 자체(무엇이 없었는지의 근거)
+LIST_ID = "kind-list"  # 첫 메시지의 공시·시장조치 목록 자체(무엇이 없었는지의 근거). 미국은 sec-list(_list_id)
 ITEM = json.loads((Path(__file__).with_name("movers.schema.json")).read_text(encoding="utf-8"))["$defs"]["item"]["properties"]
 _HID = re.compile(r"\b[HP]\d+\b")
 PREMISE_MAX = 4
@@ -34,14 +37,75 @@ def _mover(ws: Workspace) -> dict:
     return ws.mover() or {}
 
 
+def _us(ws: Workspace) -> bool:
+    return of_exchange(_mover(ws).get("market", "")) is US
+
+
+def _pre(ws: Workspace) -> str:
+    """이 세션의 공시 id 접두어: 국내 kind · 미국 sec."""
+    return "sec" if _us(ws) else "kind"
+
+
+def _list_id(ws: Workspace) -> str:
+    return f"{_pre(ws)}-list"
+
+
+def _is_disc(ws: Workspace, sid: str) -> bool:
+    """공시 id(목록 자체 포함)인가."""
+    return sid.startswith(_pre(ws) + "-")
+
+
+def _filing_of(ws: Workspace, sid: str) -> dict | None:
+    return next((f for f in _mover(ws).get("filings", []) if f"{_pre(ws)}-{f['acptno']}" == sid), None)
+
+
+# 미국 기관 원문 도메인. 공유 목록(truth-agent cases.OFFICIAL_HOSTS·DISCLOSURE_HOSTS)은 국내 기관만 있어
+# 미국 세션에서만 여기서 더 본다(truth-agent 사건 검증의 기준은 바꾸지 않는다)
+US_DISCLOSURE_HOSTS = ("sec.gov",)
+US_OFFICIAL_HOSTS = ("fda.gov", "clinicaltrials.gov", "ftc.gov", "justice.gov", "uscourts.gov", "uspto.gov", "defense.gov",
+                     "energy.gov", "nih.gov", "cms.gov", "federalregister.gov")
+# 법인 형태 접미어만 뗀다(Holdings·Group 은 이름의 일부로 남긴다 — 'Arm Holdings' 를 'Arm' 으로 줄이면 'farm' 에도 걸린다)
+_LEGAL_SUFFIX = re.compile(r"[\s,.]+(inc|corp|corporation|co|company|ltd|limited|plc|llc|lp|n\.?v|s\.?a|ag|se)\.?$", re.I)
+
+
+def _under(host: str, domains: tuple[str, ...]) -> bool:
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def _web_kind(ws: Workspace, snap: dict) -> str:
+    """웹 원문의 출처 종류. 미국 세션은 미국 기관 도메인도 공시·공식으로 본다."""
+    url = snap.get("url", "")
+    kind = snap.get("kind") or host_kind(url) or "web"
+    if _us(ws) and kind not in ("official", "disclosure") and "\\" not in url and not any(ch.isspace() for ch in url):
+        host = host_of(url)
+        kind = "disclosure" if _under(host, US_DISCLOSURE_HOSTS) else "official" if _under(host, US_OFFICIAL_HOSTS) else kind
+    return kind
+
+
+def _mentions(ws: Workspace, text: str) -> bool:
+    """원문이 이 회사를 다루는가. 국내는 예전처럼 종목명이 들어 있는지 본다. 미국은 영어 원문이라 영문명(법인 형태를 뗀 것)을
+    단어 단위로 찾는다 — 여러 단어면 대소문자 무시, 한 단어면 대소문자까지 맞아야 한다('Target' 회사 ≠ 'target' 이라는 낱말).
+    ponytail: 한 단어 이름이 문장 첫머리 일반 낱말과 겹치면 여전히 걸린다 — 문제 되면 티커·CIK 동반 확인으로 좁힌다."""
+    m = _mover(ws)
+    if m.get("name") and m["name"] in text:
+        return True
+    eng = str(m.get("nameEng") or "").strip()
+    while (core := _LEGAL_SUFFIX.sub("", eng).strip()) != eng:
+        eng = core
+    if not _us(ws) or len(eng) < 3:
+        return False
+    return bool(re.search(rf"\b{re.escape(eng)}\b", text, re.I if " " in eng else 0))
+
+
 # ── 공시 ──
 def read_disclosure(ws: Workspace, args: dict) -> str:
-    """첫 메시지 목록의 공시·시장조치 원문을 읽는다. 읽은 공시는 kind-<접수번호> 로 증거·출처에 쓴다."""
-    acpt = str(args.get("acptno", "")).strip().removeprefix("kind-")
+    """첫 메시지 목록의 공시·시장조치 원문을 읽는다. 읽은 공시는 kind-<접수번호>(미국 sec-<접수번호>)로 증거·출처에 쓴다."""
+    pre, us = _pre(ws), _us(ws)
+    acpt = str(args.get("acptno", "")).strip().removeprefix(f"{pre}-")
     item = next((f for f in _mover(ws).get("filings", []) if f["acptno"] == acpt), None)
     if item is None:
-        raise ToolError("첫 메시지의 공시 목록에 있는 접수번호(acptno, 14자리)를 쓰세요.")
-    sid = f"kind-{acpt}"
+        raise ToolError("첫 메시지의 공시 목록에 있는 접수번호(acptno, 목록 첫 칸)를 쓰세요.")
+    sid = f"{pre}-{acpt}"
     if not ws.snapshot(sid):
         with ws.lock():
             state = ws.state
@@ -50,10 +114,11 @@ def read_disclosure(ws: Workspace, args: dict) -> str:
             state["disclosureReads"] = state.get("disclosureReads", 0) + 1
             ws.save_state(state)
         try:
-            text = Kind().document(acpt)
-        except KindError as error:
+            text = Sec().document(item["url"]) if us else Kind().document(acpt)
+        except (KindError, SecError) as error:
             raise ToolError(f"{error} 제목과 보도로 판단하세요.") from error
-        ws.save_snapshot(sid, {"id": sid, "url": item["url"], "title": item["title"], "publisher": item["submitter"] or "한국거래소 KIND",
+        label = "미국 SEC EDGAR" if us else "한국거래소 KIND"
+        ws.save_snapshot(sid, {"id": sid, "url": item["url"], "title": item["title"], "publisher": item["submitter"] or label,
                                "publishedDate": item["at"][:10], "kind": "disclosure", "text": text, "full": True})
     _mark_viewed(ws, sid)
     snap = ws.snapshot(sid)
@@ -65,14 +130,17 @@ def read_disclosure(ws: Workspace, args: dict) -> str:
 # ── 출처 ──
 def _source(ws: Workspace, sid: str) -> dict:
     """증거 출처 id → 공개 출처 항목."""
-    if sid == LIST_ID:
+    if sid == _list_id(ws):
         m = _mover(ws)
+        if _us(ws):
+            return {"title": f"{m.get('name', '')} 최근 공시 목록", "publisher": "미국 SEC EDGAR", "url": Sec.list_url(m.get("code", "")),
+                    "kind": "disclosure", "publishedAt": ws.state["today"]}
         return {"title": f"{m.get('name', '')} 최근 공시·시장조치 목록", "publisher": "한국거래소 KIND",
                 "url": f"https://kind.krx.co.kr/disclosure/details.do?method=searchDetailsMain&repIsuSrtCd=A{m.get('code', '')}",
                 "kind": "disclosure", "publishedAt": ws.state["today"]}
-    if sid.startswith(("web-", "kind-")):
+    if sid.startswith("web-") or _is_disc(ws, sid):
         snap = ws.snapshot(sid) or {}
-        kind = "disclosure" if sid.startswith("kind-") else (snap.get("kind") or host_kind(snap.get("url", "")) or "web")
+        kind = "disclosure" if _is_disc(ws, sid) else _web_kind(ws, snap)
         return {"title": snap.get("title") or snap.get("url", ""), "publisher": snap.get("publisher") or host_of(snap.get("url", "")) or "웹",
                 "url": snap.get("url", ""), "kind": kind, "publishedAt": _kst_day(snap.get("publishedDate")) or snap.get("publishedDate") or None}
     article = next((a for a in ws.inbox() if f"news-{a['id'][:16]}" == sid), None)
@@ -86,18 +154,18 @@ def _source(ws: Workspace, sid: str) -> dict:
 
 
 def _usable(ws: Workspace, sid: str) -> bool:
-    return sid == LIST_ID or sid in set(ws.state["viewed"])
+    return sid == _list_id(ws) or sid in set(ws.state["viewed"])
 
 
 def _primary(ws: Workspace, sid: str) -> bool:
     """사건을 확인해 주는 원문인가: 이 회사가 낸 공시 본문, 또는 이 회사를 다룬 공식·공시 웹 원문.
     공시 목록(없음의 근거)·거래소 시장조치·다른 회사 공시는 아니다."""
-    name = _mover(ws).get("name", "")
     snap = ws.snapshot(sid) or {}
-    if sid.startswith("kind-"):
-        item = next((f for f in _mover(ws).get("filings", []) if f"kind-{f['acptno']}" == sid), None)
+    if _is_disc(ws, sid):
+        item = _filing_of(ws, sid)
         return item is not None and not is_market_notice(item)
-    return sid.startswith("web-") and snap.get("kind") in ("official", "disclosure") and bool(name) and name in snap.get("text", "")
+    text = snap.get("text", "")
+    return sid.startswith("web-") and _web_kind(ws, snap) in ("official", "disclosure") and _mentions(ws, text)
 
 
 def _original(ws: Workspace, sid: str) -> bool:
@@ -105,8 +173,8 @@ def _original(ws: Workspace, sid: str) -> bool:
     기관(정부·거래소·법원 등) 웹 원문. 보도는 몇 건이든 원 출처를 옮긴 것이라 아니다."""
     if _primary(ws, sid):
         return True
-    if sid.startswith("kind-") and sid != LIST_ID:
-        return any(f"kind-{f['acptno']}" == sid for f in _mover(ws).get("filings", []))
+    if _is_disc(ws, sid) and sid != _list_id(ws):
+        return _filing_of(ws, sid) is not None
     return _official(ws, sid)
 
 
@@ -114,13 +182,12 @@ def _official(ws: Workspace, sid: str) -> bool:
     """기관(정부·거래소·법원 등) 도메인 웹 원문."""
     if not sid.startswith("web-"):
         return False
-    snap = ws.snapshot(sid) or {}
-    return (snap.get("kind") or host_kind(snap.get("url", ""))) == "official"
+    return _web_kind(ws, ws.snapshot(sid) or {}) == "official"
 
 
 def _same_doc(ws: Workspace, sid: str) -> str | None:
     """같은 문서 판별 키(매체 + 경로). news-·web- 로 두 번, www·m 주소로 두 번 넣는 것을 한 건으로 본다."""
-    if sid == LIST_ID:
+    if sid == _list_id(ws):
         return None
     try:
         url = _source(ws, sid)["url"]
@@ -164,12 +231,12 @@ def add_evidence(ws: Workspace, args: dict) -> str:
         raise ToolError("먼저 set_hypotheses 로 가설을 세우세요.")
     sid = str(args.get("source_id", "")).strip()
     if not _usable(ws, sid):
-        raise ToolError(f"'{sid}' 는 이 세션에서 읽지 않은 출처입니다. 읽은 news-·web-·kind- id 나 공시 목록 {LIST_ID} 를 쓰세요.")
+        raise ToolError(f"'{sid}' 는 이 세션에서 읽지 않은 출처입니다. 읽은 news-·web-·{_pre(ws)}- id 나 공시 목록 {_list_id(ws)} 를 쓰세요.")
     note, weight = str(args.get("note", "")).strip(), str(args.get("weight", ""))
     if not 4 <= len(note) <= 200 or weight not in ach.WEIGHTS:
         raise ToolError("note 는 4~200자, weight 는 high(공시·공식 원문)·mid(구체적 보도)·low(단일·불분명 보도) 중 하나입니다.")
-    if weight == "high" and not (sid == LIST_ID or sid.startswith("kind-") or _primary(ws, sid)):
-        raise ToolError("high 는 공시(kind-…·kind-list)나 이 회사를 다룬 공식 원문만 붙입니다. 보도는 mid·low 입니다.")
+    if weight == "high" and not (_is_disc(ws, sid) or _primary(ws, sid)):
+        raise ToolError(f"high 는 공시({_pre(ws)}-…·{_list_id(ws)})나 이 회사를 다룬 공식 원문만 붙입니다. 보도는 mid·low 입니다.")
     same = _same_doc(ws, sid)
     if any(e["source"] == sid or (same and _same_doc(ws, e["source"]) == same) for e in table["evidence"]):
         raise ToolError(f"'{sid}' 는 이미 증거로 넣은 문서입니다. 한 문서는 증거 한 건입니다(같은 보도자료를 옮긴 기사도 한 건으로 셉니다).")
@@ -210,8 +277,8 @@ def set_premises(ws: Workspace, args: dict) -> str:
         # 확인은 회사 공시 본문·공식 원문·기관 원문만 — 거래소 투자주의·경고 같은 시장조치는 회사 주장을 확인해 주지 않는다(반박 근거로는 쓴다)
         if status == "confirmed" and not any(_primary(ws, s) or _official(ws, s) for s in srcs):
             raise ToolError(f"전제 {i}: 원문 확인(confirmed)은 공시·회사·기관 원문이 있어야 합니다. 보도만 있으면 unverified 나 estimate 입니다.")
-        if status == "refuted" and not any(s == LIST_ID or _original(ws, s) for s in srcs):
-            raise ToolError(f"전제 {i}: 반박(refuted)은 원문, 또는 공시 의무가 있는 사건이 공시 목록({LIST_ID})에 없다는 근거가 있어야 합니다.")
+        if status == "refuted" and not any(s == _list_id(ws) or _original(ws, s) for s in srcs):
+            raise ToolError(f"전제 {i}: 반박(refuted)은 원문, 또는 공시 의무가 있는 사건이 공시 목록({_list_id(ws)})에 없다는 근거가 있어야 합니다.")
         if status == "estimate" and not srcs:
             raise ToolError(f"전제 {i}: 추정·전망(estimate)은 그 추정이 나온 출처를 붙입니다.")
         out.append({"id": f"P{i}", "text": text, "about": about, "core": core, "status": status, "spreadAsFact": as_fact,
@@ -252,7 +319,8 @@ def set_verdict(ws: Workspace, args: dict) -> str:
     # 전제 검증 단계에서 전제를 넣었으면 전제로 판정한다(핵심 전제의 출처가 공개 출처 맨 앞)
     premises = ws.state.get("premises") or []
     psrc = [s for p in sorted(premises, key=lambda p: not p["core"]) for s in p["sources"]]
-    primary = {s for s in sources if s != LIST_ID and _primary(ws, s)}
+    list_id = _list_id(ws)
+    primary = {s for s in sources if s != list_id and _primary(ws, s)}
     try:
         cited = {s: _source(ws, s) for s in dict.fromkeys(sources + psrc)}
         if premises:
@@ -260,7 +328,7 @@ def set_verdict(ws: Workspace, args: dict) -> str:
         else:
             # 매체 수는 보도만 센다(공시 목록·시장조치·원문은 매체가 아니다)
             publishers = {s: _outlet(c["url"]) or c["publisher"] for s, c in cited.items()
-                          if s in sources and s != LIST_ID and s not in primary and not s.startswith("kind-")}
+                          if s in sources and s != list_id and s not in primary and not _is_disc(ws, s)}
             decision = ach.decide(table["hypotheses"], table["evidence"], primary=primary, publishers=publishers)
     except ach.AchError as error:
         raise ToolError(str(error)) from error

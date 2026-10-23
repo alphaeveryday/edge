@@ -11,8 +11,9 @@ def _obj(props: dict, required: list[str]) -> dict:
 
 
 SPECS = [
-    ("read_disclosure", "첫 메시지 목록의 공시·시장조치 원문을 읽는다(한국거래소 KIND). 읽은 것은 kind-<접수번호> 로 증거에 쓴다. 세션당 8회.",
-     _obj({"acptno": {**_STR, "description": "접수번호 14자리"}}, ["acptno"])),
+    ("read_disclosure", "첫 메시지 목록의 공시·시장조치 원문을 읽는다(국내 한국거래소 KIND · 미국 SEC EDGAR, 미국 8-K·6-K 는 첨부 보도자료까지). "
+     "읽은 것은 kind-<접수번호>(미국 sec-<접수번호>)로 증거에 쓴다. 세션당 8회.",
+     _obj({"acptno": {**_STR, "description": "목록 첫 칸의 접수번호(국내 14자리 · 미국 0001234567-26-000001 꼴)"}}, ["acptno"])),
     ("view_news", "기사(news-…)나 가져온 웹 원문(web-…) 한 건을 읽는다. 증거로 쓰려면 먼저 읽어야 한다.",
      _obj({"id": {**_STR, "description": "news-… 또는 web-… id"}}, ["id"])),
     ("search_news", "빅카인즈 뉴스 수집분(제목·요약, 최근 21일)에서 찾는다. 낱말을 모두 포함한 기사를 최신순으로.",
@@ -26,7 +27,7 @@ SPECS = [
           "kind": {"type": "string", "enum": list(KINDS), "description": " · ".join(f"{k}: {v}" for k, v in KINDS.items())}},
          ["text", "kind"])}}, ["hypotheses"])),
     ("add_evidence", "증거 한 건과 가설마다의 일치(C)·어긋남(I)·무관(N)을 넣는다. 무게: high 공시·공식 원문, mid 구체적 보도, low 단일·불분명 보도.",
-     _obj({"source_id": {**_STR, "description": "읽은 news-·web-·kind- id, 또는 공시 목록 자체는 kind-list"},
+     _obj({"source_id": {**_STR, "description": "읽은 news-·web-·kind-(미국 sec-) id, 또는 공시 목록 자체는 kind-list(미국 sec-list)"},
            "note": {**_STR, "description": "이 증거가 말하는 것 한 줄 (예: '10/7~21 회사 공시 없음')"},
            "weight": {"type": "string", "enum": ["high", "mid", "low"]},
            "marks": {"type": "object", "additionalProperties": {"type": "string", "enum": list(MARKS)},
