@@ -12,7 +12,7 @@ def test_issue_phrase_correction_preserves_kolmar_condition_and_rejects_bad_evid
         return response
     parent, screen, issue = revisions(initial)
     async def revision(**kwargs):
-        search = kwargs['call']('search_news_threads', {})['tool_run_id']
+        search = kwargs['call']('list_events', {})['tool_run_id']
         edit = {'field': 'issue_detail.items.sentence', 'item_number': 1,
                 'old_text': '코스맥스 발표일은 미정', 'new_text': '코스맥스 발표일은 11월 5일',
                 'tool_run_ids': [search]}

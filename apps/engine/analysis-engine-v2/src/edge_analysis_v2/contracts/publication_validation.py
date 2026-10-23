@@ -6,6 +6,7 @@ SENTIMENTS = {"positive", "neutral", "negative"}
 
 
 from edge_analysis_v2.contracts.outlook_limits import violations
+from edge_analysis_v2.contracts.response_errors import ResponseError, validate
 
 
 def text(value):
@@ -124,3 +125,16 @@ def outlook(features, body):
                                       or sentiment not in {"positive", "neutral", "negative"}):
             raise ValueError("Invalid update sentiment")
         references(item["tool_run_ids"])
+
+def movement_selection(response, existing=()):
+    """Only immutable same-day predecessors and this response's candidates are selectable."""
+    existing = set(existing)
+    candidates = [item['candidate_id'] for item in response['new_items']]
+    validate(candidates, {'type': 'array', 'uniqueItems': True}, '$.new_items[*].candidate_id')
+    for index, candidate in enumerate(candidates):
+        if candidate in existing:
+            raise ResponseError(f'$.new_items[{index}].candidate_id', 'conflict', 'an ID distinct from existing item IDs', candidate)
+    allowed = sorted(existing | set(candidates))
+    for index, selected in enumerate(response['selected_item_ids']):
+        if selected not in allowed:
+            raise ResponseError(f'$.selected_item_ids[{index}]', 'enum', allowed, selected)

@@ -3,7 +3,6 @@ import asyncio
 import json
 
 import pytest
-from jsonschema import ValidationError
 
 from edge_analysis_v2.agent.runner import run_model
 from test_model_runner import ResultMessage, SCHEMA
@@ -51,7 +50,7 @@ def test_evidence_corrections_still_use_same_output_contract(tmp_path):
 
 
 def test_invalid_fields_cannot_be_recorded_as_success(tmp_path):
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValueError, match="Final response failed after repair"):
         invoke(tmp_path, [{'wrong': 'value'}])
     assert not (tmp_path/'response.json').exists()
     assert (tmp_path/'measurement.json').is_file()
@@ -73,3 +72,14 @@ def test_unknown_effort_fails_before_model_calls(tmp_path):
 def test_conflicting_research_settings_fail_before_spending_tokens(tmp_path, settings):
     with pytest.raises(ValueError, match='structured_only'):
         invoke(tmp_path, [{'summary': 'ok'}], **settings)
+
+
+def test_schema_defect_is_repaired_before_domain_check(tmp_path):
+    checked = []
+    result, queries = invoke(tmp_path, [{'summary': 123}, {'summary': 'fixed'}],
+                             check=lambda value: checked.append(value))
+    issue = json.loads(queries[1])
+    assert issue['path'] == '$.summary'
+    assert issue['rule'] == 'type' and issue['expected'] == 'string' and issue['actual'] == 123
+    assert checked == [{'summary': 'fixed'}]
+    assert result == {'summary': 'fixed'}
