@@ -1,6 +1,6 @@
 # 오늘의 급등주 해석 (truth-movers)
 
-etforca.com/truth/today. 오늘 급등한 국내 주식마다 **왜 올랐는지**를 공시·보도와 대조해(경쟁가설 분석, ACH) 판정하고 공개한다. 목적은 투자자가 기관·회사의 과장이나 근거 없는 테마에 당하지 않게 하는 것이다.
+etforca.com/truth/today. 오늘 급등한 국내·미국 주식마다 **왜 올랐는지**를 공시·보도와 대조해(경쟁가설 분석, ACH) 판정하고 공개한다. 목적은 투자자가 기관·회사의 과장이나 근거 없는 테마에 당하지 않게 하는 것이다.
 
 조사 에이전트 `apps/etforca/truth-research` 가 돈다. 기만 사건 검증 에이전트 `truth-agent`([truth-service.md](truth-service.md))와 같은 구조다(pi 하네스 + DeepSeek, 종목당 세션 하나, ECS Fargate 단발 태스크). 이미지·태스크·스케줄은 따로이고, 저장소 버킷·실행 키(DeepSeek·Exa)·뉴스 말뭉치·웹 도구는 truth-agent 것을 함께 쓴다. 화면은 truth-web `today.html`.
 
@@ -107,4 +107,27 @@ etforca.com/truth/today. 오늘 급등한 국내 주식마다 **왜 올랐는지
 
 ## 5. 비밀값
 
-따로 두는 키가 없다. truth-agent 의 `edge-dev-truth-agent/runtime` 시크릿(`DEEPSEEK_RESIST_NEWS_API_KEY`·`EXA_API_KEY`)을 같이 읽는다. 시세(Naver·Yahoo)와 공시(KIND)는 키가 없다.
+따로 두는 키가 없다. truth-agent 의 `edge-dev-truth-agent/runtime` 시크릿(`DEEPSEEK_RESIST_NEWS_API_KEY`·`EXA_API_KEY`)을 같이 읽는다. 시세(Naver·Yahoo)와 공시(KIND·SEC)는 키가 없다. SEC 는 요청 머리글에 연락처 이메일을 요구해 태스크 환경변수 `TRUTH_SEC_CONTACT`(비밀값 아님, truth 처리방침에 공개한 운영 연락처)로 넣는다.
+
+## 6. 미국 주식
+
+국내와 같은 흐름·판정 규칙(§1~§3)을 같은 이미지·태스크 정의로 `--market us` 로 돌린다. 다른 것은 출처·시간·기준·저장 자리다(`markets.py`).
+
+| | 국내 | 미국 |
+|---|---|---|
+| 상승률 순위 | Naver `m.stock.naver.com/api/stocks/up/{KOSPI\|KOSDAQ}` | Naver 해외 `api.stock.naver.com/stock/exchange/{NASDAQ\|NYSE\|AMEX}/up` (한글 종목명) |
+| 기준 | 10% · 거래대금 30억원 | 10% · 거래대금 200만 달러 · 주가 1달러 이상(동전주 제외) |
+| 보통주 거르기 | 종목 유형·코드 끝자리·'스팩' | 종목 유형 · 영문 이름의 Rights·Warrant·Unit·Acquisition Corp |
+| 5분 시세 | Yahoo `<code>.KS\|.KQ` | Yahoo `<티커>`(BRK.B → BRK-B) |
+| 공시 | KIND 목록·본문(`kind-<접수번호>`, 목록 `kind-list`) | SEC EDGAR 최근 공시·원문(`sec-<접수번호>`, 목록 `sec-list`). 8-K 항목 번호에 뜻을 붙이고, 원문은 첫 EX-99 첨부(보도자료)까지 읽는다 |
+| 로고 | 회사 홈페이지 아이콘 → `logos/<code>` | 순위가 주는 Naver 로고 PNG(`ssl.pstatic.net` 만) → `logos/us/<티커>` |
+| 시각·날짜 | KST, 정규장 09:00~15:30 | 뉴욕 현지, 정규장 09:30~16:00(서머타임은 시간대가 맡는다) |
+| 스케줄 | 매시 `cron(35 9-15)`·매분 `cron(* 9-15)` Asia/Seoul | 매시 `cron(35 9-15)`·매분 `cron(* 9-16)` America/New_York |
+| 공개 데이터 | `truth/data/movers/` | `truth/data/movers/us/` (같은 스키마) |
+| 비공개 상태 | `state/movers-seen/`·`state/lease-movers.json`·`state/watch-launch.json` | `state/us/` 아래 같은 이름 |
+
+- 미국 `tradeValue` 는 백만 달러, `price`·`prevClose` 는 달러다. 시각 필드(`generatedAt`·`pricedAt`·`judgedAt`·`marks[].at`·`series`)는 뉴욕 현지 시각이다.
+- 감시의 장 마감은 16:00(국내 15:30)이고 정각 조사 직전 정지(:20~:37)는 국내와 같다. 가격 갱신이 16시대까지 도는 것은 16:00 마감 가격을 받기 위해서다(Yahoo 미국 시세는 거의 늦지 않다).
+- 시장조치(투자주의·경고)는 SEC 목록에 없다. 상장 기준 미달 통지는 8-K 3.01 로 나온다. 수집 뉴스(news-)가 적어 모델은 웹 검색으로 영어 원문을 찾는다. 배포 서비스(GlobeNewswire 등)의 보도자료는 회사 주장이지 확인 원문이 아니다(시스템 지시 '미국 종목').
+- SEC 티커 목록에 없거나 응답 형식이 바뀌면 '공시 없음'이 아니라 조회 실패로 보고 보류로 싣는다(국내 KIND 실패와 같다).
+- 화면은 `today.html` 의 국내·미국 전환이다(`?market=us`). 날짜·'오늘'·실시간 표시는 그 시장 시간대로 본다. 팝업 비교 기록은 시장마다 따로(`movers-seen-us:`) 둔다.
