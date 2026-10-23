@@ -207,6 +207,18 @@ function PastCard({ past, unavailable }: { past: Past | null; unavailable: strin
   </section>;
 }
 
+// 고객이 물어본 수익률·기간 계산(서버 scenarios)이 있으면 '앞으로 내 돈' 칸이 그 계산을 보인다 — 화면의 연 5% 가정보다 먼저다.
+function ScenarioCard({ scenarios }: { scenarios: NonNullable<Report['scenarios']> }) {
+  const principal = toNum(scenarios.principal_krw), monthly = toNum(scenarios.monthly_krw);
+  const rows = (scenarios.rows ?? []).map(r => ({ ...r, future: toNum(r.future_krw), paid: toNum(r.paid_krw) })).filter(r => r.future !== null);
+  return <section className="r8-card r8-future" data-analytics-section="future" aria-labelledby="r8-future-title">
+    <div className="r8-head"><span className="r8-eyebrow">앞으로 내 돈</span><h2 id="r8-future-title" className="r8-big">물어보신 계산</h2>
+      {principal !== null && <span className="r8-sub">지금 {won(principal)}{monthly ? ` + 매달 ${won(monthly)}` : ''}</span>}</div>
+    {scenarios.status !== 'available' || !rows.length ? <p className="r8-muted">지금 금액과 넣을 돈이 정해지지 않아 계산하지 못했어요.</p>
+      : <ul className="r8-list">{rows.map(r => <li className="r8-list-row" key={`${r.annual_return_pct}:${r.years}`}><span className="r8-row-main"><b>연 {r.annual_return_pct}% · {r.years}년 뒤</b>{r.paid !== null && <span>넣은 돈 {won(r.paid, true)}</span>}</span><span className="r8-row-value">{won(r.future!, true)}</span></li>)}</ul>}
+    {!!scenarios.assumptions?.length && <span className="r8-foot">{scenarios.assumptions.join(' ')}</span>}
+  </section>;
+}
 function FutureCard({ principal, monthly, past }: { principal: number | null; monthly: number; past: Past | null }) {
   if (principal === null || principal < 0 || principal === 0 && monthly <= 0) return null;
   const bars = [5, 10, 15].map(years => ({ years, value: futureValue(principal, monthly, years), paid: principal + monthly * 12 * years }));
@@ -451,7 +463,7 @@ export function ResultView({ report, jobId, input, active = true }: { report: Re
     <FinalCard report={report} rows={rows} color={color} input={input} />
     <MonthlyCard report={report} rows={rows} color={color} monthly={monthly} onAlert={() => { trackResult('app_alert_clicked', { analysis_id: jobId }); setAppOpen(true); }} />
     {plan && <PastCard past={past} unavailable={plan.historical_performance ? '' : sentence(plan.unavailable_reason || '')} />}
-    {plan && <FutureCard principal={currentTotal ?? finalTotal} monthly={monthly ?? 0} past={past} />}
+    {report.scenarios ? <ScenarioCard scenarios={report.scenarios} /> : plan && <FutureCard principal={currentTotal ?? finalTotal} monthly={monthly ?? 0} past={past} />}
     <AnalysisCard report={report} kind={kind} analysisId={jobId} />
     <AskCard jobId={jobId} questions={questions} />
     {type && <section className="r8-card r8-actions" aria-label="결과 뒤에 할 일">

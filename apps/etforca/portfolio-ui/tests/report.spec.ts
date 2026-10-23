@@ -190,6 +190,17 @@ test('selling part of a holding into cash is a change, not keep', async ({ page 
   await expect(page.locator('.r8-headline')).toHaveText('하나만 바꾸면 돼요');
 });
 
+test('a requested scenario calculation is shown instead of the five-percent assumption', async ({ page }) => {
+  // 고객이 '연 7%면 10년 뒤 얼마?'처럼 물어 서버가 계산한 표는 결과에서 사라지면 안 된다(추천 없는 계산 전용 보고서 포함).
+  await open(page, { ...base(), recommendation: null, scenarios: { status: 'available', principal_krw: '10000000', monthly_krw: '300000', assumptions: ['매달 말에 넣는다고 놓고 계산했어요.'],
+    rows: [{ annual_return_pct: '7', years: 10, paid_krw: '46000000', future_krw: '71500000' }] } });
+  const future = page.locator('[data-analytics-section=future]');
+  await expect(future.locator('h2')).toHaveText('물어보신 계산');
+  await expect(future.locator('.r8-list-row')).toContainText('연 7% · 10년 뒤');
+  await expect(future.locator('.r8-row-value')).toHaveText('7,150만 원');
+  await expect(future).not.toContainText('연 5%');
+});
+
 test('a first-time investor sees Orca instead of a score and compares with cash', async ({ page }) => {
   const result = base();
   result.current_evaluation = evaluation(null, null);
