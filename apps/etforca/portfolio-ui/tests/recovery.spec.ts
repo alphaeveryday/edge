@@ -52,7 +52,7 @@ for (const blockedStorage of [false, true]) test(`failed input remains editable 
   });
   await page.goto('/portfolio/');
   if (blockedStorage) await page.evaluate(() => Object.defineProperty(window, 'sessionStorage', { get() { throw new DOMException('blocked', 'SecurityError'); } }));
-  await page.getByRole('button', { name: '입력 수정하기' }).click();
+  await page.getByRole('button', { name: '입력 고치기' }).click();
   await expect(page.getByRole('textbox', { name: 'VOO 금액' })).toHaveValue('1,234,567');
   await expect(page.getByLabel('기존 배당 목표')).toHaveValue('매월 40만 원');
   await page.getByRole('button', { name: '다음', exact: true }).click();

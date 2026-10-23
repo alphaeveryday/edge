@@ -4,7 +4,8 @@ const section = { paragraphs: ['입력 내용을 바탕으로 판단했어요.',
 const report = { sections: { question: section, portfolio: section, outlook: section, opinion: section },
   sources: [], metrics: { total_krw: '1000000', holdings: [], unavailable_reason: '' }, as_of: '2026-10-14T00:00:00Z' };
 
-test('an unresolved recovery keeps its idempotency key across mode changes', async ({ page }) => {
+// 누락·오류 보완은 끝내지 못한 분석에서만 연다(8차 결과의 추가 질문은 '더 물어보기' 칸). 다시 보내도 같은 요청으로 묶여야 두 번 차감되지 않는다.
+test('an unresolved recovery keeps its idempotency key when sent again', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'parent'));
   const keys: string[] = [];
   await page.route('**/api/portfolio/**', route => {
@@ -16,15 +17,12 @@ test('an unresolved recovery keeps its idempotency key across mode changes', asy
       return keys.length === 1 ? route.abort('failed') : route.fulfill({ status: 202, json: { id: 'child', state: 'queued' } });
     }
     if (path.endsWith('/child')) return route.fulfill({ json: { id: 'child', state: 'succeeded', result: { answer: section } } });
-    return route.fulfill({ json: { id: 'parent', state: 'succeeded', result: report } });
+    return route.fulfill({ json: { id: 'parent', state: 'failed', failure: 'TIMED_OUT' } });
   });
   await page.goto('/portfolio/');
-  await page.getByLabel('질문 종류').selectOption('recovery');
   await page.getByLabel('추가 질문', { exact: true }).fill('계산을 보완해 주세요');
   await page.getByRole('button', { name: '질문 보내기' }).click();
-  await expect(page.getByLabel('질문 종류')).toBeEnabled();
-  await page.getByLabel('질문 종류').selectOption('question');
-  await page.getByLabel('질문 종류').selectOption('recovery');
+  await expect(page.getByLabel('추가 질문', { exact: true })).toBeEnabled();
   await page.getByRole('button', { name: '질문 보내기' }).click();
   await expect.poll(() => keys.length).toBe(2);
   expect(keys[1]).toBe(keys[0]);
@@ -49,7 +47,7 @@ for (const [status, reason, explanation] of [
     return route.fulfill({ json: { id: 'parent', state: 'succeeded', result: report } });
   });
   await page.goto('/portfolio/');
-  await page.getByLabel('추가 질문', { exact: true }).fill('기존 목표를 실행할 수 있나요?');
+  await page.getByLabel('직접 물어보기', { exact: true }).fill('기존 목표를 실행할 수 있나요?');
   await page.getByRole('button', { name: '질문 보내기' }).click();
   await page.getByText('이 답의 계산표와 근거 보기').click();
   await expect(page.locator('.followup-revision .execution-plan')).toContainText(explanation);
@@ -58,7 +56,7 @@ for (const [status, reason, explanation] of [
   await expect(page.locator('.followup-revision')).not.toContainText('추천을 보류했어요.');
 });
 
-test('recovery remains available after the question quota and keeps the original report', async ({ page }) => {
+test('a recovery revision keeps the original report and shows very large scenario amounts exactly', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'parent'));
   const modes: string[] = [];
   await page.route('**/api/portfolio/**', route => {
@@ -69,7 +67,6 @@ test('recovery remains available after the question quota and keeps the original
       return body.mode === 'recovery' ? route.fulfill({ status: 202, json: { id: 'recovered', state: 'queued' } })
         : route.fulfill({ status: 409, json: { detail: 'CHAT_LIMIT' } });
     }
-    if (path.endsWith('/chats')) return route.fulfill({ json: { limit: 5, items: Array.from({ length: 5 }, (_, i) => ({ id: `used-${i}`, state: 'succeeded', input: { question: '이미 물어본 질문' }, result: { answer: section } })) } });
     if (path.endsWith('/recovered')) return route.fulfill({ json: { id: 'recovered', state: 'succeeded', result: {
       answer: section, status: 'complete', revision: { ...report, scenarios: { status: 'available',
         principal_krw: '1000000', monthly_krw: '0', assumptions: ['미래 수익을 보장하지 않아요.'],
@@ -77,12 +74,9 @@ test('recovery remains available after the question quota and keeps the original
           { annual_return_pct: '100', years: 50, paid_krw: '1000000', future_krw: '9007199254740993' }] },
         completion: { status: 'complete', tasks: [], missing_inputs: [], missing_research: [] } },
     } } });
-    return route.fulfill({ json: { id: 'parent', state: 'succeeded', result: report } });
+    return route.fulfill({ json: { id: 'parent', state: 'failed', failure: 'TIMED_OUT' } });
   });
   await page.goto('/portfolio/');
-  await expect(page.getByLabel('추가 질문', { exact: true })).toBeDisabled();
-  await page.getByLabel('질문 종류').selectOption('recovery');
-  await expect(page.getByLabel('추가 질문', { exact: true })).toBeEnabled();
   await page.getByLabel('추가 질문', { exact: true }).fill('5년 금액 계산해 주세요');
   await page.getByRole('button', { name: '질문 보내기' }).click();
   await page.getByText('보완 분석과 계산표 보기').click();
@@ -131,10 +125,9 @@ test('a second recovery with shorter history resets the previous chart selection
     if (path.endsWith('/chat')) return route.fulfill({ status: 202, json: { id: `child-${++submitted}`, state: 'queued' } });
     if (/child-\d$/.test(path)) return route.fulfill({ json: { id: `child-${submitted}`, state: 'succeeded',
       result: { answer: section, revision: revision(submitted === 1 ? 30 : 2) } } });
-    return route.fulfill({ json: { id: 'parent', state: 'succeeded', result: report } });
+    return route.fulfill({ json: { id: 'parent', state: 'failed', failure: 'TIMED_OUT' } });
   });
   await page.goto('/portfolio/');
-  await page.getByLabel('질문 종류').selectOption('recovery');
   await page.getByLabel('추가 질문', { exact: true }).fill('첫 보완 요청');
   await page.getByRole('button', { name: '질문 보내기' }).click();
   await page.getByText('보완 분석과 계산표 보기').click();
@@ -161,14 +154,14 @@ test('asking opens a chat that keeps the conversation and returns to the same pl
     return route.fulfill({ json: { id: 'parent', state: 'succeeded', result: report } });
   });
   await page.goto('/portfolio/');
-  await page.getByLabel('추가 질문', { exact: true }).scrollIntoViewIfNeeded();
+  await page.getByLabel('직접 물어보기', { exact: true }).scrollIntoViewIfNeeded();
   const before = await page.evaluate(() => scrollY);
-  await page.getByLabel('추가 질문', { exact: true }).fill('리밸런싱은 어떻게 해요?');
+  await page.getByLabel('직접 물어보기', { exact: true }).fill('리밸런싱은 어떻게 해요?');
   await page.getByRole('button', { name: '질문 보내기' }).click();
-  const chat = page.getByRole('dialog', { name: 'AI에게 묻기' });
+  const chat = page.getByRole('dialog', { name: '더 물어보기' });
   await expect(chat.locator('.chat-bubble--me')).toHaveText(['리밸런싱은 어떻게 해요?']);
   await expect(chat.locator('.chat-bubble--waiting')).toContainText('답을 쓰고 있어요');
-  await expect(page.getByLabel('추가 질문', { exact: true })).toBeDisabled(); // 결과 화면에서도 답이 끝날 때까지 다음 질문을 막는다
+  await expect(page.getByLabel('직접 물어보기', { exact: true })).toBeDisabled(); // 결과 화면에서도 답이 끝날 때까지 다음 질문을 막는다
   await expect(chat.getByRole('button', { name: '이어서 질문 보내기' })).toBeDisabled();
   Object.assign(turns[0], { state: 'succeeded', result: { answer: { ...section, paragraphs: ['나스닥100 비중을 30%로 줄여요.'] } } });
   await expect(chat.locator('.chat-bubble--ai')).toHaveText('나스닥100 비중을 30%로 줄여요.');
@@ -181,11 +174,11 @@ test('asking opens a chat that keeps the conversation and returns to the same pl
   await chat.getByRole('button', { name: '분석 결과로 돌아가기' }).click();
   await expect(chat).toBeHidden();
   await expect.poll(() => page.evaluate(() => scrollY)).toBe(before);
-  await page.getByRole('button', { name: '이 분석에서 나눈 대화 보기 · 2개 · 답변 작성 중' }).click();
+  await page.getByRole('button', { name: '이 분석에서 나눈 대화 보기 · 2개 · 답을 쓰는 중' }).click();
   await expect(chat).toBeVisible();
   await page.goBack();
   await expect(chat).toBeHidden();
-  await expect(page.locator('.followup')).toBeVisible();
+  await expect(page.locator('[data-analytics-section=ask]')).toBeVisible();
 });
 
 test('a failed answer is not counted and the same question can be sent again from the chat', async ({ page }) => {
@@ -201,10 +194,10 @@ test('a failed answer is not counted and the same question can be sent again fro
     return route.fulfill({ json: { id: 'parent', state: 'succeeded', result: report } });
   });
   await page.goto('/portfolio/');
-  // 대화 영역에 들어오면 뉴스레터 안내가 물러난다(analytics.spec 참고). 포인터 대신 키보드로 연다.
+  // 키보드만으로도 대화를 다시 열 수 있어야 한다.
   await page.getByRole('button', { name: '이 분석에서 나눈 대화 보기 · 1개' }).focus();
   await page.keyboard.press('Enter');
-  const chat = page.getByRole('dialog', { name: 'AI에게 묻기' });
+  const chat = page.getByRole('dialog', { name: '더 물어보기' });
   await expect(chat.locator('.chat-bubble--failed')).toContainText('이 질문은 횟수에서 빠졌어요.');
   await expect(chat).toContainText('5/5회 남음');
   await chat.getByRole('button', { name: '같은 질문 다시 보내기' }).click();

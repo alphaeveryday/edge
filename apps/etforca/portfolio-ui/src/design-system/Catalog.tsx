@@ -49,7 +49,7 @@ export function DesignCatalog() {
     </section>
     <section id="states"><SectionHeading title="기다림과 실패에도 같은 기준" />
       <h3>이메일 미리보기와 간단한 신청</h3>
-      <NewsletterSignup compact showPreview />
+      <NewsletterSignup showPreview />
       <Loading>포트폴리오를 불러오고 있어요.</Loading>
       <Notice>입력한 내용을 확인하고 있어요.</Notice><Notice tone="error">저장하지 못했어요. 입력한 내용은 그대로예요. 다시 시도해 주세요.</Notice><Notice tone="success">포트폴리오를 저장했어요.</Notice>
       <div className="ds-empty"><Icon name="dashboard" size={36} /><h3>아직 보유 종목이 없어요</h3><p>종목을 추가하면 자산과 배당을 볼 수 있어요.</p></div>

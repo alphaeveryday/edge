@@ -136,3 +136,22 @@ test('real zero allocation, amounts and history remain zero, while a missing cur
   await expect(page.locator('#report .performance svg')).toBeVisible();
   await expect(page.locator('#report .history-line.a')).toHaveCount(0);
 });
+
+// 고객 결과는 8차 일곱 칸(ResultView)으로 바뀌었고, 계산표 꼴의 ReportView 는 관리자·보완 분석에 남는다.
+// 아래 둘은 예전 report.spec 에서 옮겼다 — 같은 ETF 를 계좌마다 따로 사고팔고, 현금 확보를 매도로 칠하지 않아야 실행 지시가 틀리지 않는다.
+test('the same ETF in different accounts keeps its own trade and cash is not a sale', async ({ page }) => {
+  const execution = { status: 'ready', reasons: [], assumptions: [], monthly_krw: null, months: null, additional_krw: '0', required_additional_krw: null, accounts: [], rows: [
+    { instrument_id: 'KR:069500', name: 'KODEX 200', account: '일반 계좌', before_krw: '100000', target_krw: '70000', buy_krw: '0', sell_krw: '30000', cash_used_krw: '0' },
+    { instrument_id: 'KR:069500', name: 'KODEX 200', account: 'ISA', before_krw: '200000', target_krw: '250000', buy_krw: '50000', sell_krw: '0', cash_used_krw: '0' },
+    { instrument_id: 'CASH:KRW', name: '현금', account: '일반 계좌', before_krw: '0', target_krw: '30000', buy_krw: '0', sell_krw: '0', cash_used_krw: '-30000' }] };
+  await openDetail(page, { ...report, recommendation: { ...report.recommendation, actions: [], execution } });
+  await expect(page.locator('#report .improvements .trade-amount')).toHaveText(['30,000원매도', '50,000원매수', '30,000원현금 확보']);
+  await expect(page.locator('#report .improvements .action-note')).toHaveText(['일반 계좌', 'ISA', '일반 계좌']);
+  await expect(page.locator('#report .improvements li').filter({ hasText: '현금' }).locator('[data-trade="sell"]')).toHaveCount(0);
+});
+
+test('legacy index history keeps its units instead of being shown as won', async ({ page }) => {
+  await openDetail(page, report);
+  await expect(page.locator('#report .history-values')).toContainText('105');
+  await expect(page.locator('#report .history-values')).not.toContainText('원');
+});

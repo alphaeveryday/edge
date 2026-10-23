@@ -210,14 +210,3 @@ test('draft cleanup denial is explained instead of losing the current input', as
   await expect(page.getByRole('alert')).toContainText('임시 입력을 지우지 못했어요');
   await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('345');
 });
-
-test('an automatic popup returns focus to the latest reading position on dismissal', async ({ page }) => {
-  await page.goto('/portfolio/?preview=result');
-  await page.locator('.evaluation').scrollIntoViewIfNeeded();
-  await expect(page.locator('.report-feedback')).toBeVisible();
-  const readingPosition = page.locator('.feedback-anchor > .save-portfolio button');
-  await readingPosition.focus();
-  await page.locator('.report-feedback').getByLabel('뉴스레터 이메일').focus();
-  await page.getByRole('button', { name: '평가 팝업 닫기' }).click();
-  await expect(readingPosition).toBeFocused();
-});

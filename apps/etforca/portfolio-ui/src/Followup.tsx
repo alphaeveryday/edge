@@ -1,51 +1,32 @@
-import { Button, TextInput, TextArea, Select } from './design-system/components';
+import { Button, TextInput, TextArea } from './design-system/components';
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { request, type Section, type Report } from './api';
 import { ReportView } from './ReportView';
-import { NewsletterSignup } from './NewsletterSignup';
 import { trackAction } from './analytics';
 
 type ChatJob = { id: string; state: string; input?: { question: string }; created_at?: string; started_at?: string | null; result: { answer: Section; revision?: Report; status?: string } | null };
 type Chats = { limit: number; items: ChatJob[] };
-const waiting = (chat: ChatJob) => chat.state === 'queued' || chat.state === 'running';
+export const waiting = (chat: ChatJob) => chat.state === 'queued' || chat.state === 'running';
 
-export function Followup({ jobId, recoveryOnly = false }: { jobId: string; recoveryOnly?: boolean }) {
-  const [mode, setMode] = useState<'question' | 'recovery'>(recoveryOnly ? 'recovery' : 'question');
+// 끝나지 못한 분석에서만 쓰는 '누락·오류 보완' 요청. 결과 화면의 추가 질문은 ResultView 의 '더 물어보기' 칸이 맡는다.
+export function Followup({ jobId }: { jobId: string }) {
   const [question, setQuestion] = useState('');
-  const premium = useRef<HTMLDialogElement>(null);
-  const chat = useConversation(jobId, !recoveryOnly);
-  const recovery = useRecovery(jobId, mode === 'recovery');
+  const recovery = useRecovery(jobId, true);
   function submit(event: FormEvent) {
     event.preventDefault();
-    if (mode === 'recovery') return void recovery.ask(question);
-    chat.open();
-    void chat.send(question).then(sent => { if (sent) setQuestion(''); });
+    void recovery.ask(question);
   }
-  const remaining = chat.remaining;
-  const busy = mode === 'recovery' ? recovery.busy : chat.sending;
-  const answering = chat.items.some(waiting);
-  const blocked = mode === 'recovery' ? recovery.blocked : remaining === 0 || answering;
-  return <>
-    <section className="followup" data-analytics-section="followup"><h3>AI에게 추가로 묻기</h3>
-      {!recoveryOnly && <label>요청 종류 <Select aria-label="질문 종류" value={mode} disabled={busy} onChange={e => { setMode(e.target.value as 'question' | 'recovery'); recovery.reset(); }}><option value="question">추가 질문</option><option value="recovery">누락·오류 보완</option></Select></label>}
-      {mode === 'recovery' && recovery.answer && <div className="chat-answer">{recovery.answer.paragraphs.map((p, i) => <p key={i}>{p}</p>)}</div>}
-      {mode === 'recovery' && recovery.revision && <details className="followup-revision"><summary>보완 분석과 계산표 보기</summary><p className="notice">원본 분석은 유지되며 아래는 이 질문에 대한 별도 분석이에요.</p><ReportView key={recovery.revisionId} report={recovery.revision} /></details>}
-      {mode === 'question' && chat.items.length > 0 && <Button className="chat-resume" onClick={chat.open}>이 분석에서 나눈 대화 보기 · {chat.items.length}개{chat.items.some(waiting) ? ' · 답변 작성 중' : ''}</Button>}
-      <form className="report-chat" onSubmit={submit}><TextInput aria-label="추가 질문" placeholder={mode === 'recovery' ? '빠진 답변이나 보완할 조건을 알려 주세요.' : '이 추천안에서 더 궁금한 점이 있나요?'} required maxLength={1000} value={question} disabled={busy || blocked} onChange={e => setQuestion(e.target.value)} /><Button aria-label="질문 보내기" disabled={busy || blocked}>{busy ? '…' : '↑'}</Button></form>
-      <p className="notice">{mode === 'recovery' ? (recovery.busy ? '자료를 확인하고 답변을 작성하고 있어요…' : '이 분석의 누락·오류 보완 2회 · 실패한 요청은 차감하지 않아요.') : remaining === 0 ? `이 분석의 추가 질문 ${chat.limit}회를 모두 사용했어요. 새 분석을 시작하면 다시 물을 수 있어요.` : answering ? '앞선 질문의 답을 쓰고 있어요. 답이 끝나면 이어서 물을 수 있어요.' : `이 분석에 대해 ${chat.limit}번까지 물을 수 있어요${remaining < chat.limit ? ` · ${remaining}번 남음` : ''} · 답을 받지 못한 질문은 세지 않아요.`}</p>
-      {mode === 'recovery' && recovery.error && <p role="alert">{recovery.error}</p>}
-      {mode === 'question' && chat.error && !chat.isOpen && <p role="alert">{chat.error}</p>}
-      {!recoveryOnly && <ChatScreen chat={chat} />}
-    </section>
-    {!recoveryOnly && <>
-    <Button className="premium report-premium" onClick={() => premium.current!.showModal()}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden="true"><path d="m3 8 4-4h10l4 4-9 13zM3 8h18M7 4l5 17 5-17" /></svg>내 ETF 핵심 소식 이메일로 받기</Button><p className="report-footnote">내 보유 종목의 이슈와 가격 변동 이유를 매일 한 통으로.</p>
-    <dialog className="followup-dialog" ref={premium} aria-labelledby="premium-title"><Button className="dialog-close" aria-label="닫기" onClick={() => premium.current!.close()}>×</Button><h2 id="premium-title">내 ETF 핵심 소식 이메일로 받기</h2><NewsletterSignup jobId={jobId} showPreview /></dialog>
-    </>}
-  </>;
+  return <section className="followup" data-analytics-section="followup"><h3>AI에게 추가로 묻기</h3>
+    {recovery.answer && <div className="chat-answer">{recovery.answer.paragraphs.map((p, i) => <p key={i}>{p}</p>)}</div>}
+    {recovery.revision && <details className="followup-revision"><summary>보완 분석과 계산표 보기</summary><p className="notice">원본 분석은 유지되며 아래는 이 질문에 대한 별도 분석이에요.</p><ReportView key={recovery.revisionId} report={recovery.revision} /></details>}
+    <form className="report-chat" onSubmit={submit}><TextInput aria-label="추가 질문" placeholder="빠진 답변이나 보완할 조건을 알려 주세요." required maxLength={1000} value={question} disabled={recovery.busy || recovery.blocked} onChange={e => setQuestion(e.target.value)} /><Button aria-label="질문 보내기" disabled={recovery.busy || recovery.blocked}>{recovery.busy ? '…' : '↑'}</Button></form>
+    <p className="notice">{recovery.busy ? '자료를 확인하고 답변을 작성하고 있어요…' : '이 분석의 누락·오류 보완 2회 · 실패한 요청은 차감하지 않아요.'}</p>
+    {recovery.error && <p role="alert">{recovery.error}</p>}
+  </section>;
 }
 
 // 추가 질문은 서버가 분석마다 대화로 묶어 둔다. 다른 기기·새로고침에서도 같은 대화를 보여 주고, 답을 기다리는 동안만 다시 읽는다.
-function useConversation(jobId: string, enabled: boolean) {
+export function useConversation(jobId: string, enabled: boolean) {
   const [chats, setChats] = useState<Chats>({ limit: 5, items: [] });
   const [reload, setReload] = useState(0);
   const [sending, setSending] = useState(false);
@@ -100,9 +81,9 @@ function useConversation(jobId: string, enabled: boolean) {
     }, close: () => setOpen(false) };
 }
 
-type Conversation = ReturnType<typeof useConversation>;
+export type Conversation = ReturnType<typeof useConversation>;
 // 질문하면 분석 화면 위에 대화 화면이 열린다. 뒤로 가기(버튼·브라우저·Esc)는 같은 분석 결과 위치로 돌려보낸다.
-function ChatScreen({ chat }: { chat: Conversation }) {
+export function ChatScreen({ chat }: { chat: Conversation }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const end = useRef<HTMLDivElement>(null);
   const [draft, setDraft] = useState('');
@@ -139,7 +120,7 @@ function ChatScreen({ chat }: { chat: Conversation }) {
   return <dialog ref={dialog} className="chat-screen" aria-labelledby="chat-title" data-analytics-section="followup_chat" onClose={closed}>
     <header className="chat-screen__bar">
       <Button className="chat-screen__back" onClick={() => dialog.current!.close()}><span aria-hidden="true">←</span> 분석 결과로 돌아가기</Button>
-      <h2 id="chat-title">AI에게 묻기</h2>
+      <h2 id="chat-title">더 물어보기</h2>
       <span className="chat-screen__count">{chat.remaining}/{chat.limit}회 남음</span>
     </header>
     <div className="chat-screen__messages" role="log">
