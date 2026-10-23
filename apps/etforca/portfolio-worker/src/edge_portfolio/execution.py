@@ -70,12 +70,11 @@ def execution_tool(request, args, decision, catalog):
         if error := allocation_error(item, row['account'], request.preferences.tax_profile):
             raise ValueError(error)
     result = plan_execution(request, rows, decision)
-    if any(reason.startswith('ACCOUNT_') for reason in result['reasons']):
-        result['instruction'] = ('계좌별 before_krw와 remaining_contribution_krw, max_weight_pct를 확인하세요. '
-            '계좌 내 모든 종목 비중의 합은 max_weight_pct를 넘지 않도록 소수점 8자리까지 그대로 사용하세요. '
-            '남은 납입 한도가 0인 계좌에는 새 돈을 넣지 말고, 기존 계좌 안에서 종목을 교체하는 배치를 먼저 계산하세요. '
-            '동일 종목을 여러 계좌에 나눠도 됩니다. 같은 실패 배치를 반복하지 말고 계좌 배치나 후보 비중을 수정하세요. '
-            '납입 여력이 확인되지 않은 금액 계획은 조건부로 설명하되, 추천 비중과 결론은 완성하세요.')
+    if any(reason.startswith(('ACCOUNT_', 'MONTHLY_')) for reason in result['reasons']):
+        result['instruction'] = ('기존 돈은 그 계좌 안에서만 바꿉니다. 계좌별 min_weight_pct 이상, max_weight_pct 이하로 '
+            '계좌 안 모든 종목 비중의 합을 맞추고 소수점 8자리까지 그대로 사용하세요. 계좌 밖으로 옮길 수 있는 돈은 일반 계좌의 현금뿐이며, '
+            '그 현금은 ISA·연금 계좌에 remaining_contribution_krw(올해 남은 연 한도) 안에서만 넣습니다. 매달 넣을 돈도 목표 비중대로 같은 한도 안에서 나뉘므로, 한도를 넘으면 일반 계좌 비중을 늘리세요. '
+            '동일 종목을 여러 계좌에 나눠도 됩니다. 같은 실패 배치를 반복하지 말고 계좌 배치나 후보 비중을 수정하세요.')
     for row in result['rows']:
         row['name'] = catalog.get(row['instrument_id'], {}).get('name', row['instrument_id'])
     return result
@@ -234,36 +233,72 @@ def resolve_funding(request, decision=None):
     return funding
 
 
+# 2026년 연 납입 한도(만 원). 남은 한도를 입력하지 않으면 이 한도에서 올해 낸 돈을 뺀다.
+# 연금저축과 IRP 는 합쳐서 1,800만 원이다
+ANNUAL_LIMIT_MAN = {'ISA': 2000, '연금저축': 1800, 'IRP': 1800}
+PENSION_ACCOUNTS = ('연금저축', 'IRP')
+
+
 def plan_execution(request, allocations, decision=None):
-    funding = resolve_funding(request, decision)
+    """8차: 추천은 입력한 보유 금액과 현금만으로 짠다. 글로 적은 추가 투자금·여러 달 계획은 목표 금액에 넣지 않고,
+    월 납입은 계좌별 배분(monthly_plan)으로만 따로 낸다."""
+    funding = resolve_funding(request, decision) or {}
     rules = [rule for rule in decision.constraints if rule.kind == 'no_sell'] if decision else []
     no_sell_ids = set().union(*(set(rule.instrument_ids) for rule in rules)) if rules and all(rule.instrument_ids for rule in rules) else set()
-    delay = decision.funding.start_delay_months if decision and decision.funding is not None else 0
-    result = build_execution(request, allocations, no_sell=bool(rules), no_sell_ids=no_sell_ids,
-                             start_delay_months=delay, **(funding or {}))
-    if decision and decision.funding is not None:
-        interpreted = decision.funding
-        result['assumptions'].extend(funding_assumptions(interpreted))
-        if interpreted.assumptions and result['status'] == 'ready':
-            result['status'] = 'conditional'
-        if interpreted.max_months is not None and result['months'] is not None and result['months'] - delay > interpreted.max_months:
-            result.update(status='infeasible', reasons=['FUNDING_DURATION_EXCEEDED'], rows=[])
-    definite_failure = any(reason in ('NO_SELL_ZERO_TARGET', 'HELD_STOCK_BUY') or reason.startswith('ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:') for reason in result['reasons'])
-    if funding is None and not definite_failure:
-        result.update(status='needs_input', reasons=['ADDITIONAL_FUNDING_REQUIRED'], rows=[])
+    result = build_execution(request, allocations, monthly_krw=funding.get('monthly_krw'), no_sell=bool(rules), no_sell_ids=no_sell_ids)
+    if result['monthly_plan'] and decision and decision.funding is not None:
+        result['assumptions'].extend(funding_assumptions(decision.funding))  # 추정한 월 납입은 가정이라고 적는다
     return result
 
 
-def build_execution(request, allocations, *, additional_krw=0, monthly_krw=None, no_sell=False, no_sell_ids=(), start_delay_months=0):
-    additional = Decimal(str(additional_krw))
+def contribution_room(request, account):
+    """올해 그 계좌에 더 넣을 수 있는 돈(원). 일반 계좌는 한도가 없다(None)."""
+    if account not in ANNUAL_LIMIT_MAN:
+        return None
+    tax = request.preferences.tax_profile
+    profiles = {row.account: row for row in tax.accounts} if tax else {}
+    names = PENSION_ACCOUNTS if account in PENSION_ACCOUNTS else (account,)
+    stated = [Decimal(profiles[name].remaining_man) * 10000 for name in names if name in profiles and profiles[name].remaining_man]
+    if stated and account not in PENSION_ACCOUNTS:
+        return stated[0]  # 금융사에서 확인한 남은 한도가 먼저다
+    paid = sum((Decimal(profiles[name].paid_man) * 10000 for name in names if name in profiles and profiles[name].paid_man), Decimal(0))
+    # 연금저축과 IRP 는 한도 하나를 나눠 쓴다. 어느 한쪽에 적은 남은 한도도 둘이 함께 쓰는 한도로 본다
+    return min([max(Decimal(0), ANNUAL_LIMIT_MAN[account] * 10000 - paid), *stated])
+
+
+def limit_group(account):
+    return 'PENSION' if account in PENSION_ACCOUNTS else account  # 연금저축·IRP 는 한도 하나를 나눠 쓴다
+
+
+def split_monthly(monthly, target, room_left, stocks=()):
+    """매달 넣을 돈을 목표 비중대로 나눈다. 보유 개별주에는 넣지 않고(더 사지 않는다), 한도 계좌(limit_group 별)는
+    첫 달 몫이 올해 남은 한도 안이고 12개월 몫이 연 한도 안일 때만 받는다. 못 받는 계좌는 빼고 나머지에 다시 나눈다.
+    ponytail: 한도를 넘는 계좌는 통째로 뺄 뿐 남은 만큼 잘라 넣지 않는다 — 한도가 빠듯한 고객이 늘면 계좌별로 자른다"""
+    keys = [key for key in target if key[0] != 'CASH:KRW' and key[0] not in stocks]
+    while keys:
+        share = sum(target[key] for key in keys)
+        plan = dict(zip(keys, allocate_amounts(monthly, [target[key] * 100 / share for key in keys])))
+        used = {}
+        for key, value in plan.items():
+            used[limit_group(key[1])] = used.get(limit_group(key[1]), 0) + value
+        annual = {'ISA': ANNUAL_LIMIT_MAN['ISA'] * 10000, 'PENSION': ANNUAL_LIMIT_MAN['연금저축'] * 10000}
+        full = {group for group, value in used.items() if room_left.get(group) is not None
+                and (value > room_left[group] or value * 12 > annual[group])}
+        if not full:
+            return [{'account': key[1], 'instrument_id': key[0], 'krw': str(value)} for key, value in plan.items()]
+        keys = [key for key in keys if limit_group(key[1]) not in full]
+    return []
+
+
+def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no_sell_ids=()):
     monthly = Decimal(str(monthly_krw)) if monthly_krw is not None else None
-    if any(not value.is_finite() or value < 0 or value > 10**13 or value != value.to_integral_value()
-           for value in [additional, *([monthly] if monthly is not None else [])]):
+    if monthly is not None and (not monthly.is_finite() or monthly < 0 or monthly > 10**13 or monthly != monthly.to_integral_value()):
         raise ValueError('INVALID_FUNDING_AMOUNT')
     result = {'status': 'needs_input', 'reasons': [], 'rows': [], 'accounts': [], 'months': None,
-              'required_additional_krw': None, 'additional_krw': str(additional),
+              'required_additional_krw': None, 'additional_krw': '0',
               'allocation_scope': 'total_portfolio', 'monthly_krw': str(monthly) if monthly is not None else None,
-              'assumptions': ['입력 평가금액 기준이며 거래 수수료·세금·주 단위 주문 반올림은 제외한 금액 계획이에요.']}
+              'monthly_plan': [],
+              'assumptions': ['입력 평가금액과 현금 기준이며 거래 수수료·세금·주 단위 주문 반올림은 제외한 금액 계획이에요.']}
     if request.input_mode != 'amount' or any(h.amount_krw is None or not h.instrument_id for h in request.holdings):
         return {**result, 'reasons': ['CURRENT_AMOUNTS_REQUIRED']}
     current = {}
@@ -274,55 +309,32 @@ def build_execution(request, allocations, *, additional_krw=0, monthly_krw=None,
     target = {(row['instrument_id'], row['account']): Decimal(str(row['weight_pct'])) for row in allocations}
     if len(target) != len(allocations) or not target or sum(target.values()) != 100 or any(not w.is_finite() or w <= 0 for w in target.values()):
         raise ValueError('INVALID_EXECUTION_ALLOCATION')
-    required = Decimal(0)
+    stocks = {holding.instrument_id for holding in request.holdings if holding.kind == 'stock'}
+    def monthly_plan(deposits):
+        if monthly:
+            room_left = {}
+            for account in {key[1] for key in target}:
+                room = contribution_room(request, account)
+                if room is not None:  # 연금 두 계좌는 같은 한도에서 두 계좌에 넣은 돈을 함께 뺀다
+                    group = limit_group(account)
+                    room_left[group] = room - sum(value for name, value in deposits.items() if limit_group(name) == group)
+            result['monthly_plan'] = split_monthly(monthly, target, room_left, stocks)
+            if not result['monthly_plan']:
+                # 금액은 알고 있다. 받을 계좌가 없을 뿐이니 입력을 다시 묻지 말고 배치를 고치게 한다
+                return ['MONTHLY_CONTRIBUTION_LIMIT_EXCEEDED']
+        return []
+    if total <= 0:
+        # 가진 돈이 없으면 지금 살 것은 없고, 월 납입이 있으면 그 배분이 곧 실행할 일이다
+        if not monthly:
+            return {**result, 'reasons': ['INVESTMENT_AMOUNT_REQUIRED']}
+        reasons = monthly_plan({})
+        return {**result, 'status': 'infeasible' if reasons else 'ready', 'reasons': reasons}
+    amounts = dict(zip(target, allocate_amounts(total, list(target.values()))))
     if no_sell:
-        protected = {}
-        lower = Decimal(0)
-        for key, value in current.items():
-            if key[0] == 'CASH:KRW' or no_sell_ids and key[0] not in no_sell_ids:
-                continue
-            if key not in target:
-                return {**result, 'status': 'infeasible', 'reasons': ['NO_SELL_ZERO_TARGET']}
-            protected[key] = value
-            lower = max(lower, (value - 1) * 100 / target[key] - total)
-            required = max(required, value * 100 / target[key] - total)
-        required = required.to_integral_value(rounding=ROUND_CEILING)
-        def preserves(funding):
-            amounts = dict(zip(target, allocate_amounts(total + funding, list(target.values()))))
-            return all(amounts[key] >= value for key, value in protected.items())
-        # Largest-remainder rounding can save up to one won per holding. Search that
-        # bounded interval instead of assuming monotonic apportionment.
-        if required - lower <= 10000:
-            required = Decimal(next(value for value in range(int(lower.to_integral_value(rounding=ROUND_CEILING)), int(required) + 1) if preserves(value)))
-        else:
-            # shortcut: tiny weights use a safe bound; exact minima need a bounded apportionment solver.
-            result['required_additional_is_minimum'] = False
-            result['assumptions'].append('아주 작은 목표 비중은 반올림에 따른 최소금액 대신 매도 없이 가능한 추가 자금의 상한을 계산했어요.')
-        result['required_additional_krw'] = str(required)
-        if not preserves(additional) or not additional and monthly:
-            if not monthly:
-                return {**result, 'status': 'infeasible', 'reasons': ['ADDITIONAL_FUNDING_REQUIRED']}
-            months = int(((required - additional) / monthly).to_integral_value(rounding=ROUND_CEILING))
-            months = max(1, months)
-            if result.get('required_additional_is_minimum') is False:
-                # Check every supported finite funding duration before rejecting it on a conservative bound.
-                first = max(1, int(((lower - additional) / monthly).to_integral_value(rounding=ROUND_CEILING)))
-                months = next((n for n in range(first, min(months, 600) + 1) if preserves(additional + n * monthly)), months)
-            while not preserves(additional + months * monthly):
-                months += 1
-            additional += months * monthly
-            result.update(status='conditional', months=months, additional_krw=str(additional))
-            result['assumptions'].append('가격·환율·분배금이 변하지 않고 매월 같은 금액을 넣는 조건부 계산이며 달성 시점을 보장하지 않아요.')
-    if not additional and monthly:
-        additional = monthly
-        result.update(status='conditional', months=1, additional_krw=str(additional))
-        result['assumptions'].append('별도 목돈 없이 첫 월 납입금을 넣는 시점의 계획이며 그때까지 가격이 변하지 않는다고 가정해요.')
-    if result['months'] is not None and start_delay_months:
-        result['months'] += start_delay_months
-        result['assumptions'].append(f'월 납입은 {start_delay_months}개월 뒤부터 시작하는 계획이에요.')
-    if total + additional <= 0:
-        return {**result, 'reasons': ['INVESTMENT_AMOUNT_REQUIRED']}
-    amounts = dict(zip(target, allocate_amounts(total + additional, list(target.values()))))
+        protected = {key: value for key, value in current.items() if key[0] != 'CASH:KRW' and (not no_sell_ids or key[0] in no_sell_ids)}
+        if any(key not in target for key in protected):
+            return {**result, 'status': 'infeasible', 'reasons': ['NO_SELL_ZERO_TARGET']}
+        required = max([value * 100 / target[key] - total for key, value in protected.items()], default=Decimal(0))
     for key in dict.fromkeys([*current, *target]):
         before, after = int(current.get(key, 0)), amounts.get(key, 0)
         delta = after - before
@@ -331,48 +343,54 @@ def build_execution(request, allocations, *, additional_krw=0, monthly_krw=None,
             'target_krw': str(after), 'buy_krw': str(max(delta, 0) if not cash else 0),
             'sell_krw': str(max(-delta, 0) if not cash else 0),
             'cash_used_krw': str(-delta if cash else 0)})
-    # 고객이 넣은 개별주는 유지·축소만 한다. 계좌 사이 이동은 허용하되 종목 전체로 순매수가 생기면 실행할 수 없다.
+    # 고객이 넣은 개별주는 유지·축소만 한다. 종목 전체로 순매수가 생기면 실행할 수 없다.
     # 모든 실행 경로(추천 게시·리밸런싱 계산·저장안 실행)가 이 함수를 거친다. 허용 오차는 원 단위 반올림(행 수).
-    stocks = {holding.instrument_id for holding in request.holdings if holding.kind == 'stock'}
     net = {}
     for row in result['rows']:
         if row['instrument_id'] in stocks:
             net[row['instrument_id']] = net.get(row['instrument_id'], 0) + int(row['buy_krw']) - int(row['sell_krw'])
     if any(value > len(result['rows']) for value in net.values()):
         return {**result, 'status': 'infeasible', 'reasons': ['HELD_STOCK_BUY'], 'rows': [], 'accounts': []}
+    # 8차 계좌 규칙: 기존 돈은 그 계좌 안에서만 바꾼다. 계좌 밖으로 나갈 수 있는 돈은 일반 계좌의 현금뿐이고,
+    # 그 현금은 ISA·연금 계좌에 올해 남은 연 한도 안에서만 넣는다. 허용 오차는 그 계좌 행 수만큼의 원 단위 반올림.
     reasons = []
     tax = request.preferences.tax_profile
     known_accounts = {holding.account for holding in request.holdings}
     if tax:
         known_accounts.update(account.account for account in tax.accounts if account.opened)
+    pension = [Decimal(0), 0]  # 연금저축+IRP 에 넣는 돈, 그 행 수
+    deposits = {}
     for account in sorted({key[1] for key in current} | {key[1] for key in target}):
         before = sum(value for key, value in current.items() if key[1] == account)
         after = sum(value for key, value in amounts.items() if key[1] == account)
+        movable = current.get(('CASH:KRW', account), Decimal(0)) if account == '일반 계좌' else Decimal(0)
+        # 원 단위 반올림(행마다 1원)과 비중의 소수점 8자리 한 칸(행마다 총액의 1e-10)만큼 허용한다. 큰 금액에서도 경계를 따를 수 있게
+        tolerance = sum(1 for key in target if key[1] == account) * (1 + total / 10**10)
         deposit, withdrawal = max(Decimal(0), after - before), max(Decimal(0), before - after)
-        profile = next((row for row in tax.accounts if row.account == account), None) if tax else None
-        remaining = Decimal(profile.remaining_man) * 10000 if profile and profile.remaining_man else None
+        deposits[account] = deposit
+        room = contribution_room(request, account)
         result['accounts'].append({'account': account, 'before_krw': str(before), 'target_krw': str(after),
-                                   'deposit_krw': str(deposit), 'withdrawal_krw': str(withdrawal),
-                                   'remaining_contribution_krw': str(remaining) if remaining is not None else None,
-                                   'max_weight_pct': format(min(Decimal(100), ((before + remaining) / (total + additional) * 100)
-                                       .quantize(Decimal('.00000001'), rounding=ROUND_FLOOR)), 'f')
-                                       if remaining is not None and account != '일반 계좌' and (result['months'] or 0) <= 1 else None})
-        if account == '일반 계좌':
-            continue
+            'deposit_krw': str(deposit), 'withdrawal_krw': str(withdrawal),
+            'remaining_contribution_krw': str(room) if room is not None else None,
+            'min_weight_pct': format(max(Decimal(0), (before - movable) / total * 100).quantize(Decimal('.00000001'), rounding=ROUND_FLOOR), 'f'),
+            'max_weight_pct': format(min(Decimal(100), ((before + room) / total * 100).quantize(Decimal('.00000001'), rounding=ROUND_FLOOR)), 'f')
+                if room is not None else None})
+        if withdrawal > movable + tolerance:
+            reasons.append('ACCOUNT_TRANSFER_NOT_ALLOWED:' + account)
+        if room is not None and deposit > room + tolerance:
+            reasons.append('ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:' + account)
+        if account in PENSION_ACCOUNTS:
+            pension[0] += deposit
+            pension[1] += tolerance
         if account not in known_accounts and after > 0:
-            reasons.append('ACCOUNT_OPENING_REQUIRED:' + account)
-        if withdrawal:
-            reasons.append('ACCOUNT_WITHDRAWAL_REVIEW_REQUIRED:' + account)
-        if deposit:
-            if profile is None or not profile.remaining_man or (result['months'] or 0) > 1:
-                reasons.append('ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED:' + account)
-            elif deposit > Decimal(profile.remaining_man) * 10000:
-                reasons.append('ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:' + account)
+            result['assumptions'].append(f'{account} 계좌를 새로 열어 넣는 계획이에요.')
     if no_sell and any(int(row['sell_krw']) for row in result['rows'] if not no_sell_ids or row['instrument_id'] in no_sell_ids):
-        reasons.append('NO_SELL_VIOLATION')
-    result['reasons'] = reasons
-    if reasons:
-        result['status'] = 'infeasible' if any('EXCEEDED' in reason or reason == 'NO_SELL_VIOLATION' for reason in reasons) else 'needs_input'
-    elif result['status'] != 'conditional':
-        result['status'] = 'ready'
+        reasons.append('NO_SELL_VIOLATION')  # 최종 고객 제약 검사(decision.check_constraints)와 같이 1원도 팔지 않는다. 넣을 새 돈은 현금뿐이다
+        result['required_additional_krw'] = str(max(Decimal(0), required).to_integral_value(rounding=ROUND_CEILING))  # 비중을 고칠 때 참고
+    # 두 연금 계좌는 한도 하나를 나눠 쓴다(contribution_room 이 두 계좌에 같은 값을 준다)
+    if pension[0] > contribution_room(request, '연금저축') + pension[1]:
+        reasons.append('ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:연금저축+IRP')
+    reasons += monthly_plan(deposits)
+    result['reasons'] = list(dict.fromkeys(reasons))
+    result['status'] = 'infeasible' if reasons else 'ready'
     return result

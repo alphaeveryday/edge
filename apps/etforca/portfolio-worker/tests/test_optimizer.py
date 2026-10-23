@@ -271,16 +271,17 @@ async def test_static_service_policy_conflict_does_not_blame_missing_price_data(
 
 
 def test_vector_filter_uses_funded_amounts_before_rejecting_diluted_no_sale_weights():
+    # 팔지 않기는 금액으로 거른다. 8차에서 새 돈은 입력한 현금이고 글로 적은 추가금은 세지 않는다
     from edge_portfolio.decision import Decision
-    request = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
-        horizon='10년 이상', question='추가 100만원. 매도 금지.')
-    market = MarketData(request)
-    optimizer = Optimizer(market, request)
-    optimizer.decision = Decision(funding_text='추가 100만원', constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
     rows = [{'instrument_id': key, 'weight_pct': 50} for key in ['US:VOO', 'US:QQQ']]
-    assert all(check['status'] == 'pass' for check in optimizer.vector_checks(rows))
-    optimizer.decision.funding_text = ''
-    assert any(check['status'] == 'fail' for check in optimizer.vector_checks(rows))
+    def checks(holdings):
+        request = AnalysisInput(holdings=[{'name': key, 'instrument_id': key, 'amount_krw': amount, 'kind': 'cash' if key == 'CASH:KRW' else 'etf'}
+                                          for key, amount in holdings], horizon='10년 이상', question='추가 100만원. 매도 금지.')
+        optimizer = Optimizer(MarketData(request), request)
+        optimizer.decision = Decision(funding_text='추가 100만원', constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
+        return optimizer.vector_checks(rows)
+    assert all(check['status'] == 'pass' for check in checks([('US:VOO', 1000000), ('CASH:KRW', 1000000)]))
+    assert any(check['status'] == 'fail' for check in checks([('US:VOO', 1000000)]))
 
 
 async def test_bad_dividends_do_not_destroy_price_eligible_candidates():
@@ -651,7 +652,6 @@ async def test_price_retries_share_collection_time_and_keep_completed_candidates
     assert [row['allocations'] for row in third['candidates']] == [row['allocations'] for row in first['candidates']]
 
 
-
 def test_model_chosen_balanced_weights_remain_selectable_below_historical_winner():
     groups = [[{'weights': [.9, .1], 'duration_pct': 100, 'excess_pp': 40, 'preservation_pct': 60},
                {'weights': [.5, .5], 'duration_pct': 50, 'excess_pp': 10, 'preservation_pct': 100}]]
@@ -670,7 +670,6 @@ async def test_single_researched_combination_is_enough_and_model_can_change_its_
     result = await optimizer.tool({'combinations': [['KR:A', 'KR:B']], 'preferred_allocations': preferred})
     assert result['revision'] > first['revision']
     assert any(row['allocations'] == preferred for row in result['candidates'])
-
 
 
 async def test_model_preferred_weights_still_obey_explicit_customer_limits():
@@ -768,17 +767,19 @@ def test_numerical_noise_cannot_override_outperform_duration_with_equal_final_re
 
 
 def test_funded_candidates_that_would_buy_more_of_a_held_stock_are_dropped_before_ranking():
-    # 비중이 현재보다 낮아도 새 돈이 들어오면 개별주를 더 사야 할 수 있다. 그런 후보가 1위로 남으면 게시에서 거절돼 분석이 실패한다.
+    # 비중이 현재보다 낮아도 새 돈(현금)이 들어오면 개별주를 더 사야 할 수 있다. 그런 후보가 1위로 남으면 게시에서 거절돼 분석이 실패한다.
     from edge_portfolio.catalog import canonicalize
     from edge_portfolio.decision import Decision
-    request = canonicalize(AnalysisInput(holdings=[{'name': 'x', 'instrument_id': key, 'kind': kind, 'amount_krw': 500000}
-                                                   for key, kind in [('KR:005930', 'stock'), ('KR:069500', 'etf')]],
-                                         horizon='10년 이상', question='추가 100만원'))
+    request = canonicalize(AnalysisInput(holdings=[{'name': 'x', 'instrument_id': key, 'kind': kind, 'amount_krw': amount}
+                                                   for key, kind, amount in [('KR:005930', 'stock', 500000), ('KR:069500', 'etf', 500000), ('CASH:KRW', 'cash', 1000000)]],
+                                         horizon='10년 이상'))
     optimizer = Optimizer(MarketData(request), request)
-    optimizer.decision = Decision(kind='rebalance', funding_text='추가 100만원')
+    optimizer.decision = Decision(kind='rebalance')
     def held(weight):
         rows = [{'instrument_id': 'KR:005930', 'weight_pct': weight}, {'instrument_id': 'KR:069500', 'weight_pct': 100 - weight}]
         return next((c['status'] for c in optimizer.vector_checks(rows) if c['kind'] == 'held_stock'), 'pass')
     assert held(25) == 'pass', '₩500,000 of ₩2,000,000 keeps the stock as it is'
-    assert held(30) == 'fail', 'below the current 50% weight but still a ₩100,000 purchase'
+    assert held(30) == 'fail', 'below the current 25%+cash weight but still a ₩100,000 purchase'
     assert held(60) == 'fail'
+
+
