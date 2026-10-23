@@ -123,8 +123,18 @@ test('new server fields take priority over the fallbacks', async ({ page }) => {
   // 기록이 짧으면 머리말이 기간을 숨기지 않는다(계획 '위험: 짧은 기간').
   await expect(page.locator('[data-analytics-section=past] .r8-eyebrow').first()).toHaveText('상장 뒤 4개월, 이렇게 했다면');
   await expect(page.locator('[data-analytics-section=past] h2')).toHaveText('87만 원 더 벌었어요');
+  // 요약(past)의 기간과 다른 옛 기록으로는 그래프를 그리지 않는다 — 제목과 그래프 숫자가 어긋나면 안 된다.
+  await expect(page.locator('.r8-past-chart')).toHaveCount(0);
   await expect(page.locator('[data-analytics-section=analysis] h3')).toHaveText(['왜 반도체 ETF만 바꿔요?']);
   await expect(page.locator('.r8-ask-row')).toHaveText(result.suggested_questions);
+});
+
+test('an old multi-month plan says its target includes money still to be added', async ({ page }) => {
+  // 8차 전 실행표는 추가 자금·여러 달 납입을 목표 금액에 넣었다. 안내가 없으면 목표 금액을 지금 할 거래로 읽는다.
+  const result = base();
+  Object.assign(result.recommendation.execution, { status: 'conditional', additional_krw: '3000000', monthly_krw: '500000', months: 6 });
+  await open(page, result);
+  await expect(page.locator('.r8-final .r8-callout')).toHaveText('추천 금액에는 새로 넣을 300만 원이 들어 있어요. 매달 50만 원씩 6개월 넣어 맞추는 계획이에요.');
 });
 
 test('a first-time investor sees Orca instead of a score and compares with cash', async ({ page }) => {
@@ -170,6 +180,12 @@ test('very large amounts and enlarged text do not overflow the phone width', asy
   await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.locator('.r8-final-row').first().locator('.r8-row-value')).toHaveText('12,345억 6,789만 123원');
+});
+
+test('a broken saved survey step falls back to the first question instead of breaking the result', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-survey:r8', 'constructor'));
+  await open(page, base());
+  await expect(page.locator('[data-analytics-section=survey] h3')).toContainText('얼마나 반영했나요?');
 });
 
 test('the survey asks one question at a time, asks why only when worry grew, and never returns', async ({ page }) => {

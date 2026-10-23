@@ -134,7 +134,7 @@ function FinalCard({ report, rows, color, input }: { report: Report; rows: Row[]
   }).filter(c => c.weight > 0);
   const total = rows.every(r => r.target !== null) && rows.length ? rows.reduce((sum, r) => sum + r.target!, 0) : toNum(plan?.total_krw ?? report.metrics?.total_krw);
   const maxPositions = (input as { constraints?: { kind: string; value?: number }[] } | undefined)?.constraints?.find(c => c.kind === 'max_positions')?.value;
-  const note = report.final_note || (!plan ? withheld(report) : '');
+  const note = report.final_note || (!plan ? withheld(report) : legacyNote(plan.execution));
   return <section className="r8-card r8-final" data-analytics-section="final" aria-labelledby="r8-final-title">
     <div className="r8-row-between"><h2 id="r8-final-title" className="r8-title">최종 추천 포트폴리오</h2>
       {Number.isFinite(plan?.evaluation?.overall) && <span className="r8-rating"><svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d={starPath} /></svg><b>{score(plan!.evaluation.overall!)}</b><span>/ 5</span></span>}</div>
@@ -157,6 +157,16 @@ function FinalCard({ report, rows, color, input }: { report: Report; rows: Row[]
     {total !== null && total > 0 && <div className="r8-total"><span>합계</span><b>{won(total)}</b></div>}
     {note && <p className="r8-callout" role="status"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M12 11v5m0-8h.01" /></svg><span>{note}</span></p>}
   </section>;
+}
+
+// 옛 실행표(8차 전)는 추가 자금·여러 달 납입을 목표 금액에 넣었다. 새 안내(final_note)가 없으면 그 조건을 한 줄로 밝혀
+// 목표 금액을 지금 바로 할 거래로 읽지 않게 한다.
+function legacyNote(execution?: NonNullable<Report['recommendation']>['execution']) {
+  if (!execution || execution.status !== 'conditional') return '';
+  const additional = toNum(execution.additional_krw) ?? 0, monthly = toNum(execution.monthly_krw), months = execution.months;
+  const plan = months && months > 1 && monthly ? `매달 ${won(monthly)}씩 ${months}개월 넣어 맞추는 계획이에요.` : '';
+  const extra = additional > 0 ? `추천 금액에는 새로 넣을 ${won(additional)}이 들어 있어요.` : '';
+  return [extra, plan].filter(Boolean).join(' ') || '추천 금액에는 앞으로 넣을 돈이 들어 있어요.';
 }
 
 function withheld(report: Report) {
@@ -219,7 +229,9 @@ function pastOf(report: Report, history: History | null | undefined, total: numb
   const start = report.period?.start ?? points[0]?.date ?? '', end = report.period?.end ?? points.at(-1)?.date ?? '';
   const hasCurrent = points.length >= 2 && points.every(p => Number.isFinite(p.current) && p.current! > 0);
   const cash = history?.baseline_kind === 'new_cash' || kind === 'start';
-  const rec = points.length >= 2 ? points.map(p => total * p.recommended / points[0].recommended) : null;
+  // 서버 요약(past)이 기록과 다른 기간을 말하면 그 기록으로 그래프를 그리지 않는다 — 제목과 그래프가 다른 숫자를 보이면 안 된다.
+  const sameSpan = !server || !report.period || points.length >= 2 && points[0].date === report.period.start && points.at(-1)!.date === report.period.end;
+  const rec = points.length >= 2 && sameSpan ? points.map(p => total * p.recommended / points[0].recommended) : null;
   const cur = hasCurrent && !cash ? points.map(p => total * p.current! / points[0].current!) : null;
   const recEnd = server ? toNum(server.rec_end_krw)! : rec!.at(-1)!;
   const curEnd = server ? toNum(server.cur_end_krw)! : cash ? total : cur?.at(-1) ?? recEnd;
@@ -248,15 +260,15 @@ function PastChart({ past }: { past: Past }) {
   if (Math.abs(a - b) < 36) { const mid = (a + b) / 2, up = a <= b ? -18 : 18; a = mid + up; b = mid - up; }
   [a, b] = [a, b].map(v => Math.max(16, Math.min(150, v)));
   const otherName = past.mode === 'cash' ? '현금' : '지금 그대로';
-  return <svg className="r8-past-chart" viewBox="0 0 350 168" width="100%" role="img" aria-label={`${past.label} 그래프: 추천 ${won(rec.at(-1)!, true)}${past.mode === 'single' ? '' : `, ${otherName} ${won(cur?.at(-1) ?? past.total, true)}`}`}>
+  return <svg className="r8-past-chart" viewBox="0 0 350 168" width="100%" role="img" aria-label={`${past.label} 그래프: 추천 ${won(past.recEnd, true)}${past.mode === 'single' ? '' : `, ${otherName} ${won(past.curEnd, true)}`}`}>
     <line className="r8-base" x1={L} x2={R} y1={y(past.total)} y2={y(past.total)} />
     <text className="r8-axis" x={L} y={y(past.total) - 6}>넣은 돈 {won(past.total, true)}</text>
     {cur && <><polyline className="r8-line-cur" points={line(cur)} /><circle className="r8-dot-cur" cx={R} cy={otherY} r="4" /></>}
     <polygon className="r8-area" points={`${line(rec)} ${R},${B} ${L},${B}`} />
     <polyline className="r8-line-rec" points={line(rec)} />
     <circle className="r8-dot-rec" cx={R} cy={recEndY} r="5.5" />
-    <text className="r8-tag-rec" x="266" y={a - 6}>추천</text><text className="r8-val-rec" x="266" y={a + 10}>{short(rec.at(-1)!)}</text>
-    {past.mode !== 'single' && <><text className="r8-tag" x="266" y={b - 6}>{otherName}</text><text className="r8-val" x="266" y={b + 10}>{short(cur?.at(-1) ?? past.total)}</text></>}
+    <text className="r8-tag-rec" x="266" y={a - 6}>추천</text><text className="r8-val-rec" x="266" y={a + 10}>{short(past.recEnd)}</text>
+    {past.mode !== 'single' && <><text className="r8-tag" x="266" y={b - 6}>{otherName}</text><text className="r8-val" x="266" y={b + 10}>{short(past.curEnd)}</text></>}
     <text className="r8-axis" x={L} y="164">그때</text><text className="r8-axis" x={R} y="164" textAnchor="end">지금</text>
   </svg>;
 }
@@ -406,7 +418,9 @@ const surveyShown = new Set<string>();
 // 결과 맨 끝 카드. 한 번에 한 문항, 분석 하나에 한 번(남은 문항은 같은 브라우저에서 이어서). 팝업으로 띄우지 않는다.
 function Survey({ jobId }: { jobId: string }) {
   const key = `edge-portfolio-survey:${jobId}`;
-  const [step, setStep] = useState<SurveyStep>(() => { try { return (localStorage.getItem(key) as SurveyStep) || 'fit'; } catch { return 'fit'; } });
+  const [step, setStep] = useState<SurveyStep>(() => {
+    try { const saved = localStorage.getItem(key); return saved === 'done' || saved && Object.hasOwn(surveySteps, saved) ? saved as SurveyStep : 'fit'; } catch { return 'fit'; }
+  });
   const [finished] = useState(step === 'done');
   const [reason, setReason] = useState('');
   const [text, setText] = useState('');
@@ -466,14 +480,14 @@ export function FailedView({ failure, partial, canRetry, busy, onRetry, onEdit, 
 }
 
 const shown = new Set<string>();
-export function ResultView({ report, jobId, input }: { report: Report; jobId: string; input?: Input }) {
+export function ResultView({ report, jobId, input, active = true }: { report: Report; jobId: string; input?: Input; active?: boolean }) {
   const [appOpen, setAppOpen] = useState(false);
   const [typeOpen, setTypeOpen] = useState(false);
   const rows = finalRows(report);
   const hasContent = !!report.recommendation || Number.isFinite(report.current_evaluation?.overall) || rows.length > 0 || analysisItems(report, null).length > 0;
   useEffect(() => {
     // 실제 결과 칸이 그려졌고 고객이 그 탭을 보고 있을 때 분석 하나에 한 번(빈 결과·뒤쪽 탭·StrictMode 재실행은 세지 않는다).
-    if (!hasContent || shown.has(jobId)) return;
+    if (!hasContent || !active || shown.has(jobId)) return;
     function send() {
       if (document.visibilityState !== 'visible' || shown.has(jobId)) return;
       shown.add(jobId); trackResult('result_shown', { analysis_id: jobId });
@@ -481,7 +495,7 @@ export function ResultView({ report, jobId, input }: { report: Report; jobId: st
     send();
     document.addEventListener('visibilitychange', send);
     return () => document.removeEventListener('visibilitychange', send);
-  }, [jobId, hasContent]);
+  }, [jobId, hasContent, active]);
   const colors = new Map<string, string>();
   for (const row of [...rows, ...(report.recommendation?.allocations ?? []).map(a => ({ id: a.instrument_id, kind: a.kind }))]) {
     if (!colors.has(row.id)) colors.set(row.id, row.kind === 'cash' ? 'var(--chart-slate)' : palette[colors.size % palette.length]);

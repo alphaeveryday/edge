@@ -144,7 +144,7 @@ export function Analysis({ embedded = false, active = true }: { embedded?: boole
   return <Container className="app">{!embedded && <a className="dashboard-link" href={preview ? '?preview=dashboard' : '?view=dashboard'} onClick={e => void openDashboard(e)}>내 포트폴리오 ↗</a>}{confirmation}{embedded && jobId && <div className="card-heading"><h2>최근 AI 포폴 분석</h2><Button onClick={reset}>새로 분석하기</Button></div>}{jobId && <div className="nav"><div className="nav__pill"><span className="nav__logo">ETF Orca</span></div></div>}
     {storageWarning && <Notice>{storageWarning}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}
-    {!jobId ? <InputForm onSubmit={submit} busy={busy} initialInput={rejectedInput} /> : job?.state === 'succeeded' && job.result ? <><ResultView report={job.result} jobId={jobId} input={job.input} /><Button variant="secondary" className="secondary" onClick={reset}>새 포트폴리오 분석하기</Button></> : job?.state === 'failed' ? <>
+    {!jobId ? <InputForm onSubmit={submit} busy={busy} initialInput={rejectedInput} /> : job?.state === 'succeeded' && job.result ? <><ResultView report={job.result} jobId={jobId} input={job.input} active={active} /><Button variant="secondary" className="secondary" onClick={reset}>새 포트폴리오 분석하기</Button></> : job?.state === 'failed' ? <>
       <FailedView failure={job.failure} partial={job.result?.partial_report} canRetry={!!job.input} busy={busy} onRetry={retry} onEdit={reset}>
         {job.result?.partial_report && Object.keys(job.result.partial_report.sections || {}).length > 0 && <ReportView report={{ ...job.result.partial_report, recommendation: null,
           completion: { tasks: [], missing_research: [], ...job.result.partial_report.completion, status: 'partial',
