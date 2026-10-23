@@ -59,3 +59,27 @@ def decide(hypotheses: list[dict], evidence: list[dict], *, primary: set[str], p
     confidence = round(min(0.9, 0.5 + 0.1 * margin), 2) if tag != "pending" else round(min(0.4, 0.2 + 0.05 * margin), 2)
     return {"tag": tag, "confidence": confidence, "winner": win["id"], "runnerUp": runner["id"], "margin": margin,
             "scores": scores, "why": why}
+
+
+# ── 전제 검증(ACH 가 동점일 때) ──
+# 원인 가설은 동시에 참일 수 있어(유예도 있었고 단타 수급도 있었다) 어긋남으로 갈리지 않는다. 그때는 '왜 올랐나' 대신
+# '오르게 만든 주장이 사실인가'를 본다: 주장을 핵심 전제로 쪼개 전제마다 상태를 하나 고르고(모델), 태그는 코드가 정한다.
+STATUSES = {"confirmed": "원문 확인", "estimate": "추정·전망", "refuted": "반박됨", "unverified": "확인 불가"}
+
+
+def decide_premises(premises: list[dict]) -> dict:
+    """주가가 기대는 회사 전제(core)만 태그를 가른다(ACH 의 태그 규칙과 같은 뜻).
+    핵심 전제가 반박됨 → 허위매물(과장) · 추정·전망인데 확정처럼 퍼짐 → 허위매물(과장) · 모두 원문 확인 → 유망주(실제 사건) · 그 밖 → 판단 보류."""
+    core = [p for p in premises if p["core"]]
+    if not core:
+        raise AchError("주가가 기대는 회사 전제를 하나 이상 core 로 표시하세요.")
+    if any(p["status"] == "refuted" for p in core):
+        tag, confidence, why = "false", 0.8, "급등을 이끈 주장의 핵심 전제가 원문과 어긋난다"
+    elif any(p["status"] == "estimate" and p["spreadAsFact"] for p in core):
+        tag, confidence, why = "false", 0.7, "추정·전망인 핵심 전제가 확정된 사실처럼 퍼졌다"
+    elif all(p["status"] == "confirmed" for p in core):
+        tag, confidence, why = "promising", 0.7, "핵심 전제가 모두 원문으로 확인된다"
+    else:
+        tag, confidence, why = "pending", 0.3, "핵심 전제 일부를 원문으로 확인하지 못했다"
+    return {"tag": tag, "confidence": confidence, "why": why, "method": "premises",
+            "core": {p["id"]: p["status"] for p in core}}

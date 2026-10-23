@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import datetime, timedelta
 import json
 import logging
@@ -34,23 +35,46 @@ MIN_TRADE_VALUE = 30.0  # 거래대금 하한(억원, 누적 거래대금) — �
 MAX_MOVERS = 15         # 화면에 싣는 종목 수
 NEW_SESSIONS = 5        # 한 실행에서 새로 판정하는 종목 수(나머지는 다음 정각에)
 WATCH_SESSIONS = 3      # 감시가 띄운 '새 종목만' 실행의 세션 수 — 한 묶음(PARALLEL)으로 끝낸다
-HOURLY_GUARD = range(27, 38)  # '새 종목만' 실행은 이 분에 세션을 열지 않는다 — 세션(최대 7분)이 :35 정각 조사의 잠금과 겹친다
+HOURLY_GUARD = range(22, 38)  # '새 종목만' 실행은 이 분에 세션을 열지 않는다 — 세션(최대 7분)+전제 검증(최대 5분)이 :35 정각 조사의 잠금과 겹친다
 MAX_MARKS = 12          # 그래프에 찍는 판정 이력 수(최근 것만)
-PARALLEL = 3            # 판정 세션 동시 실행 — 5종목 × 세션 7분 이내가 잠금(55분) 안에 든다
+PARALLEL = 3            # 판정 세션 동시 실행 — 5종목 × (세션 7분 + 전제 검증 5분) 이내가 잠금(55분) 안에 든다
 FILING_DAYS = 14        # 판정 세션에 넘기는 최근 공시 기간
 NEWS_LIMIT = 15
 SCHEMA = json.loads((Path(__file__).with_name("movers.schema.json")).read_text(encoding="utf-8"))
 _LOGO_TYPES = {"png": "image/png", "jpg": "image/jpeg", "ico": "image/x-icon", "webp": "image/webp"}
 
 
+def _filing_lines(filings: list[dict]) -> str:
+    return "\n".join(f"- {f['acptno']} | {f['at']} | {f['submitter']} | {f['title']}" for f in filings) or "- (최근 공시·시장조치 없음)"
+
+
 def _prompt(m: Mover, filings: list[dict], articles: list[news.Article], series: list[list]) -> str:
     flow = ", ".join(f"{t} {p:,.0f}" for t, p in series[::6]) or "(장중 시세 없음)"
-    disc = "\n".join(f"- {f['acptno']} | {f['at']} | {f['submitter']} | {f['title']}" for f in filings) or "- (최근 공시·시장조치 없음)"
+    disc = _filing_lines(filings)
     heads = "\n".join(f"- {a.source_id} | {a.published[:16]} | {a.publisher} | {a.title}" for a in articles) or "- (수집된 보도 없음)"
     return (f"오늘 급등한 종목: {m.name}({m.code}, {m.market}) 현재가 {m.price:,.0f}원, 전일 대비 {m.change_pct:+.2f}% "
             f"(전일 종가 {m.prev_close:,.0f}원, 거래대금 {m.trade_value:,.0f}억원).\n장중 흐름(30분 간격): {flow}\n\n"
             f"최근 {FILING_DAYS}일 공시·시장조치(한국거래소 KIND, 접수번호 | 시각 | 제출 | 제목 — 목록 자체는 kind-list):\n{disc}\n\n"
             f"관련 보도(최신순):\n{heads}\n\n절차대로 증거를 모으고 가설·증거 표를 채운 뒤 set_verdict 로 판정하고 finish 하세요.")
+
+
+def _premise_prompt(m: Mover, state: dict, filings: list[dict]) -> str:
+    t, v = state["ach"], state["moverVerdict"]
+    hyp = "\n".join(f"- {h['id']} [{h['kind']}] {h['text']}" for h in t["hypotheses"])
+    ev = "\n".join(f"- {e['source']} | {e['weight']} | {e['note']} | " + " ".join(f"{k}={x}" for k, x in e["marks"].items())
+                   for e in t["evidence"])
+    return (f"전제 검증 단계입니다. {m.name}({m.code}) 의 앞 판정은 가장 덜 어긋나는 설명이 둘 이상이라(동점) 판단 보류였습니다.\n"
+            f"앞에서 정리한 급등 이유(claim): {v['claim'] or '(없음)'}\n앞 확인 결과: {v['finding']}\n\n"
+            f"앞 세션의 가설:\n{hyp}\n\n앞 세션의 증거(출처 | 무게 | 내용 | 표시):\n{ev}\n\n"
+            f"최근 {FILING_DAYS}일 공시·시장조치(한국거래소 KIND, 접수번호 | 시각 | 제출 | 제목 — 목록 자체는 kind-list, 원문은 read_disclosure):\n"
+            f"{_filing_lines(filings)}\n\n"
+            "시스템 지시의 '전제 검증' 절차대로 급등을 이끈 주장을 핵심 전제로 쪼개 원 출처로 확인하고 "
+            "set_premises → set_verdict → finish 하세요. 위 출처는 다시 읽지 않고 쓸 수 있습니다.")
+
+
+def _tied(state: dict) -> bool:
+    """ACH 가 가르지 못했다(가장 덜 어긋나는 가설이 둘 이상). 원인 가설이 동시에 참이라 증거를 더 넣어도 갈리지 않는다."""
+    return (state.get("achDecision") or {}).get("margin", 1) < 1
 
 
 def pick(quotes: Quotes) -> list[Mover]:
@@ -207,14 +231,40 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
                 result = session_runner(cfg, ws, code=m.code, prompt=_prompt(m, found, arts[m.code], charts[m.code].series), corpus_path=corpus_path)
             except Exception as error:  # noqa: BLE001 - 한 종목의 실패로 나머지 게시를 버리지 않는다. 보고에 남는다
                 result = session.SessionResult(case_id=m.code, done=False, error=f"{type(error).__name__}: {error}")
+            premise = None
+            if result.done and _tied(ws.state):
+                # 동점이면 같은 작업 폴더(읽은 출처 그대로)에서 전제 검증 세션을 한 번 더, 따로 정한 추가 예산(웹·공시 원문 읽기 포함)으로.
+                # finish 까지 가지 못하면 그 세션의 판정은 초안이다 — 앞 판정(보류)으로 되돌린다(첫 세션과 같은 규칙)
+                first = {k: ws.state.get(k) for k in ("moverVerdict", "ach", "achDecision")}
+                try:
+                    with ws.lock():
+                        state = ws.state
+                        prompt = _premise_prompt(m, state, found)
+                        state.update(done=False, premiseStage=True, webCalls=0, disclosureReads=0)
+                        ws.save_state(state)
+                    extra = replace(cfg, session_timeout=cfg.premise_timeout, max_tool_calls=cfg.premise_tool_calls,
+                                    web_calls=cfg.premise_web_calls)
+                    premise = session_runner(extra, ws, code=m.code, prompt=prompt, corpus_path=corpus_path)
+                except Exception as error:  # noqa: BLE001 - 한 종목의 전제 검증 실패로 실행 전체를 멈추지 않는다
+                    premise = session.SessionResult(case_id=m.code, done=False, error=f"{type(error).__name__}: {error}")
+                if not premise.done:
+                    with ws.lock():
+                        state = ws.state
+                        state.update(first)  # 판정·표·표 판정 모두 앞 세션 것으로(감사 기록이 게시와 어긋나지 않게)
+                        state.pop("premiseDecision", None)
+                        ws.save_state(state)
             state = ws.state
             table = {"ach": state.get("ach"), "decision": state.get("achDecision")}
-            return m.code, (state.get("moverVerdict") if result.done else None), table, result
+            if state.get("premiseDecision"):
+                table |= {"premises": state.get("premises"), "premiseDecision": state["premiseDecision"]}
+            return m.code, (state.get("moverVerdict") if result.done else None), table, result, premise
 
         price_now = {m.code: m.price for m in risers}  # 판정 세션에 보여 준 가격 — 그래프에 판정 시점의 점으로 찍는다
         with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
-            for code, verdict, table, result in pool.map(judge, targets):
-                report["judged"].append({"code": code, "done": result.done, "error": result.error, "usage": result.usage})
+            for code, verdict, table, result, premise in pool.map(judge, targets):
+                report["judged"].append({"code": code, "done": result.done, "error": result.error, "usage": result.usage}
+                                        | ({"premise": {"done": premise.done, "error": premise.error, "usage": premise.usage,
+                                                        "decided": "premiseDecision" in table}} if premise else {}))
                 if verdict:
                     # ACH 표는 비공개 상태에만 둔다(감사용) — 화면에는 판정·글·출처만 나간다
                     history = (_marks(seen[code]) if code in seen else []) + [{"tag": verdict["tag"], "at": now.isoformat(), "price": price_now[code]}]
@@ -266,7 +316,9 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
             log.warning(json.dumps({"event": "movers_dates_failed", "error": str(error)[:200]}, ensure_ascii=False))
     store.put(f"runs/{today}/{run_id}.json", _json(report))
     log.info(json.dumps({"event": "movers_end", "runId": run_id, "movers": len(report["movers"]), "judged": len(report["judged"]),
-                         "failed": report["failed"], "cost": round(sum((j.get("usage") or {}).get("cost", 0) for j in report["judged"]), 4)},
+                         "failed": report["failed"], "premises": sum("premise" in j for j in report["judged"]),
+                         "cost": round(sum((u or {}).get("cost", 0) for j in report["judged"]
+                                           for u in (j.get("usage"), (j.get("premise") or {}).get("usage"))), 4)},
                         ensure_ascii=False))
     return report
 
