@@ -1,6 +1,6 @@
 import { Button, TextInput, TextArea, chartPalette } from './design-system/components';
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
-import { request, ensureVisitorSession, type Catalog, type Instrument, type Holding, type Input } from './api';
+import { request, ensureVisitorSession, type Catalog, type Chip, type Instrument, type Holding, type Input } from './api';
 import { trackAction, trackScreen } from './analytics';
 import { inputDraftKey, legacyDraftKey, readInputDraft, inputDraftFromInput } from './inputDraft';
 import { useConfirmation } from './design-system/confirmation';
@@ -15,6 +15,8 @@ import { pendingKey } from './preview';
 const accounts = ['일반 계좌', 'ISA', '연금저축', 'IRP'];
 const steps = ['지금 가진 것', '앞으로의 계획', '궁금한 점'];
 const asks = ['이대로 가도 될까요?', '매달 얼마씩 어디에 넣을까요?', '하나만 바꾼다면 뭘 바꿀까요?'];
+// 꼭 지킬 조건(서버가 검사한다). '종목 n개 이하'는 1~20개.
+const chipLabels: [Chip['kind'], string][] = [['no_leverage', '레버리지 빼기'], ['some_bonds', '채권도 조금'], ['dividend', '배당 받기'], ['max_positions', '종목 개 이하'], ['no_sell', '갖고 있는 건 팔지 않기'], ['kr_listed_etf_only', '국내 상장 ETF만']];
 const sheetBenefit: Record<string, string> = { '일반 계좌': '제한 없음', ISA: '번 돈 200만 원까지 세금 0원', 연금저축: '세액공제', IRP: '세액공제' };
 // 목록을 못 받아도 바로 담을 수 있게 많이 담는 종목은 화면에 둔다(종목 코드는 서버 목록과 같다).
 const popular: (Instrument & { note: string })[] = [
@@ -56,6 +58,8 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
   const [horizon, setHorizon] = useState(initial?.horizon ?? '');
   const [how, setHow] = useState(initial?.how ?? '');
   const [note, setNote] = useState(initial?.note ?? '');
+  const [chips, setChips] = useState<Chip[]>(initial?.chips ?? []);
+  const [count, setCount] = useState(() => String(initial?.chips?.find(c => c.kind === 'max_positions')?.value ?? ''));
   const [dividendGoal, setDividendGoal] = useState(initial?.dividendGoal ?? '');
   const [contribution, setContribution] = useState(initial?.contribution ?? '');
   const [tax, setTax] = useState<TaxProfile | null>(initial?.tax ?? null);
@@ -66,11 +70,11 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
   const [alternate, setAlternate] = useState<Holding[]>(initial?.alternate ?? []);
   const [storageError, setStorageError] = useState(false);
   useEffect(() => {
-    try { sessionStorage.setItem(inputDraftKey, JSON.stringify({ flow: 3, step, holdings, alternate, selected, question, horizon, how, interests: [], note, dividendGoal, contribution, keyword: '', tax, draftId, mode, total, fresh }));
+    try { sessionStorage.setItem(inputDraftKey, JSON.stringify({ flow: 3, step, holdings, alternate, selected, question, horizon, how, interests: [], note, chips, dividendGoal, contribution, keyword: '', tax, draftId, mode, total, fresh }));
       // Any v2 write supersedes a leftover v1 draft, so clearing v2 later cannot bring the old one back.
       sessionStorage.removeItem(legacyDraftKey); setStorageError(false); }
     catch { setStorageError(true); }
-  }, [step, holdings, alternate, selected, question, horizon, how, note, dividendGoal, contribution, tax, draftId, mode, total, fresh]);
+  }, [step, holdings, alternate, selected, question, horizon, how, note, chips, dividendGoal, contribution, tax, draftId, mode, total, fresh]);
   const previousStep = useRef(step);
   useEffect(() => { if (step !== previousStep.current) { heading.current?.focus({ preventScroll: true }); window.scrollTo(0, 0); previousStep.current = step; } }, [step]);
   const [inputError, setInputError] = useState('');
@@ -176,8 +180,10 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
   function payload(planning = fresh): Input {
     const usable = usableAccounts(selected, [...new Set(holdings.map(h => h.account))], tax);
     // 월 납입은 서버가 읽는 숫자 꼴로 고쳐 보낸다('.5' → '0.5', '1.' → '1').
+    const sent = chips.map(c => c.kind === 'max_positions' ? { kind: c.kind, value: Number(count) } : { kind: c.kind });
     return { holdings: holdings.map((h, i) => ({ ...h, amount_krw: won(h, i) })), horizon, question, input_mode: 'amount', planning,
-      preferences: { accounts: usable, contribution: how + (contribution && how === '매달 꾸준히' ? ` ${Number(contribution)}만 원` : ''), ...(initial?.dividendGoal ? { dividend_goal: dividendGoal } : {}), interests: [], note, tax_profile: taxPayload(tax, usable) } };
+      monthly_krw: how === '매달 꾸준히' && Number(contribution) > 0 ? Math.round(Number(contribution) * 1e4) : null, goal_text: note, constraints: sent,
+      preferences: { accounts: usable, contribution: how + (contribution && how === '매달 꾸준히' ? ` ${Number(contribution)}만 원` : ''), ...(initial?.dividendGoal ? { dividend_goal: dividendGoal } : {}), interests: [], note: '', tax_profile: taxPayload(tax, usable) } };
   }
   async function save() {
     await ensureVisitorSession();
@@ -222,11 +228,12 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
     if (step < 2) { setStep(step + 1); return; }
     onSubmit({ ...payload(), draft_id: draftId });
   }
-  const valid = step === 0 ? holdingsValid || fresh && !holdings.length : step === 1 ? !plan : true;
+  const countOk = !chips.some(c => c.kind === 'max_positions') || /^\d{1,2}$/.test(count) && Number(count) >= 1 && Number(count) <= 20;
+  const valid = step === 0 ? holdingsValid || fresh && !holdings.length : step === 1 ? !plan : countOk;
   const guidance = step === 0 ? (valid ? '' : !holdings.length ? '종목을 하나 이상 담으면 넘어갈 수 있어요'
     : holdings.some(h => !(Number(h.amount_krw) > 0)) ? mode === 'percent' ? '각 종목의 비중을 입력해 주세요.' : '보유 종목의 금액을 입력해 주세요.'
     : invalidHolding ? mode === 'percent' ? '비중은 100% 이하, 소수 둘째 자리까지 적어 주세요.' : '금액은 10조 원 이하로 적어 주세요.'
-    : percentHundredths !== 10000 ? `비중 합계가 100%가 되면 넘어갈 수 있어요. 지금 ${percentSum}%예요.` : Number(total) * 1e4 > 1e13 ? '전체 금액은 10조 원 이하로 적어 주세요.' : tooSmall ? '전체 금액이 너무 작아 비중대로 원 단위로 나눌 수 없어요. 전체 금액을 확인해 주세요.' : '전체 금액을 적으면 넘어갈 수 있어요') : step === 1 ? plan : '';
+    : percentHundredths !== 10000 ? `비중 합계가 100%가 되면 넘어갈 수 있어요. 지금 ${percentSum}%예요.` : Number(total) * 1e4 > 1e13 ? '전체 금액은 10조 원 이하로 적어 주세요.' : tooSmall ? '전체 금액이 너무 작아 비중대로 원 단위로 나눌 수 없어요. 전체 금액을 확인해 주세요.' : '전체 금액을 적으면 넘어갈 수 있어요') : step === 1 ? plan : countOk ? '' : '종목 수는 1~20개로 적어 주세요';
   // Enter on an amount returns to the search, so the next holding needs no pointer.
   function nextSearch(e: KeyboardEvent<HTMLInputElement>) { if (e.key === 'Enter') { e.preventDefault(); reveal(searchBox.current); } }
   const weights = holdings.map(h => mode === 'percent' ? Number(h.amount_krw) || 0 : amountSum > 0 ? (Number(h.amount_krw) || 0) / amountSum * 100 : 0);
@@ -320,8 +327,17 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
           <div className="fl-list">{asks.map(a => <Button key={a} className="fl-suggest" aria-pressed={question === a} onClick={() => setQuestion(a)}><Glyph name="plus" size={16} />{a}</Button>)}</div></section>
         <section className="fl-card"><div className="fl-card__head"><label className="fl-card__title" htmlFor="goal">원하는 포트폴리오</label><span className="fl-optional">선택</span></div>
           <TextArea className="fl-textarea" id="goal" maxLength={1000} value={note} onChange={e => setNote(e.target.value)} placeholder="예: S&P500 60%, 나스닥100 30%로 가고 싶어요" />
-          <p className="fl-card__desc">참고해서 견줘 볼게요.</p>
+          <p className="fl-card__desc">참고해서 견줘 볼게요. 꼭 지킬 것은 아래 조건에서 골라 주세요.</p>
           {initial?.dividendGoal && <label className="fl-field">기존 배당 목표<TextInput className="fl-textarea" value={dividendGoal} maxLength={100} onChange={e => setDividendGoal(e.target.value)} /></label>}</section>
+        <section className="fl-card" aria-labelledby="chips-title"><div className="fl-card__head"><h2 className="fl-card__title" id="chips-title">꼭 지켜야 할 조건</h2><span className="fl-optional">선택</span></div>
+          <p className="fl-card__desc">여기서 고른 조건만 꼭 지켜요. 위에 적은 글은 참고만 해요.</p>
+          <div className="fl-chips" data-align="start" role="group" aria-labelledby="chips-title">{chipLabels.filter(([kind]) => kind !== 'no_sell' || holdings.length).map(([kind, label]) => {
+            const on = chips.some(c => c.kind === kind), toggle = () => setChips(on ? chips.filter(c => c.kind !== kind) : [...chips, { kind }]);
+            return kind === 'max_positions' ? <span key={kind} className="fl-chip fl-chip--count" data-on={on}><Button aria-pressed={on} aria-label={`종목 ${count || 'n'}개 이하`} onClick={toggle}>{on && <Glyph name="check" size={16} />}종목</Button>
+              <TextInput className="fl-bare" aria-label="최대 종목 수" inputMode="numeric" placeholder="n" value={count} onChange={e => { setCount(e.target.value.replace(/\D/g, '').slice(0, 2)); if (!on) setChips([...chips, { kind }]); }} /><span>개 이하</span></span>
+              : <Button key={kind} className="fl-chip" aria-pressed={on} onClick={toggle}>{on && <Glyph name="check" size={16} />}{label}</Button>;
+          })}</div>
+          {chips.some(c => c.kind === 'kr_listed_etf_only') && <p className="fl-card__desc">국내 상장 ETF만: 미국 ETF도 국내에 상장된 것이면 돼요.</p>}</section>
       </>}
     </section>
     {confirmation}

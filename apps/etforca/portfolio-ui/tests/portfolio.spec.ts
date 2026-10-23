@@ -4,9 +4,9 @@ import { readFileSync } from 'node:fs';
 import { addCash, addHolding, startInput } from './holdings';
 const catalog = JSON.parse(readFileSync(new URL('../../portfolio-worker/src/edge_portfolio/data/etf_catalog.json', import.meta.url), 'utf8'));
 
-// 서버 입력 계약(StrictModel, extra=forbid)은 모르는 필드를 422 로 거부한다. 8차 화면이 서버보다 먼저 배포돼도
-// 운영 분석이 깨지지 않게, 화면은 지금 서버가 받는 필드만 보낸다(월 납입은 contribution 글, 비중은 원 단위 금액으로).
-const inputKeys = ['draft_id', 'holdings', 'question', 'horizon', 'input_mode', 'planning', 'preferences'];
+// 서버 입력 계약(StrictModel, extra=forbid)은 모르는 필드를 422 로 거부한다. 화면은 서버(contracts.py AnalysisInput)가 받는 필드만 보낸다.
+// 8차 필드(#1542): 매달 넣을 돈은 원 단위 monthly_krw, '원하는 포트폴리오' 글은 goal_text(참고), 지킬 조건은 칩 constraints 만.
+const inputKeys = ['draft_id', 'holdings', 'question', 'horizon', 'input_mode', 'planning', 'preferences', 'monthly_krw', 'goal_text', 'constraints'];
 const preferenceKeys = ['accounts', 'contribution', 'dividend_goal', 'interests', 'note', 'tax_profile'];
 test('the three input steps reach analysis using only fields the server accepts', async ({ page }) => {
   let submitted: any;
@@ -22,9 +22,41 @@ test('the three input steps reach analysis using only fields the server accepts'
   await expect(page.locator('.progress')).toBeVisible();
   expect(Object.keys(submitted).every(k => inputKeys.includes(k))).toBe(true);
   expect(Object.keys(submitted.preferences).every(k => preferenceKeys.includes(k))).toBe(true);
-  expect(submitted).toMatchObject({ input_mode: 'amount', horizon: '10년 이상', planning: false,
+  expect(submitted).toMatchObject({ input_mode: 'amount', horizon: '10년 이상', planning: false, monthly_krw: 1000000, goal_text: '', constraints: [],
     holdings: [{ instrument_id: 'KR:069500', amount_krw: '7000000' }, { instrument_id: 'KR:360750', amount_krw: '3000000' }],
-    preferences: { accounts: ['일반 계좌'], contribution: '매달 꾸준히 100만 원', interests: [], tax_profile: null } });
+    preferences: { accounts: ['일반 계좌'], contribution: '매달 꾸준히 100만 원', interests: [], note: '', tax_profile: null } });
+});
+
+// 지킬 조건은 고른 칩만 보낸다(글은 참고). '종목 n개 이하'는 서버가 1~20만 받으므로 그 밖은 화면이 먼저 막는다.
+test('chosen chips are the only constraints and the position limit is validated before sending', async ({ page }) => {
+  let submitted: any;
+  await page.route('**/api/portfolio/**', route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/catalog')) return route.fulfill({ json: catalog });
+    if (path.endsWith('/analyses') && route.request().method() === 'POST') submitted = route.request().postDataJSON();
+    if (path.includes('/analyses')) return route.fulfill({ json: { id: 'chip-job', state: 'queued' } });
+    return route.fulfill({ json: {} });
+  });
+  await page.goto('/portfolio/');
+  await addCash(page);
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await page.getByRole('button', { name: '안 넣어요', exact: true }).click();
+  await page.getByRole('button', { name: /^3년 안/ }).click();
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await page.getByLabel('원하는 포트폴리오').fill('레버리지는 빼고 S&P500 위주로');
+  const chips = page.getByRole('group', { name: '꼭 지켜야 할 조건' });
+  await chips.getByRole('button', { name: '레버리지 빼기' }).click();
+  await chips.getByRole('button', { name: '국내 상장 ETF만' }).click();
+  await expect(page.getByText('미국 ETF도 국내에 상장된 것이면 돼요')).toBeVisible();
+  await chips.getByLabel('최대 종목 수').fill('25');
+  await expect(page.locator('#step-guidance')).toHaveText('종목 수는 1~20개로 적어 주세요');
+  await expect(page.getByRole('button', { name: '분석 시작하기' })).toBeDisabled();
+  await chips.getByLabel('최대 종목 수').fill('5');
+  await page.getByRole('button', { name: '분석 시작하기' }).click();
+  await expect.poll(() => submitted?.constraints).toEqual([{ kind: 'no_leverage' }, { kind: 'kr_listed_etf_only' }, { kind: 'max_positions', value: 5 }]);
+  expect(submitted.goal_text).toBe('레버리지는 빼고 S&P500 위주로');
+  expect(submitted.monthly_krw).toBeNull();
+  expect(submitted.preferences.note).toBe('');
 });
 
 test('timeout explains interruption and preserved input without blaming customer data', async ({ page }) => {

@@ -31,6 +31,7 @@ test('monthly amount: presets, −/+ and direct entry; zero is refused before th
   await page.getByRole('button', { name: /^10년 넘게 뒤/ }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await expect.poll(() => saved?.preferences.contribution).toBe('매달 꾸준히 0.5만 원');
+  expect(saved.monthly_krw).toBe(5000);
   await page.getByRole('button', { name: '앞 단계로' }).click();
   await page.getByRole('button', { name: '50만', exact: true }).click();
   await expect(page.getByRole('button', { name: '50만', exact: true })).toHaveAttribute('aria-pressed', 'true');
@@ -44,4 +45,6 @@ test('monthly amount: presets, −/+ and direct entry; zero is refused before th
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await expect.poll(() => saved?.preferences.contribution).toBe('아직 고민 중');
   expect(saved.planning).toBe(true);
+  // '아직 몰라요'는 매달 넣을 돈이 없다는 뜻이다 — 숫자 칸(monthly_krw)은 비운다.
+  expect(saved.monthly_krw).toBeNull();
 });

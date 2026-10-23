@@ -137,6 +137,11 @@ body:has(.fl[data-surface=plain]) { background: var(--color-surface); }
 /* 칩·선택 타일 */
 .fl-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
 .fl .fl-chip { min-height: 44px; padding: 0 14px; border: 1px solid var(--color-border); border-radius: var(--radius-pill); background: var(--color-surface); font-size: .9375rem; display: inline-flex; align-items: center; gap: 4px; }
+.fl-chips[data-align=start] { justify-content: flex-start; }
+.fl .fl-chip--count { padding: 0 6px 0 0; gap: 4px; }
+.fl .fl-chip--count .ds-button { min-height: 42px; padding: 0 4px 0 14px; display: inline-flex; align-items: center; gap: 4px; border-radius: var(--radius-pill); }
+.fl .fl-chip--count[data-on=true] { border-color: var(--color-primary); background: var(--color-primary-soft); color: var(--color-primary); font-weight: 600; }
+.fl .fl-chip--count .ds-input.fl-bare { width: 2.5em; height: 30px; border-radius: 8px; background: var(--color-canvas); text-align: center; }
 .fl .fl-chip[aria-pressed=true] { border-color: var(--color-primary); background: var(--color-primary-soft); color: var(--color-primary); font-weight: 600; }
 .fl-tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .fl .fl-tile { position: relative; min-height: 92px; border: 1px solid var(--color-border); border-radius: 16px; background: var(--color-surface); padding: 14px 44px 14px 14px; display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
