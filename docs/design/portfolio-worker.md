@@ -164,7 +164,7 @@ LLM이 지정한 비중은 소수점 8자리까지 검산하며 유효한 가격
 | 필드 | 만드는 곳 | 뜻 |
 |---|---|---|
 | `verdict {kind, headline}` | kind 는 코드, headline 은 모델 | 가진 것이 현금뿐이거나 없으면 `start`, 사고팔 행이 없으면 `keep`, 판 종목 수와 산 종목 수 가운데 큰 쪽이 1이면 `one`(하나를 팔아 하나를 사는 교체 포함), 그 밖은 `rebuild`. 실행표가 없으면(금액 모름) 싣지 않는다 |
-| `answer` | 모델 | 물어본 것에 돈으로 답한 문장. 안의 금액은 실행표(`before_krw`·`target_krw`·`buy_krw`·`sell_krw`·계좌 합계)·`monthly_plan`·`past` 값과 그 합·차이여야 한다. 쓴 자리(원 또는 만 원)까지 반올림한 값이면 같다고 본다('3천만'·'1억 5천만' 표기도 같은 검사). 어긋나면 쓸 수 있는 금액 목록과 함께 고쳐 쓰게 하고(분석 전체에서 2번), 그래도 틀리면 답만 빼고 결과를 낸다(`answer_dropped` 진단 이벤트) |
+| `answer` | 모델 | 물어본 것에 돈으로 답한 문장. 안의 금액은 실행표(`before_krw`·`target_krw`·`buy_krw`·`sell_krw`·계좌 합계)·`monthly_plan`·`past`·검산한 계산 결과(`scenarios`) 값과 그 합·차이여야 한다. 쓴 자리(원 또는 만 원)까지 반올림한 값이면 같다고 본다('3천만'·'1억 5천만' 표기도 같은 검사). 어긋나면 쓸 수 있는 금액 목록과 함께 고쳐 쓰게 하고(분석 전체에서 2번), 그래도 틀리면 답만 빼고 결과를 낸다(`answer_dropped` 진단 이벤트) |
 | `constraint_results [{kind, status, note}]` | 코드 | 고른 칩마다 `kept`·`substituted` 와 정해진 안내 문장 |
 | `final_note` | 모델 | 최종 추천 칸 아래 안내 한 줄 |
 | `period {start, end, label, shortest_instrument_id}` | 코드 | `historical_performance` 와 같은 비교 기간. 가장 늦게 상장한 종목이 기간을 정하면 그 종목과 '상장 뒤 N개월'(30일 미만은 N일), 1년 이상이면 '최근 N년' |

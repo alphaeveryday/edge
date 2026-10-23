@@ -282,3 +282,12 @@ def test_mixed_thousand_and_hundred_amounts_are_read_whole():
     assert answer_amount_error(published, request)  # '5백만'만 읽고 통과하면 안 된다
     published['answer'] = '5백만 원은 그대로 두세요.'
     assert answer_amount_error(published, request) is None
+
+
+def test_calculation_answers_may_use_verified_scenario_amounts():
+    # 계산만 묻는 질문('10년 뒤 얼마?')의 답은 검산한 계산 결과 금액을 써야 한다
+    request = holder([('KR:069500', 10000000, '일반 계좌')])
+    published = {'scenarios': {'status': 'available', 'principal_krw': '10000000', 'monthly_krw': '500000',
+                               'rows': [{'annual_return_pct': '5', 'years': 10, 'future_krw': '93470527', 'paid_krw': '70000000'}]},
+                 'answer': '10년 뒤 9,347만 원이에요. 넣은 돈 7,000만 원에 2,347만 원이 불어나요.'}
+    assert answer_amount_error(published, request) is None

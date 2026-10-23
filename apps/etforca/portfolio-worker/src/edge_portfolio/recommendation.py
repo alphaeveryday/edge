@@ -289,7 +289,7 @@ def result_fields(published, sections, final, request, checks, catalog, sources)
 
 
 def allowed_amounts(published, request):
-    """answer 문장이 쓸 수 있는 금액: 최종 추천(2번 칸)·매달 넣을 돈(3번)·지난 기간(4번) 값과 그 합·차이."""
+    """answer 문장이 쓸 수 있는 금액: 최종 추천(2번 칸)·매달 넣을 돈(3번)·지난 기간(4번)·검산한 계산 결과 값과 그 합·차이."""
     values = {0}
     def add(*items):
         values.update(abs(int(Decimal(str(item)))) for item in items if item not in (None, ''))
@@ -316,6 +316,13 @@ def allowed_amounts(published, request):
         for key in (row['instrument_id'], row['account']):
             monthly[key] = monthly.get(key, 0) + int(row['krw'])
     add(execution.get('monthly_krw'), *monthly.values())
+    scenarios = published.get('scenarios') or {}  # 계산만 묻는 질문은 검산한 계산 결과의 금액을 쓴다
+    if scenarios.get('status') == 'available':
+        add(scenarios.get('principal_krw'), scenarios.get('monthly_krw'))
+        for row in scenarios.get('rows', []):
+            add(row.get('future_krw'), row.get('paid_krw'))
+            if row.get('future_krw') and row.get('paid_krw'):
+                add(int(Decimal(row['future_krw'])) - int(Decimal(row['paid_krw'])))  # 불어난 돈
     past = published.get('past') or {}
     add(*past.values())
     if past.get('rec_end_krw') and past.get('cur_end_krw'):
