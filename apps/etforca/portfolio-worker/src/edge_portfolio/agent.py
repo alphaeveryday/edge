@@ -23,7 +23,7 @@ from .recommendation import search_etfs, publish_recommendation
 from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report, model_price_payload
 from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
-from .decision import Decision, QuestionSection, validate_decision, check_constraints, filter_preference_constraints
+from .decision import ACCEPTED, Decision, QuestionSection, validate_decision, check_constraints
 from .execution import execution_tool, resolve_funding, zero_funding_quote, funding_assumptions, validate_funding, TOOL as EXECUTION_TOOL
 from .scenarios import build_scenarios, ScenarioToolInput, stated_principal, principal_declaration, principal_context_matches, principal_preference_matches, TOOL as SCENARIO_TOOL
 from .evidence_quality import inspect_body, source_page
@@ -563,7 +563,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                        'status': 'model_review' if rule.kind == 'unverified' else 'unknown',
                                        'reason': 'MODEL_REVIEW' if rule.kind == 'unverified' else 'NO_ALLOCATION_SELECTED'}
                                       for number, rule in enumerate(decision.constraints, 1)]
-                        if final.recommendation and any(check['status'] not in {'pass', 'model_review'} for check in checks):
+                        if final.recommendation and any(check['status'] not in ACCEPTED for check in checks):
                             raise ValueError('CUSTOMER_CONSTRAINT_NOT_SATISFIED: select another candidate; never relax mandatory constraints: ' + json.dumps(checks, ensure_ascii=False))
                         validation_step = 'report_sections'
                         sections = {name: validate_section('question' if source_free_allowed and (decision.scenario_requested or not evidence.sources) and getattr(final, name).limitations else name,
@@ -580,7 +580,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if not selected and optimizer.result['candidates']:
                             if not execution_rejection and all(row['candidate_id'] in execution_failures for row in optimizer.result['candidates']):
                                 execution_rejection = execution_failures[optimizer.result['candidates'][0]['candidate_id']]
-                            blocked = any(check['status'] not in {'pass', 'model_review'} and check.get('reason') != 'NO_ALLOCATION_SELECTED' for check in checks)
+                            blocked = any(check['status'] not in ACCEPTED and check.get('reason') != 'NO_ALLOCATION_SELECTED' for check in checks)
                             published['optimization']['reason'] = 'EXECUTION_INFEASIBLE' if execution_rejection else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RECOMMENDATION_WITHHELD'
                             if execution_rejection:
                                 published['execution_rejection'] = execution_rejection
@@ -641,28 +641,14 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             decision = validate_decision(interpreted.decision, request, market.catalog, question_text=followup_question or request.question)
                             if prior_report:
                                 inherited = Decision.model_validate(prior_report.get('decision') or {})
-                                rules = {}
-                                resolved_sources = ({rule.source for rule in decision.constraints if rule.kind != 'unverified'}
-                                                    - {rule.source for rule in decision.constraints if rule.kind == 'unverified'})
-                                for rule in [*inherited.constraints, *decision.constraints]:
-                                    if rule.kind == 'unverified' and rule.source in resolved_sources:
-                                        continue
-                                    identity = rule.model_dump(mode='json', exclude={'source'})
-                                    if rule.kind == 'unverified':
-                                        identity['source'] = rule.source
-                                    for name in ('instrument_ids', 'accounts', 'markets'):
-                                        identity[name] = sorted(identity[name])
-                                    rules.setdefault(json.dumps(identity, sort_keys=True), rule)
-                                decision.constraints = list(rules.values())
-                                filter_preference_constraints(decision, request, question_text=followup_question)
+                                # 조건은 저장된 입력의 칩에서 다시 만든다(validate_decision). 옛 보고서의 글 조건은 잇지 않는다
                                 decision.objectives = decision.objectives or inherited.objectives
-                                if decision.funding is None and not decision.funding_text:
+                                # 숫자 칸의 월 납입이 있으면 옛 글 해석을 물려받지 않는다. 그래야 저장된 monthly_krw 가 그대로 쓰인다
+                                if decision.funding is None and not decision.funding_text and getattr(request, 'monthly_krw', None) is None:
                                     decision.funding = inherited.funding.model_copy(deep=True) if inherited.funding is not None else None
                                 decision.funding_text = zero_funding_quote(request, decision) or decision.funding_text or inherited.funding_text
                                 if followup_question:
                                     decision.questions = [question for question in decision.questions if question in followup_question] or [followup_question]
-                                # Each extraction is bounded and validated already; merging
-                                # must not discard inherited rules at the extraction limit.
                                 context['active_decision'] = decision.model_dump(mode='json')
                                 saved_target_verified = prior_report.get('parent_state') != 'failed' and (prior_report.get('completion') or {}).get('status') == 'complete'
                                 if (decision.execute_saved_target or decision.execution_requested) and prior_report.get('recommendation') and saved_target_verified:
@@ -678,7 +664,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                                 'required_additional_krw': None, 'additional_krw': '0', 'monthly_krw': None,
                                                 'allocation_scope': 'total_portfolio'}
                                             current_checks = []
-                                        if any(check['status'] not in {'pass', 'model_review'} for check in current_checks):
+                                        if any(check['status'] not in ACCEPTED for check in current_checks):
                                             followup_execution.update(status='needs_input' if any(check['status'] == 'unknown' for check in current_checks) else 'infeasible',
                                                 rows=[], reasons=['CUSTOMER_CONSTRAINT_NOT_SATISFIED'])
                                         context['saved_target_execution'] = followup_execution

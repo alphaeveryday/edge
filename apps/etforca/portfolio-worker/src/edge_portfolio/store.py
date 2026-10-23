@@ -82,10 +82,10 @@ def save_draft(draft_id, owner, payload):
     preferences = payload['preferences']
     sections = {
         'portfolio': {k: payload[k] for k in ('holdings', 'question', 'input_mode', 'planning')},
-        'funding': {'contribution': preferences['contribution']},
+        'funding': {'contribution': preferences['contribution'], 'monthly_krw': payload.get('monthly_krw')},
         'horizon': {'horizon': payload['horizon']},
-        'interests': {'interests': preferences['interests']},
-        'notes': {'note': preferences['note']},
+        'interests': {'interests': preferences['interests'], 'constraints': payload.get('constraints', [])},
+        'notes': {'note': preferences['note'], 'goal_text': payload.get('goal_text', '')},
         'tax': {'accounts': preferences['accounts'], 'tax_profile': preferences['tax_profile']},
     }
     with connect() as db:

@@ -9,7 +9,7 @@ import numpy as np
 
 from .market_data import fetch_prices, normalized_prices, comparison_bounds, expected_sessions, history_basis, history_returns, price_failure, weights
 from .recommendation import selected_accounts, allocation_error
-from .decision import Decision, check_constraints
+from .decision import ACCEPTED, Decision, check_constraints
 from .execution import plan_execution
 from .catalog import price_symbol
 from .contracts import calculate
@@ -129,7 +129,7 @@ class Optimizer:
             if any(sorted((row['instrument_id'], row['weight_pct']) for row in candidate['allocations']) == list(preferred)
                    for candidate in result.get('candidates', [])):
                 continue
-            if any(check['status'] not in {'pass', 'model_review'} for check in self.vector_checks(rows)):
+            if any(check['status'] not in ACCEPTED for check in self.vector_checks(rows)):
                 continue
             result.setdefault('comparison_status', result['status'])
             result.setdefault('comparison_reason', result.get('reason'))
@@ -337,7 +337,7 @@ class Optimizer:
                 for row in rows[:]:
                     allocation = [{'instrument_id': key, 'weight_pct': round(weight * 100, 8)} for key, weight in zip(ids_in_group, row['weights'])]
                     checks = self.vector_checks(allocation)
-                    if any(check['status'] not in {'pass', 'model_review'} for check in checks):
+                    if any(check['status'] not in ACCEPTED for check in checks):
                         unknown_count += any(check['status'] == 'unknown' for check in checks)
                         rejected_count += 1
                         rows.remove(row)

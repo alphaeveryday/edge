@@ -180,9 +180,11 @@ def submit(body: AnalysisInput, request: Request, idempotency_key: UUID = Header
         raise HTTPException(422, 'HOLDING_WEIGHTS_REQUIRED')
     from .execution import parse_funding
     contribution = body.preferences.contribution.strip()
-    if not contribution:
+    if body.monthly_krw is not None:
+        pass  # 8차 입력: 매달 넣을 돈을 숫자 칸으로 받는다. 글 선택지는 없어도 된다
+    elif not contribution:
         raise HTTPException(422, 'CONTRIBUTION_CHOICE_REQUIRED')
-    if contribution.startswith('매달 꾸준히'):
+    elif contribution.startswith('매달 꾸준히'):
         if not parse_funding(contribution):
             raise HTTPException(422, 'MONTHLY_AMOUNT_REQUIRED')
     elif contribution not in {'이미 다 매수한 상태에요', '목돈 한 번에', '아직 고민 중'} and not parse_funding(contribution):

@@ -154,7 +154,24 @@ def funding_assumptions(funding):
             for name in dict.fromkeys(funding.estimated_fields) if getattr(funding, name) is not None)]
 
 
+def uses_text_funding(request, decision=None):
+    """8차: 입력 칸의 월 납입(monthly_krw)이 글 해석보다 먼저다. 후속 질문이 납입을 새로 정하면(검증된 funding) 그 값이 먼저다.
+    후속 질문은 이 경우 저장된 funding 을 물려받지 않는다(agent.py)."""
+    if getattr(request, 'monthly_krw', None) is None:
+        return True
+    # 원금만 다시 말한 funding(monthly_krw=None)은 납입을 바꾼 것이 아니다. 0원이나 '추가 납입 없이'는 바꾼(멈춘) 것이다
+    return bool(getattr(request, 'funding_questions', None) and decision and decision.funding is not None
+                and (decision.funding.monthly_krw is not None or zero_funding_quote(request, decision)))
+
+
 def resolve_funding(request, decision=None):
+    funding = resolve_text_funding(request, decision)
+    if uses_text_funding(request, decision):
+        return funding
+    return {'additional_krw': Decimal(0), **(funding or {}), 'monthly_krw': Decimal(request.monthly_krw)}
+
+
+def resolve_text_funding(request, decision=None):
     if decision and decision.funding is not None:
         funding = decision.funding
         return {'additional_krw': Decimal(funding.additional_krw),
@@ -246,7 +263,7 @@ def plan_execution(request, allocations, decision=None):
     rules = [rule for rule in decision.constraints if rule.kind == 'no_sell'] if decision else []
     no_sell_ids = set().union(*(set(rule.instrument_ids) for rule in rules)) if rules and all(rule.instrument_ids for rule in rules) else set()
     result = build_execution(request, allocations, monthly_krw=funding.get('monthly_krw'), no_sell=bool(rules), no_sell_ids=no_sell_ids)
-    if result['monthly_plan'] and decision and decision.funding is not None:
+    if result['monthly_plan'] and decision and decision.funding is not None and uses_text_funding(request, decision):
         result['assumptions'].extend(funding_assumptions(decision.funding))  # 추정한 월 납입은 가정이라고 적는다
     return result
 
@@ -310,7 +327,21 @@ def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no
     if len(target) != len(allocations) or not target or sum(target.values()) != 100 or any(not w.is_finite() or w <= 0 for w in target.values()):
         raise ValueError('INVALID_EXECUTION_ALLOCATION')
     stocks = {holding.instrument_id for holding in request.holdings if holding.kind == 'stock'}
+    # 매달 넣는 돈은 칩이 막은 종목(레버리지, 국내 상장이 아닌 것)에 넣지 않는다. 팔지 않기로 남긴 레버리지는 이렇게 몫이 줄어든다
+    chips = {chip.kind for chip in getattr(request, 'constraints', [])}
+    no_monthly = set(stocks)
+    if chips & {'no_leverage', 'kr_listed_etf_only'}:
+        from .catalog import instruments, traits
+        for key in target:
+            item = instruments().get(key[0], {})
+            if 'no_leverage' in chips and 'leverage' in traits(item) or 'kr_listed_etf_only' in chips and item.get('market') != 'KR':
+                no_monthly.add(key[0])
     def monthly_plan(deposits):
+        if monthly and not any(key[0] != 'CASH:KRW' and key[0] not in no_monthly for key in target) \
+                and any(key[0] != 'CASH:KRW' and key[0] not in stocks for key in target):
+            # 칩이 추천 구성의 모든 종목에 매달 넣는 것을 막았다(예: 레버리지만 가진 채 팔지 않기). 실행 불가가 아니다
+            result['assumptions'].append('고른 조건 때문에 추천 구성 안에는 매달 넣을 종목이 없어요.')
+            return []
         if monthly:
             room_left = {}
             for account in {key[1] for key in target}:
@@ -318,7 +349,7 @@ def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no
                 if room is not None:  # 연금 두 계좌는 같은 한도에서 두 계좌에 넣은 돈을 함께 뺀다
                     group = limit_group(account)
                     room_left[group] = room - sum(value for name, value in deposits.items() if limit_group(name) == group)
-            result['monthly_plan'] = split_monthly(monthly, target, room_left, stocks)
+            result['monthly_plan'] = split_monthly(monthly, target, room_left, no_monthly)
             if not result['monthly_plan']:
                 # 금액은 알고 있다. 받을 계좌가 없을 뿐이니 입력을 다시 묻지 말고 배치를 고치게 한다
                 return ['MONTHLY_CONTRIBUTION_LIMIT_EXCEEDED']
