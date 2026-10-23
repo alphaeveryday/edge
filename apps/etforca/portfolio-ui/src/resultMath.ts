@@ -1,4 +1,5 @@
 import type { History, Input, Report } from './api';
+import { executionReasons } from './ExecutionPlan';
 
 // 8차 결과 화면의 금액·판정·과거 성과·앞으로 내 돈 계산. 화면 코드(ResultView)와 떼어 따로 검사한다(portfolio-ui/AGENTS.md: 금융 계산은 디자인 코드에 넣지 않는다).
 export type Kind = 'keep' | 'one' | 'rebuild' | 'start';
@@ -56,7 +57,12 @@ export function verdictKind(report: Report, rows: Row[], input?: Input): Kind | 
 // 옛 실행표(8차 전)는 추가 자금·여러 달 납입을 목표 금액에 넣었다. 새 안내(final_note)가 없으면 그 조건을 한 줄로 밝혀
 // 목표 금액을 지금 바로 할 거래로 읽지 않게 한다.
 export function legacyNote(execution?: NonNullable<Report['recommendation']>['execution']) {
-  if (!execution || (execution.status !== 'ready' && execution.status !== 'conditional')) return '';
+  if (!execution) return '';
+  // 옛 보고서는 확인할 것(납입 한도·계좌 개설 등)이 남은 추천도 냈다. 고객이 그대로 실행하지 않게 먼저 확인할 것을 밝힌다.
+  if (execution.status === 'needs_input' || execution.status === 'infeasible') {
+    const needs = [...new Set((execution.reasons ?? []).map(reason => { const [code, account] = reason.split(':'); return `${account ? `${account} · ` : ''}${executionReasons[code] || '실행 조건을 더 확인해야 해요.'}`; }))];
+    return [execution.status === 'infeasible' ? '지금 조건으로는 이 구성을 바로 실행할 수 없어요.' : '실행하기 전에 확인할 것이 있어요.', ...needs].join(' ');
+  }
   // 계좌 사이로 돈을 옮겨야 하는 옛 실행표: 한 계좌에서 판 돈이 다른 계좌의 매수 대금이 되지 않으므로 넣고 뺄 돈을 밝힌다.
   const transfers = (execution.accounts ?? []).flatMap(a => [
     (toNum(a.withdrawal_krw) ?? 0) > 0 ? `${a.account}에서 ${won(toNum(a.withdrawal_krw)!)} 빼기` : '',

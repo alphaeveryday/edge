@@ -45,6 +45,9 @@ test('money words, deepest fall, five-percent projection and account transfers a
   expect(legacyNote({ status: 'ready', reasons: [], assumptions: [], additional_krw: '0', monthly_krw: null, required_additional_krw: null, months: null, rows: [],
     accounts: [{ account: '일반 계좌', deposit_krw: '0', withdrawal_krw: '3000000' }, { account: 'ISA', deposit_krw: '3000000', withdrawal_krw: '0' }] }))
     .toBe('계좌 사이 옮길 돈: 일반 계좌에서 300만 원 빼기, ISA에 300만 원 넣기.');
+  // 확인할 것이 남은 옛 추천은 그 조건을 먼저 보인다(예전 ExecutionDetails 가 하던 일).
+  expect(legacyNote({ status: 'needs_input', reasons: ['ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED:ISA'], assumptions: [], additional_krw: '0', monthly_krw: null, required_additional_krw: null, months: null, rows: [], accounts: [] }))
+    .toBe('실행하기 전에 확인할 것이 있어요. ISA · 금융사에서 남은 납입 한도를 확인해야 해요.');
 });
 
 async function open(page: Page, result: unknown, input: unknown = { question: '이 구성으로 계속 들고 가도 돼요?', horizon: '10년 이상', holdings: [] }) {
