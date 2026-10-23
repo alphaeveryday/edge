@@ -29,22 +29,6 @@ def test_amounts_and_score_are_computed_and_current_input_is_not_the_recommendat
     assert plan['expected_return_1y'] is None and plan['historical_performance'] is None
 
 
-def test_unchanged_percentage_does_not_hide_a_required_top_up():
-    from edge_portfolio.decision import Decision
-    request = AnalysisInput(holdings=[{'name': key, 'instrument_id': key, 'amount_krw': 500000} for key in ['US:VOO', 'US:QQQ']],
-                            horizon='10년 이상', question='추가 100만원')
-    raw = final_payload()
-    raw['recommendation']['allocations'] = [{'instrument_id': key, 'account': '일반 계좌', 'weight_pct': weight}
-        for key, weight in [('US:VOO', 50), ('US:QQQ', 30), ('US:VTI', 20)]]
-    decision = Decision(kind='rebalance', funding_text='추가 100만원')
-    plan = publish_recommendation(FinalReport.model_validate(raw), request, calculate(request), SOURCES, decision)['recommendation']
-    voo = next(action for action in plan['actions'] if action['instrument_id'] == 'US:VOO')
-    assert voo['before_pct'] == voo['after_pct'] == 50
-    assert voo['buy_krw'] == '500000'
-    assert voo['action'] == '추가 매수'
-    assert plan['total_krw'] == '2000000'
-
-
 def test_recommended_rating_is_required():
     raw = final_payload()
     raw['recommendation']['evaluation']['scores'] = None
@@ -147,17 +131,16 @@ def test_sentence_boundary_preserves_etf_initialisms_and_decimal_values():
 def test_a_held_stock_can_be_kept_or_reduced_but_never_bought_and_no_new_stock_is_published():
     # 고객이 넣은 개별주는 분석·유지·축소할 수 있다. AI가 새 개별주를 담거나 보유 개별주를 더 사게 하면 안 된다.
     from edge_portfolio.catalog import canonicalize
-    from edge_portfolio.decision import Decision
-    request = canonicalize(AnalysisInput(holdings=[{'name': 'x', 'instrument_id': key, 'amount_krw': 500000} for key in ['US:AAPL', 'US:VOO']],
-                                         horizon='10년 이상', question='추가 100만원'))
     def plan(rows, funded=False):
+        holdings = [('US:AAPL', 500000), ('US:VOO', 500000), *([('CASH:KRW', 1000000)] if funded else [])]
+        request = canonicalize(AnalysisInput(holdings=[{'name': 'x', 'instrument_id': key, 'amount_krw': amount, 'kind': 'cash' if key == 'CASH:KRW' else 'etf'}
+                                                       for key, amount in holdings], horizon='10년 이상'))
         raw = final_payload()
         raw['recommendation']['allocations'] = [{'instrument_id': key, 'account': '일반 계좌', 'weight_pct': weight} for key, weight in rows]
-        decision = Decision(kind='rebalance', funding_text='추가 100만원') if funded else None
-        return publish_recommendation(FinalReport.model_validate(raw), request, calculate(request), SOURCES, decision)['recommendation']
+        return publish_recommendation(FinalReport.model_validate(raw), request, calculate(request), SOURCES, None)['recommendation']
     kept = plan([('US:AAPL', 25), ('US:VOO', 75)], funded=True)
     assert next(row for row in kept['allocations'] if row['instrument_id'] == 'US:AAPL')['kind'] == 'stock'
-    assert next(a for a in kept['actions'] if a['instrument_id'] == 'US:AAPL')['buy_krw'] == '0', 'new money goes to the ETF'
+    assert next(r for r in kept['execution']['rows'] if r['instrument_id'] == 'US:AAPL')['buy_krw'] == '0', 'new cash goes to the ETF'
     with pytest.raises(ValueError, match='never bought more'):
         plan([('US:AAPL', 40), ('US:VOO', 60)], funded=True)
     with pytest.raises(ValueError, match='never bought more'):

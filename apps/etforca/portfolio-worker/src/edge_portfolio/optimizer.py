@@ -408,11 +408,9 @@ class Optimizer:
                     status = 'pass'
                 elif self.request.input_mode == 'percent':
                     status = check_constraints(self.decision.model_copy(update={'constraints': [rule]}), rows, self.request, self.market.catalog)[0]['status']
-                elif plan['status'] not in {'ready', 'conditional'}:
+                elif plan['status'] == 'needs_input':
                     status = 'unknown'
-                elif plan['monthly_krw'] and Decimal(plan['monthly_krw']) > 0:
-                    status = 'pass'  # A necessary existence check; exact months/accounts are checked at publication.
-                else:
+                else:  # 8차: 월 납입은 목표 금액에 들어가지 않으므로 팔지 않기를 채워 주지 못한다
                     amounts = {}
                     for holding in holdings:
                         amounts[holding.instrument_id] = amounts.get(holding.instrument_id, Decimal(0)) + holding.amount_krw
