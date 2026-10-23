@@ -140,10 +140,17 @@ def held_weights(request):
     return held
 
 
-def chip_status(rule, weights, request, catalog, rows=()):
+def active_chips(request, decision=None):
+    """이번 계산에서 지킬 칩(kind → value). 후속 질문의 견주기가 푼 칩은 뺀다."""
+    relaxed = set(getattr(decision, 'relaxed_constraints', None) or [])
+    return {chip.kind: chip.value for chip in getattr(request, 'constraints', []) if chip.kind not in relaxed}
+
+
+def chip_status(rule, weights, request, catalog, rows=(), decision=None):
     """칩 하나의 결정적 판정. 부딪치면 보류하지 않고 '팔지 않기'를 먼저 지킨 뒤 남은 칩을 substituted 로 둔다."""
     held = held_weights(request)
-    no_sell = any(chip.kind == 'no_sell' for chip in getattr(request, 'constraints', []))
+    chips = active_chips(request, decision)
+    no_sell = 'no_sell' in chips
     def has(key, trait):
         return trait in traits(catalog.get(key, {}))
     if rule.kind in {'no_leverage', 'kr_listed_etf_only'}:
@@ -174,7 +181,6 @@ def chip_status(rule, weights, request, catalog, rows=()):
         if not no_sell or held is None:
             return 'fail'
         kept = {key for key in held if key != 'CASH:KRW'}
-        chips = {chip.kind: chip.value for chip in request.constraints}
         def blocked(key):  # 다른 칩 때문에 더 살 수 없는 종목
             return ('kr_listed_etf_only' in chips and catalog.get(key, {}).get('market') != 'KR'
                     or 'no_leverage' in chips and has(key, 'leverage'))
@@ -198,7 +204,7 @@ def check_constraints(decision, rows, request, catalog):
     checks = []
     for number, rule in enumerate(decision.constraints, 1):
         if rule.kind in {'no_leverage', 'kr_listed_etf_only', 'some_bonds', 'dividend'} or rule.kind == 'max_positions' and getattr(request, 'constraints', None):
-            checks.append({'constraint': number, 'kind': rule.kind, 'source': rule.source, 'status': chip_status(rule, weights, request, catalog, rows)})
+            checks.append({'constraint': number, 'kind': rule.kind, 'source': rule.source, 'status': chip_status(rule, weights, request, catalog, rows, decision)})
             continue
         if rule.kind == 'unverified':
             # Preserve the condition for model judgment without certifying it in code.

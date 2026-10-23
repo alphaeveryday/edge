@@ -209,3 +209,43 @@ async def test_what_if_followup_can_lift_a_chip_only_for_that_calculation(follow
             await answer_question('QLD를 팔면?', {'input': saved, 'sources': Evidence.sources}, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
         else:
             await run_analysis(AnalysisInput.model_validate(saved), 'test', stages.append, model_call=model, evidence=Evidence())
+
+
+def test_answer_amount_rounding_is_exact_to_the_written_unit():
+    # '만 원으로 반올림' 허용은 그 자리까지만이다. 표기 단위 전체를 오차로 두면 틀린 금액이 지나간다
+    request = holder([('KR:069500', 50000000, '일반 계좌')])
+    published = {'recommendation': {'execution': {'rows': [row('KR:069500', 50000000, 50000000)]}}}
+    for wrong in ('1억 원을 사세요.', '1.5억 원을 사세요.', '5,001만 원을 사세요.'):
+        published['answer'] = wrong
+        assert answer_amount_error(published, request), wrong
+    published['answer'] = '5,000만 원은 그대로 두세요.'
+    assert answer_amount_error(published, request) is None
+
+
+def test_saved_target_execution_amounts_are_allowed_in_the_answer():
+    # 저장된 추천을 실행하는 후속 답은 최상위 execution 의 금액을 쓴다
+    request = holder([('KR:069500', 1000000, '일반 계좌')])
+    published = {'execution': {'rows': [row('KR:069500', 1000000, 0, sell=1000000), row('KR:360750', 0, 1000000, buy=1000000)]},
+                 'answer': 'KODEX 200 100만 원을 팔아 S&P500을 사세요.'}
+    assert answer_amount_error(published, request) is None
+
+
+def test_type_card_uses_unrounded_shares_and_skips_unknown_weights():
+    assert type_card(holder([('US:QLD', 196, '일반 계좌'), ('KR:360750', 804, '일반 계좌')]), CATALOG, 0)['key'] == 'us'  # 19.6%는 20% 미만
+    names = AnalysisInput(holdings=[{'name': 'KODEX 200', 'instrument_id': 'KR:069500'}], horizon='10년 이상', input_mode='names')
+    assert type_card(names, CATALOG, 0) is None  # 비중을 모르는 보유자를 '첫 출발'로 부르지 않는다
+
+
+def test_relaxed_chip_is_not_applied_by_checks_or_monthly_split():
+    # 견주기에서 푼 칩이 판정과 매달 배분에 남으면 '풀면?'의 답이 풀지 않은 계산이 된다
+    from edge_portfolio.decision import Decision, check_constraints, validate_decision
+    from edge_portfolio.execution import plan_execution
+    from edge_portfolio.followup import FollowupInput
+    request = FollowupInput(holdings=[{'name': key, 'instrument_id': key, 'amount_krw': amount} for key, amount in [('KR:069500', 9500000), ('KR:148070', 500000)]],
+                            horizon='10년 이상', monthly_krw=300000, constraints=[{'kind': 'some_bonds'}, {'kind': 'no_sell'}],
+                            question='처음\n\n후속 질문: 채권 조건을 빼면?', funding_questions=['처음', '채권 조건을 빼면?'])
+    decision = validate_decision(Decision(relaxed_constraints=['some_bonds']), request, CATALOG)
+    assert [rule.kind for rule in decision.constraints] == ['no_sell']
+    plan = plan_execution(request, [{'instrument_id': 'KR:069500', 'account': '일반 계좌', 'weight_pct': 95},
+                                    {'instrument_id': 'KR:148070', 'account': '일반 계좌', 'weight_pct': 5}], decision)
+    assert len(plan['monthly_plan']) == 2  # 채권에만 몰아주지 않는다

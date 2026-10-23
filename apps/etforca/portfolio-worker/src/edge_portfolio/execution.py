@@ -265,7 +265,9 @@ def plan_execution(request, allocations, decision=None):
     funding = resolve_funding(request, decision) or {}
     rules = [rule for rule in decision.constraints if rule.kind == 'no_sell'] if decision else []
     no_sell_ids = set().union(*(set(rule.instrument_ids) for rule in rules)) if rules and all(rule.instrument_ids for rule in rules) else set()
-    result = build_execution(request, allocations, monthly_krw=funding.get('monthly_krw'), no_sell=bool(rules), no_sell_ids=no_sell_ids)
+    relaxed = set(getattr(decision, 'relaxed_constraints', None) or [])
+    chips = {chip.kind for chip in getattr(request, 'constraints', [])} - relaxed
+    result = build_execution(request, allocations, monthly_krw=funding.get('monthly_krw'), no_sell=bool(rules), no_sell_ids=no_sell_ids, chips=chips)
     if result['monthly_plan'] and decision and decision.funding is not None and uses_text_funding(request, decision):
         result['assumptions'].extend(funding_assumptions(decision.funding))  # 추정한 월 납입은 가정이라고 적는다
     return result
@@ -310,7 +312,7 @@ def split_monthly(monthly, target, room_left, stocks=()):
     return []
 
 
-def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no_sell_ids=()):
+def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no_sell_ids=(), chips=None):
     monthly = Decimal(str(monthly_krw)) if monthly_krw is not None else None
     if monthly is not None and (not monthly.is_finite() or monthly < 0 or monthly > 10**13 or monthly != monthly.to_integral_value()):
         raise ValueError('INVALID_FUNDING_AMOUNT')
@@ -331,7 +333,8 @@ def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no
         raise ValueError('INVALID_EXECUTION_ALLOCATION')
     stocks = {holding.instrument_id for holding in request.holdings if holding.kind == 'stock'}
     # 매달 넣는 돈은 칩이 막은 종목(레버리지, 국내 상장이 아닌 것)에 넣지 않는다. 팔지 않기로 남긴 레버리지는 이렇게 몫이 줄어든다
-    chips = {chip.kind for chip in getattr(request, 'constraints', [])}
+    if chips is None:  # 이번 계산의 칩(견주기로 푼 칩 제외). 직접 부르면 입력의 칩 전부
+        chips = {chip.kind for chip in getattr(request, 'constraints', [])}
     no_monthly = set(stocks)
     if chips & {'no_leverage', 'kr_listed_etf_only', *CHIP_MIN_PCT}:
         from .catalog import instruments, traits

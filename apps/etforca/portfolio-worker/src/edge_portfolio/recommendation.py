@@ -1,5 +1,5 @@
 """Validate model choices; derive amounts, deltas and totals in code."""
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
 import re
 
 from .catalog import analysis_catalog, directory, traits
@@ -139,7 +139,7 @@ def publish_recommendation(final, request, metrics, sources, decision=None):
 
 
 # ---- 8차 결과 칸 필드(report 최상위). 모델이 쓴 글(headline·answer·final_note·suggested_questions)과 코드가 정한 값을 묶는다 ----
-MONEY = re.compile(r'(?<![\d.,])(?:(\d[\d,]*)\s*억\s*)?(?:(\d[\d,]*(?:\.\d+)?)\s*만\s*)?(?:(\d[\d,]*)\s*)?원')
+MONEY = re.compile(r'(?<![\d.,])(?:(\d[\d,]*(?:\.\d+)?)\s*억\s*)?(?:(\d[\d,]*(?:\.\d+)?)\s*만\s*)?(?:(\d[\d,]*)\s*)?원')
 CHIP_NOTES = {
     ('no_leverage', 'kept'): '레버리지·인버스는 새로 사지 않아요.',
     ('no_leverage', 'substituted'): '팔지 않기를 먼저 지켜 가진 레버리지는 그대로 두고, 매달 넣는 돈은 다른 종목에 넣어 몫을 줄여요.',
@@ -190,15 +190,15 @@ def analysis_item(title, section, urls):
 
 def type_card(request, catalog, monthly):
     stats = {'monthly': bool(monthly)}
-    rows = [holding for holding in request.holdings if holding.kind != 'cash' and holding.amount_krw]
-    if not rows:
+    if not any(holding.kind != 'cash' for holding in request.holdings):
         return {'key': 'first_start', 'stats': stats}
-    if request.input_mode == 'names':
-        return None
+    rows = [holding for holding in request.holdings if holding.kind != 'cash' and holding.amount_krw]
+    if request.input_mode == 'names' or not rows:
+        return None  # 가진 종목의 비중을 모르면 유형을 정하지 않는다
     total = sum(holding.amount_krw for holding in rows)
     found = {holding.instrument_id: traits(catalog.get(holding.instrument_id, {'kind': holding.kind})) for holding in rows}
     def pct(test):
-        return round(float(sum(holding.amount_krw for holding in rows if test(holding, found[holding.instrument_id])) * 100 / total))
+        return sum(holding.amount_krw for holding in rows if test(holding, found[holding.instrument_id])) * 100 / total
     korean = lambda h, t: not t & {'foreign', 'bond', 'gold'}
     stats.update({
         'leverage_pct': pct(lambda h, t: 'leverage' in t), 'stock_pct': pct(lambda h, t: 'stock' in t),
@@ -212,17 +212,18 @@ def type_card(request, catalog, monthly):
              lambda t: 'us' in t and not t & {'bond', 'gold'}, lambda t: 'foreign' in t and not t & {'us', 'bond', 'gold'}]
     stats.update({'positions': len(amounts), 'stock_count': sum('stock' in found[key] for key in amounts),
                   'etf_count': sum('stock' not in found[key] for key in amounts),
-                  'largest_pct': round(float(max(amounts.values()) * 100 / total)),
+                  'largest_pct': max(amounts.values()) * 100 / total,
                   'asset_kinds': sum(any(test(found[key]) for key in amounts) for test in kinds)})
+    # 판정은 반올림 전 비중으로(19.6%는 레버리지 20% 이상이 아니다), 보이는 값만 정수로
     key = next((name for name, stat, minimum in TYPE_RULES if stats[stat] >= minimum), 'balanced')
-    return {'key': key, 'stats': stats}
+    return {'key': key, 'stats': {name: round(float(value)) if isinstance(value, Decimal) else value for name, value in stats.items()}}
 
 
 def result_fields(published, sections, final, request, checks, catalog, sources):
     """verdict·answer·constraint_results·final_note·analysis·suggested_questions·type_card. 모두 선택 필드다."""
     fields = {}
     recommendation = published.get('recommendation')
-    execution = (recommendation or {}).get('execution') or {}
+    execution = (recommendation or {}).get('execution') or published.get('execution') or {}  # 저장 목표 실행은 최상위 execution
     urls = {source['id']: source.get('url') for source in sources}
     if recommendation:
         kind = verdict_kind(request, execution)
@@ -281,7 +282,7 @@ def allowed_amounts(published, request):
         holdings[holding.instrument_id] = holdings.get(holding.instrument_id, 0) + (holding.amount_krw or 0)
     total = sum(holdings.values())
     add(total, *holdings.values())
-    execution = ((published.get('recommendation') or {}).get('execution')) or {}
+    execution = ((published.get('recommendation') or {}).get('execution')) or published.get('execution') or {}
     fields = ('before_krw', 'target_krw', 'buy_krw', 'sell_krw', 'cash_used_krw')
     sums = {}
     for row in execution.get('rows', []):
@@ -316,8 +317,10 @@ def answer_amount_error(published, request):
             continue
         number = lambda value: Decimal(value.replace(',', '')) if value else Decimal(0)
         stated = number(eok) * 100000000 + number(man) * 10000 + number(won)
-        unit = 1 if won else Decimal(10000) / (10 ** len(man.split('.')[1])) if man and '.' in man else 10000 if man else 100000000
-        if not any(abs(value - stated) < unit for value in allowed):
+        # 적은 자리까지 반올림 또는 버림한 값만 같다고 본다. 억만 쓴 표기도 만 원 자리까지는 맞아야 한다
+        unit = 1 if won else Decimal(10000) / (10 ** len(man.split('.')[1])) if man and '.' in man else 10000
+        if not any(stated in {(Decimal(value) / unit).to_integral_value(rounding=rounding) * unit for rounding in (ROUND_HALF_UP, ROUND_FLOOR)}
+                   for value in allowed):
             wrong.append(match.group().strip())
     if not wrong:
         return None
