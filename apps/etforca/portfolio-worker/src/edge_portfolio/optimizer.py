@@ -17,12 +17,15 @@ from .market_data import comparison_method, comparison_column
 
 PRICE_TIMEOUT_SECONDS = 65
 PRICE_COLLECTION_BUDGET_SECONDS = 180
+# 8차: 모든 비교를 가장 짧은 종목의 기록에 맞추고, 자료가 짧다고 후보를 빼지 않는다.
+# 종가 둘(하루치 수익률)이면 계산한다. 종가 하나뿐인 상장 당일은 비교할 수익률이 없다
+MIN_PRICE_POINTS = 2
 
 
 def optimization_bounds(ids, records, as_of, *, column=None):
     start, end = comparison_bounds(ids, records, as_of, column=column)
     sessions = set().union(*(set(expected_sessions(key, start, end)) for key in ids - {'CASH:KRW'}))
-    if len(sessions) < 11:
+    if len(sessions) < MIN_PRICE_POINTS:
         raise ValueError('INSUFFICIENT_COMPARISON_SESSIONS')
     return start, end
 
@@ -32,7 +35,7 @@ def optimization_prices(ids, records, as_of, bounds=None):
     sessions = set().union(*(set(expected_sessions(key, frame.index[0], frame.index[-1])) for key in ids - {'CASH:KRW'}))
     if sessions:
         frame = frame.loc[frame.index.isin(sessions)]
-    if len(frame) < 11:
+    if len(frame) < MIN_PRICE_POINTS:
         raise ValueError('INSUFFICIENT_COMPARISON_SESSIONS')
     return frame / frame.iloc[0], sources
 
@@ -44,8 +47,8 @@ def grid(size):
 
 
 def search(ids, frame, current, preferred=()):
-    if len(frame) < 11:
-        return []  # Ten measured sessions plus the initial normalization date.
+    if len(frame) < MIN_PRICE_POINTS:
+        return []  # The initial normalization date plus at least one measured session.
     allocation = grid(len(ids))
     extra = [[weight / 100 for _, weight in proposal] for proposal in preferred
              if [key for key, _ in proposal] == ids and any(weight % 10 for _, weight in proposal)]
