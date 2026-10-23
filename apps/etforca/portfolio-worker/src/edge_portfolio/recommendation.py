@@ -2,7 +2,7 @@
 from decimal import Decimal, ROUND_HALF_UP
 import re
 
-from .catalog import analysis_catalog, directory
+from .catalog import analysis_catalog, directory, traits
 from .contracts import validate_section
 from .execution import allocate_amounts, plan_execution
 
@@ -136,3 +136,222 @@ def publish_recommendation(final, request, metrics, sources, decision=None):
                                'expected_return_1y': None, 'dividend_yield_1y': None,
                                'historical_performance': None, 'unavailable_reason': metrics['unavailable_reason']},
             'insights': [{'title': item.title, 'content': validate_section('question', item.content.model_dump(), sources)} for item in final.insights]}
+
+
+# ---- 8차 결과 칸 필드(report 최상위). 모델이 쓴 글(headline·answer·final_note·suggested_questions)과 코드가 정한 값을 묶는다 ----
+MONEY = re.compile(r'(?<![\d.,])(?:(\d[\d,]*(?:\.\d+)?)\s*억\s*)?(?:(\d[\d,]*(?:\.\d+)?)\s*만\s*)?(?:(\d[\d,]*)\s*)?원')
+CHIP_NOTES = {
+    ('no_leverage', 'kept'): '레버리지·인버스는 새로 사지 않아요.',
+    ('no_leverage', 'substituted'): '팔지 않기를 먼저 지켜 가진 레버리지는 그대로 두고, 매달 넣는 돈은 다른 종목에 넣어 몫을 줄여요.',
+    ('some_bonds', 'kept'): '채권 ETF가 {bond}%예요.',
+    ('some_bonds', 'substituted'): '팔지 않기를 먼저 지켜 채권 ETF는 {bond}%예요. {monthly_bond}',
+    ('dividend', 'kept'): '배당 ETF가 {dividend}%예요.',
+    ('dividend', 'substituted'): '팔지 않기를 먼저 지켜 배당 ETF는 {dividend}%예요. {monthly_dividend}',
+    ('max_positions', 'kept'): '종목 {count}개예요.',
+    ('max_positions', 'substituted'): '팔지 않기를 먼저 지켜 가진 {count}개를 모두 두고 새 종목은 더하지 않아요.',
+    ('no_sell', 'kept'): '가진 종목은 팔지 않아요.',
+    ('kr_listed_etf_only', 'kept'): '새로 담는 종목은 모두 국내 상장이에요.',
+}
+# 시안 v8-SH-types 의 판정 초안: 위에서부터 먼저 맞는 유형 하나(비중은 현금을 뺀 보유 기준)
+# key 는 화면(portfolio-ui)의 카드 이름과 같다
+TYPE_RULES = [('lev', 'leverage_pct', 20), ('stock', 'stock_pct', 40), ('chip', 'semi_ai_pct', 40),
+              ('div', 'dividend_pct', 40), ('bond', 'bond_gold_pct', 30), ('pension', 'pension_pct', 50),
+              ('kr', 'kr_pct', 50), ('us', 'us_pct', 70)]
+# 카드에 보이는 [이름, 값] 쌍. 화면은 앞 3개만 쓴다
+TYPE_STATS = {'lev': [('레버리지', 'leverage_pct', '%'), ('종목 수', 'positions', '개')],
+              'stock': [('개별 주식', 'stock_pct', '%'), ('주식 수', 'stock_count', '개'), ('ETF', 'etf_count', '개')],
+              'chip': [('반도체·AI', 'semi_ai_pct', '%'), ('종목 수', 'positions', '개')],
+              'div': [('배당 ETF', 'dividend_pct', '%'), ('종목 수', 'positions', '개')],
+              'bond': [('채권·금', 'bond_gold_pct', '%'), ('주식', 'equity_pct', '%')],
+              'pension': [('연금 계좌', 'pension_pct', '%'), ('종목 수', 'positions', '개')],
+              'kr': [('국내 비중', 'kr_pct', '%'), ('종목 수', 'positions', '개')],
+              'us': [('미국 비중', 'us_pct', '%'), ('종목 수', 'positions', '개')],
+              'bal': [('자산 종류', 'asset_kinds', '가지'), ('가장 큰 몫', 'largest_pct', '%')]}
+
+
+def verdict_kind(request, execution):
+    """판정 경계(계약 기본값 2번). '하나만'은 판 종목 수와 산 종목 수 가운데 큰 쪽이 하나일 때다(판 돈으로 하나를 사는 교체 포함)."""
+    if not any(holding.kind != 'cash' for holding in request.holdings):
+        return 'start'
+    rows = [row for row in execution.get('rows', []) if row['instrument_id'] != 'CASH:KRW']
+    sold = {row['instrument_id'] for row in rows if int(row['sell_krw'])}
+    bought = {row['instrument_id'] for row in rows if int(row['buy_krw'])}
+    if not sold and not bought:
+        return 'keep'
+    return 'one' if max(len(sold), len(bought)) == 1 else 'rebuild'
+
+
+def clean_quote(text):
+    """근거 문장에서 마크다운 머리표·링크·표 조각을 걷어 낸다. 표 행은 문장이 아니라 버린다."""
+    text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text or '')
+    text = re.sub(r'(?m)^\s*#+\s*', '', text).replace('**', '').replace('__', '')
+    if text.count('|') >= 2 or re.fullmatch(r'[\s|:#*\-–—]*', text):
+        return ''
+    return re.sub(r'\s+', ' ', text).strip()
+
+
+def analysis_item(title, section, urls):
+    evidence = []
+    for item in section.get('evidence', []):
+        quote = clean_quote(item.get('quote'))
+        if quote and all(quote != row['quote'] for row in evidence):
+            evidence.append({'quote': quote, 'url': urls.get(item.get('source_id'))})
+    return {'title': title, 'paragraphs': section['paragraphs'], 'evidence': evidence, 'limitations': section.get('limitations', [])}
+
+
+def type_card(request, catalog, monthly, recommended=0):
+    method = ['넣는 방법', '매달 꾸준히' if monthly else '한 번에 크게']
+    if not any(holding.kind != 'cash' for holding in request.holdings):
+        return {'key': 'start', 'stats': [method, *([['추천 종목', f'ETF {recommended}개']] if recommended else [])]}
+    stats = {}
+    rows = [holding for holding in request.holdings if holding.kind != 'cash' and holding.amount_krw]
+    if request.input_mode == 'names' or not rows:
+        return None  # 가진 종목의 비중을 모르면 유형을 정하지 않는다
+    total = sum(holding.amount_krw for holding in rows)
+    found = {holding.instrument_id: traits(catalog.get(holding.instrument_id, {'kind': holding.kind})) for holding in rows}
+    def pct(test):
+        return sum(holding.amount_krw for holding in rows if test(holding, found[holding.instrument_id])) * 100 / total
+    korean = lambda h, t: not t & {'foreign', 'bond', 'gold'}
+    stats.update({
+        'leverage_pct': pct(lambda h, t: 'leverage' in t), 'stock_pct': pct(lambda h, t: 'stock' in t),
+        'semi_ai_pct': pct(lambda h, t: 'semi_ai' in t), 'dividend_pct': pct(lambda h, t: 'dividend' in t),
+        'bond_gold_pct': pct(lambda h, t: bool(t & {'bond', 'gold'})), 'pension_pct': pct(lambda h, t: h.account in ('연금저축', 'IRP')),
+        'kr_pct': pct(korean), 'us_pct': pct(lambda h, t: 'us' in t and not t & {'bond', 'gold'})})
+    stats['equity_pct'] = 100 - stats['bond_gold_pct']
+    amounts = {}
+    for holding in rows:
+        amounts[holding.instrument_id] = amounts.get(holding.instrument_id, 0) + holding.amount_krw
+    kinds = [lambda t: 'bond' in t, lambda t: 'gold' in t, lambda t: not t & {'foreign', 'bond', 'gold'},
+             lambda t: 'us' in t and not t & {'bond', 'gold'}, lambda t: 'foreign' in t and not t & {'us', 'bond', 'gold'}]
+    stats.update({'positions': len(amounts), 'stock_count': sum('stock' in found[key] for key in amounts),
+                  'etf_count': sum('stock' not in found[key] for key in amounts),
+                  'largest_pct': max(amounts.values()) * 100 / total,
+                  'asset_kinds': sum(any(test(found[key]) for key in amounts) for test in kinds)})
+    # 판정은 반올림 전 비중으로(19.6%는 레버리지 20% 이상이 아니다), 보이는 값만 정수로
+    key = next((name for name, stat, minimum in TYPE_RULES if stats[stat] >= minimum), 'bal')
+    shown = [[label, f'{round(float(stats[name]))}{unit}'] for label, name, unit in TYPE_STATS[key]]
+    return {'key': key, 'stats': (shown + [method])[:3]}
+
+
+def result_fields(published, sections, final, request, checks, catalog, sources):
+    """verdict·answer·constraint_results·final_note·analysis·suggested_questions·type_card. 모두 선택 필드다."""
+    fields = {}
+    recommendation = published.get('recommendation')
+    execution = (recommendation or {}).get('execution') or published.get('execution') or {}  # 저장 목표 실행은 최상위 execution
+    urls = {source['id']: source.get('url') for source in sources}
+    if recommendation:
+        kind = verdict_kind(request, execution)
+        if execution.get('rows') or kind == 'start':  # 실행표가 없으면(금액 모름) 판정할 수 없다
+            fields['verdict'] = {'kind': kind, 'headline': final.headline}
+        weights = {}
+        for row in recommendation['allocations']:
+            weights[row['instrument_id']] = weights.get(row['instrument_id'], 0) + row['weight_pct']
+        def share(trait):
+            return round(sum(weight for key, weight in weights.items() if trait in traits(catalog.get(key, {}))), 1)
+        def monthly_into(trait, label):
+            into = any(trait in traits(catalog.get(row['instrument_id'], {})) for row in execution.get('monthly_plan', []))
+            # 매달 배분은 추천 구성 안에서만 한다. 구성에 그 종목이 없으면(팔지 않아 새로 살 돈이 없으면) 그렇게 말한다
+            return f'매달 넣는 돈을 {label}에 넣어 늘려요.' if into else f'팔지 않으면 {label}를 새로 담을 돈이 없어 지금은 채우지 못해요.'
+        values = {'bond': share('bond'), 'dividend': share('dividend'), 'count': len(weights),
+                  'monthly_bond': monthly_into('bond', '채권 ETF'), 'monthly_dividend': monthly_into('dividend', '배당 ETF')}
+        chips = {chip.kind for chip in getattr(request, 'constraints', [])}
+        results = []
+        for check in checks:
+            status = {'pass': 'kept', 'substituted': 'substituted'}.get(check['status'])
+            if check['kind'] in chips and status:
+                note = CHIP_NOTES.get((check['kind'], status), '')
+                results.append({'kind': check['kind'], 'status': status, 'note': note.format(**values)})
+        fields['constraint_results'] = results
+    if final.answer.strip():
+        fields['answer'] = final.answer.strip()
+    if final.final_note.strip():
+        fields['final_note'] = final.final_note.strip()
+    if final.suggested_questions:
+        fields['suggested_questions'] = list(final.suggested_questions)
+    current = published.get('current_evaluation') or {}
+    items = []
+    if current.get('reason'):
+        items.append(analysis_item(f"왜 {current['overall']}점이에요?" if current.get('overall') is not None else '지금 구성은 어때요?', current['reason'], urls))
+    if sections.get('opinion'):
+        items.append(analysis_item('그래서 무엇을 하면 돼요?', sections['opinion'], urls))
+    evaluation = (recommendation or {}).get('evaluation') or {}
+    if evaluation.get('reason'):
+        items.append(analysis_item(f"추천 구성은 왜 {evaluation['overall']}점이에요?", evaluation['reason'], urls))
+    items += [analysis_item(insight['title'], insight['content'], urls) for insight in published.get('insights', [])]
+    if sections.get('outlook'):
+        items.append(analysis_item('앞으로 1년은요?', sections['outlook'], urls))
+    fields['analysis'] = items
+    card = type_card(request, catalog, execution.get('monthly_krw') if execution else getattr(request, 'monthly_krw', None),
+                     len({row['instrument_id'] for row in (recommendation or {}).get('allocations', [])}))
+    if card:
+        fields['type_card'] = card
+    return fields
+
+
+def allowed_amounts(published, request):
+    """answer 문장이 쓸 수 있는 금액: 최종 추천(2번 칸)·매달 넣을 돈(3번)·지난 기간(4번)·검산한 계산 결과 값과 그 합·차이."""
+    values = {0}
+    def add(*items):
+        values.update(abs(int(Decimal(str(item)))) for item in items if item not in (None, ''))
+    holdings = {}
+    for holding in request.holdings:
+        holdings[holding.instrument_id] = holdings.get(holding.instrument_id, 0) + (holding.amount_krw or 0)
+    total = sum(holdings.values())
+    add(total, *holdings.values())
+    execution = ((published.get('recommendation') or {}).get('execution')) or published.get('execution') or {}
+    fields = ('before_krw', 'target_krw', 'buy_krw', 'sell_krw', 'cash_used_krw')
+    sums = {}
+    for row in execution.get('rows', []):
+        add(*(row[field] for field in fields))
+        for field in fields:
+            sums[(row['instrument_id'], field)] = sums.get((row['instrument_id'], field), 0) + int(row[field])
+    add(*sums.values())
+    for field in fields:  # 여러 종목을 합친 총 매수·매도액('총 300만 원을 옮기세요')
+        add(sum(int(row[field]) for row in execution.get('rows', [])))
+    for account in execution.get('accounts', []):
+        add(*(account.get(field) for field in ('before_krw', 'target_krw', 'deposit_krw', 'withdrawal_krw')))
+    monthly = {}
+    for row in execution.get('monthly_plan', []):
+        add(row['krw'])
+        for key in (row['instrument_id'], row['account']):
+            monthly[key] = monthly.get(key, 0) + int(row['krw'])
+    add(execution.get('monthly_krw'), *monthly.values())
+    scenarios = published.get('scenarios') or {}  # 계산만 묻는 질문은 검산한 계산 결과의 금액을 쓴다
+    if scenarios.get('status') == 'available':
+        add(scenarios.get('principal_krw'), scenarios.get('monthly_krw'))
+        for row in scenarios.get('rows', []):
+            add(row.get('future_krw'), row.get('paid_krw'))
+            if row.get('future_krw') and row.get('paid_krw'):
+                add(int(Decimal(row['future_krw'])) - int(Decimal(row['paid_krw'])))  # 불어난 돈
+    past = published.get('past') or {}
+    add(*past.values())
+    if past.get('rec_end_krw') and past.get('cur_end_krw'):
+        add(int(past['rec_end_krw']) - int(past['cur_end_krw']))
+    add(*(int(past[name]) - total for name in ('rec_end_krw', 'cur_end_krw') if past.get(name)))  # 원금보다 늘거나 준 금액
+    if past.get('rec_max_loss_krw') and past.get('cur_max_loss_krw'):
+        add(int(past['rec_max_loss_krw']) - int(past['cur_max_loss_krw']))
+    return values
+
+
+def answer_amount_error(published, request):
+    """계획 2단계 통과 조건: 답 문장의 금액은 2·4번 칸 값과 같아야 한다. 적은 단위(만)까지 반올림한 값이면 같다고 본다."""
+    allowed = allowed_amounts(published, request)
+    wrong = []
+    # '3천만 원', '1억 5천만 원', '3백만 원'처럼 천·백을 쓴 표기를 숫자로 바꿔 같은 검사를 받게 한다
+    # 앞 숫자를 뺀 '천만 원'·'1억 천만 원'은 1천으로 읽는다
+    answer = re.sub(r'(?:(\d*)\s*(천)\s*)?(?:(\d*)\s*(백)\s*)?(\d+)?(?=\s*(?:만|원))',
+                    lambda m: str((int(m[1] or 1) * 1000 if m[2] else 0) + (int(m[3] or 1) * 100 if m[4] else 0) + int(m[5] or 0)) if m[2] or m[4] else m[0],
+                    published.get('answer', ''))
+    for match in MONEY.finditer(answer):
+        eok, man, won = match.groups()
+        if not any(match.groups()):
+            continue
+        number = lambda value: Decimal(value.replace(',', '')) if value else Decimal(0)
+        stated = number(eok) * 100000000 + number(man) * 10000 + number(won)
+        # 적은 자리까지 반올림한 값만 같다고 본다. 억만 쓴 표기도 만 원 자리까지는 맞아야 한다
+        unit = 1 if won else Decimal(10000) / (10 ** len(man.split('.')[1])) if man and '.' in man else 10000
+        if not any(stated == (Decimal(value) / unit).to_integral_value(rounding=ROUND_HALF_UP) * unit for value in allowed):
+            wrong.append(match.group().strip())
+    if not wrong:
+        return None
+    return f"{', '.join(wrong)} 은(는) 최종 추천·매달 넣을 돈·지난 기간 칸에 없는 금액이에요. 쓸 수 있는 금액(원): " + ', '.join(f'{value:,}' for value in sorted(allowed)[:60])

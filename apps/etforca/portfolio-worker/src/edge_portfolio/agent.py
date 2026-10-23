@@ -19,7 +19,7 @@ from mcp.client.streamable_http import streamable_http_client
 
 from .contracts import LIMITS, ROLES, Section, FinalReport, calculate, validate_section
 from .outlook import TOOL as OUTLOOK_TOOL, OutlookReader
-from .recommendation import search_etfs, publish_recommendation
+from .recommendation import search_etfs, publish_recommendation, result_fields, answer_amount_error
 from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report, model_price_payload
 from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
@@ -209,6 +209,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     recommendation_reconciled = False
     reconciliation_draft = None
     retained_prior_text = False
+    answer_repairs = 0
     termination_reason = 'COMPLETED'
 
     def checkpoint():
@@ -597,6 +598,15 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 'required_additional_krw': None, 'assumptions': []}
                                 if final.withheld_reason == 'customer_failed' else followup_execution)
                             checks = followup_checks or checks
+                        validation_step = 'result_fields'
+                        published.update(result_fields(published, sections, final, request, checks, market.catalog, evidence.sources))
+                        if published.get('answer') and (amount_error := answer_amount_error(published, request)):
+                            # 분석 전체에서 두 번만, 모델 호출 예산이 남았을 때만 고쳐 쓰게 한다(조사 보완 라운드가 repairs 를 되돌려도)
+                            if answer_repairs < 2 and repairs < 2 and not finalizing and calls < MAX_MODEL_CALLS - 2:
+                                answer_repairs += 1
+                                raise ValueError('ANSWER_AMOUNT_MISMATCH: ' + amount_error)
+                            published.pop('answer')  # 고쳐 쓰지 못한 답은 싣지 않는다. 화면은 기존 답으로 대신 보인다
+                            emit('answer_dropped', role=role, code='ANSWER_AMOUNT_MISMATCH')
                         validation_step = 'report_completion'
                         published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'],
                             considered_ids=[key for group in getattr(optimizer, 'groups', []) for key in group])

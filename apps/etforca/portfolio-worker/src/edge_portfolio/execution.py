@@ -250,6 +250,9 @@ def resolve_text_funding(request, decision=None):
     return funding
 
 
+# 칩의 뜻(계약 기본값 1번): 채권 ETF 합계 10% 이상, 배당 ETF 합계 50% 이상
+CHIP_MIN_PCT = {'some_bonds': ('bond', Decimal(10)), 'dividend': ('dividend', Decimal(50))}
+
 # 2026년 연 납입 한도(만 원). 남은 한도를 입력하지 않으면 이 한도에서 올해 낸 돈을 뺀다.
 # 연금저축과 IRP 는 합쳐서 1,800만 원이다
 ANNUAL_LIMIT_MAN = {'ISA': 2000, '연금저축': 1800, 'IRP': 1800}
@@ -262,7 +265,9 @@ def plan_execution(request, allocations, decision=None):
     funding = resolve_funding(request, decision) or {}
     rules = [rule for rule in decision.constraints if rule.kind == 'no_sell'] if decision else []
     no_sell_ids = set().union(*(set(rule.instrument_ids) for rule in rules)) if rules and all(rule.instrument_ids for rule in rules) else set()
-    result = build_execution(request, allocations, monthly_krw=funding.get('monthly_krw'), no_sell=bool(rules), no_sell_ids=no_sell_ids)
+    relaxed = set(getattr(decision, 'relaxed_constraints', None) or [])
+    chips = {chip.kind for chip in getattr(request, 'constraints', [])} - relaxed
+    result = build_execution(request, allocations, monthly_krw=funding.get('monthly_krw'), no_sell=bool(rules), no_sell_ids=no_sell_ids, chips=chips)
     if result['monthly_plan'] and decision and decision.funding is not None and uses_text_funding(request, decision):
         result['assumptions'].extend(funding_assumptions(decision.funding))  # 추정한 월 납입은 가정이라고 적는다
     return result
@@ -307,7 +312,7 @@ def split_monthly(monthly, target, room_left, stocks=()):
     return []
 
 
-def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no_sell_ids=()):
+def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no_sell_ids=(), chips=None):
     monthly = Decimal(str(monthly_krw)) if monthly_krw is not None else None
     if monthly is not None and (not monthly.is_finite() or monthly < 0 or monthly > 10**13 or monthly != monthly.to_integral_value()):
         raise ValueError('INVALID_FUNDING_AMOUNT')
@@ -328,14 +333,23 @@ def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no
         raise ValueError('INVALID_EXECUTION_ALLOCATION')
     stocks = {holding.instrument_id for holding in request.holdings if holding.kind == 'stock'}
     # 매달 넣는 돈은 칩이 막은 종목(레버리지, 국내 상장이 아닌 것)에 넣지 않는다. 팔지 않기로 남긴 레버리지는 이렇게 몫이 줄어든다
-    chips = {chip.kind for chip in getattr(request, 'constraints', [])}
+    if chips is None:  # 이번 계산의 칩(견주기로 푼 칩 제외). 직접 부르면 입력의 칩 전부
+        chips = {chip.kind for chip in getattr(request, 'constraints', [])}
     no_monthly = set(stocks)
-    if chips & {'no_leverage', 'kr_listed_etf_only'}:
+    if chips & {'no_leverage', 'kr_listed_etf_only', *CHIP_MIN_PCT}:
         from .catalog import instruments, traits
+        found = {key[0]: traits(instruments().get(key[0], {})) for key in target}
         for key in target:
-            item = instruments().get(key[0], {})
-            if 'no_leverage' in chips and 'leverage' in traits(item) or 'kr_listed_etf_only' in chips and item.get('market') != 'KR':
+            if 'no_leverage' in chips and 'leverage' in found[key[0]] or 'kr_listed_etf_only' in chips and instruments().get(key[0], {}).get('market') != 'KR':
                 no_monthly.add(key[0])
+        # 팔지 않기 때문에 채권·배당 비중을 못 채웠으면(substituted) 매달 넣는 돈을 그 종목에만 넣어 채운다
+        short = set()
+        for kind, (trait, minimum) in CHIP_MIN_PCT.items():
+            keys = {key[0] for key in target if trait in found[key[0]]} - no_monthly
+            if kind in chips and 'no_sell' in chips and keys and sum(w for key, w in target.items() if key[0] in keys) < minimum:
+                short |= keys
+        if short:
+            no_monthly |= {key[0] for key in target} - short
     def monthly_plan(deposits):
         if monthly and not any(key[0] != 'CASH:KRW' and key[0] not in no_monthly for key in target) \
                 and any(key[0] != 'CASH:KRW' and key[0] not in stocks for key in target):

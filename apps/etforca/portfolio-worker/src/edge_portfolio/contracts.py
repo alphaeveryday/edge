@@ -1,5 +1,5 @@
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 from datetime import date
 import re
@@ -249,6 +249,17 @@ class FinalReport(StrictModel):
     selected_candidate_id: str | None = None
     insights: list[Insight] = Field(min_length=1, max_length=3)
     return_forecast: ReturnForecast | None = None
+    # 8차 결과 맨 위·최종 추천·더 물어보기 칸. 옛 보고서에는 없으므로 비어 있어도 된다(화면이 기존 필드로 대신 보인다)
+    headline: str = Field(default='', max_length=40)
+    answer: str = Field(default='', max_length=300)
+    final_note: str = Field(default='', max_length=120)
+    suggested_questions: list[Annotated[str, Field(min_length=2, max_length=40)]] = Field(default_factory=list, max_length=4)
+
+    @model_validator(mode='after')
+    def four_or_no_questions(self):
+        if len(self.suggested_questions) not in (0, 4):
+            raise ValueError('suggested_questions: write exactly four follow-up questions')
+        return self
 
 
 def validate_section(role, raw, sources):
