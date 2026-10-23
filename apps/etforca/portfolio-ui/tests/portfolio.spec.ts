@@ -48,6 +48,9 @@ test('chosen chips are the only constraints and the position limit is validated 
   await chips.getByRole('button', { name: '레버리지 빼기' }).click();
   await chips.getByRole('button', { name: '국내 상장 ETF만' }).click();
   await expect(page.getByText('미국 ETF도 국내에 상장된 것이면 돼요')).toBeVisible();
+  // 세 자리 붙여넣기는 잘라 맞추지 않는다(100 → 10 이 되면 다른 조건이 된다).
+  await chips.getByLabel('최대 종목 수').fill('100');
+  await expect(chips.getByLabel('최대 종목 수')).toHaveValue('100');
   await chips.getByLabel('최대 종목 수').fill('25');
   await expect(page.locator('#step-guidance')).toHaveText('종목 수는 1~20개로 적어 주세요');
   await expect(page.getByRole('button', { name: '분석 시작하기' })).toBeDisabled();

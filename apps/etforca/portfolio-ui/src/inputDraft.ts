@@ -10,7 +10,8 @@ export type InputDraft = { flow?: 3; total?: string; chips?: Chip[]; submittedJo
 export function inputDraftFromInput(input: Input) {
   const mode = input.input_mode === 'percent' ? 'percent' : 'amount';
   const funding = input.preferences?.contribution || '';
-  const monthly = /^매달 꾸준히 ([\d.]+)만 원$/.exec(funding);
+  // 숫자 칸(monthly_krw, 원)이 있으면 그것이 먼저다(서버도 글보다 먼저 쓴다). 없으면 옛 글에서 읽는다.
+  const monthly = input.monthly_krw ? [funding, String(input.monthly_krw / 1e4)] : /^매달 꾸준히 ([\d.]+)만 원$/.exec(funding);
   const draft: InputDraft = { flow: 3, step: 0, holdings: input.holdings.map(h => ({ ...h, amount_krw: h.amount_krw == null ? null : String(Number(h.amount_krw)) })),
     alternate: [], selected: [...new Set([...(input.preferences?.accounts || []), ...input.holdings.map(h => h.account)])],
     question: input.question, horizon: input.horizon, how: monthly ? '매달 꾸준히' : funding, contribution: monthly?.[1] || '',

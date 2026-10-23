@@ -334,7 +334,7 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
           <div className="fl-chips" data-align="start" role="group" aria-labelledby="chips-title">{chipLabels.filter(([kind]) => kind !== 'no_sell' || holdings.length).map(([kind, label]) => {
             const on = chips.some(c => c.kind === kind), toggle = () => setChips(on ? chips.filter(c => c.kind !== kind) : [...chips, { kind }]);
             return kind === 'max_positions' ? <span key={kind} className="fl-chip fl-chip--count" data-on={on}><Button aria-pressed={on} aria-label={`종목 ${count || 'n'}개 이하`} onClick={toggle}>{on && <Glyph name="check" size={16} />}종목</Button>
-              <TextInput className="fl-bare" aria-label="최대 종목 수" inputMode="numeric" placeholder="n" value={count} onChange={e => { const digits = e.target.value.replace(/\D/g, '').slice(0, 2); setChips([...chips.filter(c => c.kind !== kind), { kind, value: digits ? Number(digits) : undefined }]); }} /><span>개 이하</span></span>
+              <TextInput className="fl-bare" aria-label="최대 종목 수" inputMode="numeric" placeholder="n" value={count} onChange={e => { const digits = e.target.value.replace(/\D/g, '').slice(0, 3); /* 세 자리(100)는 잘라 맞추지 않고 1~20 검사로 고치게 한다 */ setChips([...chips.filter(c => c.kind !== kind), { kind, value: digits ? Number(digits) : undefined }]); }} /><span>개 이하</span></span>
               : <Button key={kind} className="fl-chip" aria-pressed={on} onClick={toggle}>{on && <Glyph name="check" size={16} />}{label}</Button>;
           })}</div>
           {chips.some(c => c.kind === 'kr_listed_etf_only') && <p className="fl-card__desc">국내 상장 ETF만: 미국 ETF도 국내에 상장된 것이면 돼요.</p>}</section>
