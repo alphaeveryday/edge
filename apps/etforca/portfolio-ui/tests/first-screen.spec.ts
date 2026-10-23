@@ -95,8 +95,8 @@ test('a returning visitor sees the last verdict and either edits a prefilled inp
   await expect(page.getByRole('heading', { name: /다시 오셨네요/ })).toBeVisible();
   const card = page.getByRole('region', { name: '지난 분석' });
   await expect(card).toContainText('10월 21일');
-  // 판정은 실행표에서 계약과 같은 규칙으로 정한다: 바뀌는 종목이 둘이면 '하나만'이 아니다.
-  await expect(card).toContainText('여러 종목을 바꾸는 게 나아요');
+  // 판정은 결과 화면과 같은 규칙(resultMath.verdictKind)으로 정한다: 바뀌는 종목이 둘이면 '하나만'이 아니다.
+  await expect(card).toContainText('다시 짜야 해요');
   await expect(card).toContainText('0원 → 250만 원 새로 사기');
   await expect(page.getByRole('link', { name: /내 포트폴리오/ })).toHaveAttribute('href', '?view=dashboard');
   await card.getByRole('button', { name: '바꿨어요' }).click();
@@ -106,14 +106,13 @@ test('a returning visitor sees the last verdict and either edits a prefilled inp
   await expect.poll(() => page.evaluate(() => localStorage.getItem('edge-portfolio-job'))).toBe('earlier');
 });
 
-// 계산하지 못한 지난 분석(실행표 없음)을 '이대로 가도 돼요'로 읽으면 고객에게 틀린 판정을 준다.
-test('a past analysis without a computed execution is not shown as keep', async ({ page }) => {
-  // 한도 초과(infeasible)로 실행할 수 없는 표는 줄이 남아 있어도 판정·금액을 보이지 않는다.
-  await open(page, null, { ...latest, result: { ...latest.result, recommendation: { execution: { ...latest.result.recommendation.execution, status: 'infeasible' } } } });
+// 한도 초과(infeasible)로 실행할 수 없는 실행표는 줄이 남아 있어도 사고팔 금액을 보이지 않는다(결과 화면 finalRows 와 같은 기준).
+test('a past analysis with a non-executable table shows no trade amounts', async ({ page }) => {
+  await open(page, null, { ...latest, result: { ...latest.result, recommendation: { allocations: [], actions: [], execution: { ...latest.result.recommendation.execution, status: 'infeasible' } } } });
   const card = page.getByRole('region', { name: '지난 분석' });
-  await expect(card).toContainText('지난 분석을 다시 볼 수 있어요');
-  await expect(card).not.toContainText('바꾸는 게 나아요');
+  await expect(card).toContainText('10월 21일');
   await expect(card).not.toContainText('새로 사기');
+  await expect(card).not.toContainText('전부 팔기');
 });
 
 // 지난 분석으로 시작해 고친 입력은 처음 화면에 다녀와도 지난 분석 입력으로 덮이지 않는다.
