@@ -153,14 +153,8 @@ class Evaluation(StrictModel):
 
 
 class RecommendationEvaluation(Evaluation):
+    # 4~5점은 프롬프트 지침이다. 서버가 점수로 추천을 막으면 고객은 추천 없는 결과를 받는다
     scores: Scores
-
-    @model_validator(mode='after')
-    def recommended_floor(self):
-        # 직접 추천한 구성은 세 항목 평균 4점 이상(4~5점 안에서 근거대로 차등)으로 보여 준다
-        if self.scores.leadership + self.scores.profitability + self.scores.stability < 12:
-            raise ValueError('RECOMMENDED_SCORE_BELOW_FOUR: recommendation.evaluation.scores must average 4.0~5.0; rescore within that range by the same evidence')
-        return self
 
 
 class Allocation(StrictModel):
