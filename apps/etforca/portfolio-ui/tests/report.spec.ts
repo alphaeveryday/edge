@@ -195,7 +195,11 @@ test('very large amounts and enlarged text do not overflow the phone width', asy
   const result = base();
   result.recommendation.execution.rows[0] = row('KR:360750', 'TIGER 미국S&P500', 'ISA', 1234567890123, 1234567890123);
   await open(page, result);
+  const size = () => page.locator('.r8-answer').evaluate(el => parseFloat(getComputedStyle(el).fontSize));
+  const before = await size();
   await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
+  // 고객이 글자를 키우면 결과 글도 커져야 한다(고정 px 이면 그대로라 확대가 무시된다).
+  expect(await size()).toBeGreaterThan(before * 1.5);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await expect(page.locator('.r8-final-row').first().locator('.r8-row-value')).toHaveText('12,345억 6,789만 123원');
 });

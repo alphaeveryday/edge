@@ -213,15 +213,14 @@ function MonthlyCard({ report, rows, color, monthly, onAlert }: { report: Report
   </section>;
 }
 
+/** 고점에서 저점까지 가장 많이 줄어든 돈과, 같은 구간의 고점 대비 비율(금액과 비율이 다른 구간에서 오지 않게). */
 function deepestFall(values: number[]) {
-  let peak = values[0], worst = 0;
-  for (const v of values) { peak = Math.max(peak, v); worst = Math.max(worst, peak - v); }
-  return worst;
-}
-function drawdown(values: number[]) {
-  let peak = values[0], worst = 0;
-  for (const v of values) { peak = Math.max(peak, v); worst = Math.max(worst, peak > 0 ? (peak - v) / peak : 0); }
-  return worst;
+  let peak = values[0], amount = 0, ratio = 0;
+  for (const v of values) {
+    peak = Math.max(peak, v);
+    if (peak - v > amount) { amount = peak - v; ratio = peak > 0 ? amount / peak : 0; }
+  }
+  return { amount, ratio };
 }
 function periodLabel(start: string, end: string) {
   const days = Math.max(1, Math.round((Date.parse(end) - Date.parse(start)) / 864e5));
@@ -230,7 +229,7 @@ function periodLabel(start: string, end: string) {
   return months >= 1 ? `지난 ${months}개월` : `지난 ${days}일`;
 }
 type Past = { label: string; start: string; end: string; mode: 'compare' | 'cash' | 'single'; total: number; rec: number[] | null; cur: number[] | null;
-  recEnd: number; curEnd: number; recLoss: number; curLoss: number; recDrop: number; curDrop: number; basis: string };
+  recEnd: number; curEnd: number; recLoss: number; curLoss: number; recDrop: number | null; curDrop: number | null; basis: string; singleName: string };
 function pastOf(report: Report, history: History | null | undefined, total: number | null, kind: Kind | null): Past | null {
   if (!total || total <= 0) return null;
   const points = (history?.points ?? []).filter(p => Number.isFinite(p.recommended) && p.recommended > 0 && Number.isFinite(Date.parse(p.date)));
@@ -245,15 +244,18 @@ function pastOf(report: Report, history: History | null | undefined, total: numb
   const cur = hasCurrent && !cash ? points.map(p => total * p.current! / points[0].current!) : null;
   const recEnd = server ? toNum(server.rec_end_krw)! : rec!.at(-1)!;
   const curEnd = server ? toNum(server.cur_end_krw)! : cash ? total : cur?.at(-1) ?? recEnd;
-  const recLoss = server ? Math.abs(toNum(server.rec_max_loss_krw)!) : deepestFall(rec!);
-  const curLoss = server ? Math.abs(toNum(server.cur_max_loss_krw)!) : cash ? 0 : cur ? deepestFall(cur) : recLoss;
-  // 서버 요약은 금액만 주므로 비율은 넣은 돈 기준으로 어림한다.
-  const recDrop = rec && !server ? drawdown(rec) : recLoss / total;
-  const curDrop = cur && !server ? drawdown(cur) : curLoss / total;
+  const recFall = rec ? deepestFall(rec) : null, curFall = cur ? deepestFall(cur) : null;
+  const recLoss = server ? Math.abs(toNum(server.rec_max_loss_krw)!) : recFall!.amount;
+  const curLoss = server ? Math.abs(toNum(server.cur_max_loss_krw)!) : cash ? 0 : curFall ? curFall.amount : recLoss;
+  // 서버 요약은 금액만 준다. 같은 기간 기록이 있을 때만 비율을 기록에서 읽고, 없으면 비율을 지어내지 않는다.
+  const recDrop = recFall?.ratio ?? null;
+  const curDrop = cash ? 0 : curFall?.ratio ?? (cur ? null : recDrop);
   // 바꿀 것이 없으면 두 선이 같다 — 같은 숫자를 두 번 보이지 않고 한 줄로 말한다.
   const same = !cash && (kind === 'keep' || (!server && !cur) || Math.abs(recEnd - curEnd) < 1 && Math.abs(recLoss - curLoss) < 1);
   return { label: report.period?.label || (start && end ? periodLabel(start, end) : '지난 기간'), start, end, mode: cash ? 'cash' : same ? 'single' : 'compare',
-    total, rec, cur, recEnd, curEnd, recLoss, curLoss, recDrop, curDrop, basis: history?.basis ?? '' };
+    total, rec, cur, recEnd, curEnd, recLoss, curLoss, recDrop, curDrop, basis: history?.basis ?? '',
+    // 한 줄로 줄일 때: 지금 구성과 같으면 '지금 그대로', 지금 구성의 기록이 없으면 추천만 보인다.
+    singleName: cur || kind === 'keep' ? '지금 그대로' : '추천' };
 }
 
 function PastChart({ past }: { past: Past }) {
@@ -294,14 +296,14 @@ function PastCard({ past, unavailable }: { past: Past | null; unavailable: strin
     : past.mode === 'single' ? <><em>{won(Math.abs(gain), true)}</em> {gain >= 0 ? '벌었어요' : '잃었어요'}</>
     : diff >= 0 ? <><em>{won(diff, true)}</em> 더 벌었어요</> : <>지금 구성이 <em>{won(-diff, true)}</em> 더 벌었어요</>;
   const otherName = past.mode === 'cash' ? '현금' : '지금 그대로';
-  const boxes = past.mode === 'single' ? [['지금 그대로', past.recLoss, past.recDrop] as const] : [[otherName, past.curLoss, past.curDrop] as const, ['추천', past.recLoss, past.recDrop] as const];
+  const boxes = past.mode === 'single' ? [[past.singleName, past.recLoss, past.recDrop] as const] : [[otherName, past.curLoss, past.curDrop] as const, ['추천', past.recLoss, past.recDrop] as const];
   const worse = past.mode === 'single' || Math.abs(past.recLoss - past.curLoss) < 1 ? -1 : past.curLoss > past.recLoss ? 0 : 1;
   const lossDiff = past.curLoss - past.recLoss;
   return <section className="r8-card r8-past" data-analytics-section="past" aria-labelledby="r8-past-title">
     <div className="r8-head"><span className="r8-eyebrow">{past.label}, 이렇게 했다면</span><h2 id="r8-past-title" className="r8-big">{heading}</h2></div>
     {past.rec && <PastChart past={past} />}
     <div className="r8-loss"><span className="r8-eyebrow">가장 크게 떨어졌을 때 내 돈</span>
-      <div className="r8-loss-boxes">{boxes.map(([name, loss, drop], i) => <div key={name} className="r8-loss-box" data-worse={i === worse || undefined}><span>{name}</span><b>{won(-loss, true)}</b><span>{(-drop * 100).toFixed(1)}%</span></div>)}</div>
+      <div className="r8-loss-boxes">{boxes.map(([name, loss, drop], i) => <div key={name} className="r8-loss-box" data-worse={i === worse || undefined}><span>{name}</span><b>{won(-loss, true)}</b>{drop !== null && <span>{(-drop * 100).toFixed(1)}%</span>}</div>)}</div>
       {past.mode === 'compare' && Math.abs(lossDiff) >= 1 && <p className="r8-strong">추천이 {lossDiff > 0 ? <><em>{won(lossDiff, true)}</em> 덜 잃었어요</> : <>{won(-lossDiff, true)} 더 잃었어요</>}</p>}
       {past.mode === 'cash' && <p className="r8-muted">현금은 떨어지지 않지만 그동안 늘지도 않았어요.</p>}
     </div>
@@ -317,7 +319,7 @@ function FutureCard({ principal, monthly, past }: { principal: number | null; mo
   if (principal === null || principal < 0 || principal === 0 && monthly <= 0) return null;
   const bars = [5, 10, 15].map(years => ({ years, value: futureValue(principal, monthly, years), paid: principal + monthly * 12 * years }));
   const final = bars[2].value;
-  const drop = past?.recDrop ?? 0;
+  const drop = past?.recDrop ?? 0; // 비율을 모르면 나쁜 해 줄을 숨긴다.
   return <section className="r8-card r8-future" data-analytics-section="future" aria-labelledby="r8-future-title">
     <div className="r8-head"><span className="r8-eyebrow">앞으로 내 돈</span>
       <h2 id="r8-future-title" className="r8-big">15년 뒤 <em>{won(final, true)}</em></h2>
@@ -497,7 +499,8 @@ export function ResultView({ report, jobId, input, active = true }: { report: Re
   const [appOpen, setAppOpen] = useState(false);
   const [typeOpen, setTypeOpen] = useState(false);
   const rows = finalRows(report);
-  const hasContent = !!report.recommendation || Number.isFinite(report.current_evaluation?.overall) || rows.length > 0 || analysisItems(report, null).length > 0;
+  // 추천 객체만 있고 행·점수·글이 모두 비면 빈 결과다 — 노출로 세지 않는다.
+  const hasContent = Number.isFinite(report.current_evaluation?.overall) || Number.isFinite(report.recommendation?.evaluation?.overall) || rows.length > 0 || analysisItems(report, null).length > 0;
   useEffect(() => {
     // 실제 결과 칸이 그려졌고 고객이 그 탭을 보고 있을 때 분석 하나에 한 번(빈 결과·뒤쪽 탭·StrictMode 재실행은 세지 않는다).
     const key = `edge-portfolio-result-shown:${jobId}`;
