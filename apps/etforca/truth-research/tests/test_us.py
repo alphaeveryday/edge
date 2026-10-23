@@ -254,6 +254,8 @@ def test_us_web_news_times_are_shown_in_new_york_time(cfg):
          web_news=lambda m, s: [_web("https://www.reuters.com/b", "2026-10-22T13:00:00.000Z") | {"title": "Tantech\nsoars"}])
     line = next(x for x in runner.seen[0]["prompt"].splitlines() if x.startswith("- web-"))
     assert "| 2026-10-22 09:00 |" in line and line.endswith("Tantech soars")
+    # 시간대 없는 값(날짜만 등)은 바꾸지 않는다 — 실행 컴퓨터 시각으로 읽혀 전날로 밀리면 급등 전 기사처럼 보인다
+    assert research._local("2026-10-22", US) == "2026-10-22" and research._local("2026-10-22T13:00:00", US) == "2026-10-22"
 
 
 def test_us_searches_news_only_for_movers_that_can_get_a_session(cfg):

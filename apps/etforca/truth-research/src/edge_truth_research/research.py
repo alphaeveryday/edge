@@ -124,11 +124,13 @@ WEB_NEWS_CHARS = 8000   # 그 원문 글자 수(view_news 가 보여 주는 만�
 
 
 def _local(published: str | None, market: Market) -> str:
-    """원문 발행 시각(ISO, 보통 UTC) → 그 시장 현지 'YYYY-MM-DD HH:MM'. 읽을 수 없으면 앞 10자(날짜)만."""
+    """원문 발행 시각(ISO, 보통 UTC) → 그 시장 현지 'YYYY-MM-DD HH:MM'. 시간대가 없거나(날짜만 포함) 읽을 수 없으면 앞 10자(날짜)만 —
+    시간대 없는 값을 바꾸면 실행 컴퓨터 시각으로 읽혀 전날·지어낸 시각이 된다."""
     try:
-        return datetime.fromisoformat(str(published).replace("Z", "+00:00")).astimezone(market.tz).strftime("%Y-%m-%d %H:%M")
+        moment = datetime.fromisoformat(str(published).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return str(published or "")[:10]
+    return moment.astimezone(market.tz).strftime("%Y-%m-%d %H:%M") if moment.tzinfo else str(published)[:10]
 
 
 def _about(m: Mover, text: str) -> bool:
