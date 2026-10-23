@@ -364,3 +364,19 @@ def test_followup_estimated_monthly_amount_keeps_its_assumption():
     plan = plan_execution(req, [{'instrument_id': 'KR:360750', 'account': '일반 계좌', 'weight_pct': 100}], changed)
     assert plan['monthly_plan'][0]['krw'] == '500000'
     assert '월 50만원으로 가정' in plan['assumptions']
+
+
+def test_new_leverage_is_judged_on_the_same_won_split_as_the_trade_table():
+    # 비중 끝자리가 1원 미만이어도 원 단위 배분(최대 나머지)에서 1원 매수가 생기면 새로 산 것이다
+    req = holder([('US:QLD', 6000000), ('KR:360750', 4000000)], [{'kind': 'no_leverage'}])
+    assert chip_checks(req, [('US:QLD', 60.000006), ('KR:360750', 39.999994)])['no_leverage'] == 'fail'
+    assert chip_checks(req, [('US:QLD', 60), ('KR:360750', 40)])['no_leverage'] == 'pass'
+
+
+def test_no_sell_with_a_position_cap_substitutes_bonds_instead_of_blocking_every_candidate():
+    # 주식 ETF 90%·현금 10%에 팔지 않기·종목 1개·채권도 조금: 새 종목을 못 더하니 채권은 대신 지키고 추천은 나와야 한다
+    req = holder([('KR:360750', 900), ('CASH:KRW', 100)], [{'kind': 'no_sell'}, {'kind': 'max_positions', 'value': 1}, {'kind': 'some_bonds'}])
+    assert chip_checks(req, [('KR:360750', 100)]) == {'no_sell': 'pass', 'max_positions': 'pass', 'some_bonds': 'substituted'}
+    # 종목 수 제한이 없으면 현금 10%로 채권 10%를 채울 수 있으니 대신하지 않는다
+    free = holder([('KR:360750', 900), ('CASH:KRW', 100)], [{'kind': 'no_sell'}, {'kind': 'some_bonds'}])
+    assert chip_checks(free, [('KR:360750', 100)])['some_bonds'] == 'fail'

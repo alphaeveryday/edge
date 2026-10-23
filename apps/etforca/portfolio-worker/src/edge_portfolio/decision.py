@@ -6,7 +6,7 @@ from pydantic import Field, model_validator
 
 from .catalog import traits
 from .contracts import Section, StrictModel
-from .execution import plan_execution
+from .execution import allocate_amounts, plan_execution
 
 # 8차: 지킬 조건은 입력의 칩(request.constraints)뿐이다. 글은 참고로만 모델에 넘긴다.
 CHIP_LABELS = {'no_leverage': '레버리지 빼기', 'some_bonds': '채권도 조금', 'dividend': '배당 받기',
@@ -137,7 +137,7 @@ def held_weights(request):
     return held
 
 
-def chip_status(rule, weights, request, catalog):
+def chip_status(rule, weights, request, catalog, rows=()):
     """칩 하나의 결정적 판정. 부딪치면 보류하지 않고 '팔지 않기'를 먼저 지킨 뒤 남은 칩을 substituted 로 둔다."""
     held = held_weights(request)
     no_sell = any(chip.kind == 'no_sell' for chip in getattr(request, 'constraints', []))
@@ -149,12 +149,16 @@ def chip_status(rule, weights, request, catalog):
                   and (has(key, 'leverage') if rule.kind == 'no_leverage' else catalog.get(key, {}).get('market') != 'KR')]
         if held is None:
             return 'unknown' if banned else 'pass'
-        # 1원이라도 더 사면 새로 산 것이다. 1원이 안 되는 끝자리(비중 소수점)만 원 단위 반올림으로 본다
+        # 1원이라도 더 사면 새로 산 것이다. 실행표(build_execution)와 같은 원 단위 배분으로 견준다
         total = sum(h.amount_krw for h in request.holdings) if request.input_mode == 'amount' else None
+        target, before = {}, {}
+        if total and rows:
+            for row, amount in zip(rows, allocate_amounts(total, [Decimal(str(row['weight_pct'])) for row in rows])):
+                target[row['instrument_id']] = target.get(row['instrument_id'], 0) + amount
+            for holding in request.holdings:
+                before[holding.instrument_id] = before.get(holding.instrument_id, 0) + holding.amount_krw
         def bought(key):
-            if not total:
-                return weights[key] > held.get(key, 0)
-            return (weights[key] - held.get(key, 0)) * total / 100 >= 1
+            return target.get(key, 0) > before.get(key, 0) if target else weights[key] > held.get(key, 0)
         if any(bought(key) for key in banned):
             return 'fail'
         # 팔지 않기 때문에 가진 레버리지를 남겼다. 매달 넣는 돈을 넣지 않아 몫을 줄인다(split_monthly)
@@ -164,8 +168,17 @@ def chip_status(rule, weights, request, catalog):
         if sum((weight for key, weight in weights.items() if has(key, trait)), Decimal(0)) >= minimum:
             return 'pass'
         # 팔지 않기로 묶인 다른 종목 때문에 채울 수 없을 때만 대신 지킨다
-        locked = sum((weight for key, weight in (held or {}).items() if key != 'CASH:KRW' and not has(key, trait)), Decimal(0))
-        return 'substituted' if no_sell and held is not None and 100 - locked < minimum else 'fail'
+        if not no_sell or held is None:
+            return 'fail'
+        kept = {key for key in held if key != 'CASH:KRW'}
+        cap = next((chip.value for chip in request.constraints if chip.kind == 'max_positions'), None)
+        if cap is not None and len(kept) >= cap:
+            # 종목 수 칩 때문에 새 종목도 더할 수 없다. 현금은 가진 같은 성격 종목에만 더 넣을 수 있다
+            owned = sum((held[key] for key in kept if has(key, trait)), Decimal(0))
+            best = owned + (held.get('CASH:KRW', 0) if owned else 0)
+        else:
+            best = 100 - sum((held[key] for key in kept if not has(key, trait)), Decimal(0))
+        return 'substituted' if best < minimum else 'fail'
     # max_positions: 서로 다른 종목 수(현금 제외). 팔지 않기로 이미 n개를 넘게 가졌으면 새 종목만 더하지 않는다
     count = sum(value > 0 for key, value in weights.items() if key != 'CASH:KRW')
     if count <= rule.value:
@@ -182,7 +195,7 @@ def check_constraints(decision, rows, request, catalog):
     checks = []
     for number, rule in enumerate(decision.constraints, 1):
         if rule.kind in {'no_leverage', 'kr_listed_etf_only', 'some_bonds', 'dividend'} or rule.kind == 'max_positions' and getattr(request, 'constraints', None):
-            checks.append({'constraint': number, 'kind': rule.kind, 'source': rule.source, 'status': chip_status(rule, weights, request, catalog)})
+            checks.append({'constraint': number, 'kind': rule.kind, 'source': rule.source, 'status': chip_status(rule, weights, request, catalog, rows)})
             continue
         if rule.kind == 'unverified':
             # Preserve the condition for model judgment without certifying it in code.

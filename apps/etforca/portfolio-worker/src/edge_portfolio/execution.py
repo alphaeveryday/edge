@@ -333,7 +333,8 @@ def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no
             if 'no_leverage' in chips and 'leverage' in traits(item) or 'kr_listed_etf_only' in chips and item.get('market') != 'KR':
                 no_monthly.add(key[0])
     def monthly_plan(deposits):
-        if monthly and not any(key[0] != 'CASH:KRW' and key[0] not in no_monthly for key in target)                 and any(key[0] != 'CASH:KRW' and key[0] not in stocks for key in target):
+        if monthly and not any(key[0] != 'CASH:KRW' and key[0] not in no_monthly for key in target) \
+                and any(key[0] != 'CASH:KRW' and key[0] not in stocks for key in target):
             # 칩이 추천 구성의 모든 종목에 매달 넣는 것을 막았다(예: 레버리지만 가진 채 팔지 않기). 실행 불가가 아니다
             result['assumptions'].append('고른 조건 때문에 추천 구성 안에는 매달 넣을 종목이 없어요.')
             return []
