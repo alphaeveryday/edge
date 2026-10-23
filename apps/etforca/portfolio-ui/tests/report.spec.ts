@@ -86,8 +86,10 @@ test('an old report without verdict fields still answers, recommends and compare
   const past = page.locator('[data-analytics-section=past]');
   await expect(past.locator('.r8-eyebrow').first()).toHaveText('지난 3년, 이렇게 했다면');
   await expect(past.locator('h2')).toHaveText('375만 원 더 벌었어요');
-  // 가장 크게 떨어졌을 때: 지금 그대로 -30% = -375만 원(더 잃는 쪽만 빨강), 추천 -20% = -250만 원.
+  // 가장 크게 떨어졌을 때는 고점에서 저점까지 실제로 줄어든 돈: 지금 그대로 1,250만→875만 -375만 원(-30%, 더 잃는 쪽만 빨강),
+  // 추천 1,250만→1,000만 -250만 원(-20%). 다음 고점 뒤 낙폭이 아니라 가장 깊은 낙폭이어야 한다.
   await expect(past.locator('.r8-loss-box b')).toHaveText(['-375만 원', '-250만 원']);
+  await expect(past.locator('.r8-loss-box span:last-child')).toHaveText(['-30.0%', '-20.0%']);
   await expect(past.locator('.r8-loss-box[data-worse]')).toContainText('지금 그대로');
   await expect(past.locator('.r8-strong')).toHaveText('추천이 125만 원 덜 잃었어요');
 
@@ -135,6 +137,14 @@ test('an old multi-month plan says its target includes money still to be added',
   Object.assign(result.recommendation.execution, { status: 'conditional', additional_krw: '3000000', monthly_krw: '500000', months: 6 });
   await open(page, result);
   await expect(page.locator('.r8-final .r8-callout')).toHaveText('추천 금액에는 새로 넣을 300만 원이 들어 있어요. 매달 50만 원씩 6개월 넣어 맞추는 계획이에요.');
+});
+
+test('adding money in the same proportions is not a rebuild', async ({ page }) => {
+  // 옛 실행표는 돈을 더 넣으면 모든 종목 금액이 늘었다. 비중이 같으면 '이대로 가도 돼요'여야 한다.
+  const result = base();
+  result.recommendation.execution.rows = [row('KR:360750', 'TIGER 미국S&P500', 'ISA', 5000000, 5500000), row('KR:379810', 'KODEX 미국나스닥100', 'ISA', 5000000, 5500000)];
+  await open(page, result);
+  await expect(page.locator('.r8-headline')).toHaveText('이대로 가도 돼요');
 });
 
 test('a first-time investor sees Orca instead of a score and compares with cash', async ({ page }) => {

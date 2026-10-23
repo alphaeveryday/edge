@@ -69,8 +69,12 @@ function verdictKind(report: Report, rows: Row[], input?: Input): Kind | null {
     : (report.metrics?.holdings ?? []).some(h => h.name !== '현금');
   const known = rows.filter(r => r.before !== null && r.target !== null);
   if (known.length ? !known.some(r => r.kind !== 'cash' && r.before! > 0) : !held) return 'start';
+  const invested = known.filter(r => r.kind !== 'cash');
+  const beforeSum = invested.reduce((sum, r) => sum + r.before!, 0), targetSum = invested.reduce((sum, r) => sum + r.target!, 0);
+  // 같은 비중으로 돈만 더 넣는 옛 계획은 '바꾸는' 것이 아니다 — 금액이 아니라 현금을 뺀 비중으로 센다.
+  const moved = (r: Row) => (r.before! < 1) !== (r.target! < 1) || beforeSum > 0 && targetSum > 0 && Math.abs(r.before! / beforeSum - r.target! / targetSum) > .005;
   const changed = new Set(known.length
-    ? known.filter(r => r.kind !== 'cash' && Math.abs(r.target! - r.before!) >= 1).map(r => r.id)
+    ? invested.filter(moved).map(r => r.id)
     : (report.recommendation.actions ?? []).filter(a => !a.instrument_id.startsWith('CASH:') && (a.before_pct ?? 0) !== a.after_pct).map(a => a.instrument_id));
   return changed.size === 0 ? 'keep' : changed.size === 1 ? 'one' : 'rebuild';
 }
@@ -208,6 +212,11 @@ function MonthlyCard({ report, rows, color, monthly, onAlert }: { report: Report
   </section>;
 }
 
+function deepestFall(values: number[]) {
+  let peak = values[0], worst = 0;
+  for (const v of values) { peak = Math.max(peak, v); worst = Math.max(worst, peak - v); }
+  return worst;
+}
 function drawdown(values: number[]) {
   let peak = values[0], worst = 0;
   for (const v of values) { peak = Math.max(peak, v); worst = Math.max(worst, peak > 0 ? (peak - v) / peak : 0); }
@@ -220,7 +229,7 @@ function periodLabel(start: string, end: string) {
   return months >= 1 ? `지난 ${months}개월` : `지난 ${days}일`;
 }
 type Past = { label: string; start: string; end: string; mode: 'compare' | 'cash' | 'single'; total: number; rec: number[] | null; cur: number[] | null;
-  recEnd: number; curEnd: number; recLoss: number; curLoss: number; basis: string };
+  recEnd: number; curEnd: number; recLoss: number; curLoss: number; recDrop: number; curDrop: number; basis: string };
 function pastOf(report: Report, history: History | null | undefined, total: number | null, kind: Kind | null): Past | null {
   if (!total || total <= 0) return null;
   const points = (history?.points ?? []).filter(p => Number.isFinite(p.recommended) && p.recommended > 0 && Number.isFinite(Date.parse(p.date)));
@@ -235,12 +244,15 @@ function pastOf(report: Report, history: History | null | undefined, total: numb
   const cur = hasCurrent && !cash ? points.map(p => total * p.current! / points[0].current!) : null;
   const recEnd = server ? toNum(server.rec_end_krw)! : rec!.at(-1)!;
   const curEnd = server ? toNum(server.cur_end_krw)! : cash ? total : cur?.at(-1) ?? recEnd;
-  const recLoss = server ? Math.abs(toNum(server.rec_max_loss_krw)!) : total * drawdown(rec!);
-  const curLoss = server ? Math.abs(toNum(server.cur_max_loss_krw)!) : cash ? 0 : cur ? total * drawdown(cur) : recLoss;
+  const recLoss = server ? Math.abs(toNum(server.rec_max_loss_krw)!) : deepestFall(rec!);
+  const curLoss = server ? Math.abs(toNum(server.cur_max_loss_krw)!) : cash ? 0 : cur ? deepestFall(cur) : recLoss;
+  // 서버 요약은 금액만 주므로 비율은 넣은 돈 기준으로 어림한다.
+  const recDrop = rec && !server ? drawdown(rec) : recLoss / total;
+  const curDrop = cur && !server ? drawdown(cur) : curLoss / total;
   // 바꿀 것이 없으면 두 선이 같다 — 같은 숫자를 두 번 보이지 않고 한 줄로 말한다.
   const same = !cash && (kind === 'keep' || (!server && !cur) || Math.abs(recEnd - curEnd) < 1 && Math.abs(recLoss - curLoss) < 1);
   return { label: report.period?.label || (start && end ? periodLabel(start, end) : '지난 기간'), start, end, mode: cash ? 'cash' : same ? 'single' : 'compare',
-    total, rec, cur, recEnd, curEnd, recLoss, curLoss, basis: history?.basis ?? '' };
+    total, rec, cur, recEnd, curEnd, recLoss, curLoss, recDrop, curDrop, basis: history?.basis ?? '' };
 }
 
 function PastChart({ past }: { past: Past }) {
@@ -281,14 +293,14 @@ function PastCard({ past, unavailable }: { past: Past | null; unavailable: strin
     : past.mode === 'single' ? <><em>{won(Math.abs(gain), true)}</em> {gain >= 0 ? '벌었어요' : '잃었어요'}</>
     : diff >= 0 ? <><em>{won(diff, true)}</em> 더 벌었어요</> : <>지금 구성이 <em>{won(-diff, true)}</em> 더 벌었어요</>;
   const otherName = past.mode === 'cash' ? '현금' : '지금 그대로';
-  const boxes = past.mode === 'single' ? [['지금 그대로', past.recLoss] as const] : [[otherName, past.curLoss] as const, ['추천', past.recLoss] as const];
+  const boxes = past.mode === 'single' ? [['지금 그대로', past.recLoss, past.recDrop] as const] : [[otherName, past.curLoss, past.curDrop] as const, ['추천', past.recLoss, past.recDrop] as const];
   const worse = past.mode === 'single' || Math.abs(past.recLoss - past.curLoss) < 1 ? -1 : past.curLoss > past.recLoss ? 0 : 1;
   const lossDiff = past.curLoss - past.recLoss;
   return <section className="r8-card r8-past" data-analytics-section="past" aria-labelledby="r8-past-title">
     <div className="r8-head"><span className="r8-eyebrow">{past.label}, 이렇게 했다면</span><h2 id="r8-past-title" className="r8-big">{heading}</h2></div>
     {past.rec && <PastChart past={past} />}
     <div className="r8-loss"><span className="r8-eyebrow">가장 크게 떨어졌을 때 내 돈</span>
-      <div className="r8-loss-boxes">{boxes.map(([name, loss], i) => <div key={name} className="r8-loss-box" data-worse={i === worse || undefined}><span>{name}</span><b>{won(-loss, true)}</b><span>{(-loss / past.total * 100).toFixed(1)}%</span></div>)}</div>
+      <div className="r8-loss-boxes">{boxes.map(([name, loss, drop], i) => <div key={name} className="r8-loss-box" data-worse={i === worse || undefined}><span>{name}</span><b>{won(-loss, true)}</b><span>{(-drop * 100).toFixed(1)}%</span></div>)}</div>
       {past.mode === 'compare' && Math.abs(lossDiff) >= 1 && <p className="r8-strong">추천이 {lossDiff > 0 ? <><em>{won(lossDiff, true)}</em> 덜 잃었어요</> : <>{won(-lossDiff, true)} 더 잃었어요</>}</p>}
       {past.mode === 'cash' && <p className="r8-muted">현금은 떨어지지 않지만 그동안 늘지도 않았어요.</p>}
     </div>
@@ -304,7 +316,7 @@ function FutureCard({ principal, monthly, past }: { principal: number | null; mo
   if (!principal || principal <= 0) return null;
   const bars = [5, 10, 15].map(years => ({ years, value: futureValue(principal, monthly, years), paid: principal + monthly * 12 * years }));
   const final = bars[2].value;
-  const drop = past?.rec ? drawdown(past.rec) : past ? past.recLoss / past.total : 0;
+  const drop = past?.recDrop ?? 0;
   return <section className="r8-card r8-future" data-analytics-section="future" aria-labelledby="r8-future-title">
     <div className="r8-head"><span className="r8-eyebrow">앞으로 내 돈</span>
       <h2 id="r8-future-title" className="r8-big">15년 뒤 <em>{won(final, true)}</em></h2>
@@ -534,7 +546,7 @@ export function ResultView({ report, jobId, input, active = true }: { report: Re
     <FinalCard report={report} rows={rows} color={color} input={input} />
     <MonthlyCard report={report} rows={rows} color={color} monthly={monthly} onAlert={() => { trackResult('app_alert_clicked', { analysis_id: jobId }); setAppOpen(true); }} />
     {plan && <PastCard past={past} unavailable={plan.historical_performance ? '' : sentence(plan.unavailable_reason || '')} />}
-    {plan && <FutureCard principal={finalTotal || currentTotal} monthly={monthly ?? 0} past={past} />}
+    {plan && <FutureCard principal={currentTotal || finalTotal} monthly={monthly ?? 0} past={past} />}
     <AnalysisCard report={report} kind={kind} analysisId={jobId} />
     <AskCard jobId={jobId} questions={questions} />
     {type && <section className="r8-card r8-actions" aria-label="결과 뒤에 할 일">
