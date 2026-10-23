@@ -401,3 +401,17 @@ def test_followup_principal_only_funding_keeps_the_saved_monthly_amount():
                         question='처음\n\n후속 질문: 원금은 1000만원입니다', funding_questions=['처음', '원금은 1000만원입니다'])
     principal = Decision(funding=Funding(source='원금은 1000만원입니다', principal_krw=10000000))
     assert resolve_funding(req, principal)['monthly_krw'] == 300000
+
+
+@pytest.mark.parametrize('funding,question,expected', [
+    ({'source': '이제 매달 넣지 않을게요', 'monthly_krw': 0}, '이제 매달 넣지 않을게요', 0),
+    ({'source': '추가 납입 없이 계산해 주세요'}, '추가 납입 없이 계산해 주세요', None),
+])
+def test_followup_that_stops_contributions_overrides_the_saved_monthly_amount(funding, question, expected):
+    # 고객이 후속 질문에서 납입을 멈추면 저장된 30만 원을 다시 배분하면 안 된다
+    from edge_portfolio.decision import Funding
+    from edge_portfolio.execution import resolve_funding
+    from edge_portfolio.followup import FollowupInput
+    req = FollowupInput(holdings=[], planning=True, horizon='10년 이상', monthly_krw=300000,
+                        question='처음\n\n후속 질문: ' + question, funding_questions=['처음', question])
+    assert resolve_funding(req, Decision(funding=Funding(**funding)))['monthly_krw'] == expected
