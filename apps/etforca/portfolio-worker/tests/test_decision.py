@@ -296,3 +296,36 @@ async def test_written_condition_without_chip_does_not_block_publication(monkeyp
     assert result['recommendation']['allocations']
     assert result['customer_constraint_checks'] == []
     assert stages.count('opinion') == 1
+
+
+def test_one_won_of_new_leverage_is_a_new_buy():
+    # '새로 사는 레버리지 0원' 계약: 비중 반올림 허용으로 몇백 원 매수가 지나가면 안 된다
+    req = holder([('US:QLD', 6000000), ('KR:360750', 4000000)], [{'kind': 'no_leverage'}])
+    assert chip_checks(req, [('US:QLD', 60.004), ('KR:360750', 39.996)])['no_leverage'] == 'fail'
+
+
+def test_leverage_only_holder_with_no_sell_is_not_made_infeasible_by_monthly_money():
+    # 팔지 않기가 이기는 결정: 가진 레버리지만 남는 구성도 추천이어야 한다. 매달 넣을 곳이 없을 뿐 실행 불가가 아니다
+    from edge_portfolio.execution import build_execution
+    req = holder([('US:QLD', 1000000)], [{'kind': 'no_leverage'}, {'kind': 'no_sell'}], monthly_krw=300000)
+    plan = build_execution(req, [{'instrument_id': 'US:QLD', 'account': '일반 계좌', 'weight_pct': 100}], monthly_krw=300000, no_sell=True)
+    assert (plan['status'], plan['reasons'], plan['monthly_plan']) == ('ready', [], [])
+
+
+def test_followup_funding_change_beats_the_saved_monthly_amount():
+    # 저장된 monthly_krw 가 후속 질문의 '매달 50만 원이면?'을 덮으면 견주기 답이 틀린다
+    from edge_portfolio.decision import Funding
+    from edge_portfolio.execution import resolve_funding
+    from edge_portfolio.followup import FollowupInput
+    req = FollowupInput(holdings=[], planning=True, horizon='10년 이상', monthly_krw=300000,
+                        question='처음\n\n후속 질문: 매달 50만원이면?', funding_questions=['처음', '매달 50만원이면?'])
+    changed = Decision(funding=Funding(source='매달 50만원', monthly_krw=500000))
+    assert resolve_funding(req, changed)['monthly_krw'] == 500000
+    assert resolve_funding(req, Decision())['monthly_krw'] == 300000
+
+
+def test_model_may_structure_the_numeric_monthly_amount():
+    # 숫자 칸의 월 납입은 글에 없지만 고객 입력이다. 모델이 그대로 옮겨도 인용 검사로 거절하지 않는다
+    req = holder([('KR:360750', 1000)], monthly_krw=500000)
+    decision = Decision(funding={'source': '매달 50만원', 'monthly_krw': 500000})
+    assert validate_decision(decision, req, CATALOG).funding.monthly_krw == 500000
