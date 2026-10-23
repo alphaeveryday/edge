@@ -132,6 +132,8 @@ resource "aws_ecs_task_definition" "this" {
       TRUTH_RUN_SUBNETS   = join(",", var.subnet_ids)
       TRUTH_RUN_SG        = aws_security_group.this.id
       TRUTH_RUN_CONTAINER = local.container_name
+      # 미국 공시(SEC EDGAR)는 연락처가 든 User-Agent 를 요구한다
+      TRUTH_SEC_CONTACT = var.sec_contact
     } : { name = k, value = v }]
     # truth-agent 와 같은 시크릿·같은 키
     secrets = [for key in ["DEEPSEEK_RESIST_NEWS_API_KEY", "EXA_API_KEY"] : {
@@ -231,6 +233,51 @@ resource "aws_scheduler_schedule" "prices" {
     retry_policy {
       maximum_event_age_in_seconds = 60
       maximum_retry_attempts       = 0
+    }
+  }
+}
+
+# 미국: 같은 태스크 정의를 --market us 로, 뉴욕 시간대(서머타임 자동)로 돌린다. 장중 매시 :35 조사 + 매분 가격 갱신·새 급등주 감시.
+# 공개 데이터는 truth/data/movers/us/, 상태는 저장소 state/us/ 에 따로 둔다(docs/design/truth-movers.md §6).
+locals {
+  us_schedules = {
+    run    = { name = "${var.name}-us", expression = var.us_schedule_expression, command = ["run", "--market", "us"], overrides = {}, max_age = 900, retries = 2 }
+    prices = { name = "${var.name}-us-prices", expression = var.us_prices_schedule_expression, command = ["prices", "--market", "us"], overrides = { Cpu = "256", Memory = "512" }, max_age = 60, retries = 0 }
+  }
+}
+
+resource "aws_scheduler_schedule" "us" {
+  for_each                     = local.us_schedules
+  name                         = each.value.name
+  state                        = var.schedule_state
+  schedule_expression          = each.value.expression
+  schedule_expression_timezone = "America/New_York"
+
+  flexible_time_window { mode = "OFF" }
+
+  target {
+    arn      = "arn:aws:scheduler:::aws-sdk:ecs:runTask"
+    role_arn = aws_iam_role.scheduler.arn
+    input = jsonencode({
+      Cluster        = var.cluster_arn
+      TaskDefinition = aws_ecs_task_definition.this.arn
+      LaunchType     = "FARGATE"
+      NetworkConfiguration = {
+        AwsvpcConfiguration = {
+          Subnets        = var.subnet_ids
+          SecurityGroups = [aws_security_group.this.id]
+          AssignPublicIp = "DISABLED"
+        }
+      }
+      Overrides = merge(each.value.overrides, {
+        ContainerOverrides = [{ Name = local.container_name, Command = each.value.command }]
+      })
+    })
+
+    # 조사는 늦은 재시도가 다음 시각 실행과 겹칠 뿐이라 짧게, 매분 가격 갱신은 두지 않는다(국내와 같다)
+    retry_policy {
+      maximum_event_age_in_seconds = each.value.max_age
+      maximum_retry_attempts       = each.value.retries
     }
   }
 }

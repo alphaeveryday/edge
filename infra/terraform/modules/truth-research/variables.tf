@@ -65,6 +65,23 @@ variable "prices_schedule_expression" {
   default     = "cron(* 9-15 ? * MON-FRI *)"
 }
 
+variable "us_schedule_expression" {
+  description = "미국 조사 시각 (America/New_York — 서머타임을 따라간다). 장중 매시 :35, 9:35~15:35. 감시의 :20~:37 정지 규칙이 국내와 같은 분을 쓴다."
+  type        = string
+  default     = "cron(35 9-15 ? * MON-FRI *)"
+}
+
+variable "us_prices_schedule_expression" {
+  description = "미국 가격 갱신 시각 (America/New_York). 장중 매분 — 16:00 장 마감 가격을 받으려고 16시대까지 돈다(16:01 부터는 감시가 띄우지 않고 가격만 고친다)."
+  type        = string
+  default     = "cron(* 9-16 ? * MON-FRI *)"
+}
+
+variable "sec_contact" {
+  description = "SEC EDGAR 요청 머리글(User-Agent)의 연락처 이메일. SEC 는 연락처 없는 요청을 403 으로 막는다."
+  type        = string
+}
+
 variable "schedule_state" {
   description = "ENABLED 또는 DISABLED."
   type        = string

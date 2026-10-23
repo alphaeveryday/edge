@@ -17,4 +17,7 @@ module "truth_research" {
   runtime_secret_arn  = module.truth_agent.runtime_secret_arn
   landing_bucket_name = module.landing_site.bucket_name
   landing_bucket_arn  = module.landing_site.bucket_arn
+
+  # 미국 공시(SEC) 요청 연락처 — truth 사이트 처리방침(privacy.html)에 공개한 운영 연락처와 같다
+  sec_contact = "asm.alphaeveryday@gmail.com"
 }
