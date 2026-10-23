@@ -1,14 +1,15 @@
 import type { Page } from '@playwright/test';
+import { addHolding, startInput } from '../scripts/fill-form.mjs';
+export { addHolding, startInput };
 
 // The input starts empty, so flows that only need a valid first step add one cash holding.
 export async function addCash(page: Page, amount = '1000000', account = '일반 계좌') {
-  await page.getByRole('combobox', { name: `${account}에 담은 종목 찾기` }).fill('현금');
-  await page.getByRole('option', { name: '현금 원화 현금' }).click();
-  await page.getByRole('textbox', { name: '현금 금액', exact: true }).fill(amount);
+  await addHolding(page, '현금', '현금', amount, account);
 }
-
-// 요청사항은 모바일에서 접혀 있다(선택 항목). 적어야 하는 흐름은 먼저 연다.
-export async function openRequest(page: Page) {
-  const summary = page.locator('.askbox > summary');
-  if (await summary.isVisible()) await summary.click();
+// 1/3 → 2/3 → 3/3 까지 필수 답만 채운다(매달 넣지 않음 · 정한 때 없음).
+export async function toAsk(page: Page) {
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await page.getByRole('button', { name: '안 넣어요', exact: true }).click();
+  await page.getByRole('button', { name: /^정한 때 없어요/ }).click();
+  await page.getByRole('button', { name: '다음', exact: true }).click();
 }

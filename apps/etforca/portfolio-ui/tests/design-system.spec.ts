@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { addCash } from './holdings';
+import { addCash, toAsk } from './holdings';
 
 test('the design catalog uses production controls without customer traffic or persistence', async ({ page }) => {
   const calls: string[] = [];
@@ -46,7 +46,8 @@ test('tokens stay consistent across input, dashboard and catalog, including text
 
 test('search affordances and dividend data remain visible after token changes', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
-  await expect(page.locator('.find__plus').first()).toHaveCSS('color', 'rgb(255, 255, 255)');
+  await page.getByRole('button', { name: '내 포트폴리오 넣기' }).click();
+  await expect(page.locator('.fl-add').first()).toHaveCSS('color', 'rgb(27, 100, 218)');
   await page.goto('/portfolio/?preview=dashboard');
   const month = page.getByRole('button', { name: /^2026-10 예상/ });
   await expect(month.locator('b')).toHaveCSS('background-color', 'rgb(32, 105, 133)');
@@ -56,31 +57,24 @@ test('search affordances and dividend data remain visible after token changes', 
 
 test('keyboard focus stays distinct and the final CTA grows with enlarged text', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
-  const search = page.locator('.find .field').first();
-  await search.focus();
-  await expect(search).toHaveCSS('outline-color', 'rgb(27, 100, 218)');
-  await expect(search).toHaveCSS('outline-width', '3px');
+  await page.getByRole('button', { name: '내 포트폴리오 넣기' }).click();
+  // 큰 검색칸은 테두리 대신 칸 전체에 파란 초점 띠를 둔다.
+  await page.getByRole('searchbox', { name: '종목 이름이나 코드로 찾기' }).focus();
+  await expect(page.locator('.fl-search')).toHaveCSS('box-shadow', /rgb\(27, 100, 218\)/);
+  await page.keyboard.press('Tab');
+  await expect(page.locator(':focus')).toHaveCSS('outline-color', 'rgb(27, 100, 218)');
   await addCash(page);
-  await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '이미 다 매수한 상태에요', exact: true }).click();
-  await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '10년 넘게 뒤', exact: true }).click();
-  await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await toAsk(page);
   await page.evaluate(() => { document.documentElement.style.fontSize = '200%'; });
-  const submit = page.getByRole('button', { name: '내 포트폴리오 분석하기', exact: true });
+  const submit = page.getByRole('button', { name: '분석 시작하기', exact: true });
   await expect(submit).toBeVisible();
   expect(await submit.evaluate(el => {
     const range = document.createRange(); range.selectNodeContents(el);
     const text = range.getBoundingClientRect(), button = el.getBoundingClientRect();
     return text.top >= button.top && text.bottom <= button.bottom && text.left >= button.left && text.right <= button.right;
   })).toBe(true);
-  await expect.poll(() => page.evaluate(() => {
-    const bar = document.querySelector('.bar')!;
-    return getComputedStyle(bar).position === 'static' || parseFloat(getComputedStyle(document.querySelector('.app')!).paddingBottom) >= bar.getBoundingClientRect().height;
-  })).toBe(true);
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-  expect(await page.evaluate(() => document.querySelector('.step.in')!.getBoundingClientRect().bottom <= document.querySelector('.bar')!.getBoundingClientRect().top)).toBe(true);
+  expect(await page.evaluate(() => document.querySelector('.fl-step')!.getBoundingClientRect().bottom <= document.querySelector('.fl-cta')!.getBoundingClientRect().top + 1)).toBe(true);
 });
 
 test('destructive confirmation can cancel without losing assets and confirms only the chosen deletion', async ({ page }) => {

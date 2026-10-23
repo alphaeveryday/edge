@@ -62,7 +62,7 @@ export async function previewRequest<T>(path: string, init?: RequestInit): Promi
     result = { id: path.endsWith('/chat') ? 'preview-chat-' + crypto.randomUUID() : path.split('/').at(-1), state: 'succeeded', input: body, created_at: new Date().toISOString(), result: { answer: { paragraphs: ['테스트 답변: 기존 테마를 유지하고 추가 투자금을 목표 비중에 맞춰 나누세요.'], evidence: [], limitations: [] }, revision: report, status: 'complete' } };
     if (path.endsWith('/chat') && body?.mode !== 'recovery') previewChats.push(result);
   }
-  else if (path === '/analyses/latest' && preview === 'empty') result = null;
+  else if (path === '/analyses/latest' && (preview === 'empty' || preview === 'input')) result = null;
   else if (path.startsWith('/analyses')) {
     if (path === '/analyses' && body) localStorage.setItem('edge-preview-input', JSON.stringify(body as Input));
     const state = preview === 'queued' ? 'queued' : preview === 'running' ? 'running' : preview === 'failed' ? 'failed' : 'succeeded';

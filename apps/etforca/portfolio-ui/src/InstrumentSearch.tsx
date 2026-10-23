@@ -3,6 +3,12 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { Catalog, Instrument } from './api';
 import { trackAction } from './analytics';
 
+// 이름·티커·코드 어디에 들어 있어도 찾고, 티커가 정확히 같으면 맨 위로.
+export function matchInstruments(rows: Instrument[], query: string, limit = 20) {
+  const q = query.toLocaleUpperCase().replace(/\s/g, '');
+  return rows.filter(r => (r.name + r.ticker + r.code + (r.symbol ?? '')).toLocaleUpperCase().replace(/\s/g, '').includes(q))
+    .sort((a, b) => Number(b.ticker === q) - Number(a.ticker === q)).slice(0, limit);
+}
 export const cashInstrument: Instrument = { id: 'CASH:KRW', market: 'CASH', ticker: 'KRW', code: 'KRW', name: '현금', kind: 'cash' };
 export function InstrumentSearch({ account, catalog, onAdd, onOpen, includeStocks = false }: { account: string; catalog: Catalog | null; onAdd: (item: Instrument) => string | void; onOpen?: () => void; includeStocks?: boolean }) {
   const label = includeStocks ? '종목' : 'ETF';
@@ -15,8 +21,7 @@ export function InstrumentSearch({ account, catalog, onAdd, onOpen, includeStock
     const q = query.toLocaleUpperCase().replace(/\s/g, '');
     const rows = [cashInstrument, ...((catalog?.instruments || []).filter(i => i.id !== cashInstrument.id && (includeStocks || i.kind !== 'stock')))];
     if (!q) return rows.filter(r => ['CASH:KRW', 'KR:069500', 'KR:360750', 'US:VOO', 'US:QQQM'].includes(r.id));
-    return rows.filter(r => (r.name + r.ticker + r.code + (r.symbol ?? '')).toLocaleUpperCase().replace(/\s/g, '').includes(q))
-      .sort((a, b) => Number(b.ticker === q) - Number(a.ticker === q)).slice(0, 20);
+    return matchInstruments(rows, query);
   }, [query, catalog, includeStocks]);
   const empty = !!catalog && !!query.trim() && !options.length;
   // Counts searches that found nothing (e.g. individual stocks) without sending what was typed.

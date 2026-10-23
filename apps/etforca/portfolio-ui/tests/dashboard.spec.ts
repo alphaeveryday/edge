@@ -13,12 +13,14 @@ test('chart motion respects reduced motion and monthly bars open the chosen mont
   await expect(page.locator('.dividend-records')).not.toBeEmpty();
   await page.goto('/portfolio/?preview=running');
   await expect(page.locator('.progress-steps')).toHaveCount(0);
-  await expect(page.locator('.research-motion g.active')).toHaveCount(1);
-  await expect(page.locator('.research-flow')).toHaveCSS('animation-name', 'research-flow');
+  // 서버 단계(portfolio)의 두 역할만 '검토 중'으로 돈다. 동작 줄이기에서는 도는 표시를 멈추고 글자는 남긴다.
+  await expect(page.locator('.fl-agent[data-s="run"]')).toHaveCount(2);
+  await expect(page.locator('.fl-agent[data-s="run"] .ds-spinner').first()).toHaveCSS('animation-name', 'ds-spin');
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await expect(page.locator('.research-flow')).toHaveCSS('animation-name', 'none');
+  await expect(page.locator('.fl-agent[data-s="run"] .ds-spinner').first()).toHaveCSS('animation-name', 'none');
+  await expect(page.locator('.fl-agent[data-s="run"]').first()).toContainText('검토 중');
   await page.goto('/portfolio/?preview=queued');
-  await expect(page.locator('.research-motion g.active')).toHaveCount(0);
+  await expect(page.locator('.fl-agent[data-s="run"]')).toHaveCount(0);
   await expect(page.getByRole('list', { name: '분석 역할과 검토 흐름' })).toBeVisible();
 });
 test('money calculations preserve FX, fees and unavailable cost; purchases never exceed the budget', () => {

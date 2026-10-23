@@ -200,7 +200,7 @@ test('presence and first input save share one in-flight visitor session', async 
   await page.waitForTimeout(200);
   expect(sessionCalls).toBe(1);
   release();
-  await expect(page.getByRole('button', { name: '매달 꾸준히', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '안 넣어요', exact: true })).toBeVisible();
 });
 
 test('two first-visit tabs share the cookie before recording presence', async ({ context, page }) => {

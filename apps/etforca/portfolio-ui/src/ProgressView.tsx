@@ -1,34 +1,46 @@
-import { roles, titles, type Job } from './api';
+import { useState } from 'react';
+import { Button } from './design-system/components';
+import { roles, type Job } from './api';
+import { trackResult } from './analytics';
+import { Brand, Glyph, type GlyphName } from './flow';
 
-export function ProgressView({ job, elapsed }: { job: Job | null; elapsed: number }) {
-  const stage = job?.state === 'running' ? roles.indexOf(job.stage!) : -1;
-  const card = (title: string, subtitle: string, index: number, path: string, mini = false) => <li className={mini ? 'mini' : 'wide'} data-s={stage < index ? 'wait' : stage === index ? 'run' : 'done'}><svg className="ic" viewBox="0 0 24 24" aria-hidden="true"><path d={path} /></svg><b>{title}</b><span>{subtitle}</span><em>{stage === index ? '검토 중' : stage > index ? '검토 완료' : '대기'}</em></li>;
-  return <article className="step progress in">
-    <span className="eyebrow">포트폴리오 분석</span>
-    <h2>{job?.state === 'running' ? '포트폴리오를\n검토하고 있어요' : '분석을 기다리고 있어요'}</h2>
-    <div className="research-motion" data-running={stage >= 0}>
-      <svg viewBox="0 0 360 110" aria-hidden="true">
-        <path className="research-track" d="M40 55H310" />
-        {stage >= 0 && <path className="research-flow" d={`M40 55H${40 + stage * 90}`} />}
-        {roles.map((role, i) => <g key={role} className={i === stage ? 'active' : i < stage ? 'complete' : ''}>
-          <circle className="research-halo" cx={40 + i * 90} cy="55" r="24" />
-          <circle cx={40 + i * 90} cy="55" r="16" />
-          <text x={40 + i * 90} y="60" textAnchor="middle">{i < stage ? '✓' : i + 1}</text>
-        </g>)}
-      </svg>
-      <p role="status">{stage >= 0 ? titles[roles[stage]] : '접수 완료 · 순서대로 분석합니다'}</p>
-    </div>
-    <ul className="vals agents tree" aria-label="분석 역할과 검토 흐름">
-      {card('종목 분석 AI', 'ETF 안의 기업', 1, 'M16.5 10.5a6 6 0 1 1-12 0a6 6 0 1 1 12 0M15 15l5 5M8 12v-2M10.5 12V8M13 12v-3', true)}
-      {card('산업 분석 AI', '산업의 흐름', 1, 'M3 20V10l6 3.5V10l6 3.5V5h4v15zM3 20h18', true)}
-      {card('경제 분석 AI', '경제와 환율', 2, 'M20.5 12a8.5 8.5 0 1 1-17 0a8.5 8.5 0 1 1 17 0M3.5 12h17M12 3.5c3 3 3 14 0 17M12 3.5c-3 3-3 14 0 17', true)}
-      <li className={'hand' + (stage >= 3 ? ' go' : '')} aria-hidden="true"><svg viewBox="0 0 300 40" preserveAspectRatio="none"><path d="M50 0V18H250V0M150 0V40" /></svg><span>분석 결과 전달</span></li>
-      {card('포트폴리오 매니저', '분석을 모아 추천안을 만들어요', 3, 'M12 3.5v8.5h8.5A8.5 8.5 0 1 1 12 3.5zM15 3.9A8.5 8.5 0 0 1 20.1 9H15z')}
-      <li className={'hand' + (stage >= 3 ? ' go' : '')} aria-hidden="true"><svg viewBox="0 0 300 40" preserveAspectRatio="none"><path d="M150 0V40" /></svg><span>추천안 검토</span></li>
-      {card('리스크 매니저', '추천안의 위험과 놓친 점을 확인해요', 3, 'M12 3l7.5 3v5.5c0 4.6-3 8-7.5 9.5-4.5-1.5-7.5-4.9-7.5-9.5V6zM8.8 12l2.3 2.3 4.2-4.4')}
-    </ul>
-    <p className="notice">한 AI가 위 역할의 관점을 순서대로 검토해요.</p>
-    <p className="notice">보통 5분, 최대 10분 정도 걸려요.<br />화면을 닫아도 분석은 계속됩니다.</p>
-    {job?.state === 'running' && <p className="notice">{Math.floor(elapsed / 60)}분 {elapsed % 60}초 경과</p>}
-  </article>;
+// 결과 링크: 이 브라우저의 방문자 쿠키로만 열린다(분석은 방문자별로 묶여 있다). 탭을 닫거나 저장소가 지워져도 이 링크로 돌아온다.
+export const resultLink = (id: string) => `${location.origin}${location.pathname}?analysis=${encodeURIComponent(id)}`;
+const state = { wait: '대기', run: '검토 중', done: '완료' } as const;
+
+// W1·W2: 역할 도식과 물어본 것. 한 AI가 다섯 역할의 관점을 차례로 검토한다(동시에 도는 에이전트가 아니다).
+export function ProgressView({ job, elapsed, offline = false }: { job: Job | null; elapsed: number; offline?: boolean }) {
+  const running = job?.state === 'running', stage = running ? roles.indexOf(job.stage!) : -1;
+  const status = (index: number) => stage < index ? 'wait' : stage === index ? 'run' : 'done';
+  const node = (title: string, sub: string, index: number, icon: GlyphName, wide = false) => <li className="fl-agent" data-wide={wide} data-s={status(index)}>
+    <span className="fl-icontile"><Glyph name={icon} /></span><span className="fl-agent__text"><b>{title}</b><small>{sub}</small></span>
+    <em>{status(index) === 'done' ? <Glyph name="check" size={14} /> : status(index) === 'run' ? <i className="ds-spinner" aria-hidden="true" /> : <i className="fl-dot" aria-hidden="true" />}{state[status(index)]}</em></li>;
+  const count = (job?.input?.holdings ?? []).filter(h => h.kind !== 'cash').length;
+  const [copied, setCopied] = useState<'' | 'done' | 'failed'>('');
+  async function copy() {
+    try { await navigator.clipboard.writeText(resultLink(job!.id)); setCopied('done'); trackResult('result_link_copied', { screen: job!.state === 'running' ? 'running' : 'queued' }); }
+    catch { setCopied('failed'); } // 복사를 막은 브라우저에서는 링크를 그대로 보여 직접 복사하게 한다.
+  }
+  return <div className="fl progress" data-surface="plain">
+    {offline && <p className="fl-offline" role="status"><Glyph name="alert" size={16} />연결이 끊겼어요 · 다시 연결되면 이어서 보여 드려요</p>}
+    <Brand />
+    <div className="fl-hero" data-align="center"><h1 aria-live="polite">{running ? count ? <>종목 {count}개를<br />나눠서 보고 있어요</> : <>추천 포트폴리오를<br />만들고 있어요</> : '순서를 기다리고 있어요'}</h1>
+      <p>{running ? `${Math.floor(elapsed / 60)}분 ${elapsed % 60}초 지났어요 · 보통 5분쯤 걸려요` : '앞선 분석이 끝나면 바로 시작해요 · 보통 5분쯤 걸려요'}</p></div>
+    <section className="fl-card" data-tone="soft">
+      <ul className="fl-agents" aria-label="분석 역할과 검토 흐름">
+        {node('종목 분석 AI', '종목 속 기업', 1, 'search')}{node('산업 분석 AI', '산업의 흐름', 1, 'factory')}{node('경제 분석 AI', '경제와 환율', 2, 'globe')}
+        <li className="fl-hand" aria-hidden="true">분석 결과 전달</li>
+        {node('포트폴리오 매니저', '분석을 모아 추천안을 만들어요', 3, 'briefcase', true)}
+        <li className="fl-hand" aria-hidden="true">추천안 검토</li>
+        {node('리스크 매니저', '추천안의 위험과 놓친 점을 살펴요', 3, 'shield', true)}
+      </ul>
+      <p className="fl-caption">AI 하나가 다섯 역할을 차례로 맡아 검토해요</p>
+      {/* 단계가 바뀔 때만 읽어 준다(경과 초는 읽지 않는다). */}
+      <p className="fl-sr" role="status">{running ? `${['질문 정리', '종목·산업 분석', '경제 분석', '추천안 작성과 검토'][Math.max(0, stage)]} 중` : '순서를 기다리는 중'}</p>
+    </section>
+    <section className="fl-asked" aria-label="물어보신 것"><p><Glyph name="message" size={16} />물어보신 것에 답하고 있어요</p><b>“{job?.input?.question?.trim() || '이대로 가도 될까요?'}”</b><small>결과 맨 위에서 이 질문에 먼저 답해 드려요</small></section>
+    {job && <div className="fl-cta"><p className="fl-cta__hint">창을 닫아도 분석은 계속돼요</p>
+      <Button className="fl-tertiary" onClick={() => void copy()}><Glyph name="link" size={18} />결과 링크 복사해 두기</Button>
+      <p className="fl-cta__hint" role="status">{copied === 'done' ? '링크를 복사했어요. 이 브라우저에서 열면 결과로 바로 가요.' : copied === 'failed' ? <>복사하지 못했어요. 이 링크를 직접 복사해 주세요: <span className="fl-link">{resultLink(job.id)}</span></> : ''}</p></div>}
+  </div>;
 }

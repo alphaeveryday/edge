@@ -19,6 +19,15 @@ export function bulkHoldings(text: string, catalog: Catalog, account: string, mo
   return rows;
 }
 
+// 전체 금액(원)을 비중대로 원 단위로 나눈다. 합계는 전체 금액과 정확히 같고(남는 원은 소수 몫이 큰 종목부터), 비중이 0 인 종목은 0원이다.
+// 비중이 양수인데 0원이 되는 종목이 있으면 그 전체 금액으로는 나눌 수 없다는 뜻이다 — 부르는 쪽이 막는다.
+export function fromPercents(totalWon: number, percents: number[]): number[] {
+  const exact = percents.map(p => totalWon * p / 100), base = exact.map(Math.floor);
+  let left = totalWon - base.reduce((sum, n) => sum + n, 0);
+  for (const i of exact.map((v, i) => i).sort((a, b) => (exact[b] - base[b]) - (exact[a] - base[a]))) { if (left <= 0) break; if (percents[i] > 0) { base[i]++; left--; } }
+  return base;
+}
+
 // Whole-portfolio weights in 0.01% steps that sum to exactly 100, as the analysis contract requires.
 export function toPercents(amounts: number[]): string[] {
   const total = amounts.reduce((sum, n) => sum + n, 0);
