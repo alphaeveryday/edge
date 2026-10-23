@@ -1,7 +1,8 @@
 """오늘 오른 종목 조사 실행 (docs/design/truth-movers.md). 판정은 세션(모델, ACH), 나머지(목록·시세·공시·로고·게시)는 코드.
 
-장중 매시 :35 (truth-agent 사건 갱신 :05 와 30분 어긋나게): 상승률 상위 → 종목별 시세·KIND 공시·보도·로고
-→ 판정이 필요한 종목만 조사 세션 → movers/latest.json 게시. truth-agent 와 저장소를 함께 쓰지만 잠금은 따로다.
+장중 매시 :35 (truth-agent 사건 갱신 :05 와 30분 어긋나게): 상승률 상위 → 종목별 시세·공시(국내 KIND · 미국 SEC)·보도·로고
+→ 판정이 필요한 종목만 조사 세션 → movers/latest.json(미국 movers/us/latest.json) 게시. truth-agent 와 저장소를 함께 쓰지만 잠금은 따로다.
+미국은 같은 흐름을 뉴욕 시각으로 돈다(markets.py, 설계 §6).
 """
 from __future__ import annotations
 

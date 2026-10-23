@@ -1,8 +1,9 @@
 # 오늘 오른 종목 조사 에이전트(truth-research) — truth-agent 와 같은 구조(pi 하네스 + DeepSeek, ECS Fargate 단발 태스크).
 # 장중 매시 :35 에 돈다(truth-agent 사건 갱신 :05 와 30분 어긋나게). 저장소 버킷·실행 키는 truth-agent 것을 함께 쓴다.
 #
-# 스케줄러 → ecs:RunTask(worker 클러스터). 태스크는 상승률 상위·5분 시세(Naver·Yahoo, 키 없음)·KIND 공시(키 없음)를 모으고,
-# 판정이 필요한 종목만 ACH 조사 세션을 연 뒤 랜딩 버킷 truth/data/movers/ 에 게시한다. 겹친 실행은 런타임 잠금이 막는다.
+# 스케줄러 → ecs:RunTask(worker 클러스터). 태스크는 상승률 상위·5분 시세(Naver·Yahoo, 키 없음)·공시(KIND·SEC, 키 없음)를 모으고,
+# 판정이 필요한 종목만 ACH 조사 세션을 연 뒤 랜딩 버킷 truth/data/movers/(미국 movers/us/) 에 게시한다. 겹친 실행은 런타임 잠금이 막는다.
+# 국내는 Asia/Seoul, 미국은 같은 태스크 정의를 --market us 로 America/New_York 스케줄에 돌린다(아래 aws_scheduler_schedule.us).
 data "aws_caller_identity" "current" {}
 
 locals {
