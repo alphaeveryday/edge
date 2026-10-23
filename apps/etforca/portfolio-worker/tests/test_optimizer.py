@@ -37,9 +37,12 @@ def test_ranking_is_finite_and_ordered_with_zero_or_negative_excess(excess):
     assert all(row['recent_outperform_days'] == 0 for row in result)
 
 
-def test_less_than_ten_measured_sessions_cannot_claim_ten_days_of_outperformance():
-    frame = pd.DataFrame({'A': [1] + [1.1] * 9, 'CASH:KRW': 1.0})
-    assert search(['A'], frame, {'CASH:KRW': 1}) == []
+def test_one_measured_session_is_compared_without_claiming_more_days_than_exist():
+    # 8차: 하루치 기록이어도 비교한다. 대신 '최근 앞선 날'은 실제로 잰 날 수를 넘지 않는다
+    frame = pd.DataFrame({'A': [1, 1.1], 'CASH:KRW': 1.0})
+    rows = search(['A'], frame, {'CASH:KRW': 1})
+    assert rows and all(row['recent_outperform_days'] <= 1 for row in rows)
+    assert search(['A'], frame.iloc[:1], {'CASH:KRW': 1}) == []  # 종가 하나는 수익률이 없다
 
 
 def test_every_grid_is_fully_invested_in_ten_percent_units():
@@ -368,14 +371,15 @@ async def test_new_baseline_etf_uses_its_available_period_for_all_candidates():
     assert result['candidates']
 
 
-async def test_candidate_too_new_for_ten_days_does_not_shorten_usable_peers():
+async def test_newest_candidate_sets_the_shared_window_instead_of_being_dropped():
+    # 8차 결정: 모든 비교를 가장 짧은 종목의 기록에 맞춘다. 7거래일짜리 새 ETF도 후보에 남고 모두 그 기간으로 견준다
     request, market, groups = batch()
     market.loader = lambda symbol, _: record(dates=pd.bdate_range('2026-10-01', '2026-10-09')) if symbol == 'E.KS' else record()
     result = await Optimizer(market, request).tool({'combinations': groups})
     assert result['status'] == 'available'
-    assert result['tested_combinations'] == 9
-    assert len(result['candidates']) == 9
-    assert result['start_date'] < '2026-10-01'
+    assert result['tested_combinations'] == 10
+    assert len(result['candidates']) == 10
+    assert result['start_date'] == '2026-10-01'
 
 
 async def test_candidates_are_validated_within_the_shared_window_not_their_full_histories():
@@ -402,8 +406,10 @@ async def test_shared_endpoint_does_not_let_a_short_candidate_disqualify_longer_
     market.loader = lambda symbol, _: record(dates=short if symbol == 'E.KS' else pd.bdate_range('2025-10-09', '2026-10-12'))
     result = await Optimizer(market, request).tool({'combinations': groups})
     assert result['status'] == 'available'
-    assert result['tested_combinations'] == 9
-    assert len(result['candidates']) == 9
+    # 짧은 후보도 남고(8차: 기록이 짧다고 빼지 않는다), 공통 끝날로 잘려도 긴 후보들은 그대로 견준다
+    assert result['tested_combinations'] == 10
+    assert len(result['candidates']) == 10
+    assert result['end_date'] == '2026-10-12'
 
 
 async def test_null_close_column_excludes_only_the_malformed_candidate():
