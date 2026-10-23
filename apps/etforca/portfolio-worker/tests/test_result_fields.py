@@ -89,21 +89,22 @@ def test_evidence_quotes_drop_markdown_headers_and_table_fragments():
 
 
 @pytest.mark.parametrize('holdings,key', [
-    ([('CASH:KRW', 1000, '일반 계좌')], 'first_start'),
-    ([('US:QLD', 450, '일반 계좌'), ('KR:360750', 550, '일반 계좌')], 'leverage'),
-    ([('KR:005930', 500, '일반 계좌'), ('KR:069500', 500, '일반 계좌')], 'stock_picker'),
-    ([('KR:148070', 300, '일반 계좌'), ('KR:069500', 700, '일반 계좌')], 'bond_shield'),
+    ([('CASH:KRW', 1000, '일반 계좌')], 'start'),
+    ([('US:QLD', 450, '일반 계좌'), ('KR:360750', 550, '일반 계좌')], 'lev'),
+    ([('KR:005930', 500, '일반 계좌'), ('KR:069500', 500, '일반 계좌')], 'stock'),
+    ([('KR:148070', 300, '일반 계좌'), ('KR:069500', 700, '일반 계좌')], 'bond'),
     ([('KR:069500', 600, 'IRP'), ('KR:360750', 400, '일반 계좌')], 'pension'),
-    ([('KR:069500', 600, '일반 계좌'), ('KR:360750', 400, '일반 계좌')], 'korea'),
+    ([('KR:069500', 600, '일반 계좌'), ('KR:360750', 400, '일반 계좌')], 'kr'),
     ([('KR:360750', 800, '일반 계좌'), ('KR:069500', 200, '일반 계좌')], 'us'),
-    ([('KR:360750', 500, '일반 계좌'), ('KR:069500', 300, '일반 계좌'), ('KR:148070', 200, '일반 계좌')], 'balanced'),
+    ([('KR:360750', 500, '일반 계좌'), ('KR:069500', 300, '일반 계좌'), ('KR:148070', 200, '일반 계좌')], 'bal'),
 ])
 def test_type_card_follows_the_draft_rules_in_order(holdings, key):
     # 시안 v8-SH-types: 위에서부터 먼저 맞는 유형 하나. 금액은 카드에 넣지 않는다
     card = type_card(holder(holdings), CATALOG, 300000)
-    assert card['key'] == key
-    assert card['stats']['monthly'] is True
-    assert not any(name.endswith('_krw') for name in card['stats'])
+    assert card['key'] == key  # 화면의 카드 이름(start·lev·stock·chip·div·bond·pension·kr·us·bal)과 같아야 카드가 뜬다
+    assert 1 <= len(card['stats']) <= 3 and all(len(pair) == 2 for pair in card['stats'])
+    assert ['넣는 방법', '매달 꾸준히'] in card['stats'] or key == 'stock'  # 개별주 카드는 시안대로 주식 수·ETF 수를 보인다
+    assert not any('원' in value for _, value in card['stats'])  # 금액은 넣지 않는다
 
 
 def final(**fields):
@@ -130,7 +131,7 @@ def test_result_fields_report_chip_results_and_question_titled_analysis():
     assert [item['title'] for item in fields['analysis']] == ['왜 2.4점이에요?', '그래서 무엇을 하면 돼요?', '추천 구성은 왜 2.4점이에요?', '왜 QLD를 팔지 않아요?', '앞으로 1년은요?']
     assert fields['analysis'][0]['evidence'] == [{'quote': '총보수 0.95%', 'url': 'https://official.example'}]
     assert len(fields['suggested_questions']) == 4
-    assert fields['type_card']['key'] == 'leverage'
+    assert fields['type_card'] == {'key': 'lev', 'stats': [['레버리지', '60%'], ['종목 수', '2개'], ['넣는 방법', '매달 꾸준히']]}
     assert 'answer' not in fields  # 모델이 쓰지 않았으면 싣지 않는다(화면이 기존 답으로 대신 보인다)
 
 

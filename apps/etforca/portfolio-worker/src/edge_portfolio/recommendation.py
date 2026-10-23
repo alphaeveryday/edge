@@ -153,9 +153,20 @@ CHIP_NOTES = {
     ('kr_listed_etf_only', 'kept'): '새로 담는 종목은 모두 국내 상장이에요.',
 }
 # 시안 v8-SH-types 의 판정 초안: 위에서부터 먼저 맞는 유형 하나(비중은 현금을 뺀 보유 기준)
-TYPE_RULES = [('leverage', 'leverage_pct', 20), ('stock_picker', 'stock_pct', 40), ('semiconductor', 'semi_ai_pct', 40),
-              ('dividend', 'dividend_pct', 40), ('bond_shield', 'bond_gold_pct', 30), ('pension', 'pension_pct', 50),
-              ('korea', 'kr_pct', 50), ('us', 'us_pct', 70)]
+# key 는 화면(portfolio-ui)의 카드 이름과 같다
+TYPE_RULES = [('lev', 'leverage_pct', 20), ('stock', 'stock_pct', 40), ('chip', 'semi_ai_pct', 40),
+              ('div', 'dividend_pct', 40), ('bond', 'bond_gold_pct', 30), ('pension', 'pension_pct', 50),
+              ('kr', 'kr_pct', 50), ('us', 'us_pct', 70)]
+# 카드에 보이는 [이름, 값] 쌍. 화면은 앞 3개만 쓴다
+TYPE_STATS = {'lev': [('레버리지', 'leverage_pct', '%'), ('종목 수', 'positions', '개')],
+              'stock': [('개별 주식', 'stock_pct', '%'), ('주식 수', 'stock_count', '개'), ('ETF', 'etf_count', '개')],
+              'chip': [('반도체·AI', 'semi_ai_pct', '%'), ('종목 수', 'positions', '개')],
+              'div': [('배당 ETF', 'dividend_pct', '%'), ('종목 수', 'positions', '개')],
+              'bond': [('채권·금', 'bond_gold_pct', '%'), ('주식', 'equity_pct', '%')],
+              'pension': [('연금 계좌', 'pension_pct', '%'), ('종목 수', 'positions', '개')],
+              'kr': [('국내 비중', 'kr_pct', '%'), ('종목 수', 'positions', '개')],
+              'us': [('미국 비중', 'us_pct', '%'), ('종목 수', 'positions', '개')],
+              'bal': [('자산 종류', 'asset_kinds', '가지'), ('가장 큰 몫', 'largest_pct', '%')]}
 
 
 def verdict_kind(request, execution):
@@ -188,10 +199,11 @@ def analysis_item(title, section, urls):
     return {'title': title, 'paragraphs': section['paragraphs'], 'evidence': evidence, 'limitations': section.get('limitations', [])}
 
 
-def type_card(request, catalog, monthly):
-    stats = {'monthly': bool(monthly)}
+def type_card(request, catalog, monthly, recommended=0):
+    method = ['넣는 방법', '매달 꾸준히' if monthly else '한 번에 크게']
     if not any(holding.kind != 'cash' for holding in request.holdings):
-        return {'key': 'first_start', 'stats': stats}
+        return {'key': 'start', 'stats': [method, *([['추천 종목', f'ETF {recommended}개']] if recommended else [])]}
+    stats = {}
     rows = [holding for holding in request.holdings if holding.kind != 'cash' and holding.amount_krw]
     if request.input_mode == 'names' or not rows:
         return None  # 가진 종목의 비중을 모르면 유형을 정하지 않는다
@@ -205,6 +217,7 @@ def type_card(request, catalog, monthly):
         'semi_ai_pct': pct(lambda h, t: 'semi_ai' in t), 'dividend_pct': pct(lambda h, t: 'dividend' in t),
         'bond_gold_pct': pct(lambda h, t: bool(t & {'bond', 'gold'})), 'pension_pct': pct(lambda h, t: h.account in ('연금저축', 'IRP')),
         'kr_pct': pct(korean), 'us_pct': pct(lambda h, t: 'us' in t and not t & {'bond', 'gold'})})
+    stats['equity_pct'] = 100 - stats['bond_gold_pct']
     amounts = {}
     for holding in rows:
         amounts[holding.instrument_id] = amounts.get(holding.instrument_id, 0) + holding.amount_krw
@@ -215,8 +228,9 @@ def type_card(request, catalog, monthly):
                   'largest_pct': max(amounts.values()) * 100 / total,
                   'asset_kinds': sum(any(test(found[key]) for key in amounts) for test in kinds)})
     # 판정은 반올림 전 비중으로(19.6%는 레버리지 20% 이상이 아니다), 보이는 값만 정수로
-    key = next((name for name, stat, minimum in TYPE_RULES if stats[stat] >= minimum), 'balanced')
-    return {'key': key, 'stats': {name: round(float(value)) if isinstance(value, Decimal) else value for name, value in stats.items()}}
+    key = next((name for name, stat, minimum in TYPE_RULES if stats[stat] >= minimum), 'bal')
+    shown = [[label, f'{round(float(stats[name]))}{unit}'] for label, name, unit in TYPE_STATS[key]]
+    return {'key': key, 'stats': (shown + [method])[:3]}
 
 
 def result_fields(published, sections, final, request, checks, catalog, sources):
@@ -267,7 +281,8 @@ def result_fields(published, sections, final, request, checks, catalog, sources)
     if sections.get('outlook'):
         items.append(analysis_item('앞으로 1년은요?', sections['outlook'], urls))
     fields['analysis'] = items
-    card = type_card(request, catalog, execution.get('monthly_krw') if execution else getattr(request, 'monthly_krw', None))
+    card = type_card(request, catalog, execution.get('monthly_krw') if execution else getattr(request, 'monthly_krw', None),
+                     len({row['instrument_id'] for row in (recommendation or {}).get('allocations', [])}))
     if card:
         fields['type_card'] = card
     return fields

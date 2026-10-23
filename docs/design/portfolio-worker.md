@@ -171,7 +171,7 @@ LLM이 지정한 비중은 소수점 8자리까지 검산하며 유효한 가격
 | `past {rec_end_krw, cur_end_krw, rec_max_loss_krw, cur_max_loss_krw}` | 코드 | 기간 첫날 지금 총액을 넣었다면의 끝 금액과 가장 크게 떨어졌을 때 잃는 금액(원, 양수). `historical_performance` 의 점을 그대로 원으로 바꾼다. 모델도 `read_portfolio_history` 결과의 `past_krw` 로 같은 값을 본다 |
 | `analysis [{title, paragraphs, evidence[{quote, url}], limitations}]` | 코드(제목은 고정 질문, 자유 분석 제목만 모델) | 지금 평가 이유('왜 N점이에요?') → 최종 의견('그래서 무엇을 하면 돼요?') → 추천 평가 이유 → 자유 분석(질문 꼴 제목) → 전망('앞으로 1년은요?'). 근거 문장은 마크다운 머리표·링크를 걷고 표 조각은 버린다 |
 | `suggested_questions` | 모델 | 더 물어보기 줄 4개 |
-| `type_card {key, stats}` | 코드 | 시안 v8-SH-types 의 판정 초안: 보유가 없으면 `first_start`, 그다음 위에서부터 레버리지 20%↑ `leverage`, 개별주 40%↑ `stock_picker`, 반도체·AI 40%↑ `semiconductor`, 배당 ETF 40%↑ `dividend`, 채권·금 30%↑ `bond_shield`, 연금저축·IRP 50%↑ `pension`, 국내 주식 50%↑ `korea`, 미국 주식 70%↑ `us`, 나머지 `balanced`. 비중은 현금을 뺀 보유 기준이고 금액은 넣지 않는다 |
+| `type_card {key, stats}` | 코드 | 시안 v8-SH-types 의 판정 초안: 보유가 없으면 `start`, 그다음 위에서부터 레버리지 20%↑ `lev`, 개별주 40%↑ `stock`, 반도체·AI 40%↑ `chip`, 배당 ETF 40%↑ `div`, 채권·금 30%↑ `bond`, 연금저축·IRP 50%↑ `pension`, 국내 주식 50%↑ `kr`, 미국 주식 70%↑ `us`, 나머지 `bal`(화면 카드 이름과 같다). 비중은 현금을 뺀 보유 기준이고, stats 는 카드에 보일 [이름, 값] 쌍 최대 3개(예: ['레버리지', '45%'], ['넣는 방법', '매달 꾸준히'])이며 금액은 넣지 않는다 |
 
 팔지 않기 때문에 채권·배당 칩을 `substituted` 로 통과하면 매달 넣는 돈은 그 성격의 추천 종목에만 나눈다('남은 조건은 월 납입으로 맞추는 안').
 
