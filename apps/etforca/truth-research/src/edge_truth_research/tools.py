@@ -64,7 +64,8 @@ def _filing_of(ws: Workspace, sid: str) -> dict | None:
 US_DISCLOSURE_HOSTS = ("sec.gov",)
 US_OFFICIAL_HOSTS = ("fda.gov", "clinicaltrials.gov", "ftc.gov", "justice.gov", "uscourts.gov", "uspto.gov", "defense.gov",
                      "energy.gov", "nih.gov", "cms.gov", "federalregister.gov")
-_CORP_SUFFIX = re.compile(r"[\s,.]+(inc|corp|corporation|co|company|ltd|limited|plc|holdings?|group|n\.?v|s\.?a|ag|se)\.?$", re.I)
+# 법인 형태 접미어만 뗀다(Holdings·Group 은 이름의 일부로 남긴다 — 'Arm Holdings' 를 'Arm' 으로 줄이면 'farm' 에도 걸린다)
+_LEGAL_SUFFIX = re.compile(r"[\s,.]+(inc|corp|corporation|co|company|ltd|limited|plc|llc|lp|n\.?v|s\.?a|ag|se)\.?$", re.I)
 
 
 def _under(host: str, domains: tuple[str, ...]) -> bool:
@@ -81,16 +82,19 @@ def _web_kind(ws: Workspace, snap: dict) -> str:
     return kind
 
 
-def _names(ws: Workspace) -> list[str]:
-    """원문이 이 회사를 다루는지 가릴 이름들. 미국은 영어 원문이라 영문명 몸통(Inc.·Holdings 등을 뗀 것)도 본다."""
+def _mentions(ws: Workspace, text: str) -> bool:
+    """원문이 이 회사를 다루는가. 국내는 예전처럼 종목명이 들어 있는지 본다. 미국은 영어 원문이라 영문명(법인 형태를 뗀 것)을
+    단어 단위로 찾는다 — 여러 단어면 대소문자 무시, 한 단어면 대소문자까지 맞아야 한다('Target' 회사 ≠ 'target' 이라는 낱말).
+    ponytail: 한 단어 이름이 문장 첫머리 일반 낱말과 겹치면 여전히 걸린다 — 문제 되면 티커·CIK 동반 확인으로 좁힌다."""
     m = _mover(ws)
-    names = [m.get("name", "")]
-    if eng := m.get("nameEng"):
-        while (core := _CORP_SUFFIX.sub("", eng).strip()) != eng:
-            eng = core
-        if len(eng) >= 3:  # 한두 글자 몸통은 아무 글에나 걸린다
-            names.append(eng)
-    return [n for n in names if n]
+    if m.get("name") and m["name"] in text:
+        return True
+    eng = str(m.get("nameEng") or "").strip()
+    while (core := _LEGAL_SUFFIX.sub("", eng).strip()) != eng:
+        eng = core
+    if not _us(ws) or len(eng) < 3:
+        return False
+    return bool(re.search(rf"\b{re.escape(eng)}\b", text, re.I if " " in eng else 0))
 
 
 # ── 공시 ──
@@ -161,8 +165,7 @@ def _primary(ws: Workspace, sid: str) -> bool:
         item = _filing_of(ws, sid)
         return item is not None and not is_market_notice(item)
     text = snap.get("text", "")
-    return sid.startswith("web-") and _web_kind(ws, snap) in ("official", "disclosure") and \
-        any(n in text if not _us(ws) else n.lower() in text.lower() for n in _names(ws))
+    return sid.startswith("web-") and _web_kind(ws, snap) in ("official", "disclosure") and _mentions(ws, text)
 
 
 def _original(ws: Workspace, sid: str) -> bool:

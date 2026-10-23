@@ -138,6 +138,7 @@ def test_routine_us_filings_do_not_reopen_a_settled_verdict(cfg):
             return [FILING, FILING | {"acptno": "0001588084-26-000100", "title": f"{self.form} · X"}]
     again = _judging({"TANH": "pending"})
     _run(cfg, src, again, kind=More("4"), now=NOW + timedelta(hours=1))
+    _run(cfg, src, again, kind=More("SCHEDULE 13G"), now=NOW + timedelta(hours=1, minutes=1))  # 2024년 말 이후 실제 서식명
     assert again.calls == []
     _run(cfg, src, again, kind=More("424B5"), now=NOW + timedelta(hours=2))
     assert [c[0] for c in again.calls] == ["TANH"]
@@ -352,6 +353,15 @@ def test_us_regulator_originals_count_and_english_name_identifies_the_company(us
     web("web-fake", "https://fda.gov.evil.example/x", "Tantech approval")
     assert tools._official(us_ws, "web-fda") and not tools._official(us_ws, "web-fake")
     assert tools._primary(us_ws, "web-sec") and not tools._primary(us_ws, "web-other")
+    # 이름을 짧게 잘라 낱말 일부로 맞추면 남의 기관 글이 '이 회사 원문'이 된다(근거 없는 유망주 판정)
+    for eng, unrelated, own in (("Arm Holdings plc", "pharmaceutical farm alarm", "Arm Holdings announced"),
+                                ("Click Holdings Limited", "Click here to read", "CLICK HOLDINGS filed"),
+                                ("Target Corp", "the target date", "Target agreed")):
+        (us_ws.root / "mover.json").write_text(json.dumps(mover | {"nameEng": eng}, ensure_ascii=False), encoding="utf-8")
+        web("web-x", "https://www.sec.gov/Archives/edgar/data/9/z.htm", unrelated)
+        assert not tools._primary(us_ws, "web-x"), eng
+        web("web-x", "https://www.sec.gov/Archives/edgar/data/9/z.htm", own)
+        assert tools._primary(us_ws, "web-x"), eng
     # 국내 세션은 공유 기준 그대로다(미국 기관 도메인을 공식으로 보지 않는다)
     kr = Workspace.prepare(tmp_path / "kr", mode="research", case=None, inbox=[], index=[], today="2026-10-22",
                            now="2026-10-22T11:35:00+09:00", mover={"code": "900010", "name": "가나다전자", "filings": []})
