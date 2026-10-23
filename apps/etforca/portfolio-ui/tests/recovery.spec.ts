@@ -46,9 +46,10 @@ for (const blockedStorage of [false, true]) test(`failed input remains editable 
       posted = route.request().postDataJSON();
       return route.fulfill({ json: { id: 'restored', state: 'queued' } });
     }
+    // 서버 #1542 전후의 입력: 새 필드 goal_text 는 '' 로 채워지고 글은 옛 note 에 남아 있다.
     return route.fulfill({ json: { id: 'failed', state: 'failed', input: { holdings: [
-      { name: 'VOO', instrument_id: 'US:VOO', kind: 'etf', account: '일반 계좌', amount_krw: '1234567' }],
-      horizon: '10년 이상', question: '', input_mode: 'amount', preferences: { accounts: ['일반 계좌'], contribution: '이미 다 매수한 상태에요', dividend_goal: '매월 40만 원', interests: [], note: '', tax_profile: null } } } });
+      { name: 'VOO', instrument_id: 'US:VOO', kind: 'etf', account: '일반 계좌', amount_krw: '1234567' }], goal_text: '', monthly_krw: null, constraints: [],
+      horizon: '10년 이상', question: '', input_mode: 'amount', preferences: { accounts: ['일반 계좌'], contribution: '이미 다 매수한 상태에요', dividend_goal: '매월 40만 원', interests: [], note: '배당 위주로 가고 싶어요', tax_profile: null } } } });
   });
   await page.goto('/portfolio/');
   if (blockedStorage) await page.evaluate(() => Object.defineProperty(window, 'sessionStorage', { get() { throw new DOMException('blocked', 'SecurityError'); } }));
@@ -59,8 +60,11 @@ for (const blockedStorage of [false, true]) test(`failed input remains editable 
   await expect(page.getByRole('button', { name: '안 넣어요', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await expect(page.getByLabel('기존 배당 목표')).toHaveValue('매월 40만 원');
+  // 빈 goal_text 가 옛 note 의 글을 가리지 않는다 — 원하는 포트폴리오 칸에 되살려 goal_text 로 보낸다.
+  await expect(page.getByLabel('원하는 포트폴리오')).toHaveValue('배당 위주로 가고 싶어요');
   await page.getByRole('button', { name: '분석 시작하기' }).click();
   await expect.poll(() => posted?.preferences.dividend_goal).toBe('매월 40만 원');
+  expect(posted.goal_text).toBe('배당 위주로 가고 싶어요');
   expect(posted.holdings[0].amount_krw).toBe('1234567');
 });
 

@@ -14,7 +14,7 @@ export function inputDraftFromInput(input: Input) {
   const draft: InputDraft = { flow: 3, step: 0, holdings: input.holdings.map(h => ({ ...h, amount_krw: h.amount_krw == null ? null : String(Number(h.amount_krw)) })),
     alternate: [], selected: [...new Set([...(input.preferences?.accounts || []), ...input.holdings.map(h => h.account)])],
     question: input.question, horizon: input.horizon, how: monthly ? '매달 꾸준히' : funding, contribution: monthly?.[1] || '',
-    interests: input.preferences?.interests || [], note: input.goal_text ?? input.preferences?.note ?? '', chips: input.constraints ?? [], dividendGoal: input.preferences?.dividend_goal || '', keyword: '', tax: input.preferences?.tax_profile || null,
+    interests: input.preferences?.interests || [], note: input.goal_text || input.preferences?.note || '', chips: input.constraints ?? [], dividendGoal: input.preferences?.dividend_goal || '', keyword: '', tax: input.preferences?.tax_profile || null,
     draftId: crypto.randomUUID(), mode, fresh: !!input.planning };
   if (!draft.selected.length) draft.selected = ['일반 계좌'];
   return draft;

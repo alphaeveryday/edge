@@ -59,7 +59,7 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
   const [how, setHow] = useState(initial?.how ?? '');
   const [note, setNote] = useState(initial?.note ?? '');
   const [chips, setChips] = useState<Chip[]>(initial?.chips ?? []);
-  const [count, setCount] = useState(() => String(initial?.chips?.find(c => c.kind === 'max_positions')?.value ?? ''));
+  const count = String(chips.find(c => c.kind === 'max_positions')?.value ?? '');
   const [dividendGoal, setDividendGoal] = useState(initial?.dividendGoal ?? '');
   const [contribution, setContribution] = useState(initial?.contribution ?? '');
   const [tax, setTax] = useState<TaxProfile | null>(initial?.tax ?? null);
@@ -180,7 +180,7 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
   function payload(planning = fresh): Input {
     const usable = usableAccounts(selected, [...new Set(holdings.map(h => h.account))], tax);
     // 월 납입은 서버가 읽는 숫자 꼴로 고쳐 보낸다('.5' → '0.5', '1.' → '1').
-    const sent = chips.map(c => c.kind === 'max_positions' ? { kind: c.kind, value: Number(count) } : { kind: c.kind });
+    const sent = chips.flatMap<Chip>(c => c.kind !== 'max_positions' ? [{ kind: c.kind }] : c.value && c.value >= 1 && c.value <= 20 ? [{ kind: c.kind, value: c.value }] : []);
     return { holdings: holdings.map((h, i) => ({ ...h, amount_krw: won(h, i) })), horizon, question, input_mode: 'amount', planning,
       monthly_krw: how === '매달 꾸준히' && Number(contribution) > 0 ? Math.round(Number(contribution) * 1e4) : null, goal_text: note, constraints: sent,
       preferences: { accounts: usable, contribution: how + (contribution && how === '매달 꾸준히' ? ` ${Number(contribution)}만 원` : ''), ...(initial?.dividendGoal ? { dividend_goal: dividendGoal } : {}), interests: [], note: '', tax_profile: taxPayload(tax, usable) } };
@@ -334,7 +334,7 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
           <div className="fl-chips" data-align="start" role="group" aria-labelledby="chips-title">{chipLabels.filter(([kind]) => kind !== 'no_sell' || holdings.length).map(([kind, label]) => {
             const on = chips.some(c => c.kind === kind), toggle = () => setChips(on ? chips.filter(c => c.kind !== kind) : [...chips, { kind }]);
             return kind === 'max_positions' ? <span key={kind} className="fl-chip fl-chip--count" data-on={on}><Button aria-pressed={on} aria-label={`종목 ${count || 'n'}개 이하`} onClick={toggle}>{on && <Glyph name="check" size={16} />}종목</Button>
-              <TextInput className="fl-bare" aria-label="최대 종목 수" inputMode="numeric" placeholder="n" value={count} onChange={e => { setCount(e.target.value.replace(/\D/g, '').slice(0, 2)); if (!on) setChips([...chips, { kind }]); }} /><span>개 이하</span></span>
+              <TextInput className="fl-bare" aria-label="최대 종목 수" inputMode="numeric" placeholder="n" value={count} onChange={e => { const digits = e.target.value.replace(/\D/g, '').slice(0, 2); setChips([...chips.filter(c => c.kind !== kind), { kind, value: digits ? Number(digits) : undefined }]); }} /><span>개 이하</span></span>
               : <Button key={kind} className="fl-chip" aria-pressed={on} onClick={toggle}>{on && <Glyph name="check" size={16} />}{label}</Button>;
           })}</div>
           {chips.some(c => c.kind === 'kr_listed_etf_only') && <p className="fl-card__desc">국내 상장 ETF만: 미국 ETF도 국내에 상장된 것이면 돼요.</p>}</section>

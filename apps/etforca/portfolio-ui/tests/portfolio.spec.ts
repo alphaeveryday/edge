@@ -51,7 +51,14 @@ test('chosen chips are the only constraints and the position limit is validated 
   await chips.getByLabel('최대 종목 수').fill('25');
   await expect(page.locator('#step-guidance')).toHaveText('종목 수는 1~20개로 적어 주세요');
   await expect(page.getByRole('button', { name: '분석 시작하기' })).toBeDisabled();
+  // 맞지 않는 종목 수가 있어도 앞 단계로 갔다 오는 초안 저장은 막히지 않는다(서버 초안 계약도 1~20만 받으므로 빼고 저장).
+  await page.getByRole('button', { name: '앞 단계로' }).click();
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '거의 다 왔어요' })).toBeVisible();
   await chips.getByLabel('최대 종목 수').fill('5');
+  // 고친 숫자는 초안에 남는다.
+  await page.reload();
+  await expect(chips.getByLabel('최대 종목 수')).toHaveValue('5');
   await page.getByRole('button', { name: '분석 시작하기' }).click();
   await expect.poll(() => submitted?.constraints).toEqual([{ kind: 'no_leverage' }, { kind: 'kr_listed_etf_only' }, { kind: 'max_positions', value: 5 }]);
   expect(submitted.goal_text).toBe('레버리지는 빼고 S&P500 위주로');
