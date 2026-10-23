@@ -147,6 +147,14 @@ test('adding money in the same proportions is not a rebuild', async ({ page }) =
   await expect(page.locator('.r8-headline')).toHaveText('이대로 가도 돼요');
 });
 
+test('selling part of a holding into cash is a change, not keep', async ({ page }) => {
+  // 현금으로 돌리라는 계획을 '이대로 가도 돼요'로 말하면 실행표와 판정이 모순된다.
+  const result = base();
+  result.recommendation.execution.rows = [row('KR:360750', 'TIGER 미국S&P500', 'ISA', 1000000, 500000), row('CASH:KRW', '현금', 'ISA', 0, 500000)];
+  await open(page, result);
+  await expect(page.locator('.r8-headline')).toHaveText('하나만 바꾸면 돼요');
+});
+
 test('a first-time investor sees Orca instead of a score and compares with cash', async ({ page }) => {
   const result = base();
   result.current_evaluation = evaluation(null, null);

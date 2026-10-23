@@ -333,6 +333,8 @@ test('result events carry only the analysis id and survey codes, once each, and 
   await page.reload();
   await expect(page.locator('.r8-hero')).toBeVisible();
   await expect(page.locator('[data-analytics-section=survey]')).toHaveCount(0);
+  await page.waitForTimeout(1500);
+  expect(events.filter(e => e.event === 'result_shown')).toHaveLength(1);
 });
 
 test('an empty result is not counted as shown', async ({ page, baseURL }) => {

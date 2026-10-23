@@ -70,8 +70,9 @@ function verdictKind(report: Report, rows: Row[], input?: Input): Kind | null {
   const known = rows.filter(r => r.before !== null && r.target !== null);
   if (known.length ? !known.some(r => r.kind !== 'cash' && r.before! > 0) : !held) return 'start';
   const invested = known.filter(r => r.kind !== 'cash');
-  const beforeSum = invested.reduce((sum, r) => sum + r.before!, 0), targetSum = invested.reduce((sum, r) => sum + r.target!, 0);
-  // 같은 비중으로 돈만 더 넣는 옛 계획은 '바꾸는' 것이 아니다 — 금액이 아니라 현금을 뺀 비중으로 센다.
+  const beforeSum = known.reduce((sum, r) => sum + r.before!, 0), targetSum = known.reduce((sum, r) => sum + r.target!, 0);
+  // 밖에서 돈을 같은 비중으로 더 넣는 옛 계획은 '바꾸는' 것이 아니다 — 금액이 아니라 (현금 행을 포함한) 전체 대비 비중으로 센다.
+  // 현금으로 사거나 팔아 현금을 남기면 그 종목의 비중이 바뀌므로 바뀐 것으로 센다(서버 규칙: 사고팔 행이 있으면 keep 이 아님).
   const moved = (r: Row) => (r.before! < 1) !== (r.target! < 1) || beforeSum > 0 && targetSum > 0 && Math.abs(r.before! / beforeSum - r.target! / targetSum) > .005;
   const changed = new Set(known.length
     ? invested.filter(moved).map(r => r.id)
@@ -313,7 +314,7 @@ function futureValue(principal: number, monthly: number, years: number) {
   return principal * (1 + ANNUAL_RATE) ** years + (monthly ? monthly * ((1 + month) ** (12 * years) - 1) / month : 0);
 }
 function FutureCard({ principal, monthly, past }: { principal: number | null; monthly: number; past: Past | null }) {
-  if (!principal || principal <= 0) return null;
+  if (principal === null || principal < 0 || principal === 0 && monthly <= 0) return null;
   const bars = [5, 10, 15].map(years => ({ years, value: futureValue(principal, monthly, years), paid: principal + monthly * 12 * years }));
   const final = bars[2].value;
   const drop = past?.recDrop ?? 0;
@@ -499,10 +500,13 @@ export function ResultView({ report, jobId, input, active = true }: { report: Re
   const hasContent = !!report.recommendation || Number.isFinite(report.current_evaluation?.overall) || rows.length > 0 || analysisItems(report, null).length > 0;
   useEffect(() => {
     // 실제 결과 칸이 그려졌고 고객이 그 탭을 보고 있을 때 분석 하나에 한 번(빈 결과·뒤쪽 탭·StrictMode 재실행은 세지 않는다).
-    if (!hasContent || !active || shown.has(jobId)) return;
+    const key = `edge-portfolio-result-shown:${jobId}`;
+    const seen = () => { try { return shown.has(jobId) || localStorage.getItem(key) === '1'; } catch { return shown.has(jobId); } };
+    if (!hasContent || !active || seen()) return;
     function send() {
-      if (document.visibilityState !== 'visible' || shown.has(jobId)) return;
+      if (document.visibilityState !== 'visible' || seen()) return;
       shown.add(jobId); trackResult('result_shown', { analysis_id: jobId });
+      try { localStorage.setItem(key, '1'); } catch { /* 새로 고침 뒤 다시 셀 수 있지만 화면은 막지 않는다. */ }
     }
     send();
     document.addEventListener('visibilitychange', send);
@@ -546,7 +550,7 @@ export function ResultView({ report, jobId, input, active = true }: { report: Re
     <FinalCard report={report} rows={rows} color={color} input={input} />
     <MonthlyCard report={report} rows={rows} color={color} monthly={monthly} onAlert={() => { trackResult('app_alert_clicked', { analysis_id: jobId }); setAppOpen(true); }} />
     {plan && <PastCard past={past} unavailable={plan.historical_performance ? '' : sentence(plan.unavailable_reason || '')} />}
-    {plan && <FutureCard principal={currentTotal || finalTotal} monthly={monthly ?? 0} past={past} />}
+    {plan && <FutureCard principal={currentTotal ?? finalTotal} monthly={monthly ?? 0} past={past} />}
     <AnalysisCard report={report} kind={kind} analysisId={jobId} />
     <AskCard jobId={jobId} questions={questions} />
     {type && <section className="r8-card r8-actions" aria-label="결과 뒤에 할 일">
