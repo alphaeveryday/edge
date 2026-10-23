@@ -4,7 +4,7 @@
 
 ## 데이터
 
-화면 코드에는 사건 내용이 없다. 같은 경로의 `data/index.json`(요약)과 `data/cases/<id>.json`(상세)을 읽는다. `today.html`(오늘의 급등주 해석)은 `data/movers/latest.json` 을 읽고 1분마다 다시 받는다(가격은 매분 갱신, '가격 HH:MM 기준'으로 표시). 지난번 본 목록과 비교해 새 급등주·분석 완료·판정 변경을 팝업으로 알린다. 지난 날짜는 `data/movers/dates.json` 목록에서 골라 `data/movers/<날짜>.json` 을 읽고, 날짜·판정 선택은 주소(`?date=&tag=`)에 남는다([설계](../../../docs/design/truth-movers.md)). 사건 파일은 `truth-agent` 가, `data/movers/`·`data/logos/` 는 조사 에이전트 `truth-research` 가 만든다. 배포 워크플로는 `truth/data/` 를 건드리지 않고, 그 자리가 비어 있을 때만 seed 사건으로 한 번 채운다. 예외는 수동 실행의 `reseed=true` 로, 정정·게시 중단이 급할 때 seed 로 `truth/data/` 를 다시 쓴다(seed 에 없는 사건 파일은 지운다).
+화면 코드에는 사건 내용이 없다. 같은 경로의 `data/index.json`(요약)과 `data/cases/<id>.json`(상세)을 읽는다. `today.html`(오늘의 급등주 해석)은 `data/movers/latest.json` 을 읽고 1분마다 다시 받는다(가격은 매분 갱신, '가격 HH:MM 기준'으로 표시). 지난번 본 목록과 비교해 새 급등주·분석 완료·판정 변경을 팝업으로 알린다. 지난 날짜는 `data/movers/dates.json` 목록에서 골라 `data/movers/<날짜>.json` 을 읽고, 날짜·판정 선택은 주소(`?date=&tag=`)에 남는다([설계](../../../docs/design/truth-movers.md)). 국내·미국 전환이 있고 미국은 같은 모양의 `data/movers/us/` 를 읽는다(`?market=us`, 날짜·시각은 뉴욕 기준, 설계 §6). 사건 파일은 `truth-agent` 가, `data/movers/`·`data/logos/` 는 조사 에이전트 `truth-research` 가 만든다. 배포 워크플로는 `truth/data/` 를 건드리지 않고, 그 자리가 비어 있을 때만 seed 사건으로 한 번 채운다. 예외는 수동 실행의 `reseed=true` 로, 정정·게시 중단이 급할 때 seed 로 `truth/data/` 를 다시 쓴다(seed 에 없는 사건 파일은 지운다).
 
 ## 로컬 미리보기
 

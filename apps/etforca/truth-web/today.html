@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>오늘의 급등주</title>
-<meta name="description" content="오늘 크게 오른 종목마다 오른 이유가 사실인지 공시·보도와 대조합니다. 가격은 장중 매분 갱신합니다.">
+<meta name="description" content="오늘 크게 오른 국내·미국 종목마다 오른 이유가 사실인지 공시·보도와 대조합니다. 가격은 장중 매분 갱신합니다.">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
 <link rel="stylesheet" href="style.css">
 <script src="intro.js"></script>
@@ -190,11 +190,12 @@ details[open] summary svg{transform:rotate(90deg)}
   <section class="hero">
     <div class="lhead">
       <h1 id="headline">오늘 크게 오른 종목</h1>
-      <p>전일 종가보다 10% 넘게 오르고 거래대금이 30억원 이상인 종목의 상승 원인을 분석합니다.</p>
+      <p id="lede">전일 종가보다 10% 넘게 오르고 거래대금이 30억원 이상인 종목의 상승 원인을 분석합니다.</p>
     </div>
     <div class="spots" id="spots" role="group" aria-label="판정별 1위"></div>
   </section>
   <nav class="bar" aria-label="보기 고르기">
+    <div class="row" id="markets" role="group" aria-label="시장"></div>
     <div class="row" id="dates" role="group" aria-label="날짜"></div>
     <div class="row" id="tags" role="group" aria-label="판정"></div>
   </nav>
@@ -217,6 +218,18 @@ details[open] summary svg{transform:rotate(90deg)}
 <script src="common.js"></script>
 <script>
 // 데이터: 조사 에이전트(truth-research)가 장중 매시 판정을 게시하고 가격은 매분 고친다 — data/movers/<날짜>.json, 날짜 목록 data/movers/dates.json (docs/design/truth-movers.md §4)
+// 미국은 data/movers/us/ 아래 같은 모양이다. 날짜·시각은 그 시장 현지 시각(뉴욕)이다(§6)
+const MARKETS = {
+  kr: {label: '국내', base: 'data/movers/', tz: 'Asia/Seoul', open: 9 * 60, close: 16 * 60, note: '약 20분 지연',
+    intro: '전일 종가보다 10% 넘게 오르고 거래대금이 30억원 이상인 종목의 상승 원인을 분석합니다.',
+    money: v => `${Math.round(v).toLocaleString('ko-KR')}원`, value: v => `${Math.round(v).toLocaleString('ko-KR')}억원`},
+  us: {label: '미국', base: 'data/movers/us/', tz: 'America/New_York', open: 9 * 60 + 30, close: 17 * 60, note: '뉴욕 시각',
+    intro: '전일 종가보다 10% 넘게 오르고 거래대금이 200만 달러 이상인 미국 종목(1달러 미만 제외)의 상승 원인을 분석합니다. 시각은 뉴욕 기준입니다.',
+    money: v => `$${v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`,
+    // 거래대금은 백만 달러 단위로 온다
+    value: v => v >= 100 ? `${(v / 100).toFixed(1)}억 달러` : `${Math.round(v * 100).toLocaleString('ko-KR')}만 달러`},
+};
+const MK = () => MARKETS[state.market];
 const TAGS = {false: '허위매물', promising: '유망주', pending: '판단 보류'};
 const TAG_HINT = {
   all: '되돌림 예상 폭이 큰 순서입니다. 허위매물이 위로 옵니다.',
@@ -226,10 +239,10 @@ const TAG_HINT = {
 };
 const EVENT_KINDS = {disclosure: '공시', earnings: '실적', contract: '계약', policy: '정책', news: '보도', rumor: '풍문'};
 const SOURCE_KINDS = {official: '공식', disclosure: '공시', news: '보도', web: '웹', video: '영상'};
-const LOGO_RE = /^data\/logos\/[0-9A-Z]{6}\.(png|jpg|ico|webp)$/;  // 스키마와 같은 규칙만 src 로 쓴다
+const LOGO_RE = /^data\/logos\/([0-9A-Z]{6}|us\/[A-Z][A-Z0-9]{0,5}(\.[A-Z])?)\.(png|jpg|ico|webp)$/;  // 스키마와 같은 규칙만 src 로 쓴다
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const CHEVRON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
-const todayKst = () => new Intl.DateTimeFormat('en-CA', {timeZone: 'Asia/Seoul'}).format(new Date());
+const todayKst = () => new Intl.DateTimeFormat('en-CA', {timeZone: MK().tz}).format(new Date());  // 보고 있는 시장의 오늘
 const hhmm = s => (/T(\d{2}:\d{2})/.exec(s || '') || [])[1] || '';
 const md = d => `${+d.slice(5, 7)}월 ${+d.slice(8, 10)}일`;
 // 출처 날짜: 올해면 '10월 22일', 아니면 연도까지. 게시일이 없는 페이지(종목 정보 페이지 등)는 판정하며 본 날을 '확인'으로 적는다
@@ -240,7 +253,7 @@ const pubDate = v => {
 };
 const dayLabel = d => `${+d.slice(5, 7)}.${+d.slice(8, 10)} ${'일월화수목금토'[new Date(d + 'T00:00:00Z').getUTCDay()]}`;  // 날짜만 보므로 UTC 로 요일을 센다
 const signed = (v, n = 2) => `${v > 0 ? '+' : ''}${v.toFixed(n)}%`;
-const krw = v => `${Math.round(v).toLocaleString("ko-KR")}원`;  // common.js 의 won 은 억 단위라 따로 둔다
+const krw = v => MK().money(v);  // 국내 원 · 미국 달러. common.js 의 won 은 억 단위라 따로 둔다
 const hue = code => (Math.imul([...code].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7), 0x9E3779B1) >>> 0) % 360;  // 끝자리만 달라도 색이 갈린다
 
 // 로고가 없거나 못 불러오면 이름 첫 글자 배지가 드러난다(종목코드로 색을 고정)
@@ -290,7 +303,7 @@ const ranksOf = items => {
   for (const t of Object.keys(TAGS)) items.filter(i => tagOf(i) === t).sort(byRank).forEach((it, n) => { r[it.code] = n + 1; });
   return r;
 };
-const kstNow = () => new Intl.DateTimeFormat('en-GB', {timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false}).format(new Date());
+const kstNow = () => new Intl.DateTimeFormat('en-GB', {timeZone: MK().tz, hour: '2-digit', minute: '2-digit', hour12: false}).format(new Date());
 const mins = t => +t.slice(0, 2) * 60 + +t.slice(3, 5);
 
 // 가격이 바뀐 종목만 잠깐 물들인다. 같은 날짜 안에서만 비교한다
@@ -313,18 +326,19 @@ const spot = (tag, it) => it ? `
   </button>`
   : `<div class="spot glass none">${esc(md(state.doc.date))}에는 ${TAGS[tag]}로 판정한 종목이 없습니다.</div>`;
 
-// 실시간 표시: 오늘 · 평일 · 가격 갱신이 도는 9~16시에만 '실시간'. 가격이 45분 넘게 멈춰 있으면 '갱신 지연'
+// 실시간 표시: 오늘 · 평일 · 가격 갱신이 도는 시간(국내 9~16시 · 미국 뉴욕 9:30~17시)에만 '실시간'. 가격이 45분 넘게 멈춰 있으면 '갱신 지연'
 function liveState(d){
   const wd = new Date(d.date + 'T00:00:00Z').getUTCDay(), now = mins(kstNow());
   if (d.date !== todayKst()) return {cls: '', label: '지난 기록'};
-  if (wd === 0 || wd === 6 || now < 9 * 60 || now >= 16 * 60) return {cls: '', label: '장 마감'};
+  if (wd === 0 || wd === 6 || now < MK().open || now >= MK().close) return {cls: '', label: '장 마감'};
   const at = d.pricedAt || d.generatedAt || '';
   return !at.startsWith(d.date) || now - mins(hhmm(at)) > 45 ? {cls: 'late', label: '갱신 지연'} : {cls: 'on', label: '실시간'};
 }
 
 // 새 소식: 지난번 본 목록(이 기기에 날짜별로 기억)과 비교해 새 급등주 · 분석 완료 · 판정 변경을 알린다.
 // 처음 여는 날에는 알리지 않는다(전부 새것이라). 최신 날짜를 볼 때만 센다.
-const SNAP = 'movers-seen:';
+const SNAP_KR = 'movers-seen:';  // 시장마다 따로 기억한다(미국 'movers-seen-us:' 는 이 접두어로 시작하지 않아 서로 지우지 않는다)
+let SNAP = SNAP_KR;
 const KINDS = {changed: '판정 변경', judged: '분석 완료', new: '새 급등주'};
 let snap = {date: null, map: null};
 const readSnap = date => { try { return JSON.parse(localStorage.getItem(SNAP + date)); } catch { return null; } };
@@ -404,7 +418,7 @@ const card = (it, rank) => {
         <span class="pct ${it.changePct >= 0 ? 'up' : 'down'}${tick(it)}">${signed(it.changePct)}</span>
       </div>
       <div class="spark">${chart(it)}</div>
-      <p class="px">주가 <b class="${tick(it).trim()}">${krw(it.price)}</b> · 전일 ${krw(it.prevClose)} · 거래대금 ${Math.round(it.tradeValue).toLocaleString('ko-KR')}억원</p>
+      <p class="px">주가 <b class="${tick(it).trim()}">${krw(it.price)}</b> · 전일 ${krw(it.prevClose)} · 거래대금 ${MK().value(it.tradeValue)}</p>
     </div>
     <div>
       <div class="meta">${pill(it, rank)}
@@ -416,13 +430,15 @@ const card = (it, rank) => {
   </article>`;
 };
 
-// 보기 상태는 주소에 둔다(?date=&tag=) — 공유·뒤로 가기가 같은 화면을 연다
+// 보기 상태는 주소에 둔다(?market=&date=&tag=) — 공유·뒤로 가기가 같은 화면을 연다
 const params = new URLSearchParams(location.search);
-const state = {date: DATE_RE.test(params.get('date') || '') ? params.get('date') : null,
+const state = {market: params.get('market') === 'us' ? 'us' : 'kr', date: DATE_RE.test(params.get('date') || '') ? params.get('date') : null,
   tag: isTag(params.get('tag')) ? params.get('tag') : 'all', dates: [], latest: null, doc: null};
+SNAP = state.market === 'us' ? 'movers-seen-us:' : SNAP_KR;
 const openCodes = new Set();  // 다시 그려도 펼친 '근거 보기'는 펼친 채로 둔다
 const saveUrl = () => {
   const q = new URLSearchParams();
+  if (state.market !== 'kr') q.set('market', state.market);
   if (state.date && state.date !== state.latest) q.set('date', state.date);
   if (state.tag !== 'all') q.set('tag', state.tag);
   history.replaceState(null, '', String(q) ? `?${q}` : location.pathname);
@@ -437,8 +453,9 @@ function render(focusRow){
   // 가격은 Yahoo 시세(약 20분 늦음)를 매분 싣는다 — 그 마지막 체결 시각을 쓴다(없던 때의 파일은 게시 시각)
   const lv = liveState(d);
   $('status').className = `live pill glass ${lv.cls}`;
-  $('status').innerHTML = `<span class="dot"></span><b>${lv.label}</b><span><span class="pt">가격 </span>${esc(hhmm(d.pricedAt || d.generatedAt))}<span class="pt"> 기준</span></span>${d.pricedAt ? '<small>약 20분 지연</small>' : ''}`;
-  $('headline').textContent = `${d.date === todayKst() ? '오늘' : md(d.date)} 크게 오른 ${items.length}종목`;
+  $('status').innerHTML = `<span class="dot"></span><b>${lv.label}</b><span><span class="pt">가격 </span>${esc(hhmm(d.pricedAt || d.generatedAt))}<span class="pt"> 기준</span></span>${d.pricedAt || state.market !== 'kr' ? `<small>${MK().note}</small>` : ''}`;
+  $('headline').textContent = `${d.date === todayKst() ? '오늘' : md(d.date)} 크게 오른 ${state.market === 'us' ? '미국 ' : ''}${items.length}종목`;
+  renderMarkets();
   const first = t => items.filter(i => tagOf(i) === t).sort(byRank)[0];
   $('spots').innerHTML = spot('false', first('false')) + spot('promising', first('promising'));
   $('dates').innerHTML = dates.map(x =>
@@ -469,8 +486,9 @@ async function show(date, focusRow){
   const mine = ++token; busy = true;
   try {
     let doc;
-    try { doc = await getJson(date && date !== state.latest ? `data/movers/${date}.json` : 'data/movers/latest.json'); }
-    catch (e) { if (!date) throw e; doc = await getJson('data/movers/latest.json'); state.latest = doc.date; }
+    const base = MK().base;
+    try { doc = await getJson(date && date !== state.latest ? `${base}${date}.json` : `${base}latest.json`); }
+    catch (e) { if (!date) throw e; doc = await getJson(`${base}latest.json`); if (mine === token) state.latest = doc.date; }
     if (mine !== token) return;  // 더 늦게 누른 날짜가 이긴다
     if (!date) state.latest = doc.date;
     state.doc = doc; state.date = doc.date;
@@ -500,8 +518,33 @@ $('pop').addEventListener('keydown', e => {
 });
 $('movers').addEventListener('toggle', e => { const c = e.target.dataset?.code; if (c) e.target.open ? openCodes.add(c) : openCodes.delete(c); }, true);
 
-getJson('data/movers/dates.json').then(x => { state.dates = (Array.isArray(x) ? x : []).filter(d => typeof d === 'string' && DATE_RE.test(d)); })
-  .catch(() => {}).finally(() => show(state.date));
+// 시장 고르기: 국내 · 미국. 바꾸면 그 시장의 최신 날짜부터 다시 받는다(팝업·가격 비교·펼친 근거는 시장마다 새로)
+function renderMarkets(focus){
+  $('markets').innerHTML = Object.entries(MARKETS).map(([k, m]) =>
+    `<button type="button" data-market="${k}" aria-pressed="${k === state.market}">${m.label}</button>`).join('');
+  $('lede').textContent = MK().intro;
+  if (focus) $('markets').querySelector('[aria-pressed=true]')?.focus();
+}
+function load(){
+  const mk = state.market;
+  getJson(`${MK().base}dates.json`).then(x => { if (mk === state.market) state.dates = (Array.isArray(x) ? x : []).filter(d => typeof d === 'string' && DATE_RE.test(d)); })
+    .catch(() => {}).finally(() => { if (mk === state.market) show(state.date); });
+}
+$('markets').addEventListener('click', e => {
+  const b = e.target.closest('button[data-market]');
+  if (!b || b.dataset.market === state.market || !Object.hasOwn(MARKETS, b.dataset.market)) return;
+  state.market = b.dataset.market;
+  Object.assign(state, {date: null, dates: [], latest: null, doc: null});
+  SNAP = state.market === 'us' ? 'movers-seen-us:' : SNAP_KR;
+  snap = {date: null, map: null}; lastPx.clear(); lastDate = null; openCodes.clear(); closeNews();
+  token++; busy = false;  // 다른 시장의 받던 응답은 버린다
+  saveUrl(); renderMarkets(true);
+  $('spots').innerHTML = ''; $('dates').innerHTML = ''; $('tags').innerHTML = ''; $('hint').textContent = '';
+  $('movers').innerHTML = '<div class="empty">급등주 해석을 불러오는 중입니다.</div>';
+  load();
+});
+renderMarkets();
+load();
 // 최신을 보고 있을 때만 1분마다 다시 받는다(가격이 매분 바뀐다). 날짜를 받는 중이면 건너뛴다(누른 날짜를 덮지 않게)
 setInterval(() => { if (!busy && (!state.doc || state.date === state.latest)) show(null); }, 60e3);
 </script>
