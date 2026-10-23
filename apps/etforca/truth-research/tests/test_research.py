@@ -504,6 +504,7 @@ def _tie_then(tag_after, *, finished=True):
         state = ws.state
         calls.append((code, cfg.session_timeout, cfg.max_tool_calls, cfg.web_calls, state.get("premiseStage", False),
                       state.get("webCalls"), state.get("disclosureReads")))
+        run.prompts.append(prompt)
         if not state.get("premiseStage"):
             state["moverVerdict"], state["done"] = _verdict("pending"), True
             state["ach"] = {"hypotheses": [{"id": "H1", "text": "유예", "kind": "other"}], "evidence": []}
@@ -513,7 +514,7 @@ def _tie_then(tag_after, *, finished=True):
             state["achDecision"] = {"tag": "pending", "margin": 0, "redone": True}  # 전제 검증 중 표를 다시 짠 흔적
         ws.save_state(state)
         return SessionResult(case_id=code, done=bool(state["done"]))
-    run.calls = calls
+    run.calls, run.prompts = calls, []
     return run
 
 
@@ -525,6 +526,8 @@ def test_tied_verdict_gets_one_premise_session_with_its_own_budget(cfg):
     report = _run(cfg, src, runner)
     first, second = runner.calls
     assert not first[4] and second[1:] == (cfg.premise_timeout, cfg.premise_tool_calls, cfg.premise_web_calls, True, 0, 0)
+    # 새 세션은 앞 세션 기억이 없다 — 공시 목록을 다시 줘야 앞에서 안 본 공시를 찾아 읽고, kind-list 반박도 목록을 보고 한다
+    assert "20261022000001" in runner.prompts[1]
     assert _latest(cfg)["items"][0]["tag"] == "false" and report["judged"][0]["premise"]["decided"]
     seen = json.loads(LocalStore(cfg.store).get("state/movers-seen/2026-10-22.json")[0])
     assert seen["900010"]["premiseDecision"]["method"] == "premises"

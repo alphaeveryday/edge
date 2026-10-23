@@ -44,9 +44,13 @@ SCHEMA = json.loads((Path(__file__).with_name("movers.schema.json")).read_text(e
 _LOGO_TYPES = {"png": "image/png", "jpg": "image/jpeg", "ico": "image/x-icon", "webp": "image/webp"}
 
 
+def _filing_lines(filings: list[dict]) -> str:
+    return "\n".join(f"- {f['acptno']} | {f['at']} | {f['submitter']} | {f['title']}" for f in filings) or "- (최근 공시·시장조치 없음)"
+
+
 def _prompt(m: Mover, filings: list[dict], articles: list[news.Article], series: list[list]) -> str:
     flow = ", ".join(f"{t} {p:,.0f}" for t, p in series[::6]) or "(장중 시세 없음)"
-    disc = "\n".join(f"- {f['acptno']} | {f['at']} | {f['submitter']} | {f['title']}" for f in filings) or "- (최근 공시·시장조치 없음)"
+    disc = _filing_lines(filings)
     heads = "\n".join(f"- {a.source_id} | {a.published[:16]} | {a.publisher} | {a.title}" for a in articles) or "- (수집된 보도 없음)"
     return (f"오늘 급등한 종목: {m.name}({m.code}, {m.market}) 현재가 {m.price:,.0f}원, 전일 대비 {m.change_pct:+.2f}% "
             f"(전일 종가 {m.prev_close:,.0f}원, 거래대금 {m.trade_value:,.0f}억원).\n장중 흐름(30분 간격): {flow}\n\n"
@@ -54,7 +58,7 @@ def _prompt(m: Mover, filings: list[dict], articles: list[news.Article], series:
             f"관련 보도(최신순):\n{heads}\n\n절차대로 증거를 모으고 가설·증거 표를 채운 뒤 set_verdict 로 판정하고 finish 하세요.")
 
 
-def _premise_prompt(m: Mover, state: dict) -> str:
+def _premise_prompt(m: Mover, state: dict, filings: list[dict]) -> str:
     t, v = state["ach"], state["moverVerdict"]
     hyp = "\n".join(f"- {h['id']} [{h['kind']}] {h['text']}" for h in t["hypotheses"])
     ev = "\n".join(f"- {e['source']} | {e['weight']} | {e['note']} | " + " ".join(f"{k}={x}" for k, x in e["marks"].items())
@@ -62,6 +66,8 @@ def _premise_prompt(m: Mover, state: dict) -> str:
     return (f"전제 검증 단계입니다. {m.name}({m.code}) 의 앞 판정은 가장 덜 어긋나는 설명이 둘 이상이라(동점) 판단 보류였습니다.\n"
             f"앞에서 정리한 급등 이유(claim): {v['claim'] or '(없음)'}\n앞 확인 결과: {v['finding']}\n\n"
             f"앞 세션의 가설:\n{hyp}\n\n앞 세션의 증거(출처 | 무게 | 내용 | 표시):\n{ev}\n\n"
+            f"최근 {FILING_DAYS}일 공시·시장조치(한국거래소 KIND, 접수번호 | 시각 | 제출 | 제목 — 목록 자체는 kind-list, 원문은 read_disclosure):\n"
+            f"{_filing_lines(filings)}\n\n"
             "시스템 지시의 '전제 검증' 절차대로 급등을 이끈 주장을 핵심 전제로 쪼개 원 출처로 확인하고 "
             "set_premises → set_verdict → finish 하세요. 위 출처는 다시 읽지 않고 쓸 수 있습니다.")
 
@@ -233,7 +239,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
                 try:
                     with ws.lock():
                         state = ws.state
-                        prompt = _premise_prompt(m, state)
+                        prompt = _premise_prompt(m, state, found)
                         state.update(done=False, premiseStage=True, webCalls=0, disclosureReads=0)
                         ws.save_state(state)
                     extra = replace(cfg, session_timeout=cfg.premise_timeout, max_tool_calls=cfg.premise_tool_calls,
