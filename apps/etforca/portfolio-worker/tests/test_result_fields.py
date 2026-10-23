@@ -273,3 +273,11 @@ def test_thousand_unit_amounts_are_checked_and_growth_needs_no_current_series():
     assert answer_amount_error(published, request) is None
     published['answer'] = '1,999만 원을 사세요.'  # 반올림만 허용한다(버림은 아니다)
     assert answer_amount_error(published, request)
+
+
+def test_mixed_thousand_and_hundred_amounts_are_read_whole():
+    request = holder([('KR:069500', 5000000, '일반 계좌')])
+    published = {'recommendation': {'execution': {'rows': [row('KR:069500', 5000000, 5000000)]}}, 'answer': '1천5백만 원을 사세요.'}
+    assert answer_amount_error(published, request)  # '5백만'만 읽고 통과하면 안 된다
+    published['answer'] = '5백만 원은 그대로 두세요.'
+    assert answer_amount_error(published, request) is None

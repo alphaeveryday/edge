@@ -316,7 +316,9 @@ def answer_amount_error(published, request):
     allowed = allowed_amounts(published, request)
     wrong = []
     # '3천만 원', '1억 5천만 원', '3백만 원'처럼 천·백을 쓴 표기를 숫자로 바꿔 같은 검사를 받게 한다
-    answer = re.sub(r'(\d+)\s*([천백])\s*(?=만|원)', lambda m: str(int(m[1]) * (1000 if m[2] == '천' else 100)), published.get('answer', ''))
+    answer = re.sub(r'(?:(\d+)\s*천\s*)?(?:(\d+)\s*백\s*)?(\d+)?(?=\s*(?:만|원))',
+                    lambda m: str(int(m[1] or 0) * 1000 + int(m[2] or 0) * 100 + int(m[3] or 0)) if m[1] or m[2] else m[0],
+                    published.get('answer', ''))
     for match in MONEY.finditer(answer):
         eok, man, won = match.groups()
         if not any(match.groups()):
