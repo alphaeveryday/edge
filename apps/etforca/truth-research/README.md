@@ -23,5 +23,6 @@ uv run --package edge-truth-research pytest apps/etforca/truth-research/tests -q
 | `DEEPSEEK_RESIST_NEWS_API_KEY` | ✓ | 모델 키(truth-agent 와 같은 시크릿) |
 | `EXA_API_KEY` | | 웹 검색·원문. 없으면 웹 도구를 끈다 |
 | `TRUTH_MAX_TOOL_CALLS` · `TRUTH_WEB_CALL_LIMIT` · `TRUTH_SESSION_TIMEOUT` | | 세션당 도구 40회 · 웹 10회 · 420초 |
+| `TRUTH_PREMISE_TOOL_CALLS` · `TRUTH_PREMISE_WEB_CALLS` · `TRUTH_PREMISE_TIMEOUT` | | 전제 검증 세션(ACH 동점일 때 한 번 더) 도구 24회 · 웹 6회 · 300초 |
 
 시세(Naver 순위·Yahoo 5분봉·현재가)와 공시(KIND)는 키가 없다. 이미지는 `deploy-truth-research.yml` 이 `edge/pipeline:truth-research-latest` 로 올리고, 인프라는 `infra/terraform/modules/truth-research`.
