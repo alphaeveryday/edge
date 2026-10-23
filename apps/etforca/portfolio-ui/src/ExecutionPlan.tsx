@@ -13,7 +13,8 @@ const reasons: Record<string, string> = {
   ACCOUNT_OPENING_REQUIRED: '계좌가 개설되어 있는지 확인해야 해요.',
   ACCOUNT_WITHDRAWAL_REVIEW_REQUIRED: '다른 계좌로 옮기기 전에 인출 조건을 확인해야 해요.',
   ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED: '금융사에서 남은 납입 한도를 확인해야 해요.',
-  ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED: '입력한 남은 납입 한도를 초과해요.',
+  ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED: '올해 남은 납입 한도를 초과해요.',
+  ACCOUNT_TRANSFER_NOT_ALLOWED: '기존 돈은 그 계좌 안에서만 바꿀 수 있어요.',
 };
 
 export function ExecutionDetails({ plan }: { plan: Execution }) {
@@ -25,6 +26,7 @@ export function ExecutionDetails({ plan }: { plan: Execution }) {
     {!actionable && plan.required_additional_krw != null && <p>{plan.required_additional_is_minimum === false ? '매도 없이 목표를 달성할 추가 자금의 상한' : '목표에 필요한 최소 추가 자금'}: <strong>{money(plan.required_additional_krw)}</strong></p>}
     {actionable && plan.months != null && plan.months > 1 && <p className="notice">{plan.months}개월 계획의 총 거래 금액이에요.</p>}
     {actionable && plan.accounts.filter(account => Number(account.deposit_krw) > 0 || Number(account.withdrawal_krw) > 0).map(account => <p key={account.account}>{account.account}{Number(account.deposit_krw) > 0 && ` · 납입 ${money(account.deposit_krw)}`}{Number(account.withdrawal_krw) > 0 && ` · 인출 ${money(account.withdrawal_krw)}`}</p>)}
+    {actionable && !!plan.monthly_plan?.length && <div className="monthly-plan"><p>매달 넣을 돈</p><ul className="report-bullets">{plan.monthly_plan.map(row => <li key={`${row.instrument_id}:${row.account}`}>{row.account} · {plan.rows.find(item => item.instrument_id === row.instrument_id)?.name || row.instrument_id.replace(/^US:/, '')} <strong>{money(row.krw)}</strong></li>)}</ul></div>}
     {!!plan.assumptions.length && <details><summary>계산에 적용한 조건</summary><ul className="report-bullets">{plan.assumptions.map(text => <li key={text}>{text}</li>)}</ul></details>}
   </>;
 }

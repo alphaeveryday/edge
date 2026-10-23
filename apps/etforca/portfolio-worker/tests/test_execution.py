@@ -557,7 +557,8 @@ def test_existing_money_stays_in_its_account_between_the_floor_and_ceiling_weigh
     assert kept['status'] == 'ready'
     assert account['min_weight_pct'] == account['max_weight_pct'] == '25.00000000'
     # 26%면 한도를 넘고, 그 돈은 현금이 없는 일반 계좌에서 빠져나와야 하므로 둘 다 막힌다
-    assert set(plan(26)['reasons']) == {'ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:연금저축', 'ACCOUNT_TRANSFER_NOT_ALLOWED:일반 계좌'}
+    assert set(plan(26)['reasons']) == {'ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:연금저축', 'ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:연금저축+IRP',
+                                        'ACCOUNT_TRANSFER_NOT_ALLOWED:일반 계좌'}
     assert plan(24)['reasons'] == ['ACCOUNT_TRANSFER_NOT_ALLOWED:연금저축']
 
 
@@ -599,3 +600,48 @@ def test_individual_stocks_cannot_be_placed_in_pension_accounts():
     stock, etf = instruments()['KR:005930'], instruments()['KR:069500']
     assert allocation_error(stock, 'IRP', None) and allocation_error(stock, '연금저축', None)
     assert allocation_error(stock, 'ISA', None) is None and allocation_error(etf, 'IRP', None) is None
+
+
+def tax_profile(*accounts):
+    return {'residence': '대한민국 거주자', 'age': '19~54세', 'income': '확인 필요', 'financial_income_tax': '확인 필요',
+            'accounts': [{'account': account, 'remaining_man': remaining} for account, remaining in accounts]}
+
+
+def test_pension_accounts_share_one_annual_limit_even_when_only_one_remaining_amount_is_known():
+    # 연금저축·IRP 는 합쳐서 연 1,800만 원이다. 한쪽에만 남은 한도를 적었다고 다른 쪽이 따로 1,800만 원을 받지 않는다
+    req = request([('CASH:KRW', 28000000, '일반 계좌')], preferences={'tax_profile': tax_profile(('연금저축', '1000'))})
+    plan = build_execution(req, [{'instrument_id': 'KR:379800', 'account': '연금저축', 'weight_pct': Decimal(1000) / 28},
+                                 {'instrument_id': 'KR:379800', 'account': 'IRP', 'weight_pct': 100 - Decimal(1000) / 28}])
+    assert plan['status'] == 'infeasible'
+    assert 'ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:IRP' in plan['reasons']
+    assert 'ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:연금저축+IRP' in plan['reasons']
+
+
+def test_monthly_money_skips_accounts_without_room_for_the_first_installment():
+    # 남은 한도 0원인 ISA 에는 첫 달 몫도 넣지 못한다. 그 몫은 한도가 없는 일반 계좌 쪽으로 다시 나눈다
+    req = request([], planning=True, preferences={'tax_profile': tax_profile(('ISA', '0'))})
+    rows = [{'instrument_id': 'KR:069500', 'account': 'ISA', 'weight_pct': 50}, {'instrument_id': 'US:VOO', 'account': '일반 계좌', 'weight_pct': 50}]
+    plan = build_execution(req, rows, monthly_krw=1000000)
+    assert plan['monthly_plan'] == [{'account': '일반 계좌', 'instrument_id': 'US:VOO', 'krw': '1000000'}]
+    only_isa = build_execution(req, [{**rows[0], 'weight_pct': 100}], monthly_krw=1000000)
+    assert only_isa['monthly_plan'] == [] and any('남은 납입 한도가 없어' in text for text in only_isa['assumptions'])
+
+
+def test_account_weight_floor_never_exceeds_its_ceiling():
+    # 기존 돈만 있고 한도가 0이면 그 계좌 비중은 한 값이다. 올림·내림 차이로 아래 경계가 위 경계를 넘으면 모델이 따를 수 없다
+    req = request([('KR:069500', 1000000, 'ISA'), ('US:VOO', 2000000, '일반 계좌')], preferences={'tax_profile': tax_profile(('ISA', '0'))})
+    plan = build_execution(req, [{'instrument_id': 'KR:069500', 'account': 'ISA', 'weight_pct': Decimal('33.33333333')},
+                                 {'instrument_id': 'US:VOO', 'account': '일반 계좌', 'weight_pct': Decimal('66.66666667')}])
+    isa = next(row for row in plan['accounts'] if row['account'] == 'ISA')
+    assert Decimal(isa['min_weight_pct']) <= Decimal(isa['max_weight_pct'])
+    assert plan['status'] == 'ready'
+
+
+def test_no_sale_rounding_matches_the_final_constraint_check():
+    # 실행 계산이 통과시킨 배치를 최종 고객 제약 검사가 1원 매도로 떨어뜨리면 게시 직전에 추천이 사라진다. 두 검사는 같은 기준이어야 한다
+    from edge_portfolio.decision import Decision, check_constraints
+    req = request([('US:VOO', 500002, '일반 계좌'), ('US:QQQ', 500000, '일반 계좌')])
+    rows = target(**{'US:VOO': 50, 'US:QQQ': 50})
+    plan = build_execution(req, rows, no_sell=True)
+    verdict = check_constraints(Decision(constraints=[{'kind': 'no_sell', 'source': '매도 금지'}]), rows, req, {})[0]['status']
+    assert (plan['status'] == 'ready') == (verdict == 'pass')
