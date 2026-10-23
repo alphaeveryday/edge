@@ -261,3 +261,15 @@ def test_answer_may_state_the_total_moved_across_instruments():
 
 def test_multiline_quote_headers_are_cleaned():
     assert clean_quote('상품 설명\n##### 총보수 0.03%') == '상품 설명 총보수 0.03%'
+
+
+def test_thousand_unit_amounts_are_checked_and_growth_needs_no_current_series():
+    request = holder([('KR:069500', 10000000, '일반 계좌')])
+    published = {'recommendation': {'execution': {'rows': [row('KR:069500', 10000000, 10000000)]}},
+                 'past': {'rec_end_krw': '12345678', 'cur_end_krw': None, 'rec_max_loss_krw': '1000000', 'cur_max_loss_krw': None}}
+    published['answer'] = '3천만 원을 사세요.'
+    assert answer_amount_error(published, request)  # '천' 표기로 검사를 피하지 못한다
+    published['answer'] = '1천만 원은 그대로 두세요. 지난 기간이었다면 원금보다 235만 원 늘었어요.'
+    assert answer_amount_error(published, request) is None
+    published['answer'] = '1,999만 원을 사세요.'  # 반올림만 허용한다(버림은 아니다)
+    assert answer_amount_error(published, request)

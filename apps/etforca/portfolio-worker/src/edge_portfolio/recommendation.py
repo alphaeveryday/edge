@@ -1,5 +1,5 @@
 """Validate model choices; derive amounts, deltas and totals in code."""
-from decimal import Decimal, ROUND_FLOOR, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP
 import re
 
 from .catalog import analysis_catalog, directory, traits
@@ -304,26 +304,28 @@ def allowed_amounts(published, request):
     past = published.get('past') or {}
     add(*past.values())
     if past.get('rec_end_krw') and past.get('cur_end_krw'):
-        add(int(past['rec_end_krw']) - int(past['cur_end_krw']), int(past['rec_end_krw']) - total, int(past['cur_end_krw']) - total)
+        add(int(past['rec_end_krw']) - int(past['cur_end_krw']))
+    add(*(int(past[name]) - total for name in ('rec_end_krw', 'cur_end_krw') if past.get(name)))  # 원금보다 늘거나 준 금액
     if past.get('rec_max_loss_krw') and past.get('cur_max_loss_krw'):
         add(int(past['rec_max_loss_krw']) - int(past['cur_max_loss_krw']))
     return values
 
 
 def answer_amount_error(published, request):
-    """계획 2단계 통과 조건: 답 문장의 금액은 2·4번 칸 값과 같아야 한다. 적은 단위(만·억)까지 반올림·버림한 값이면 같다고 본다."""
+    """계획 2단계 통과 조건: 답 문장의 금액은 2·4번 칸 값과 같아야 한다. 적은 단위(만)까지 반올림한 값이면 같다고 본다."""
     allowed = allowed_amounts(published, request)
     wrong = []
-    for match in MONEY.finditer(published.get('answer', '')):
+    # '3천만 원', '1억 5천만 원', '3백만 원'처럼 천·백을 쓴 표기를 숫자로 바꿔 같은 검사를 받게 한다
+    answer = re.sub(r'(\d+)\s*([천백])\s*(?=만|원)', lambda m: str(int(m[1]) * (1000 if m[2] == '천' else 100)), published.get('answer', ''))
+    for match in MONEY.finditer(answer):
         eok, man, won = match.groups()
         if not any(match.groups()):
             continue
         number = lambda value: Decimal(value.replace(',', '')) if value else Decimal(0)
         stated = number(eok) * 100000000 + number(man) * 10000 + number(won)
-        # 적은 자리까지 반올림 또는 버림한 값만 같다고 본다. 억만 쓴 표기도 만 원 자리까지는 맞아야 한다
+        # 적은 자리까지 반올림한 값만 같다고 본다. 억만 쓴 표기도 만 원 자리까지는 맞아야 한다
         unit = 1 if won else Decimal(10000) / (10 ** len(man.split('.')[1])) if man and '.' in man else 10000
-        if not any(stated in {(Decimal(value) / unit).to_integral_value(rounding=rounding) * unit for rounding in (ROUND_HALF_UP, ROUND_FLOOR)}
-                   for value in allowed):
+        if not any(stated == (Decimal(value) / unit).to_integral_value(rounding=ROUND_HALF_UP) * unit for value in allowed):
             wrong.append(match.group().strip())
     if not wrong:
         return None
