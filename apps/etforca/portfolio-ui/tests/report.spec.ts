@@ -1,4 +1,5 @@
 import { test, expect, type Page } from '@playwright/test';
+import { deepestFall, futureValue, legacyNote, won } from '../src/resultMath';
 
 // 8차 결과(ResultView): 누구에게나 같은 일곱 칸, 같은 차례. 서버가 새 필드를 아직 내지 않은 옛 보고서도
 // 기존 필드로 같은 칸을 채워야 한다(운영의 지난 보고서가 그대로 다시 열린다).
@@ -28,6 +29,23 @@ const base = () => ({
         row('KR:360750', 'TIGER 미국S&P500', '일반 계좌', 0, 2500000), row('KR:005930', '삼성전자', '일반 계좌', 2000000, 2000000)] } },
   insights: [{ title: '겹치는 종목이 많아요', content: section(['S&P500과 나스닥100은 애플이 겹쳐요.']) }],
 } as any);
+
+// 화면과 떼어 둔 금융 계산(resultMath). 고객이 읽는 금액이 틀리면 화면이 맞게 그려져도 소용없다.
+test('money words, deepest fall, five-percent projection and account transfers are computed exactly', () => {
+  expect([won(0), won(9999), won(10000), won(7675920), won(100000000), won(127800000), won(-2610000), won(25551824, true)])
+    .toEqual(['0원', '9,999원', '1만 원', '767만 5,920원', '1억 원', '1억 2,780만 원', '-261만 원', '2,555만 원']);
+  // 금액과 비율은 같은 구간에서: 100→50(50만 원, 50%) 뒤 300→200(100만 원, 33.3%)이면 가장 많이 줄어든 돈은 뒤 구간.
+  const fall = deepestFall([1000000, 500000, 3000000, 2000000]);
+  expect(fall.amount).toBe(1000000);
+  expect(fall.ratio).toBeCloseTo(1 / 3);
+  // 연 5% 복리: 1,000만 원은 15년 뒤 약 2,079만 원, 매달 넣는 돈만 있으면 넣은 돈보다 커진다.
+  expect(Math.round(futureValue(10000000, 0, 15))).toBe(20789282);
+  expect(futureValue(0, 300000, 15)).toBeGreaterThan(300000 * 12 * 15);
+  // 한 계좌에서 판 돈은 다른 계좌의 매수 대금이 되지 않는다 — 옮길 돈을 밝힌다.
+  expect(legacyNote({ status: 'ready', reasons: [], assumptions: [], additional_krw: '0', monthly_krw: null, required_additional_krw: null, months: null, rows: [],
+    accounts: [{ account: '일반 계좌', deposit_krw: '0', withdrawal_krw: '3000000' }, { account: 'ISA', deposit_krw: '3000000', withdrawal_krw: '0' }] }))
+    .toBe('계좌 사이 옮길 돈: 일반 계좌에서 300만 원 빼기, ISA에 300만 원 넣기.');
+});
 
 async function open(page: Page, result: unknown, input: unknown = { question: '이 구성으로 계속 들고 가도 돼요?', horizon: '10년 이상', holdings: [] }) {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'r8'));

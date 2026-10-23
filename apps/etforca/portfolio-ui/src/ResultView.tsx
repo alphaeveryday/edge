@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Button, TextArea, TextInput } from './design-system/components';
-import type { Evaluation, History, Input, Report, Section } from './api';
+import type { Evaluation, Input, Report, Section } from './api';
 import { safeReportUrl } from './reportUrl';
 import { trackResult } from './analytics';
 import { AppDownloadSheet } from './AppDownloadSheet';
@@ -8,12 +8,11 @@ import { ChatScreen, useConversation, waiting } from './Followup';
 import { TypeCardSheet, typeCards } from './TypeCard';
 import orca from '../../app-ui/assets/icon.png';
 import './result.css';
+import { ANNUAL_RATE, displayName, finalRows, futureValue, legacyNote, pastOf, toNum, verdictKind, won, type Kind, type Past, type Row } from './resultMath';
 
 // 8차 결과: 누구에게나 같은 일곱 칸(답 → 최종 추천 → 앞으로 넣을 돈 → 지난 기간 → 앞으로 내 돈 → 오르카의 분석 → 더 물어보기)과
 // 그 뒤의 유형 카드 줄·설문 카드. 서버가 새 필드(verdict·answer·past …)를 아직 안 낸 옛 보고서는 기존 필드로 같은 칸을 채운다.
 
-type Kind = 'keep' | 'one' | 'rebuild' | 'start';
-type Row = { id: string; name: string; account: string; kind: string; before: number | null; target: number | null; weight: number | null };
 type Item = { title: string; paragraphs: string[]; evidence: Section['evidence']; limitations: string[] };
 
 const axes = [['leadership', '시장 주도성'], ['profitability', '수익성'], ['stability', '안정성']] as const;
@@ -21,64 +20,14 @@ const grades = ['심각', '개선 필요', '보통', '훌륭', '매우 훌륭'];
 const gradeIndex = (value: number) => value >= 4.5 ? 4 : value >= 3.5 ? 3 : value >= 2.5 ? 2 : value >= 1.5 ? 1 : 0;
 const palette = ['--chart-1', '--chart-ocean', '--chart-violet', '--chart-3', '--chart-teal', '--chart-coral', '--chart-4', '--chart-6'].map(name => `var(${name})`);
 const constraintLabels: Record<string, string> = { no_leverage: '레버리지 빼기', some_bonds: '채권도 조금', dividend: '배당 받기', no_sell: '갖고 있는 건 팔지 않기', kr_listed_etf_only: '국내 상장 ETF만' };
-// 앞으로 내 돈 칸의 빠르기. 제품은 1년 전망만 내므로 화면이 정한 가정이고, 칸에 그대로 적는다(계약의 남은 결정 3).
-const ANNUAL_RATE = .05;
 
-const toNum = (value: unknown) => {
-  const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() ? Number(value) : NaN;
-  return Number.isFinite(n) ? n : null;
-};
-/** 원 금액을 '1억 2,780만 원', '767만 5,920원'처럼 읽는 꼴로. round 면 만 원 아래를 반올림한다. */
-export function won(value: number, round = false) {
-  let v = Math.round(Math.abs(value));
-  if (round && v >= 10000) v = Math.round(v / 10000) * 10000;
-  const sign = value < 0 && v ? '-' : '';
-  if (v < 10000) return `${sign}${v.toLocaleString('ko-KR')}원`;
-  const eok = Math.floor(v / 1e8), man = Math.floor(v % 1e8 / 1e4), rest = v % 1e4;
-  const parts = [eok ? `${eok.toLocaleString('ko-KR')}억` : '', man ? `${man.toLocaleString('ko-KR')}만` : '', rest ? rest.toLocaleString('ko-KR') : ''].filter(Boolean);
-  return sign + parts.join(' ') + (rest ? '원' : ' 원');
-}
 const short = (value: number) => won(value, true).replace(/ ?원$/, '');
 const pct = (value: number) => value > 0 && value < .1 ? '0.1% 미만' : `${Number(value.toFixed(1))}%`;
 const score = (value: number) => value.toFixed(1);
 const clean = (text: string) => text.replace(/^#+\s*/gm, '').replace(/\*\*/g, '').trim();
 // 표 조각('| a | b |')이나 머리표만 남은 줄은 고객에게 보일 문장이 아니다.
 const sentence = (text: string) => { const t = clean(text); return t && (t.match(/\|/g)?.length ?? 0) < 2 && !/^[-:|\s]+$/.test(t) ? t : ''; };
-const displayName = (id: string, name?: string) => id.startsWith('US:') ? id.slice(3) : id.startsWith('CASH:') ? '현금' : name || id.split(':').pop() || id;
 
-function finalRows(report: Report): Row[] {
-  const plan = report.recommendation;
-  if (!plan) return (report.metrics?.holdings ?? []).map(h => ({ id: h.name, name: h.name, account: h.account, kind: h.name === '현금' ? 'cash' : 'etf', before: null, target: null, weight: h.weight_pct }));
-  const allocations = plan.allocations ?? [];
-  const find = (id: string, account: string) => allocations.find(a => a.instrument_id === id && a.account === account) ?? allocations.find(a => a.instrument_id === id);
-  const execution = plan.execution;
-  if (execution?.rows?.length && (execution.status === 'ready' || execution.status === 'conditional')) {
-    return execution.rows.map(row => {
-      const allocation = find(row.instrument_id, row.account);
-      return { id: row.instrument_id, name: displayName(row.instrument_id, row.name || allocation?.name), account: row.account,
-        kind: row.instrument_id.startsWith('CASH:') ? 'cash' : allocation?.kind ?? 'etf', before: toNum(row.before_krw), target: toNum(row.target_krw), weight: allocation?.weight_pct ?? null };
-    }).filter(row => (row.before ?? 0) > 0 || (row.target ?? 0) > 0);
-  }
-  return allocations.map(a => ({ id: a.instrument_id, name: displayName(a.instrument_id, a.name), account: a.account, kind: a.kind, before: null, target: toNum(a.amount_krw), weight: Number.isFinite(a.weight_pct) ? a.weight_pct : null }));
-}
-
-function verdictKind(report: Report, rows: Row[], input?: Input): Kind | null {
-  if (report.verdict?.kind) return report.verdict.kind;
-  if (!report.recommendation) return null;
-  const held = input?.holdings ? input.holdings.some(h => h.kind !== 'cash' && !h.instrument_id?.startsWith('CASH:'))
-    : (report.metrics?.holdings ?? []).some(h => h.name !== '현금');
-  const known = rows.filter(r => r.before !== null && r.target !== null);
-  if (known.length ? !known.some(r => r.kind !== 'cash' && r.before! > 0) : !held) return 'start';
-  const invested = known.filter(r => r.kind !== 'cash');
-  const beforeSum = known.reduce((sum, r) => sum + r.before!, 0), targetSum = known.reduce((sum, r) => sum + r.target!, 0);
-  // 밖에서 돈을 같은 비중으로 더 넣는 옛 계획은 '바꾸는' 것이 아니다 — 금액이 아니라 (현금 행을 포함한) 전체 대비 비중으로 센다.
-  // 현금으로 사거나 팔아 현금을 남기면 그 종목의 비중이 바뀌므로 바뀐 것으로 센다(서버 규칙: 사고팔 행이 있으면 keep 이 아님).
-  const moved = (r: Row) => (r.before! < 1) !== (r.target! < 1) || beforeSum > 0 && targetSum > 0 && Math.abs(r.before! / beforeSum - r.target! / targetSum) > .005;
-  const changed = new Set(known.length
-    ? invested.filter(moved).map(r => r.id)
-    : (report.recommendation.actions ?? []).filter(a => !a.instrument_id.startsWith('CASH:') && (a.before_pct ?? 0) !== a.after_pct).map(a => a.instrument_id));
-  return changed.size === 0 ? 'keep' : changed.size === 1 ? 'one' : 'rebuild';
-}
 
 const headlines: Record<Kind, [string, string]> = { keep: ['', '이대로 가도 돼요'], one: ['하나만', ' 바꾸면 돼요'], rebuild: ['다시 짜야 해요', ''], start: ['', '이렇게 시작하세요'] };
 function Headline({ report, kind }: { report: Report; kind: Kind | null }) {
@@ -164,15 +113,6 @@ function FinalCard({ report, rows, color, input }: { report: Report; rows: Row[]
   </section>;
 }
 
-// 옛 실행표(8차 전)는 추가 자금·여러 달 납입을 목표 금액에 넣었다. 새 안내(final_note)가 없으면 그 조건을 한 줄로 밝혀
-// 목표 금액을 지금 바로 할 거래로 읽지 않게 한다.
-function legacyNote(execution?: NonNullable<Report['recommendation']>['execution']) {
-  if (!execution || execution.status !== 'conditional') return '';
-  const additional = toNum(execution.additional_krw) ?? 0, monthly = toNum(execution.monthly_krw), months = execution.months;
-  const plan = months && months > 1 && monthly ? `매달 ${won(monthly)}씩 ${months}개월 넣어 맞추는 계획이에요.` : '';
-  const extra = additional > 0 ? `추천 금액에는 새로 넣을 ${won(additional)}이 들어 있어요.` : '';
-  return [extra, plan].filter(Boolean).join(' ') || '추천 금액에는 앞으로 넣을 돈이 들어 있어요.';
-}
 
 function withheld(report: Report) {
   const reasons: Record<string, string> = {
@@ -213,50 +153,6 @@ function MonthlyCard({ report, rows, color, monthly, onAlert }: { report: Report
   </section>;
 }
 
-/** 고점에서 저점까지 가장 많이 줄어든 돈과, 같은 구간의 고점 대비 비율(금액과 비율이 다른 구간에서 오지 않게). */
-function deepestFall(values: number[]) {
-  let peak = values[0], amount = 0, ratio = 0;
-  for (const v of values) {
-    peak = Math.max(peak, v);
-    if (peak - v > amount) { amount = peak - v; ratio = peak > 0 ? amount / peak : 0; }
-  }
-  return { amount, ratio };
-}
-function periodLabel(start: string, end: string) {
-  const days = Math.max(1, Math.round((Date.parse(end) - Date.parse(start)) / 864e5));
-  const years = days / 365.25, months = Math.round(days / 30.44);
-  if (years >= .95 && Math.abs(years - Math.round(years)) < .15) return `지난 ${Math.round(years)}년`;
-  return months >= 1 ? `지난 ${months}개월` : `지난 ${days}일`;
-}
-type Past = { label: string; start: string; end: string; mode: 'compare' | 'cash' | 'single'; total: number; rec: number[] | null; cur: number[] | null;
-  recEnd: number; curEnd: number; recLoss: number; curLoss: number; recDrop: number | null; curDrop: number | null; basis: string; singleName: string };
-function pastOf(report: Report, history: History | null | undefined, total: number | null, kind: Kind | null): Past | null {
-  if (!total || total <= 0) return null;
-  const points = (history?.points ?? []).filter(p => Number.isFinite(p.recommended) && p.recommended > 0 && Number.isFinite(Date.parse(p.date)));
-  const server = report.past && ['rec_end_krw', 'cur_end_krw', 'rec_max_loss_krw', 'cur_max_loss_krw'].every(key => toNum(report.past![key as keyof typeof report.past]) !== null) ? report.past : null;
-  if (points.length < 2 && !server) return null;
-  const start = report.period?.start ?? points[0]?.date ?? '', end = report.period?.end ?? points.at(-1)?.date ?? '';
-  const hasCurrent = points.length >= 2 && points.every(p => Number.isFinite(p.current) && p.current! > 0);
-  const cash = history?.baseline_kind === 'new_cash' || kind === 'start';
-  // 서버 요약(past)이 기록과 다른 기간을 말하면 그 기록으로 그래프를 그리지 않는다 — 제목과 그래프가 다른 숫자를 보이면 안 된다.
-  const sameSpan = !server || !report.period || points.length >= 2 && points[0].date === report.period.start && points.at(-1)!.date === report.period.end;
-  const rec = points.length >= 2 && sameSpan ? points.map(p => total * p.recommended / points[0].recommended) : null;
-  const cur = hasCurrent && !cash ? points.map(p => total * p.current! / points[0].current!) : null;
-  const recEnd = server ? toNum(server.rec_end_krw)! : rec!.at(-1)!;
-  const curEnd = server ? toNum(server.cur_end_krw)! : cash ? total : cur?.at(-1) ?? recEnd;
-  const recFall = rec ? deepestFall(rec) : null, curFall = cur ? deepestFall(cur) : null;
-  const recLoss = server ? Math.abs(toNum(server.rec_max_loss_krw)!) : recFall!.amount;
-  const curLoss = server ? Math.abs(toNum(server.cur_max_loss_krw)!) : cash ? 0 : curFall ? curFall.amount : recLoss;
-  // 서버 요약은 금액만 준다. 같은 기간 기록이 있을 때만 비율을 기록에서 읽고, 없으면 비율을 지어내지 않는다.
-  const recDrop = recFall?.ratio ?? null;
-  const curDrop = cash ? 0 : curFall?.ratio ?? (cur ? null : recDrop);
-  // 바꿀 것이 없으면 두 선이 같다 — 같은 숫자를 두 번 보이지 않고 한 줄로 말한다.
-  const same = !cash && (kind === 'keep' || (!server && !cur) || Math.abs(recEnd - curEnd) < 1 && Math.abs(recLoss - curLoss) < 1);
-  return { label: report.period?.label || (start && end ? periodLabel(start, end) : '지난 기간'), start, end, mode: cash ? 'cash' : same ? 'single' : 'compare',
-    total, rec, cur, recEnd, curEnd, recLoss, curLoss, recDrop, curDrop, basis: history?.basis ?? '',
-    // 한 줄로 줄일 때: 지금 구성과 같으면 '지금 그대로', 지금 구성의 기록이 없으면 추천만 보인다.
-    singleName: cur || kind === 'keep' ? '지금 그대로' : '추천' };
-}
 
 function PastChart({ past }: { past: Past }) {
   const rec = past.rec!, cur = past.mode === 'compare' ? past.cur : null;
@@ -311,19 +207,16 @@ function PastCard({ past, unavailable }: { past: Past | null; unavailable: strin
   </section>;
 }
 
-function futureValue(principal: number, monthly: number, years: number) {
-  const month = (1 + ANNUAL_RATE) ** (1 / 12) - 1;
-  return principal * (1 + ANNUAL_RATE) ** years + (monthly ? monthly * ((1 + month) ** (12 * years) - 1) / month : 0);
-}
 function FutureCard({ principal, monthly, past }: { principal: number | null; monthly: number; past: Past | null }) {
   if (principal === null || principal < 0 || principal === 0 && monthly <= 0) return null;
   const bars = [5, 10, 15].map(years => ({ years, value: futureValue(principal, monthly, years), paid: principal + monthly * 12 * years }));
   const final = bars[2].value;
+  const rate = ANNUAL_RATE * 100;
   const drop = past?.recDrop ?? 0; // 비율을 모르면 나쁜 해 줄을 숨긴다.
   return <section className="r8-card r8-future" data-analytics-section="future" aria-labelledby="r8-future-title">
     <div className="r8-head"><span className="r8-eyebrow">앞으로 내 돈</span>
       <h2 id="r8-future-title" className="r8-big">15년 뒤 <em>{won(final, true)}</em></h2>
-      <span className="r8-sub">{monthly > 0 ? `지금 ${won(principal)} + 매달 ${won(monthly)}이면, 연 5%면` : `지금 ${won(principal)}을 이대로 두면, 연 5%면`}</span></div>
+      <span className="r8-sub">{monthly > 0 ? `지금 ${won(principal)} + 매달 ${won(monthly)}이면, 연 ${rate}%면` : `지금 ${won(principal)}을 이대로 두면, 연 ${rate}%면`}</span></div>
     <div className="r8-bars" role="img" aria-label={bars.map(b => `${b.years}년 뒤 ${won(b.value, true)}, 넣은 돈 ${won(b.paid, true)}`).join('. ')}>{bars.map((b, i) => <div key={b.years} className="r8-bar-col" data-final={i === 2 || undefined}>
       <b>{short(b.value)}</b>
       <span className="r8-stack" style={{ height: `${Math.max(24, b.value / final * 150)}px` }}><span className="r8-grown" style={{ flex: `${Math.max(0, b.value - b.paid)} 1 0` }} /><span className="r8-paid" style={{ flex: `${b.paid} 1 0` }} /></span>
@@ -331,7 +224,7 @@ function FutureCard({ principal, monthly, past }: { principal: number | null; mo
     <div className="r8-legend"><span><i className="r8-paid" />넣은 돈</span><span><i className="r8-grown" />불어난 돈</span></div>
     {drop > .001 && past && <div className="r8-bad"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m22 17-8.5-8.5-5 5L2 7" /><path d="M16 17h6v-6" /></svg>
       <span>{past.label}처럼 -{(drop * 100).toFixed(1)}% 떨어지는 해가 오면</span><b>{won(final * (1 - drop), true)}</b></div>}
-    <span className="r8-foot">연 5%로 불어난다고 놓고 계산했어요. 세금과 보수는 넣지 않았어요.</span>
+    <span className="r8-foot">연 {rate}%로 불어난다고 놓고 계산했어요. 세금과 보수는 넣지 않았어요.</span>
   </section>;
 }
 
