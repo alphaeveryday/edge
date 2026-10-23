@@ -70,10 +70,10 @@ def execution_tool(request, args, decision, catalog):
         if error := allocation_error(item, row['account'], request.preferences.tax_profile):
             raise ValueError(error)
     result = plan_execution(request, rows, decision)
-    if any(reason.startswith('ACCOUNT_') for reason in result['reasons']):
+    if any(reason.startswith(('ACCOUNT_', 'MONTHLY_')) for reason in result['reasons']):
         result['instruction'] = ('기존 돈은 그 계좌 안에서만 바꿉니다. 계좌별 min_weight_pct 이상, max_weight_pct 이하로 '
             '계좌 안 모든 종목 비중의 합을 맞추고 소수점 8자리까지 그대로 사용하세요. 계좌 밖으로 옮길 수 있는 돈은 일반 계좌의 현금뿐이며, '
-            '그 현금은 ISA·연금 계좌에 remaining_contribution_krw(올해 남은 연 한도) 안에서만 넣습니다. '
+            '그 현금은 ISA·연금 계좌에 remaining_contribution_krw(올해 남은 연 한도) 안에서만 넣습니다. 매달 넣을 돈도 목표 비중대로 같은 한도 안에서 나뉘므로, 한도를 넘으면 일반 계좌 비중을 늘리세요. '
             '동일 종목을 여러 계좌에 나눠도 됩니다. 같은 실패 배치를 반복하지 말고 계좌 배치나 후보 비중을 수정하세요.')
     for row in result['rows']:
         row['name'] = catalog.get(row['instrument_id'], {}).get('name', row['instrument_id'])
@@ -271,9 +271,9 @@ def limit_group(account):
 
 
 def split_monthly(monthly, target, room_left, stocks=()):
-    """매달 넣을 돈을 목표 비중대로 나눈다. 보유 개별주에는 넣지 않고(더 사지 않는다), 올해 남은 한도(limit_group 별)로
-    첫 달 몫도 못 받는 계좌는 빼고 나머지에 다시 나눈다.
-    ponytail: 12개월 누적 한도와 일부만 남은 한도는 계좌를 통째로 뺄 뿐 잘라 넣지 않는다 — 한도가 빠듯한 고객이 늘면 계좌별로 자른다"""
+    """매달 넣을 돈을 목표 비중대로 나눈다. 보유 개별주에는 넣지 않고(더 사지 않는다), 한도 계좌(limit_group 별)는
+    첫 달 몫이 올해 남은 한도 안이고 12개월 몫이 연 한도 안일 때만 받는다. 못 받는 계좌는 빼고 나머지에 다시 나눈다.
+    ponytail: 한도를 넘는 계좌는 통째로 뺄 뿐 남은 만큼 잘라 넣지 않는다 — 한도가 빠듯한 고객이 늘면 계좌별로 자른다"""
     keys = [key for key in target if key[0] != 'CASH:KRW' and key[0] not in stocks]
     while keys:
         share = sum(target[key] for key in keys)
@@ -281,7 +281,9 @@ def split_monthly(monthly, target, room_left, stocks=()):
         used = {}
         for key, value in plan.items():
             used[limit_group(key[1])] = used.get(limit_group(key[1]), 0) + value
-        full = {group for group, value in used.items() if room_left.get(group) is not None and value > room_left[group]}
+        annual = {'ISA': ANNUAL_LIMIT_MAN['ISA'] * 10000, 'PENSION': ANNUAL_LIMIT_MAN['연금저축'] * 10000}
+        full = {group for group, value in used.items() if room_left.get(group) is not None
+                and (value > room_left[group] or value * 12 > annual[group])}
         if not full:
             return [{'account': key[1], 'instrument_id': key[0], 'krw': str(value)} for key, value in plan.items()]
         keys = [key for key in keys if limit_group(key[1]) not in full]
@@ -318,11 +320,15 @@ def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no
                     room_left[group] = room - sum(value for name, value in deposits.items() if limit_group(name) == group)
             result['monthly_plan'] = split_monthly(monthly, target, room_left, stocks)
             if not result['monthly_plan']:
-                result['assumptions'].append('추천 계좌에 올해 남은 납입 한도가 없어 매달 넣을 곳을 정하지 않았어요.')
+                # 금액은 알고 있다. 받을 계좌가 없을 뿐이니 입력을 다시 묻지 말고 배치를 고치게 한다
+                return ['MONTHLY_CONTRIBUTION_LIMIT_EXCEEDED']
+        return []
     if total <= 0:
         # 가진 돈이 없으면 지금 살 것은 없고, 월 납입이 있으면 그 배분이 곧 실행할 일이다
-        monthly_plan({})
-        return {**result, 'status': 'ready'} if result['monthly_plan'] else {**result, 'reasons': ['INVESTMENT_AMOUNT_REQUIRED']}
+        if not monthly:
+            return {**result, 'reasons': ['INVESTMENT_AMOUNT_REQUIRED']}
+        reasons = monthly_plan({})
+        return {**result, 'status': 'infeasible' if reasons else 'ready', 'reasons': reasons}
     amounts = dict(zip(target, allocate_amounts(total, list(target.values()))))
     if no_sell:
         protected = {key: value for key, value in current.items() if key[0] != 'CASH:KRW' and (not no_sell_ids or key[0] in no_sell_ids)}
@@ -384,7 +390,7 @@ def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no
     # 두 연금 계좌는 한도 하나를 나눠 쓴다(contribution_room 이 두 계좌에 같은 값을 준다)
     if pension[0] > contribution_room(request, '연금저축') + pension[1]:
         reasons.append('ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED:연금저축+IRP')
-    monthly_plan(deposits)
+    reasons += monthly_plan(deposits)
     result['reasons'] = list(dict.fromkeys(reasons))
     result['status'] = 'infeasible' if reasons else 'ready'
     return result

@@ -624,7 +624,11 @@ def test_monthly_money_skips_accounts_without_room_for_the_first_installment():
     plan = build_execution(req, rows, monthly_krw=1000000)
     assert plan['monthly_plan'] == [{'account': '일반 계좌', 'instrument_id': 'US:VOO', 'krw': '1000000'}]
     only_isa = build_execution(req, [{**rows[0], 'weight_pct': 100}], monthly_krw=1000000)
-    assert only_isa['monthly_plan'] == [] and any('남은 납입 한도가 없어' in text for text in only_isa['assumptions'])
+    # 금액은 알고 있으니 입력을 다시 묻지 않는다. 받을 계좌가 없다는 실행 불가로 모델이 배치를 고친다
+    assert (only_isa['status'], only_isa['reasons'], only_isa['monthly_plan']) == ('infeasible', ['MONTHLY_CONTRIBUTION_LIMIT_EXCEEDED'], [])
+    # 매달 1,000만 원을 연금저축에 넣으면 첫 달은 되지만 1년이면 합산 연 한도 1,800만 원을 넘는다
+    yearly = build_execution(request([], planning=True), [{'instrument_id': 'KR:379800', 'account': '연금저축', 'weight_pct': 100}], monthly_krw=10000000)
+    assert yearly['status'] == 'infeasible'
 
 
 def test_account_weight_floor_never_exceeds_its_ceiling():
@@ -651,7 +655,7 @@ def test_monthly_money_respects_the_shared_pension_limit_and_never_buys_more_of_
     # 연금저축·IRP 에 반씩 2,000만 원을 매달 넣으면 첫 달부터 합산 1,800만 원을 넘는다. 그 몫은 넣지 않는다
     split = build_execution(request([], planning=True), [{'instrument_id': 'KR:379800', 'account': '연금저축', 'weight_pct': 50},
                                                           {'instrument_id': 'KR:379800', 'account': 'IRP', 'weight_pct': 50}], monthly_krw=20000000)
-    assert split['monthly_plan'] == []
+    assert (split['status'], split['monthly_plan']) == ('infeasible', [])
     # 보유 개별주는 유지·축소만 한다. 매달 넣는 돈도 개별주를 더 사는 데 쓰지 않는다
     stock = AnalysisInput(holdings=[{'name': 'x', 'instrument_id': 'KR:005930', 'kind': 'stock', 'amount_krw': 1000000}], horizon='10년 이상')
     rows = [{'instrument_id': 'KR:005930', 'account': '일반 계좌', 'weight_pct': 50}, {'instrument_id': 'KR:069500', 'account': '일반 계좌', 'weight_pct': 50}]

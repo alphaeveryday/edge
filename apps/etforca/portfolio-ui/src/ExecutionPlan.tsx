@@ -15,6 +15,7 @@ const reasons: Record<string, string> = {
   ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED: '금융사에서 남은 납입 한도를 확인해야 해요.',
   ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED: '올해 남은 납입 한도를 초과해요.',
   ACCOUNT_TRANSFER_NOT_ALLOWED: '기존 돈은 그 계좌 안에서만 바꿀 수 있어요.',
+  MONTHLY_CONTRIBUTION_LIMIT_EXCEEDED: '매달 넣을 돈이 계좌의 연 납입 한도를 넘어요.',
 };
 
 export function ExecutionDetails({ plan }: { plan: Execution }) {

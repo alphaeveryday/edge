@@ -514,7 +514,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                  'NO_COMPARABLE_PRICE_HISTORY', 'BASELINE_PRICE_UNAVAILABLE', 'PRICE_STALE', 'PRICE_UNAVAILABLE',
                                  'CURRENT_AMOUNTS_REQUIRED', 'INVESTMENT_AMOUNT_REQUIRED', 'ADDITIONAL_FUNDING_REQUIRED',
                                  'NO_SELL_ZERO_TARGET', 'NO_SELL_VIOLATION', 'ACCOUNT_OPENING_REQUIRED',
-                                 'ACCOUNT_WITHDRAWAL_REVIEW_REQUIRED', 'ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED', 'ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED'}
+                                 'ACCOUNT_WITHDRAWAL_REVIEW_REQUIRED', 'ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED', 'ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED',
+                                 'ACCOUNT_TRANSFER_NOT_ALLOWED', 'MONTHLY_CONTRIBUTION_LIMIT_EXCEEDED'}
                         reason_codes = sorted({value.split(':')[0] for value in answer.get('reasons', []) if isinstance(value, str) and value.split(':')[0] in codes}) if isinstance(answer, dict) else []
                         emit('tool_finished', role=role, tool=tool,
                              status=status if status in {'available', 'unavailable', 'rejected', 'no_match', 'found', 'not_found', 'missing', 'stale', 'not_connected', 'ready', 'conditional', 'needs_input', 'infeasible'} else 'unknown',
