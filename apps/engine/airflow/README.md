@@ -12,7 +12,7 @@
 | `dags/edge_investor_intraday.py` | 장중 수급 DAG: `plan → collect → normalize → load → verdict` |
 | `dags/edge_source_daily.py` | 원천 관측 DAG(ALPHA-1130, Airflow 전용 레인 `source-daily`): `plan → {매크로·업종·재무} 각각 collect → normalize → load → report → verdict`. 생성 시 pause — 아래 "원천 관측 레인" |
 | `dags/edge_disclosure.py` | 공시 보충 배치 DAG(ALPHA-1407, 평일 19:30): `plan → collect → {정제 2개} → load → report → verdict`. 생성 시 pause. dev 는 10-21 전환으로 Airflow 가 실행한다(ALPHA-1425, SFN 스케줄 DISABLED) — 아래 "공시 보충 배치 레인" |
-| `dags/edge_premarket.py` | 장전 유니버스 DAG(ALPHA-1408, 평일 07:00, 원장 밖): `collect → normalize → universe → verdict`. 생성 시 pause. dev 는 10-22 전환으로 Airflow 가 실행한다(ALPHA-1429, SFN 스케줄 DISABLED) — 아래 "장전 유니버스 레인" |
+| `dags/edge_premarket.py` | 장전 유니버스 DAG(ALPHA-1408, 평일 07:00, 원장 밖): `collect → normalize → universe → verdict`. 생성 시 pause. dev 는 10-23 전환으로 Airflow 가 실행한다(ALPHA-1429, SFN 스케줄 DISABLED) — 아래 "장전 유니버스 레인" |
 | `dags/edge_news.py` | 뉴스 DAG(ALPHA-1409, 매일 00:10·08:10): `plan → collect → normalize → {tag, load_documents} → load_assertions → assemble → report → verdict`. 생성 시 pause. 아직 SFN 이 실행한다 — 아래 "뉴스 레인" |
 | `dags/edge_dividend_daily.py` | 배당 갱신 전용 DAG: 03:00 KST, 기존 배치 종료 확인 → plan → collect → normalize → load → report. 생성 시 pause. 수집·조회 범위 계약과 활성화 순서는 `docs/design/portfolio-dividend-ledger.md` |
 | `tests/` | DagBag 파싱, terraform(슬롯·명령) 대조, exit code·당일 수집·재처리·보고·활성화 규칙. CI `test-airflow.yml`이 공식 Airflow 이미지(다이제스트 고정) 안에서 실행한다 |
@@ -1243,7 +1243,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 ## 장전 유니버스 레인(premarket, ALPHA-1408)
 
-**현재 상태(2026-10-22): Airflow 가 실행한다(ALPHA-1429).** dev `premarket_orchestrator = "AIRFLOW"` — SFN `edge-dev-data-pipeline-premarket` 의 07:00 EventBridge 스케줄은 DISABLED 다. 평일 07:00 슬롯은 `edge_premarket`(unpause)이 돈다. SFN 상태 머신은 롤백용으로 남는다. 전환 전 10-21 21:00 수동 시험 1회가 SFN 07:00 과 같은 명령·순서로 끝났다(유니버스 무변경, 수집 3424건, 실패 ETF 0).
+**현재 상태(2026-10-23): Airflow 가 실행한다(ALPHA-1429).** dev `premarket_orchestrator = "AIRFLOW"` — SFN `edge-dev-data-pipeline-premarket` 의 07:00 EventBridge 스케줄은 DISABLED 다. 평일 07:00 슬롯은 `edge_premarket`(unpause)이 돈다. SFN 상태 머신은 롤백용으로 남는다. 전환 전 10-21 21:00 수동 시험 1회가 SFN 07:00 과 같은 명령·순서로 끝났다(유니버스 무변경, 수집 3424건, 실패 ETF 0).
 
 - **원장 밖 레인이다.** 장전 수집과 마감 뒤 수집이 같은 CLI 를 쓰는데, 그 CLI 의 원장 작업은 시장 레인 소유다(`premarket_pipeline.tf` 서두).
   - 그래서 plan·report 가 없다.

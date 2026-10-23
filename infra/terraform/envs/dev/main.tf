@@ -633,7 +633,7 @@ module "data_pipeline" {
   # 소유를 확인한다, apps/engine/airflow/README.md "운영 전환·롤백 절차").
   investor_intraday_orchestrator = "AIRFLOW"
 
-  # 장전 유니버스 레인(ALPHA-1408·1429). 10-22 전환: 평일 07:00 슬롯은 Airflow `edge_premarket` 이 실행한다.
+  # 장전 유니버스 레인(ALPHA-1408·1429). 10-23 전환: 평일 07:00 슬롯은 Airflow `edge_premarket` 이 실행한다.
   # AIRFLOW 면 premarket_schedule_state(모듈 기본 ENABLED)가 DISABLED 로 덮인다. 원장 밖 레인이라 슬롯 대조는 원래 없다.
   # 롤백은 edge_premarket pause → 종료 확인(queued·running·ECS 0) → 이 줄을 지우는 PR → apply 순서다. apply 를 먼저 하면
   # 두 주체가 같은 07:00 슬롯을 돌린다(apps/engine/airflow/README.md "장전 유니버스 레인"의 전환·롤백).
