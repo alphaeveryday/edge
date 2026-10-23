@@ -42,6 +42,7 @@ class Mover:
     change_pct: float
     trade_value: float  # 누적 거래대금: 국내 억원 · 미국 백만 달러
     logo_url: str | None = None  # 미국: Naver 가 주는 로고 PNG 주소(국내는 회사 홈페이지에서 찾는다)
+    name_eng: str | None = None  # 미국: 영문 회사명 — 영어 원문이 이 회사를 다루는지 가릴 때 쓴다
 
 
 @dataclass(frozen=True)
@@ -61,8 +62,14 @@ _US_NOT_COMMON = re.compile(r"\b(rights?|warrants?|units?|acquisition (corp|co|c
 _US_SYMBOL = re.compile(r"^[A-Z][A-Z0-9]{0,5}(\.[A-Z])?$")
 
 
+def us_symbol(raw: str) -> str:
+    """Naver 해외 티커 → 우리 표기. 반 클래스 주식은 'BRK B'·'BF A' 처럼 띄어 오므로 'BRK.B' 로 맞춘다
+    (Yahoo·SEC 는 이것을 BRK-B 로 바꿔 쓴다). 우선주 'AHT PRD' 는 클래스가 한 글자가 아니라 그대로 두어 걸러진다."""
+    return re.sub(r"^([A-Z][A-Z0-9]{0,5}) ([A-Z])$", r"\1.\2", raw.strip())
+
+
 def is_us_common_stock(symbol: str, name_eng: str, end_type: str = "stock") -> bool:
-    """미국 보통주인가. ETF 는 종목 유형으로, 워런트·유닛·스팩은 영문 이름으로 거른다."""
+    """미국 보통주인가(symbol 은 us_symbol 로 맞춘 것). ETF 는 종목 유형으로, 우선주는 티커 꼴로, 워런트·유닛·스팩은 영문 이름으로 거른다."""
     return end_type == "stock" and bool(_US_SYMBOL.match(symbol)) and not _US_NOT_COMMON.search(name_eng)
 
 
@@ -98,8 +105,9 @@ class Quotes:
         """상승률 순위 한 쪽. 첫 쪽이 비었거나 필드가 없으면 실패로 올린다 — 응답 형식이 바뀐 것을 '오늘 급등 없음'으로 게시하지 않는다."""
         us = of_exchange(market) is US
         rows = self._get((NAVER_WORLD_UP if us else NAVER_UP).format(market=market, page=page, size=size)).get("stocks") or []
-        key = "symbolCode" if us else "itemCode"
-        if page == 1 and not (rows and all(r.get(key) and r.get("fluctuationsRatio") is not None for r in rows)):
+        # 실제로 읽는 칸을 본다(미국은 원시값 칸) — 그 칸이 사라지면 전부 0% 로 걸러져 '오늘 급등 없음'이 게시된다
+        need = ("symbolCode", "fluctuationsRatioRaw", "closePriceRaw") if us else ("itemCode", "fluctuationsRatio")
+        if page == 1 and not (rows and all(r.get(need[0]) and all(r.get(k) is not None for k in need[1:]) for r in rows)):
             raise QuoteError(f"Naver {market} 상승률 순위 응답이 비었거나 형식이 다릅니다.")
         return rows
 
@@ -135,7 +143,7 @@ class Quotes:
 
     @staticmethod
     def _us_mover(market: str, row: dict, min_change: float) -> Mover | None:
-        code, eng = str(row.get("symbolCode") or "").strip(), str(row.get("stockNameEng") or "").strip()
+        code, eng = us_symbol(str(row.get("symbolCode") or "")), str(row.get("stockNameEng") or "").strip()
         name = (str(row.get("stockName") or "").strip() or eng)[:40]
         price, diff, pct = _num(row.get("closePriceRaw")), _num(row.get("compareToPreviousClosePriceRaw")), _num(row.get("fluctuationsRatioRaw"))
         if not code or not name or price <= 0 or price - diff <= 0 or pct < min_change or not is_us_common_stock(code, eng, str(row.get("stockEndType", ""))):
@@ -143,7 +151,7 @@ class Quotes:
         logo = str(row.get("itemLogoPngUrl") or "")
         return Mover(code=code, name=name, market=market, price=price, prev_close=price - diff, change_pct=pct,
                      trade_value=_num(row.get("accumulatedTradingValueRaw")) / 1e6,
-                     logo_url=logo if logo.startswith("https://ssl.pstatic.net/") else None)
+                     logo_url=logo if logo.startswith("https://ssl.pstatic.net/") else None, name_eng=eng or None)
 
     # ── 당일 5분 시세 ──
     def chart(self, code: str, market: str, day_ymd: str) -> Chart:

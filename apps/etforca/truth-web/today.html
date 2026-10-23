@@ -223,7 +223,8 @@ const MARKETS = {
   kr: {label: '국내', base: 'data/movers/', tz: 'Asia/Seoul', open: 9 * 60, close: 16 * 60, note: '약 20분 지연',
     intro: '전일 종가보다 10% 넘게 오르고 거래대금이 30억원 이상인 종목의 상승 원인을 분석합니다.',
     money: v => `${Math.round(v).toLocaleString('ko-KR')}원`, value: v => `${Math.round(v).toLocaleString('ko-KR')}억원`},
-  us: {label: '미국', base: 'data/movers/us/', tz: 'America/New_York', open: 9 * 60 + 30, close: 17 * 60, note: '뉴욕 시각',
+  // 가격은 16:00 마감가에서 멈춘다 — 마감 30분 뒤(국내와 같은 간격)부터 '장 마감'으로 보여 '갱신 지연'으로 오인하지 않게
+  us: {label: '미국', base: 'data/movers/us/', tz: 'America/New_York', open: 9 * 60 + 30, close: 16 * 60 + 30, note: '뉴욕 시각',
     intro: '전일 종가보다 10% 넘게 오르고 거래대금이 200만 달러 이상인 미국 종목(1달러 미만 제외)의 상승 원인을 분석합니다. 시각은 뉴욕 기준입니다.',
     money: v => `$${v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`,
     // 거래대금은 백만 달러 단위로 온다

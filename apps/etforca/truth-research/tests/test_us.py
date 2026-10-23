@@ -115,6 +115,34 @@ def test_us_session_sees_sec_filings_and_dollar_prices(cfg):
     assert mover["market"] == "NASDAQ" and mover["filings"] == [FILING]
 
 
+def test_kr_first_message_is_unchanged():
+    # 국내 판정 품질은 이 첫 메시지 위에서 맞춰 왔다 — 미국을 넣으며 국내 글이 한 글자라도 바뀌면 국내 판정이 흔들린다
+    m = Mover(code="900010", name="가나다전자", market="KOSDAQ", price=13000.0, prev_close=10000.0, change_pct=30.0, trade_value=130.0)
+    got = research._prompt(m, [], [], [["09:05", 10000.0]])
+    assert got.startswith("오늘 급등한 종목: 가나다전자(900010, KOSDAQ) 현재가 13,000원, 전일 대비 +30.00% (전일 종가 10,000원, 거래대금 130억원).\n"
+                          "장중 흐름(30분 간격): 09:05 10,000\n\n최근 14일 공시·시장조치(한국거래소 KIND, 접수번호 | 시각 | 제출 | 제목 — 목록 자체는 kind-list):\n")
+
+
+def test_routine_us_filings_do_not_reopen_a_settled_verdict(cfg):
+    # 급등주에는 임원 매매(Form 4)·5% 미만 보고(13G)가 수시로 붙는다. 그때마다 판정을 다시 열면 세션을 다 쓰고 판정이 매시 흔들린다.
+    # 새 주식 발행(424B)은 급등과 직접 얽힌 사건이라 다시 연다.
+    src = FakeQuotes({"NASDAQ": [_m("TANH", "탄테크 홀딩스", 181.8)]})
+    _run(cfg, src, _judging({"TANH": "false"}))
+
+    class More(FakeSec):
+        def __init__(self, form):
+            super().__init__()
+            self.form = form
+
+        def disclosures(self, code, since, until):
+            return [FILING, FILING | {"acptno": "0001588084-26-000100", "title": f"{self.form} · X"}]
+    again = _judging({"TANH": "pending"})
+    _run(cfg, src, again, kind=More("4"), now=NOW + timedelta(hours=1))
+    assert again.calls == []
+    _run(cfg, src, again, kind=More("424B5"), now=NOW + timedelta(hours=2))
+    assert [c[0] for c in again.calls] == ["TANH"]
+
+
 def test_us_filing_outage_defers_and_fails_loudly(cfg):
     # SEC 를 못 읽은 종목을 '최근 공시 없음'으로 판정하면 테마로 몬다 — 보류로 싣고, 전부 실패면 실행을 실패로 남긴다.
     runner = _judging({})
@@ -177,17 +205,25 @@ def test_us_risers_parse_world_ranking_and_drop_non_common(monkeypatch):
         return {"symbolCode": sym, "stockName": f"{sym} 한글", "stockNameEng": eng, "closePriceRaw": "24.83",
                 "compareToPreviousClosePriceRaw": "16.02", "fluctuationsRatioRaw": str(pct), "fluctuationsRatio": str(pct),
                 "accumulatedTradingValueRaw": "50942000", "stockEndType": end, "itemLogoPngUrl": logo}
+    # 반 클래스 주식은 'BRK B' 처럼 띄어 온다(실측) — 보통주로 살리고 BRK.B 로 맞춘다. 우선주 'AHT PRD' 는 거른다
     rows = [row("TANH", "Tantech Holdings Ltd", 181.8), row("HAVAR", "Harvard Ave Acquisition Rights Expiry", 21.0),
             row("ABCDW", "Abcd Corp Warrant", 20.0), row("SOXL", "Direxion Semi Bull 3X", 15.0, "etf"),
+            row("BRK B", "Berkshire Hathaway Inc", 14.0), row("AHT PRD", "Ashford Hospitality Trust Pref D", 13.0),
             row("EVIL", "Evil Inc", 12.0, logo="http://evil.example/x.png"), row("LOW", "Low Inc", 9.0)]
     client = quotes_mod.Quotes()
     urls = []
     monkeypatch.setattr(client, "_get", lambda url: urls.append(url) or {"stocks": rows})
     got = client.risers("NASDAQ", 10.0)
-    assert [m.code for m in got] == ["TANH", "EVIL"] and urls[0].startswith("https://api.stock.naver.com/stock/exchange/NASDAQ/up?")
+    assert [m.code for m in got] == ["TANH", "BRK.B", "EVIL"] and urls[0].startswith("https://api.stock.naver.com/stock/exchange/NASDAQ/up?")
     tanh = got[0]
     assert tanh.trade_value == pytest.approx(50.942) and tanh.prev_close == pytest.approx(8.81) and tanh.logo_url.startswith("https://ssl.pstatic.net/")
-    assert got[1].logo_url is None  # 로고는 우리 도메인에서 서빙된다 — Naver 이미지 서버 주소만 받는다
+    assert tanh.name_eng == "Tantech Holdings Ltd"
+    assert got[2].logo_url is None  # 로고는 우리 도메인에서 서빙된다 — Naver 이미지 서버 주소만 받는다
+    # 실제로 읽는 원시값 칸이 사라지면 전부 0% 로 걸러져 '급등 없음'이 게시된다 — 형식 변경으로 실패시킨다
+    for r in rows:
+        r.pop("fluctuationsRatioRaw")
+    with pytest.raises(quotes_mod.QuoteError):
+        client.risers("NASDAQ", 10.0)
 
 
 def test_us_chart_uses_new_york_session_and_bare_ticker(monkeypatch):
@@ -206,8 +242,9 @@ def test_us_chart_uses_new_york_session_and_bare_ticker(monkeypatch):
 
 # ── SEC 공시 ──
 def _submissions(**over):
+    # 접수 시각은 실측 쌍(BHVN 2026-10): JSON 15:00:07Z ↔ EDGAR 접수 페이지 07:00:07, JSON 10-16 01:18:55Z ↔ 10-15 17:18:55
     recent = {"accessionNumber": ["0001-26-3", "0001-26-2", "0001-26-1"], "filingDate": ["2026-10-22", "2026-10-15", "2026-09-01"],
-              "acceptanceDateTime": ["2026-10-22T12:01:00.000Z", "2026-10-16T01:18:55.000Z", "2026-09-01T20:00:00.000Z"],
+              "acceptanceDateTime": ["2026-10-22T15:00:07.000Z", "2026-10-16T01:18:55.000Z", "2026-09-01T20:00:00.000Z"],
               "form": ["8-K", "S-1", "8-K"], "primaryDocument": ["a8k.htm", "s1.htm", "old.htm"],
               "primaryDocDescription": ["8-K", "REGISTRATION STATEMENT", "8-K"], "items": ["1.01,9.01", "", "8.01"]} | over
     return {"name": "TANTECH HOLDINGS LTD", "filings": {"recent": recent}}
@@ -232,8 +269,11 @@ def test_sec_list_keeps_window_in_new_york_time_with_item_meanings(monkeypatch):
     client, urls = _sec(monkeypatch, respond)
     got = client.disclosures("TANH", "2026-10-08", "2026-10-22")
     assert [f["acptno"] for f in got] == ["0001-26-3", "0001-26-2"]  # 14일 밖(9/1)은 뺀다
-    assert got[0]["at"] == "2026-10-22 08:01" and got[0]["title"] == "8-K · 1.01 중요 계약 체결 · 9.01"
-    assert got[1]["title"] == "S-1 · REGISTRATION STATEMENT"
+    # JSON 시각은 Z 가 붙어도 UTC 가 아니다 — UTC 로 읽으면 장 전 07:00 보도자료가 11:00(급등 뒤)으로 보여 판정이 뒤집힌다
+    assert got[0]["at"] == "2026-10-22 07:00" and got[0]["title"] == "8-K · 1.01 중요 계약 체결 · 9.01"
+    assert got[1]["at"] == "2026-10-15 17:18" and got[1]["title"] == "S-1 · REGISTRATION STATEMENT"  # 접수일(filingDate)과 날짜가 맞는다
+    # 겨울(EST)은 차이가 한 시간 더 크다(실측 AAPL 2026-02-25T02:55:58Z ↔ 2026-02-24 16:55:58)
+    assert sec_mod.accepted_at("2026-02-25T02:55:58.000Z").isoformat() == "2026-02-24T16:55:58-05:00"
     assert got[0]["url"] == "https://www.sec.gov/Archives/edgar/data/1588084/0001263/a8k.htm"
     assert urls[1] == "https://data.sec.gov/submissions/CIK0001588084.json"
 
@@ -297,3 +337,23 @@ def test_us_tools_use_sec_ids_and_reject_kind_ids(us_ws, monkeypatch):
     sources = us_ws.state["moverVerdict"]["sources"]
     assert sources[0]["publisher"] == "TANTECH HOLDINGS LTD" and sources[0]["kind"] == "disclosure"
     assert any(s["publisher"] == "미국 SEC EDGAR" and "browse-edgar" in s["url"] for s in sources)
+
+
+def test_us_regulator_originals_count_and_english_name_identifies_the_company(us_ws, tmp_path):
+    # 미국 급등의 확인 원문은 FDA·SEC 같은 미국 기관 영어 원문이다. 국내 기관 도메인만 인정하면 FDA 승인도 '확인 불가'로 남아
+    # 미국 판정이 늘 보류로 쏠린다. 회사 이름은 영어 원문에 한글로 나오지 않으니 영문명(몸통)으로 이 회사 글인지 가린다.
+    def web(sid, url, text):
+        us_ws.save_snapshot(sid, {"id": sid, "url": url, "title": "t", "kind": "web", "text": text, "full": True})
+    mover = us_ws.mover() | {"nameEng": "Tantech Holdings Ltd"}
+    (us_ws.root / "mover.json").write_text(json.dumps(mover, ensure_ascii=False), encoding="utf-8")
+    web("web-fda", "https://www.fda.gov/news-events/x", "FDA approves a drug")
+    web("web-sec", "https://www.sec.gov/Archives/edgar/data/1/x.htm", "TANTECH HOLDINGS LTD entered into an agreement")
+    web("web-other", "https://www.sec.gov/Archives/edgar/data/2/y.htm", "Another Company Inc agreement")
+    web("web-fake", "https://fda.gov.evil.example/x", "Tantech approval")
+    assert tools._official(us_ws, "web-fda") and not tools._official(us_ws, "web-fake")
+    assert tools._primary(us_ws, "web-sec") and not tools._primary(us_ws, "web-other")
+    # 국내 세션은 공유 기준 그대로다(미국 기관 도메인을 공식으로 보지 않는다)
+    kr = Workspace.prepare(tmp_path / "kr", mode="research", case=None, inbox=[], index=[], today="2026-10-22",
+                           now="2026-10-22T11:35:00+09:00", mover={"code": "900010", "name": "가나다전자", "filings": []})
+    kr.save_snapshot("web-fda", {"id": "web-fda", "url": "https://www.fda.gov/x", "title": "t", "kind": "web", "text": "x", "full": True})
+    assert not tools._official(kr, "web-fda")

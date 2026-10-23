@@ -59,6 +59,40 @@ def _filing_of(ws: Workspace, sid: str) -> dict | None:
     return next((f for f in _mover(ws).get("filings", []) if f"{_pre(ws)}-{f['acptno']}" == sid), None)
 
 
+# 미국 기관 원문 도메인. 공유 목록(truth-agent cases.OFFICIAL_HOSTS·DISCLOSURE_HOSTS)은 국내 기관만 있어
+# 미국 세션에서만 여기서 더 본다(truth-agent 사건 검증의 기준은 바꾸지 않는다)
+US_DISCLOSURE_HOSTS = ("sec.gov",)
+US_OFFICIAL_HOSTS = ("fda.gov", "clinicaltrials.gov", "ftc.gov", "justice.gov", "uscourts.gov", "uspto.gov", "defense.gov",
+                     "energy.gov", "nih.gov", "cms.gov", "federalregister.gov")
+_CORP_SUFFIX = re.compile(r"[\s,.]+(inc|corp|corporation|co|company|ltd|limited|plc|holdings?|group|n\.?v|s\.?a|ag|se)\.?$", re.I)
+
+
+def _under(host: str, domains: tuple[str, ...]) -> bool:
+    return any(host == d or host.endswith("." + d) for d in domains)
+
+
+def _web_kind(ws: Workspace, snap: dict) -> str:
+    """웹 원문의 출처 종류. 미국 세션은 미국 기관 도메인도 공시·공식으로 본다."""
+    url = snap.get("url", "")
+    kind = snap.get("kind") or host_kind(url) or "web"
+    if _us(ws) and kind not in ("official", "disclosure") and "\\" not in url and not any(ch.isspace() for ch in url):
+        host = host_of(url)
+        kind = "disclosure" if _under(host, US_DISCLOSURE_HOSTS) else "official" if _under(host, US_OFFICIAL_HOSTS) else kind
+    return kind
+
+
+def _names(ws: Workspace) -> list[str]:
+    """원문이 이 회사를 다루는지 가릴 이름들. 미국은 영어 원문이라 영문명 몸통(Inc.·Holdings 등을 뗀 것)도 본다."""
+    m = _mover(ws)
+    names = [m.get("name", "")]
+    if eng := m.get("nameEng"):
+        while (core := _CORP_SUFFIX.sub("", eng).strip()) != eng:
+            eng = core
+        if len(eng) >= 3:  # 한두 글자 몸통은 아무 글에나 걸린다
+            names.append(eng)
+    return [n for n in names if n]
+
+
 # ── 공시 ──
 def read_disclosure(ws: Workspace, args: dict) -> str:
     """첫 메시지 목록의 공시·시장조치 원문을 읽는다. 읽은 공시는 kind-<접수번호>(미국 sec-<접수번호>)로 증거·출처에 쓴다."""
@@ -102,7 +136,7 @@ def _source(ws: Workspace, sid: str) -> dict:
                 "kind": "disclosure", "publishedAt": ws.state["today"]}
     if sid.startswith("web-") or _is_disc(ws, sid):
         snap = ws.snapshot(sid) or {}
-        kind = "disclosure" if _is_disc(ws, sid) else (snap.get("kind") or host_kind(snap.get("url", "")) or "web")
+        kind = "disclosure" if _is_disc(ws, sid) else _web_kind(ws, snap)
         return {"title": snap.get("title") or snap.get("url", ""), "publisher": snap.get("publisher") or host_of(snap.get("url", "")) or "웹",
                 "url": snap.get("url", ""), "kind": kind, "publishedAt": _kst_day(snap.get("publishedDate")) or snap.get("publishedDate") or None}
     article = next((a for a in ws.inbox() if f"news-{a['id'][:16]}" == sid), None)
@@ -122,12 +156,13 @@ def _usable(ws: Workspace, sid: str) -> bool:
 def _primary(ws: Workspace, sid: str) -> bool:
     """사건을 확인해 주는 원문인가: 이 회사가 낸 공시 본문, 또는 이 회사를 다룬 공식·공시 웹 원문.
     공시 목록(없음의 근거)·거래소 시장조치·다른 회사 공시는 아니다."""
-    name = _mover(ws).get("name", "")
     snap = ws.snapshot(sid) or {}
     if _is_disc(ws, sid):
         item = _filing_of(ws, sid)
         return item is not None and not is_market_notice(item)
-    return sid.startswith("web-") and snap.get("kind") in ("official", "disclosure") and bool(name) and name in snap.get("text", "")
+    text = snap.get("text", "")
+    return sid.startswith("web-") and _web_kind(ws, snap) in ("official", "disclosure") and \
+        any(n in text if not _us(ws) else n.lower() in text.lower() for n in _names(ws))
 
 
 def _original(ws: Workspace, sid: str) -> bool:
@@ -144,8 +179,7 @@ def _official(ws: Workspace, sid: str) -> bool:
     """기관(정부·거래소·법원 등) 도메인 웹 원문."""
     if not sid.startswith("web-"):
         return False
-    snap = ws.snapshot(sid) or {}
-    return (snap.get("kind") or host_kind(snap.get("url", ""))) == "official"
+    return _web_kind(ws, ws.snapshot(sid) or {}) == "official"
 
 
 def _same_doc(ws: Workspace, sid: str) -> str | None:

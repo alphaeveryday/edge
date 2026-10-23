@@ -26,7 +26,7 @@ from . import logos, session
 from .kind import Kind, is_market_warning
 from .markets import KR, US, Market, of_exchange
 from .quotes import Chart, Mover, Quotes
-from .sec import Sec
+from .sec import Sec, is_routine
 
 log = logging.getLogger(__name__)
 LEASE_KEY = KR.lease_key  # 국내. 미국은 Market.lease_key(state/us/…) — 장 시간이 겹치지 않아도 잠금은 따로 둔다
@@ -62,12 +62,13 @@ def _filing_head(market: Market) -> str:
 
 
 def _prompt(m: Mover, filings: list[dict], articles: list[news.Article], series: list[list], market: Market = KR) -> str:
-    flow = ", ".join(f"{t} {_money(p, market)}" for t, p in series[::6]) or "(장중 시세 없음)"
+    # 국내 첫 메시지는 예전 글 그대로 둔다(흐름 숫자에 단위 없음) — 미국만 달러·현지 시각을 밝힌다
+    flow = ", ".join(f"{t} {_money(p, market) if market is US else f'{p:,.0f}'}" for t, p in series[::6]) or "(장중 시세 없음)"
     disc = _filing_lines(filings)
     heads = "\n".join(f"- {a.source_id} | {a.published[:16]} | {a.publisher} | {a.title}" for a in articles) or "- (수집된 보도 없음)"
     value = f"{m.trade_value:,.1f}백만 달러" if market is US else f"{m.trade_value:,.0f}억원"
-    where = "미국 종목, 시각은 뉴욕 현지" if market is US else "국내 종목"
-    return (f"오늘 급등한 종목({where}): {m.name}({m.code}, {m.market}) 현재가 {_money(m.price, market)}, 전일 대비 {m.change_pct:+.2f}% "
+    where = f"(미국 종목, 영문명 {m.name_eng or '미상'}, 시각은 뉴욕 현지)" if market is US else ""
+    return (f"오늘 급등한 종목{where}: {m.name}({m.code}, {m.market}) 현재가 {_money(m.price, market)}, 전일 대비 {m.change_pct:+.2f}% "
             f"(전일 종가 {_money(m.prev_close, market)}, 거래대금 {value}).\n장중 흐름(30분 간격): {flow}\n\n"
             f"{_filing_head(market)}:\n{disc}\n\n"
             f"관련 보도(최신순):\n{heads}\n\n절차대로 증거를 모으고 가설·증거 표를 채운 뒤 set_verdict 로 판정하고 finish 하세요.")
@@ -224,7 +225,9 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind=None, session_runner
         raw, _ = store.get(seen_key)
         seen: dict[str, dict] = json.loads(raw) if raw else {}
         arts = {m.code: _articles(texts, m.name) for m in risers}
-        evidence = {m.code: {"filings": sorted(f["acptno"] for f in filings[m.code] or [] if not is_market_warning(f)), "news": sorted(a.id for a in arts[m.code])}
+        # 다시 열지 않는 공시: 국내 거래소 시장경보, 미국 일상 서류(임원 매매 Form 4·5% 미만 보고 13G 등 — 급등주에 수시로 붙는다)
+        evidence = {m.code: {"filings": sorted(f["acptno"] for f in filings[m.code] or [] if not is_market_warning(f) and not (market is US and is_routine(f))),
+                             "news": sorted(a.id for a in arts[m.code])}
                     for m in risers}
 
         def stale(m: Mover) -> bool:
@@ -248,7 +251,8 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind=None, session_runner
             found = filings[m.code] or []
             ws = Workspace.prepare(Path(tmp) / "sessions" / m.code, mode="research", case=None, inbox=[a.to_dict() for a in arts[m.code]],
                                    index=[], today=today, now=now.isoformat(),
-                                   mover={"code": m.code, "name": m.name, "market": m.market, "filings": found})
+                                   mover={"code": m.code, "name": m.name, "market": m.market, "filings": found}
+                                   | ({"nameEng": m.name_eng} if m.name_eng else {}))
             try:
                 result = session_runner(cfg, ws, code=m.code, prompt=_prompt(m, found, arts[m.code], charts[m.code].series, market),
                                         corpus_path=corpus_path)

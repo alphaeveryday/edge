@@ -29,6 +29,23 @@ ITEMS = {"1.01": "중요 계약 체결", "1.02": "중요 계약 해지", "1.05":
          "3.03": "주주 권리 변경", "5.01": "경영권 변경", "5.02": "임원·이사 변동", "5.03": "정관 변경(주식 병합 등)",
          "5.07": "주주총회 결과", "7.01": "공정공시(보도자료)", "8.01": "기타 주요 사건"}
 _EXHIBIT = re.compile(r"ex[-_]?99|exhibit[-_]?99", re.I)
+# 급등주에 수시로 붙는 일상 서류(임원·대주주 매매, 5% 미만 수동 투자 보고). 판정 뒤 새로 나와도 판정을 다시 열지 않는다
+# (국내 투자주의·경고와 같은 취급 — 목록에는 남아 모델이 본다). 새 주식 발행(424B·S-1)·8-K 는 다시 연다
+ROUTINE_FORMS = {"3", "4", "5", "3/A", "4/A", "5/A", "144", "SC 13G", "SC 13G/A"}
+
+
+def accepted_at(value: str) -> datetime:
+    """submissions JSON 의 acceptanceDateTime → 실제 접수 시각(뉴욕). 값 끝에 Z 가 붙어 있지만 UTC 가 아니다:
+    실측(2026-10, EDGAR 접수 페이지 대조)으로 실제 UTC 보다 뉴욕 시차만큼 늦다(서머타임 +4시간, 겨울 +5시간 —
+    AAPL 2026-07-31T14:01:02Z = 06:01:02 EDT, 2026-02-25T02:55:58Z = 2026-02-24 16:55:58 EST). 그만큼 당겨 읽는다."""
+    raw = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    shift = raw.astimezone(US.tz).utcoffset()  # -4h · -5h
+    return (raw + shift).astimezone(US.tz)
+
+
+def is_routine(filing: dict) -> bool:
+    """판정을 다시 열지 않는 일상 서류인가(제목 맨 앞이 서식)."""
+    return filing.get("title", "").split(" · ")[0] in ROUTINE_FORMS
 
 
 class SecError(RuntimeError):
@@ -83,7 +100,7 @@ class Sec:
         for i, acc in enumerate(recent["accessionNumber"]):
             if not since <= recent["filingDate"][i] <= until:
                 continue
-            at = datetime.fromisoformat(recent["acceptanceDateTime"][i].replace("Z", "+00:00")).astimezone(US.tz)
+            at = accepted_at(recent["acceptanceDateTime"][i])
             form, desc = recent["form"][i], (recent["primaryDocDescription"][i] or "").strip()
             items = [f"{x} {ITEMS[x]}" if x in ITEMS else x for x in str(recent["items"][i] or "").split(",") if x]
             title = " · ".join(dict.fromkeys(p for p in [form, desc if desc.upper() != form.upper() else "", *items] if p))
