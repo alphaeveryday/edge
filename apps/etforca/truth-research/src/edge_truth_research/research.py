@@ -11,6 +11,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 import json
 import logging
+import re
 from pathlib import Path
 import tempfile
 import time
@@ -72,8 +73,10 @@ def _prompt(m: Mover, filings: list[dict], articles: list[news.Article], series:
     heads = "\n".join(f"- {a.source_id} | {a.published[:16]} | {a.publisher} | {a.title}" for a in articles) or "- (수집된 보도 없음)"
     head = "관련 보도(최신순)"
     if market is US and web:  # 미국은 Exa 영어 보도가 먼저다 — 원문이 작업 폴더에 있어 view_news 로 바로 읽힌다(웹 호출 예산을 쓰지 않는다)
-        head = "관련 보도(영어 웹 보도, 최신순 — view_news 로 바로 읽는다)"
-        heads = "\n".join(f"- {w['id']} | {(w.get('publishedDate') or '')[:16]} | {host_of(w['url'])} | {w['title']}" for w in web)
+        head = "관련 보도(영어 웹 보도, 최신순, 발행 시각은 뉴욕 — 확인 전 웹 기사다. view_news 로 바로 읽는다)"
+        # 발행 시각은 UTC 로 오므로 뉴욕 시각으로 바꿔 쓴다(급등 전후가 판정을 가른다). 제목의 줄바꿈은 지운다(한 줄 한 기사)
+        heads = "\n".join(f"- {w['id']} | {_local(w.get('publishedDate'), market)} | {host_of(w['url'])} | {' '.join(str(w['title']).split())}"
+                          for w in web)
     elif market is US:
         head = "관련 보도(영어 웹 보도를 찾지 못해 국내 수집 기사로 대신한다, 최신순)"
     value = f"{m.trade_value:,.1f}백만 달러" if market is US else f"{m.trade_value:,.0f}억원"
@@ -120,8 +123,29 @@ WEB_NEWS_LIMIT = 8      # 미국 종목마다 미리 모으는 영어 보도 수
 WEB_NEWS_CHARS = 8000   # 그 원문 글자 수(view_news 가 보여 주는 만큼 넉넉히)
 
 
+def _local(published: str | None, market: Market) -> str:
+    """원문 발행 시각(ISO, 보통 UTC) → 그 시장 현지 'YYYY-MM-DD HH:MM'. 읽을 수 없으면 앞 10자(날짜)만."""
+    try:
+        return datetime.fromisoformat(str(published).replace("Z", "+00:00")).astimezone(market.tz).strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return str(published or "")[:10]
+
+
+def _about(m: Mover, text: str) -> bool:
+    """이 회사를 다룬 글인가: 티커(3자 이상, 또는 'NASDAQ:Z'·'$Z'·'(Z)' 꼴) 또는 영문명(법인 형태를 뗀 것)이 단어로 나온다.
+    검색이 다른 회사 글을 섞어 주면 그 글만으로 빅카인즈 대신을 막지 않게 걸러 낸다."""
+    from .tools import _LEGAL_SUFFIX
+    code = re.escape(m.code)
+    if (len(m.code) >= 3 and re.search(rf"\b{code}\b", text)) or re.search(rf"[:$(]\s?{code}\b", text):
+        return True
+    eng = (m.name_eng or "").strip()
+    while (core := _LEGAL_SUFFIX.sub("", eng).strip()) != eng:
+        eng = core
+    return len(eng) >= 3 and bool(re.search(rf"\b{re.escape(eng)}\b", text, re.I if " " in eng else 0))
+
+
 def exa_news(key: str, m: Mover, since: str) -> list[dict]:
-    """미국 종목의 영어 보도(Exa 뉴스 검색, since 이후 발행, 최신순)를 web- 원문 스냅숏 꼴로. 실패는 WebError 로 올린다."""
+    """미국 종목의 영어 보도(Exa 뉴스 검색, since 이후 발행, 이 회사를 다룬 것만, 최신순)를 web- 원문 스냅숏 꼴로. 실패는 WebError 로 올린다."""
     from edge_truth_agent.web import Exa, kind_of
     data = Exa(key)._post("/search", {"query": f"{m.name_eng or m.name} ({m.code}) stock", "numResults": WEB_NEWS_LIMIT,
                                       "type": "auto", "category": "news", "startPublishedDate": f"{since}T00:00:00.000Z",
@@ -132,7 +156,7 @@ def exa_news(key: str, m: Mover, since: str) -> list[dict]:
         # Exa 는 기간 조건을 걸어도 오래된 시세 페이지(2017·2020년 발행)를 섞어 준다(2026-10 실측) — 기간 밖은 버린다
         if str(r.get("publishedDate") or "9999")[:10] < since:
             continue
-        if url.startswith(("http://", "https://")) and r.get("text"):
+        if url.startswith(("http://", "https://")) and r.get("text") and _about(m, f"{r.get('title') or ''} {r['text']}"):
             out.append({"id": _web_id(url), "url": url, "title": r.get("title") or "", "publishedDate": r.get("publishedDate"),
                         "kind": kind_of(url), "text": r["text"], "full": True})
     return sorted(out, key=lambda w: w.get("publishedDate") or "", reverse=True)
@@ -265,23 +289,40 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind=None, session_runner
         seen_key = market.seen_key(today)
         raw, _ = store.get(seen_key)
         seen: dict[str, dict] = json.loads(raw) if raw else {}
-        # 미국 보도: Exa 영어 뉴스가 먼저다. 결과가 없거나(키 없음·검색 실패 포함) 비면 빅카인즈 말뭉치 기사로 대신한다
+        # 다시 열지 않는 공시: 국내 거래소 시장경보, 미국 일상 서류(임원 매매 Form 4·5% 미만 보고 13G 등 — 급등주에 수시로 붙는다)
+        filed = {m.code: sorted(f["acptno"] for f in filings[m.code] or [] if not is_market_warning(f) and not (market is US and is_routine(f)))
+                 for m in risers}
+        # 미국 보도: Exa 영어 뉴스가 먼저다. 결과가 없거나(키 없음·검색 실패 포함) 비면 빅카인즈 말뭉치 기사로 대신한다.
+        # 검색은 세션을 열 수 있는 종목만 한다(처음 보는 종목, 보류 종목, 새 공시가 나온 종목 — 확정 판정은 보도로 다시 열지 않는다)
         web: dict[str, list[dict]] = {}
         if market is US:
+            def may_open(m: Mover) -> bool:
+                rec = seen.get(m.code)
+                if filings[m.code] is None:
+                    return False
+                if only_new or rec is None:
+                    return rec is None
+                return rec["verdict"]["tag"] == "pending" or bool(set(filed[m.code]) - set(rec["filings"]))
             search = web_news or ((lambda m, s: exa_news(cfg.exa_key, m, s)) if cfg.exa_key else None)
-            report["newsFallback"] = []
-            for m in risers:
+            if search is None:
+                log.warning(json.dumps({"event": "web_news_off", "reason": "EXA_API_KEY 가 없어 미국 보도를 국내 수집 기사로 대신합니다."},
+                                       ensure_ascii=False))
+            report["newsFallback"], errors, asked = [], 0, [m for m in risers if may_open(m)]
+            for m in asked:
                 try:
                     web[m.code] = search(m, since) if search else []
                 except Exception as error:  # noqa: BLE001 - 웹 장애는 그 종목만 국내 수집 기사로 대신한다(판정은 계속)
-                    web[m.code] = []
+                    web[m.code], errors = [], errors + 1
                     log.warning(json.dumps({"event": "web_news_failed", "code": m.code, "error": str(error)[:200]}, ensure_ascii=False))
                 if not web[m.code]:
                     report["newsFallback"].append(m.code)
+            if asked and errors == len(asked):  # 웹 전면 장애는 실패로 남긴다(국내 기사로 판정은 하되 성공으로 끝내지 않는다)
+                report["failed"].append("web-news")
         arts = {m.code: [] if web.get(m.code) else _articles(texts, m.name) for m in risers}
-        news_at = {w["id"]: w.get("publishedDate") for ws_ in web.values() for w in ws_}
-        # 다시 열지 않는 공시: 국내 거래소 시장경보, 미국 일상 서류(임원 매매 Form 4·5% 미만 보고 13G 등 — 급등주에 수시로 붙는다)
-        evidence = {m.code: {"filings": sorted(f["acptno"] for f in filings[m.code] or [] if not is_market_warning(f) and not (market is US and is_routine(f))),
+        # 보도 발행 시각(미국 재조사 판단용): 웹은 원문 메타데이터(UTC), 빅카인즈는 한국 시각
+        news_at = {w["id"]: w.get("publishedDate") for ws_ in web.values() for w in ws_} | \
+            {a.id: a.published.replace(" ", "T") + "+09:00" for a_ in arts.values() for a in a_ if len(a.published) >= 16}
+        evidence = {m.code: {"filings": filed[m.code],
                              "news": sorted(w["id"] for w in web[m.code]) if web.get(m.code) else sorted(a.id for a in arts[m.code])}
                     for m in risers}
 
@@ -292,7 +333,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind=None, session_runner
             if set(evidence[m.code]["filings"]) - set(rec["filings"]):
                 return True
             fresh = set(evidence[m.code]["news"]) - set(rec["news"])
-            if web.get(m.code):  # 웹 검색은 매번 순서·구성이 조금씩 달라진다 — 판정 뒤에 새로 발행된 보도만 센다
+            if market is US:  # 웹 검색은 매번 구성이 조금씩 바뀌고 Exa↔빅카인즈로 출처가 바뀌기도 한다 — 판정 뒤에 새로 발행된 보도만 센다
                 fresh = {s for s in fresh if _after(news_at.get(s), rec["verdict"].get("judgedAt"))}
             return rec["verdict"]["tag"] == "pending" and bool(fresh)
         # 처음 보는 종목부터 — 한 실행의 세션 수가 정해져 있어 넘친 종목은 다음 정각에
@@ -405,6 +446,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind=None, session_runner
     store.put(f"runs/{today}/{run_id}.json", _json(report))
     log.info(json.dumps({"event": "movers_end", "runId": run_id, "movers": len(report["movers"]), "judged": len(report["judged"]),
                          "failed": report["failed"], "premises": sum("premise" in j for j in report["judged"]),
+                         **({"newsFallback": len(report["newsFallback"])} if "newsFallback" in report else {}),
                          "cost": round(sum((u or {}).get("cost", 0) for j in report["judged"]
                                            for u in (j.get("usage"), (j.get("premise") or {}).get("usage"))), 4)},
                         ensure_ascii=False))

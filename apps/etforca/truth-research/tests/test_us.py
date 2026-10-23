@@ -189,13 +189,20 @@ def test_exa_news_drops_pages_outside_the_window(monkeypatch):
 
     def post(self, path, body):
         sent.update(body)
-        return {"results": [{"url": "https://a.com/new", "title": "n", "publishedDate": "2026-10-22T10:00:00.000Z", "text": "x"},
-                            {"url": "https://a.com/old", "title": "o", "publishedDate": "2017-05-23T00:00:00.000Z", "text": "x"},
-                            {"url": "https://a.com/nodate", "title": "d", "text": "x"},
+        about = "Tantech (NASDAQ:TANH) shares jumped"
+        return {"results": [{"url": "https://a.com/mid", "title": "m", "publishedDate": "2026-10-20T10:00:00.000Z", "text": about},
+                            {"url": "https://a.com/new", "title": "n", "publishedDate": "2026-10-22T10:00:00.000Z", "text": about},
+                            {"url": "https://a.com/old", "title": "o", "publishedDate": "2017-05-23T00:00:00.000Z", "text": about},
+                            {"url": "https://a.com/nodate", "title": "Tantech Holdings wins order", "text": "x"},
+                            {"url": "https://a.com/other", "title": "Other Corp", "publishedDate": "2026-10-22T11:00:00.000Z",
+                             "text": "Other Corp (NYSE:OTH) rose"},
                             {"url": "https://a.com/empty", "title": "e", "publishedDate": "2026-10-21T00:00:00.000Z", "text": ""}]}
     monkeypatch.setattr(web_mod.Exa, "_post", post)
-    got = research.exa_news("k", _m("TANH", "탄테크 홀딩스", 181.8), "2026-10-08")
-    assert [w["url"] for w in got] == ["https://a.com/new", "https://a.com/nodate"] and all(w["full"] for w in got)  # 최신순, 날짜 모름은 뒤
+    mover = Mover(code="TANH", name="탄테크 홀딩스", market="NASDAQ", price=24.83, prev_close=8.81, change_pct=181.8, trade_value=50.9,
+                  name_eng="Tantech Holdings Ltd")
+    got = research.exa_news("k", mover, "2026-10-08")
+    # 최신순(입력 순서와 다르게), 날짜 모름은 뒤. 다른 회사 글은 버린다 — 하나라도 남으면 빅카인즈 대신을 막아 엉뚱한 보도만 싣게 된다
+    assert [w["url"] for w in got] == ["https://a.com/new", "https://a.com/mid", "https://a.com/nodate"] and all(w["full"] for w in got)
     assert sent["startPublishedDate"] == "2026-10-08T00:00:00.000Z" and sent["category"] == "news"
 
 
@@ -228,6 +235,34 @@ def test_us_pending_reopens_only_for_web_news_published_after_the_verdict(cfg):
     newer = first + [_web("https://www.reuters.com/newer", "2026-10-22T16:10:00.000Z")]  # 판정 뒤 발행
     _run(cfg, src, again, web_news=lambda m, s: newer, now=NOW + timedelta(hours=2))
     assert len(again.seen) == 1
+
+
+def test_us_pending_does_not_reopen_when_the_news_source_switches(cfg):
+    # Exa 가 한 번 막혀 빅카인즈로 대신하면 기사 id 가 통째로 달라진다 — 그것을 '새 보도'로 세면 Exa 가 흔들릴 때마다 보류가 매시 다시 열린다
+    _seed_korean_news(cfg)  # 22:10 KST = 09:10 EDT 발행 — 판정(11:35 EDT) 전
+    src = FakeQuotes({"NASDAQ": [_m("TANH", "탄테크 홀딩스", 181.8)]})
+    _run(cfg, src, _reading("pending"), web_news=lambda m, s: [_web("https://www.globenewswire.com/a")])
+    again = _reading("pending")
+    report = _run(cfg, src, again, web_news=_fail, now=NOW + timedelta(hours=1))
+    assert again.seen == [] and report["newsFallback"] == ["TANH"] and "web-news" in report["failed"]  # 전면 장애는 실패로 드러낸다
+
+
+def test_us_web_news_times_are_shown_in_new_york_time(cfg):
+    # 첫 메시지는 '시각은 뉴욕 현지'라고 한다 — UTC 를 그대로 자르면 13:00Z(=09:00 EDT) 기사가 13:00 으로 보여 급등 전후가 뒤집힌다
+    runner = _reading()
+    _run(cfg, FakeQuotes({"NASDAQ": [_m("TANH", "탄테크 홀딩스", 181.8)]}), runner,
+         web_news=lambda m, s: [_web("https://www.reuters.com/b", "2026-10-22T13:00:00.000Z") | {"title": "Tantech\nsoars"}])
+    line = next(x for x in runner.seen[0]["prompt"].splitlines() if x.startswith("- web-"))
+    assert "| 2026-10-22 09:00 |" in line and line.endswith("Tantech soars")
+
+
+def test_us_searches_news_only_for_movers_that_can_get_a_session(cfg):
+    # 확정 판정은 보도로 다시 열지 않으니 검색해도 쓰이지 않는다 — 매 실행 15종목 검색은 비용만 든다(매분 감시는 6분마다 실행을 띄운다)
+    src = FakeQuotes({"NASDAQ": [_m("TANH", "탄테크 홀딩스", 181.8), _m("XLAB", "엑사스케일", 73.2)]})
+    _run(cfg, src, _judging({"TANH": "false", "XLAB": "pending"}), web_news=lambda m, s: [])
+    asked = []
+    _run(cfg, src, _judging({"XLAB": "pending"}), web_news=lambda m, s: asked.append(m.code) or [], now=NOW + timedelta(hours=1))
+    assert asked == ["XLAB"]  # 허위로 확정된 TANH 는 찾지 않는다(새 공시가 나오면 그때 다시 찾는다)
 
 
 def test_kr_runs_never_call_exa(cfg):
