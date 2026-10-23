@@ -580,7 +580,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             if not execution_rejection and all(row['candidate_id'] in execution_failures for row in optimizer.result['candidates']):
                                 execution_rejection = execution_failures[optimizer.result['candidates'][0]['candidate_id']]
                             blocked = any(check['status'] not in {'pass', 'model_review'} and check.get('reason') != 'NO_ALLOCATION_SELECTED' for check in checks)
-                            published['optimization']['reason'] = 'EXECUTION_INFEASIBLE' if execution_rejection else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RATING_BELOW_MINIMUM' if final.withheld_reason == 'quality_failed' else 'RECOMMENDATION_WITHHELD'
+                            published['optimization']['reason'] = 'EXECUTION_INFEASIBLE' if execution_rejection else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RECOMMENDATION_WITHHELD'
                             if execution_rejection:
                                 published['execution_rejection'] = execution_rejection
                         validation_step = 'report_enrichment'

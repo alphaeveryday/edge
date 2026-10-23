@@ -52,12 +52,11 @@ def test_recommended_rating_is_required():
         FinalReport.model_validate(raw)
 
 
-def test_recommendation_scores_stay_between_four_and_five_but_vary():
-    # AI가 직접 고른 추천 구성은 4점 아래로 보여 주지 않는다. 4~5점 안의 차등은 그대로 살린다.
+def test_recommendation_below_four_is_published_not_blocked():
+    # 4~5점은 프롬프트 지침일 뿐이다. 모델이 4점 아래로 매겨도 서버가 막으면 고객은 추천을 못 받는다(8차 결정)
     raw = final_payload()
     raw['recommendation']['evaluation']['scores'] = {'leadership': 3, 'profitability': 3.5, 'stability': 4.5}
-    with pytest.raises(ValueError, match='RECOMMENDED_SCORE_BELOW_FOUR'):
-        FinalReport.model_validate(raw)
+    assert publish(raw)['recommendation']['evaluation']['overall'] == 3.7
     for scores, overall in (({'leadership': 4, 'profitability': 4, 'stability': 4}, 4),
                             ({'leadership': 5, 'profitability': 4.5, 'stability': 3.5}, 4.3),
                             ({'leadership': 5, 'profitability': 5, 'stability': 5}, 5)):

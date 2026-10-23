@@ -371,8 +371,9 @@ async def test_execution_rejection_is_not_misreported_as_a_low_rating(monkeypatc
                         'arguments': json.dumps({'allocations': [{'instrument_id': 'KR:069500', 'account': '일반 계좌', 'weight_pct': 100}]})}}]}}]}
             content['recommendation']['allocations'] = [{'instrument_id': 'KR:069500', 'account': 'ISA', 'weight_pct': 100}]
             content['selected_candidate_id'] = 'candidate-1'
-            if repairs:
+            if repairs and repairs[-1] != 1:
                 assert ('ready' if feasible_retry else 'EXECUTION_INFEASIBLE') in payload['messages'][-1]['content']
+            if repairs:
                 content['recommendation'] = None
                 content['selected_candidate_id'] = None
                 if feasible_retry:
@@ -383,9 +384,12 @@ async def test_execution_rejection_is_not_misreported_as_a_low_rating(monkeypatc
         'residence': '대한민국 거주자', 'age': '19~54세', 'income': '확인 필요', 'financial_income_tax': '확인 필요',
         'accounts': [{'account': 'ISA', 'opened': '2020-01-01', 'remaining_man': '0'}]}})
     result = await run_analysis(req, 'test-only', phases.append, model_call=model, evidence=Evidence())
-    assert len(repairs) == (3 if feasible_retry else 4), 'Execution failure still receives recovery after two search batches'
+    # 실행 실패도 두 검색 묶음 뒤 복구 기회를 받는다. 실행 가능한 재시도 뒤의 보류는 점수 탓이 아니므로
+    # 통과 후보의 조사 공백을 채우라는 요청을 더 받는다(점수 보류만 조사를 면제하던 길은 8차에서 없앴다)
+    assert len(repairs) == (5 if feasible_retry else 4)
     assert result['recommendation'] is None
-    assert result['optimization']['reason'] == ('RATING_BELOW_MINIMUM' if feasible_retry else 'EXECUTION_INFEASIBLE')
+    # 점수는 보류 까닭이 아니다(8차). 남은 보류는 실행 불가와 일반 보류뿐이다
+    assert result['optimization']['reason'] == ('RECOMMENDATION_WITHHELD' if feasible_retry else 'EXECUTION_INFEASIBLE')
     if feasible_retry:
         assert 'execution_rejection' not in result
         execution_events = [event for event in result['diagnostics']['events'] if event['event'] == 'tool_finished' and event['tool'] == 'calculate_rebalance']
