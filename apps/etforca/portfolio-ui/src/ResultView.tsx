@@ -235,6 +235,11 @@ function analysisItems(report: Report, kind: Kind | null): Item[] {
   const reason = current?.reason?.paragraphs?.length ? current.reason : s.portfolio;
   const items: Item[] = [
     { title: Number.isFinite(current?.overall) && kind !== 'start' ? `왜 ${score(current!.overall!)}점이에요?` : '지금 구성은 어때요?', ...section(reason) },
+    // 옛 보고서의 질문별 답: 맨 위 답 칸에 쓴 첫 답을 뺀 나머지 질문과 남은 확인 사항을 그대로 남긴다.
+    ...(report.completion?.tasks ?? []).filter(t => t.answer?.trim() || t.missing?.length).filter(t => t !== report.completion!.tasks.find(x => x.answer)).map(t => ({
+      title: clean(t.question) || '물어보신 것', paragraphs: [sentence(t.answer || '') || '이 질문에 답하기 위한 확인이 남아 있어요.'], evidence: [],
+      // 'ACCOUNT_…' 같은 내부 코드는 고객에게 보이지 않는다.
+      limitations: (t.missing ?? []).filter(m => !/^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+/.test(m)).map(sentence).filter(Boolean) })),
     { title: kind === 'start' ? '왜 이렇게 골랐어요?' : kind === 'keep' ? '왜 그대로 둬도 돼요?' : '왜 이렇게 바꿔요?', ...section(plan?.evaluation?.reason) },
     { title: '지금 무엇부터 하면 돼요?', ...section(s.opinion) },
     { title: '앞으로는 어떻게 될까요?', ...section(s.outlook) },

@@ -123,6 +123,20 @@ test('an old report without verdict fields still answers, recommends and compare
   await expect(page.locator('[data-analytics-section=ask] .r8-ask-row')).toHaveCount(4);
 });
 
+test('an old report with several questions keeps every answer', async ({ page }) => {
+  // 예전 결과는 질문마다 답을 보였다. 맨 위 답 칸에는 첫 답만 들어가므로 나머지는 오르카의 분석에 남아야 한다.
+  await open(page, { ...base(), completion: { status: 'partial', missing_inputs: [], missing_research: [], tasks: [
+    { question: '첫 질문은요?', status: 'answered', answer: '첫 답이에요.', missing: [] },
+    { question: '두 번째 질문은요?', status: 'answered', answer: '두 번째 답이에요.', missing: [] },
+    { question: '세 번째 질문은요?', status: 'partial', answer: '', missing: ['ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED:ISA', '남은 납입 한도를 알려 주세요.'] }] } });
+  await expect(page.locator('.r8-answer')).toHaveText('첫 답이에요.');
+  const analysis = page.locator('[data-analytics-section=analysis]');
+  await expect(analysis.locator('h3')).toContainText(['두 번째 질문은요?', '세 번째 질문은요?']);
+  await expect(analysis).toContainText('두 번째 답이에요.');
+  await expect(analysis).not.toContainText('첫 답이에요.');
+  await expect(analysis).not.toContainText('ACCOUNT_CONTRIBUTION');
+});
+
 test('new server fields take priority over the fallbacks', async ({ page }) => {
   const result = { ...base(), verdict: { kind: 'one', headline: '하나만 바꾸면 돼요' }, answer: '반도체 ETF 250만 원만 옮기세요. 지난 3년이었다면 287만 원을 더 벌었어요.',
     constraint_results: [{ kind: 'no_leverage', status: 'kept', note: '' }, { kind: 'no_sell', status: 'substituted', note: '월 납입으로 줄여요' }],
