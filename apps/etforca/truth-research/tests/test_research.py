@@ -467,3 +467,26 @@ def test_watch_stops_at_the_regular_session_close(cfg):
     src, launched = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), []
     assert "정규장" in _watch(cfg, src, now=NOW.replace(hour=15, minute=30), launched=launched)["skipped"]
     assert _watch(cfg, src, now=NOW.replace(hour=15, minute=19), launched=launched)["launched"] and len(launched) == 1
+
+
+def test_each_verdict_is_kept_as_a_chart_mark_with_the_price_seen_then(cfg):
+    # 그래프에 판정 시점마다 점을 찍는다 — 판정이 뒤집혀도 앞 판정의 시각·가격이 남아야 언제 무엇으로 봤는지 보인다.
+    _seed_news(cfg)
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
+    _run(cfg, src, _judging({"900010": "pending"}))
+    _run(cfg, src, _judging({"900010": "false"}), kind=FakeKind(extra=["20261022000099"]), now=NOW + timedelta(hours=1))
+    marks = _latest(cfg)["items"][0]["marks"]
+    assert marks == [{"at": "11:35", "tag": "pending", "price": 1300.0}, {"at": "12:35", "tag": "false", "price": 1300.0}]
+
+
+def test_marks_start_from_the_last_verdict_saved_before_history_existed(cfg):
+    # 이력을 남기기 전 판정(배포 당일 상태)도 점 하나로 보인다. 가격을 모르니 null — 화면이 그 시각 시세로 찍는다.
+    _seed_news(cfg)
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
+    _run(cfg, src, _judging({"900010": "promising"}))
+    key = "state/movers-seen/2026-10-22.json"
+    seen = json.loads(LocalStore(cfg.store).get(key)[0])
+    del seen["900010"]["history"]
+    LocalStore(cfg.store).put(key, json.dumps(seen).encode())
+    _run(cfg, src, _judging({}), now=NOW + timedelta(hours=1))
+    assert _latest(cfg)["items"][0]["marks"] == [{"at": "11:35", "tag": "promising", "price": None}]

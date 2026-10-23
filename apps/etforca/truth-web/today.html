@@ -83,7 +83,14 @@ body{overflow-y:auto}
 .pct{flex:none;font-size:22px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums;border-radius:6px;padding:0 4px;margin-right:-4px}
 .up{color:var(--up)}.down{color:var(--down)}
 .spark{margin-top:18px}
-.spark svg{display:block;width:100%;height:96px;overflow:visible}
+.plot{position:relative}
+.plot svg{display:block;width:100%;height:96px;overflow:visible}
+/* 판정 시점: 그때 가격에 점. 그래프가 가로로 늘어나도 원이 찌그러지지 않게 SVG 밖 HTML 로 얹는다 */
+.mk{position:absolute;width:11px;height:11px;margin:-5.5px 0 0 -5.5px;border-radius:50%;box-shadow:0 0 0 2px var(--bg)}
+.m-false{background:var(--warn)}.m-promising{background:var(--ok)}.m-pending{background:#c7c7cc}
+.marks{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:8px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.marks span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.marks i{width:8px;height:8px;border-radius:50%}
 .ax{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--faint);margin-top:6px;font-variant-numeric:tabular-nums}
 .nochart{height:96px;display:grid;place-items:center;font-size:12.5px;color:var(--faint);border:1px dashed var(--line);border-radius:12px}
 .px{margin-top:12px;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
@@ -107,7 +114,7 @@ summary::-webkit-details-marker{display:none}
 summary:hover{color:var(--text)}
 summary svg{width:12px;height:12px;transition:transform .2s cubic-bezier(.2,.8,.2,1)}
 details[open] summary svg{transform:rotate(90deg)}
-.more{display:grid;gap:14px;padding-top:12px;max-width:68ch}
+.more{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;padding-top:12px;max-width:68ch}
 .more h3{font-size:12px;font-weight:600;color:var(--faint)}
 .more p,.more li{font-size:14px;line-height:1.65;color:rgba(245,245,247,.82)}
 .more p{margin-top:4px}
@@ -116,7 +123,8 @@ details[open] summary svg{transform:rotate(90deg)}
 .srcs a{display:flex;align-items:baseline;gap:8px;padding:5px 0;font-size:13.5px;color:var(--muted);min-width:0}
 .srcs a:hover{color:var(--text)}
 .srcs a em{flex:none;font-style:normal;font-size:12px;color:var(--faint);width:28px}
-.srcs a span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srcs a span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srcs time{flex:none;font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
 .srcs svg{flex:none;width:11px;height:11px;align-self:center}
 .impact b{color:var(--warn-text);font-variant-numeric:tabular-nums}
 
@@ -224,6 +232,12 @@ const CHEVRON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stro
 const todayKst = () => new Intl.DateTimeFormat('en-CA', {timeZone: 'Asia/Seoul'}).format(new Date());
 const hhmm = s => (/T(\d{2}:\d{2})/.exec(s || '') || [])[1] || '';
 const md = d => `${+d.slice(5, 7)}월 ${+d.slice(8, 10)}일`;
+// 출처 날짜: 올해면 '10월 22일', 아니면 연도까지. 게시일이 없는 페이지(종목 정보 페이지 등)는 판정하며 본 날을 '확인'으로 적는다
+const pubDate = v => {
+  const d = (v || '').slice(0, 10), day = state.doc?.date || '';
+  if (!DATE_RE.test(d)) return DATE_RE.test(day) ? `<time datetime="${day}" title="게시일이 없는 페이지라 확인한 날을 적었습니다">${md(day)} 확인</time>` : '';
+  return `<time datetime="${d}">${d.slice(0, 4) === day.slice(0, 4) ? md(d) : `${d.slice(0, 4)}년 ${md(d)}`}</time>`;
+};
 const dayLabel = d => `${+d.slice(5, 7)}.${+d.slice(8, 10)} ${'일월화수목금토'[new Date(d + 'T00:00:00Z').getUTCDay()]}`;  // 날짜만 보므로 UTC 로 요일을 센다
 const signed = (v, n = 2) => `${v > 0 ? '+' : ''}${v.toFixed(n)}%`;
 const krw = v => `${Math.round(v).toLocaleString("ko-KR")}원`;  // common.js 의 won 은 억 단위라 따로 둔다
@@ -233,23 +247,38 @@ const hue = code => (Math.imul([...code].reduce((h, c) => (h * 31 + c.charCodeAt
 const logo = it => `<span class="logo-c" style="background:hsl(${hue(it.code)} 42% 36%)" aria-hidden="true">${esc([...it.name][0])}${
   LOGO_RE.test(it.logo || '') ? `<img src="${esc(it.logo)}" alt="" loading="lazy" onerror="this.remove()">` : ''}</span>`;
 
-// 장중 5분 시세 + 전일 종가 점선. 가로는 시각(분), 세로는 가격. 상승 빨강 · 하락 파랑
+// 판정 이력: 판정 시각과 그때 본 가격. 가격이 없으면(이력 전 판정) 그 시각까지의 마지막 시세로 찍는다.
+// 이력이 없는 지난 기록은 마지막 판정 하나를 쓴다
+const HM = /^\d{2}:\d{2}$/;
+function marksOf(it, s){
+  const raw = Array.isArray(it.marks) ? it.marks : it.judgedAt ? [{at: hhmm(it.judgedAt), tag: it.tag, price: null}] : [];
+  return raw.filter(m => m && HM.test(m.at) && isTag(m.tag)).map(m => {
+    const price = Number.isFinite(m.price) && m.price > 0 ? m.price : (s.findLast(p => p[0] <= m.at) || s[0] || [])[1];
+    return Number.isFinite(price) ? {at: m.at, tag: m.tag, price} : null;
+  }).filter(Boolean);
+}
+
+// 장중 5분 시세 + 전일 종가 점선 + 판정 시점의 점. 가로는 시각(분), 세로는 가격. 상승 빨강 · 하락 파랑
 function chart(it){
-  const s = (it.series || []).filter(p => Array.isArray(p) && /^\d{2}:\d{2}$/.test(p[0]) && Number.isFinite(p[1]));
+  const s = (it.series || []).filter(p => Array.isArray(p) && HM.test(p[0]) && Number.isFinite(p[1]));
   if (s.length < 2) return '<div class="nochart">장중 시세가 아직 없습니다</div>';
   const W = 300, H = 96, min = t => +t.slice(0, 2) * 60 + +t.slice(3);
-  const t0 = min(s[0][0]), t1 = Math.max(t0 + 1, min(s.at(-1)[0]));
-  const ps = s.map(p => p[1]), lo = Math.min(it.prevClose, ...ps), hi = Math.max(it.prevClose, ...ps), pad = (hi - lo) * .08 || 1;
+  const mk = marksOf(it, s), ts = [...s.map(p => min(p[0])), ...mk.map(m => min(m.at))];  // 시세(약 20분 지연)보다 늦은 판정도 담는다
+  const t0 = Math.min(...ts), t1 = Math.max(t0 + 1, ...ts), hm = t => `${String(t / 60 | 0).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+  const ps = [...s.map(p => p[1]), ...mk.map(m => m.price)], lo = Math.min(it.prevClose, ...ps), hi = Math.max(it.prevClose, ...ps), pad = (hi - lo) * .08 || 1;
   const x = t => ((min(t) - t0) / (t1 - t0) * W).toFixed(1), y = v => ((hi + pad - v) / (hi - lo + 2 * pad) * H).toFixed(1);
   const line = s.map((p, i) => `${i ? 'L' : 'M'}${x(p[0])},${y(p[1])}`).join('');
   const col = it.changePct >= 0 ? 'var(--up)' : 'var(--down)', base = y(it.prevClose);
-  return `
-    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(it.name)} 장중 시세, ${s[0][0]}부터 ${s.at(-1)[0]}까지. 점선은 전일 종가">
-      <path d="${line}L${W},${H}L0,${H}Z" fill="${col}" fill-opacity=".1"/>
+  const label = m => `${m.at} ${TAGS[m.tag]} 판정 · ${krw(m.price)}`;
+  const dots = mk.map(m => `<span class="mk m-${m.tag}" style="left:${x(m.at) / W * 100}%;top:${y(m.price)}px" title="${esc(label(m))}"></span>`).join('');
+  return `<div class="plot">
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(it.name)} 장중 시세, ${s[0][0]}부터 ${s.at(-1)[0]}까지. 점선은 전일 종가${mk.length ? `. 판정 시점 ${mk.map(label).join(', ')}` : ''}">
+      <path d="${line}L${x(s.at(-1)[0])},${H}L${x(s[0][0])},${H}Z" fill="${col}" fill-opacity=".1"/>
       <line x1="0" x2="${W}" y1="${base}" y2="${base}" stroke="rgba(255,255,255,.4)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
       <path d="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
-    </svg>
-    <div class="ax"><span>${s[0][0]}</span><span>점선 전일 종가</span><span>${s.at(-1)[0]}</span></div>`;
+    </svg>${dots}</div>
+    <div class="ax"><span>${hm(t0)}</span><span>점선 전일 종가</span><span>${hm(t1)}</span></div>
+    ${mk.length ? `<div class="marks" aria-hidden="true">${mk.map(m => `<span><i class="m-${m.tag}"></i>${esc(label(m))}</span>`).join('')}</div>` : ''}`;
 }
 
 const isTag = t => Object.hasOwn(TAGS, t);
@@ -364,7 +393,7 @@ const card = (it, rank) => {
     it.claim && `<div><h3>내세운 주장</h3><p>${esc(it.claim)}</p></div>`,
     it.reasons?.length && `<div><h3>판단 근거</h3><ul>${it.reasons.slice(0, 3).map(r => `<li>${esc(r)}</li>`).join('')}</ul></div>`,
     it.sources?.length && `<div><h3>출처 ${it.sources.length}</h3><div class="srcs">${it.sources.map(s => `<a ${ext(s.url)} title="${esc(s.title)}">
-      <em>${esc(SOURCE_KINDS[s.kind] || s.kind)}</em><span>${esc(s.publisher)} · ${esc(s.title)}</span>${ARROW}</a>`).join('')}</div></div>`,
+      <em>${esc(SOURCE_KINDS[s.kind] || s.kind)}</em><span>${esc(s.publisher)} · ${esc(s.title)}</span>${pubDate(s.publishedAt)}${ARROW}</a>`).join('')}</div></div>`,
     tag === 'false' && it.impact > 0 && `<p class="impact">되돌림 예상 폭 <b>약 ${it.impact.toFixed(1)}%</b>. 상승률에 확신도를 곱한 근사값으로, 순서를 정할 때만 씁니다.</p>`,
   ].filter(Boolean);
   return `

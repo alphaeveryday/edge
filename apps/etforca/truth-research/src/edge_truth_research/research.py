@@ -35,6 +35,7 @@ MAX_MOVERS = 15         # 화면에 싣는 종목 수
 NEW_SESSIONS = 5        # 한 실행에서 새로 판정하는 종목 수(나머지는 다음 정각에)
 WATCH_SESSIONS = 3      # 감시가 띄운 '새 종목만' 실행의 세션 수 — 한 묶음(PARALLEL)으로 끝낸다
 HOURLY_GUARD = range(27, 38)  # '새 종목만' 실행은 이 분에 세션을 열지 않는다 — 세션(최대 7분)이 :35 정각 조사의 잠금과 겹친다
+MAX_MARKS = 12          # 그래프에 찍는 판정 이력 수(최근 것만)
 PARALLEL = 3            # 판정 세션 동시 실행 — 5종목 × 세션 7분 이내가 잠금(55분) 안에 든다
 FILING_DAYS = 14        # 판정 세션에 넘기는 최근 공시 기간
 NEWS_LIMIT = 15
@@ -98,6 +99,14 @@ def finish_doc(doc: dict) -> bytes:
 def _pending(reason: str) -> dict:
     return {"tag": "pending", "confidence": 0.0, "event": {"title": "급등 사건 확인 전", "kind": "unknown", "at": None},
             "claim": "", "finding": reason, "reasons": [reason], "sources": []}
+
+
+def _marks(rec: dict) -> list[dict]:
+    """판정 이력(그래프의 점). 이력을 남기기 전 상태는 마지막 판정 하나로 본다(가격 모름 → 화면이 그 시각 시세로 찍는다)."""
+    if "history" in rec:
+        return rec["history"]
+    v = rec["verdict"]
+    return [{"tag": v["tag"], "at": v["judgedAt"], "price": None}]
 
 
 def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None, session_runner=session.run,
@@ -202,12 +211,14 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
             table = {"ach": state.get("ach"), "decision": state.get("achDecision")}
             return m.code, (state.get("moverVerdict") if result.done else None), table, result
 
+        price_now = {m.code: m.price for m in risers}  # 판정 세션에 보여 준 가격 — 그래프에 판정 시점의 점으로 찍는다
         with ThreadPoolExecutor(max_workers=PARALLEL) as pool:
             for code, verdict, table, result in pool.map(judge, targets):
                 report["judged"].append({"code": code, "done": result.done, "error": result.error, "usage": result.usage})
                 if verdict:
                     # ACH 표는 비공개 상태에만 둔다(감사용) — 화면에는 판정·글·출처만 나간다
-                    seen[code] = evidence[code] | {"verdict": verdict | {"judgedAt": now.isoformat()}} | table
+                    history = (_marks(seen[code]) if code in seen else []) + [{"tag": verdict["tag"], "at": now.isoformat(), "price": price_now[code]}]
+                    seen[code] = evidence[code] | {"verdict": verdict | {"judgedAt": now.isoformat()}, "history": history[-MAX_MARKS:]} | table
                 else:
                     report["failed"].append(code)
 
@@ -215,7 +226,8 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
         items = []
         for m in risers:
             if m.code in seen:  # 이번 또는 오늘 앞선 판정(시세만 새로)
-                judged = seen[m.code]["verdict"]
+                judged = seen[m.code]["verdict"] | {"marks": [{"at": h["at"][11:16], "tag": h["tag"], "price": h["price"]}
+                                                              for h in _marks(seen[m.code])]}
             elif filings[m.code] is None:
                 judged = _pending("공시를 조회하지 못해 판정을 미룹니다.") | {"judgedAt": None}
             else:
