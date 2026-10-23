@@ -1,76 +1,118 @@
 import { test, expect } from '@playwright/test';
-import { addCash, openRequest } from './holdings';
+import { addCash, addHolding, startInput, toAsk } from './holdings';
 
 test('unit changes preserve independent amounts and percentages through refresh', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
   await addCash(page, '345');
-  await page.getByRole('button', { name: '비율', exact: true }).click();
-  await page.getByLabel('현금 비율', { exact: true }).fill('100');
+  await page.getByRole('button', { name: '비중', exact: true }).click();
+  await page.getByLabel('현금 비중', { exact: true }).fill('100');
+  await page.locator('#total').fill('80');
   await page.reload();
-  await expect(page.getByLabel('현금 비율', { exact: true })).toHaveValue('100');
+  await expect(page.getByLabel('현금 비중', { exact: true })).toHaveValue('100');
+  await expect(page.locator('#total')).toHaveValue('80');
   await page.getByRole('button', { name: '금액', exact: true }).click();
   await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('345');
-  await page.getByRole('button', { name: '비율', exact: true }).click();
-  await expect(page.getByLabel('현금 비율', { exact: true })).toHaveValue('100');
+  await page.getByRole('button', { name: '비중', exact: true }).click();
+  await expect(page.getByLabel('현금 비중', { exact: true })).toHaveValue('100');
 });
 
 test('refresh resumes the current step and preview reset cannot erase a customer draft', async ({ page }) => {
   await page.addInitScript(() => sessionStorage.setItem('edge-portfolio-form-v2', 'customer draft'));
   await page.goto('/portfolio/?preview=input');
-  await addCash(page);
-  await openRequest(page);
-  await page.getByLabel('요청사항', { exact: true }).fill('반도체 테마 유지');
+  await addCash(page, '777');
   await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '매달 꾸준히', exact: true }).click();
-  await page.getByLabel('추가 투자금액').fill('50');
+  await page.getByRole('button', { name: '50만', exact: true }).click();
   await page.reload();
-  await expect(page.getByLabel('추가 투자금액')).toHaveValue('50');
-  await expect(page.getByLabel('전체 5단계 중 2단계')).toBeVisible();
-  await page.getByRole('button', { name: '앞 질문으로' }).click();
-  await expect(page.getByLabel('요청사항', { exact: true })).toHaveValue('반도체 테마 유지');
+  await expect(page.getByRole('progressbar', { name: '3단계 중 2단계 앞으로의 계획' })).toBeVisible();
+  await expect(page.getByLabel('매달 넣을 돈(만 원)')).toHaveValue('50');
+  await page.getByRole('button', { name: '앞 단계로' }).click();
+  await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('777');
   await page.getByRole('button', { name: '테스트 초기화' }).click();
-  await expect(page.getByLabel('요청사항', { exact: true })).toHaveValue('');
+  await expect(page.getByRole('button', { name: '내 포트폴리오 넣기' })).toBeVisible();
   expect(await page.evaluate(() => sessionStorage.getItem('edge-portfolio-form-v2'))).toBe('customer draft');
 });
 
-test('cancelling optional tax details never makes them a prerequisite', async ({ page }) => {
+// 고른 계좌를 다시 빼면 그 계좌의 확인 질문도 조건에서 빠진다(답하지 않은 질문이 남아 막지 않는다).
+test('an account chosen and then removed leaves no pending eligibility question', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
   await addCash(page);
-  await page.locator('.tax-trigger').click();
-  await page.getByRole('radio', { name: '대한민국 거주자', exact: true }).check();
-  await page.keyboard.press('Escape');
   await page.getByRole('button', { name: '다음', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '어떻게 투자할 계획인가요?' })).toBeVisible();
-  await expect(page.locator('.step')).toBeFocused();
+  await expect(page.locator('.fl-step')).toBeFocused();
+  await page.getByRole('button', { name: '안 넣어요', exact: true }).click();
+  await page.getByRole('button', { name: /^3년 안/ }).click();
+  await page.getByRole('button', { name: /^ISA/ }).click();
+  await expect(page.getByRole('button', { name: '다음', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: /^ISA/ }).click();
+  await expect(page.getByRole('group', { name: '국내에 살고 있나요?' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '다음', exact: true })).toBeEnabled();
 });
 
 test('duplicate ETF selection explains rejection and keeps the search for correction', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
   await addCash(page);
-  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' });
-  await search.fill('현금');
-  await page.getByRole('option', { name: '현금 원화 현금' }).click();
+  const search = page.getByRole('searchbox', { name: '종목 이름이나 코드로 찾기' });
+  await addHolding(page, '현금', '현금');
   await expect(page.getByRole('alert')).toContainText('이미 담은 종목');
   await expect(search).toHaveValue('현금');
-  await expect(page.locator('.rows .row')).toHaveCount(1);
+  await expect(page.locator('.fl-hold')).toHaveCount(1);
 });
 
-test('removing an account with holdings can be cancelled without losing its values', async ({ page }) => {
+// 계좌 바꾸기는 그 계좌의 종목을 통째로 옮기되, 옮길 수 없는 계좌(미국 상장 → ISA)는 고를 수 없다. 금액은 그대로다.
+test('moving an account group keeps the values and refuses accounts the holdings cannot be in', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
-  await page.getByRole('button', { name: '+ISA', exact: true }).click();
-  await page.getByRole('combobox', { name: 'ISA에 담은 종목 찾기' }).fill('VOO');
-  await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
-  await page.getByLabel('Vanguard S&P 500 ETF 금액', { exact: true }).fill('200');
-  await page.getByRole('button', { name: 'ISA 지우기' }).click();
-  await page.getByRole('button', { name: '취소', exact: true }).click();
-  await expect(page.getByLabel('Vanguard S&P 500 ETF 금액', { exact: true })).toHaveValue('200');
+  await addHolding(page, '069500', 'KODEX 200', '200');
+  await addHolding(page, 'VOO', 'Vanguard S&P 500 ETF', '300');
+  await page.getByRole('button', { name: '일반 계좌 계좌 바꾸기' }).click();
+  const sheet = page.getByRole('dialog', { name: /어느 계좌로 옮길까요/ });
+  await expect(sheet.getByRole('button', { name: /^ISA/ })).toBeDisabled();
+  // 키보드 없이(터치) 닫을 수 있어야 한다.
+  await sheet.getByRole('button', { name: '계좌 고르기 닫기' }).click();
+  await expect(sheet).toBeHidden();
+  await page.getByRole('button', { name: 'Vanguard S&P 500 ETF 빼기' }).click();
+  await page.getByRole('button', { name: '일반 계좌 계좌 바꾸기' }).click();
+  await sheet.getByRole('button', { name: /^ISA/ }).click();
+  await sheet.getByRole('button', { name: '이 계좌로 옮기기' }).click();
+  await expect(page.locator('.fl-group')).toHaveCount(1);
+  await expect(page.locator('.fl-group')).toContainText('ISA');
+  await expect(page.getByLabel('KODEX 200 금액', { exact: true })).toHaveValue('200');
+});
+
+// 마지막 남은 계좌는 해제할 수 없다 — 계좌가 빈 초안은 옛 번들(롤백)이 통째로 버리고, 쓸 계좌 없는 분석은 없다.
+test('the last remaining account cannot be unselected', async ({ page }) => {
+  await page.goto('/portfolio/?preview=input');
+  await page.getByRole('button', { name: '아직 투자 전이에요' }).click();
+  await expect(page.getByRole('button', { name: /^일반 계좌/ })).toBeDisabled();
+  await page.getByRole('button', { name: /^연금저축/ }).click();
+  await expect(page.getByRole('button', { name: /^일반 계좌/ })).toBeEnabled();
+  await page.getByRole('button', { name: /^일반 계좌/ }).click();
+  await expect(page.getByRole('button', { name: /^연금저축/ })).toBeDisabled();
+});
+
+// 한도에 걸린 입력을 고친 뒤 처음 화면에 다녀와도 고친 값이 남는다(거절된 요청으로 되돌리지 않는다).
+test('an input edited after a limit screen keeps the edits across the start screen', async ({ page }) => {
+  await page.route('**/api/portfolio/**', route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/analyses') && route.request().method() === 'POST') return route.fulfill({ status: 429, json: { detail: 'QUEUE_FULL' } });
+    return route.fulfill({ json: path.endsWith('/catalog') ? { counts: { KR: 0, US: 0 }, instruments: [] } : path.endsWith('/latest') ? null : {} });
+  });
+  await page.goto('/portfolio/');
+  await addCash(page, '1000');
+  await toAsk(page);
+  await page.getByRole('button', { name: '분석 시작하기' }).click();
+  await expect(page.getByRole('heading', { name: /분석 요청이/ })).toBeVisible();
+  await page.getByRole('button', { name: '입력 고치기' }).click();
+  await page.getByLabel('현금 금액', { exact: true }).fill('2000');
+  await page.getByRole('button', { name: '처음 화면으로' }).click();
+  await page.getByRole('button', { name: '내 포트폴리오 넣기' }).click();
+  await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('2,000');
 });
 
 test('malformed stored form does not prevent a new analysis', async ({ page }) => {
   await page.addInitScript(() => sessionStorage.setItem('edge-preview-form-v2', '{"step":2,"holdings":null}'));
   await page.goto('/portfolio/?preview=input');
-  await expect(page.locator('.rows .row')).toHaveCount(0);
-  await expect(page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' })).toBeVisible();
+  await startInput(page);
+  await expect(page.locator('.fl-hold')).toHaveCount(0);
+  await expect(page.getByRole('searchbox', { name: '종목 이름이나 코드로 찾기' })).toBeVisible();
 });
 
 test('Escape offers to keep unsaved asset edits and saving preserves them', async ({ page }) => {
@@ -92,11 +134,16 @@ test('catalog retry keeps entered values and recovers search without refreshing'
   await page.route('**/api/portfolio/session', r => r.fulfill({ json: {} }));
   await page.route('**/api/portfolio/workbook/catalog', r => fail ? r.fulfill({ status: 503, json: {} }) : r.fulfill({ json: { counts: { KR: 0, US: 1 }, instruments: [{ id: 'US:VOO', name: 'VOO', ticker: 'VOO', code: 'VOO', market: 'US', kind: 'etf' }] } }));
   await page.goto('/portfolio/');
-  await addCash(page, '250');
+  await startInput(page);
+  // 목록을 못 받아도 많이 담는 종목·현금은 바로 담을 수 있다.
+  await expect(page.getByText('종목 목록을 불러오지 못했어요')).toBeVisible();
+  await page.getByRole('button', { name: '현금 담기', exact: true }).click();
+  await page.getByRole('button', { name: '이 계좌에 담기' }).click();
+  await page.getByLabel('현금 금액', { exact: true }).fill('250');
   fail = false;
-  await page.getByRole('button', { name: '목록 다시 불러오기' }).click();
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).fill('VOO');
-  await expect(page.getByRole('option')).toContainText('VOO');
+  await page.getByRole('button', { name: /다시 불러오기/ }).click();
+  await page.getByRole('searchbox', { name: '종목 이름이나 코드로 찾기' }).fill('VOO');
+  await expect(page.getByRole('button', { name: 'VOO 담기' })).toBeVisible();
   await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('250');
 });
 
@@ -105,16 +152,17 @@ test('invalid numeric precision is explained before an API submission fails', as
   // Amounts copied from a brokerage app keep only their digits; percentages still reject extra precision.
   await addCash(page, '1,234,567원');
   await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('1,234,567');
-  await page.getByRole('button', { name: '비율', exact: true }).click();
-  await page.getByLabel('현금 비율', { exact: true }).fill('12.345');
+  await page.getByRole('button', { name: '비중', exact: true }).click();
+  await page.getByLabel('현금 비중', { exact: true }).fill('12.345');
   await expect(page.getByRole('button', { name: '다음', exact: true })).toBeDisabled();
   await expect(page.locator('#step-guidance')).toContainText('소수 둘째 자리');
-  await page.getByLabel('현금 비율', { exact: true }).fill('100');
+  await page.getByLabel('현금 비중', { exact: true }).fill('100');
   await expect(page.getByRole('button', { name: '다음', exact: true })).toBeEnabled();
 });
 
 test('the 20-holding limit is visible instead of silently rejecting a selection', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
+  await startInput(page);
   await page.evaluate(() => {
     const key = 'edge-preview-form-v2';
     const draft = JSON.parse(sessionStorage.getItem(key)!);
@@ -122,10 +170,10 @@ test('the 20-holding limit is visible instead of silently rejecting a selection'
     sessionStorage.setItem(key, JSON.stringify(draft));
   });
   await page.reload();
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).fill('VOO');
-  await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
+  await page.getByRole('searchbox', { name: '종목 이름이나 코드로 찾기' }).fill('VOO');
+  await page.getByRole('button', { name: 'Vanguard S&P 500 ETF 담기' }).click();
   await expect(page.getByRole('alert')).toContainText('최대 20종목');
-  await expect(page.locator('.rows .row')).toHaveCount(20);
+  await expect(page.locator('.fl-hold')).toHaveCount(20);
 });
 
 test('storage failure preserves retry identity and still reaches an accepted analysis', async ({ page }) => {
@@ -136,37 +184,21 @@ test('storage failure preserves retry identity and still reaches an accepted ana
   });
   await page.addInitScript(() => { Storage.prototype.setItem = function () { throw new DOMException('denied', 'SecurityError'); }; });
   await page.goto('/portfolio/');
+  await startInput(page);
   await expect(page.getByRole('alert')).toContainText('입력을 임시 보관할 수 없어요');
+  // 보관할 수 없으니 처음 화면으로 나가면 쓴 것이 사라진다 — 나가는 길을 막는다.
+  await expect(page.getByRole('button', { name: '처음 화면으로' })).toBeDisabled();
   await addCash(page, '99');
   await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '아직 고민 중', exact: true }).click();
+  await page.getByRole('button', { name: '안 넣어요', exact: true }).click();
+  await page.getByRole('button', { name: /^정한 때 없어요/ }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '정한 때 없어요', exact: true }).click();
-  await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '내 포트폴리오 분석하기' }).click();
+  await page.getByRole('button', { name: '분석 시작하기' }).click();
   await expect(page.getByText('요청을 처리하지 못했어요. 연결 상태를 확인해 주세요.')).toBeVisible();
   await page.getByRole('button', { name: '접수 다시 확인' }).click();
   await expect(page.locator('.progress')).toBeVisible();
   expect(keys).toHaveLength(2); expect(keys[0]).toBe(keys[1]);
   await expect(page.getByText(/분석 결과를 자동 복원할 수 없어요/)).toBeVisible();
-});
-
-test('confirming account removal does not resurrect values when it is added again', async ({ page }) => {
-  await page.goto('/portfolio/?preview=input');
-  await page.getByRole('button', { name: '+ISA', exact: true }).click();
-  await page.getByRole('combobox', { name: 'ISA에 담은 종목 찾기' }).fill('VOO');
-  await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
-  await page.getByLabel('Vanguard S&P 500 ETF 금액', { exact: true }).fill('200');
-  await page.getByRole('button', { name: '비율', exact: true }).click();
-  await page.getByRole('button', { name: 'ISA 지우기' }).click();
-  await page.getByRole('button', { name: '삭제하기', exact: true }).click();
-  await expect(page.locator('.step')).toBeFocused();
-  await page.getByRole('button', { name: '+ISA', exact: true }).click();
-  await page.getByRole('combobox', { name: 'ISA에 담은 종목 찾기' }).fill('VOO');
-  await page.getByRole('option').filter({ hasText: 'Vanguard' }).click();
-  await page.getByRole('button', { name: '금액', exact: true }).click();
-  await expect(page.getByLabel('Vanguard S&P 500 ETF 금액', { exact: true })).toHaveValue('');
 });
 
 for (const matching of [false, true]) test(`a completed job clears only its own submitted draft (${matching})`, async ({ page }) => {
@@ -184,7 +216,7 @@ for (const matching of [false, true]) test(`a completed job clears only its own 
     : { counts: { KR: 0, US: 0 }, instruments: [] } }));
   await page.goto('/portfolio/');
   await page.getByRole('button', { name: '새 포트폴리오 분석하기' }).click();
-  if (matching) await expect(page.locator('.rows .row')).toHaveCount(0);
+  if (matching) await expect(page.locator('.fl-hold')).toHaveCount(0);
   else await expect(page.getByLabel('현금 금액', { exact: true })).toHaveValue('345');
 });
 
@@ -197,7 +229,8 @@ test('a restored holding cannot be hidden outside the editable account list', as
     sessionStorage.setItem(key, JSON.stringify(draft));
   });
   await page.reload();
-  await expect(page.locator('.rows .row')).toHaveCount(0);
+  await startInput(page);
+  await expect(page.locator('.fl-hold')).toHaveCount(0);
 });
 
 test('draft cleanup denial is explained instead of losing the current input', async ({ page }) => {

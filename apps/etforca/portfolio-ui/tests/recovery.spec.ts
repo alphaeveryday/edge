@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { openRequest } from './holdings';
+import { startInput } from './holdings';
 import { readFileSync } from 'node:fs';
 import { bulkHoldings } from '../src/bulkHoldings';
 const catalog = JSON.parse(readFileSync(new URL('../../portfolio-worker/src/edge_portfolio/data/etf_catalog.json', import.meta.url), 'utf8'));
@@ -54,10 +54,12 @@ for (const blockedStorage of [false, true]) test(`failed input remains editable 
   if (blockedStorage) await page.evaluate(() => Object.defineProperty(window, 'sessionStorage', { get() { throw new DOMException('blocked', 'SecurityError'); } }));
   await page.getByRole('button', { name: '입력 고치기' }).click();
   await expect(page.getByRole('textbox', { name: 'VOO 금액' })).toHaveValue('1,234,567');
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  // 서버에 남은 입력의 넣는 방법·기간이 그대로 골라져 있다.
+  await expect(page.getByRole('button', { name: '안 넣어요', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await page.getByRole('button', { name: '다음', exact: true }).click();
   await expect(page.getByLabel('기존 배당 목표')).toHaveValue('매월 40만 원');
-  await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '선택 질문 건너뛰고 분석하기' }).click();
+  await page.getByRole('button', { name: '분석 시작하기' }).click();
   await expect.poll(() => posted?.preferences.dividend_goal).toBe('매월 40만 원');
   expect(posted.holdings[0].amount_krw).toBe('1234567');
 });
@@ -70,16 +72,17 @@ test('bulk entry reaches analysis without optional question screens', async ({ p
     return route.fulfill({ json: { id: 'bulk', state: 'queued' } });
   });
   await page.goto('/portfolio/');
+  await startInput(page);
   await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
   await page.getByLabel('일반 계좌 · 종목 코드와 금액(원)').fill('VOO 600,000\nQQQ 400000원');
   await page.getByRole('button', { name: '목록에 추가' }).click();
-  await expect(page.locator('.row')).toHaveCount(2);
+  await expect(page.locator('.fl-hold')).toHaveCount(2);
   await page.screenshot({ path: `test-results/bulk-entry-${test.info().project.name}.png`, fullPage: true });
   await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '이미 다 매수한 상태에요', exact: true }).click();
+  await page.getByRole('button', { name: '안 넣어요', exact: true }).click();
+  await page.getByRole('button', { name: /^10년 넘게 뒤/ }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '10년 넘게 뒤', exact: true }).click();
-  await page.getByRole('button', { name: '선택 질문 건너뛰고 분석하기' }).click();
+  await page.getByRole('button', { name: '분석 시작하기' }).click();
   await expect.poll(() => posted?.holdings.length).toBe(2);
   expect(posted.holdings.map((h: { amount_krw: string }) => h.amount_krw)).toEqual(['600000', '400000']);
   expect(posted.preferences.interests).toEqual([]);
@@ -93,8 +96,9 @@ test('saved stocks are imported as stocks, not relabeled as ETFs, and unknown sa
     return route.fulfill({ json: {} });
   });
   await page.goto('/portfolio/');
-  await page.getByRole('button', { name: '저장된 보유 종목 불러오기' }).click();
-  await page.locator('.ds-confirm-dialog').getByRole('button', { name: '불러오기' }).click();
+  await startInput(page);
+  // 담은 것이 없을 때 불러오기는 바꿀 입력이 없으니 다시 묻지 않는다.
+  await page.getByRole('button', { name: /저장된 보유 종목 불러오기/ }).click();
   await expect(page.getByRole('textbox', { name: 'Apple 금액' })).toBeVisible();
   await expect.poll(() => page.evaluate(() => sessionStorage.getItem('edge-portfolio-form-v2'))).toContain('"kind":"stock"');
 });
@@ -111,8 +115,8 @@ for (const state of ['missing', 'pending', 'old-version', 'no-market']) test(`re
     return route.fulfill({ json: {} });
   });
   await page.goto('/portfolio/');
-  await page.getByRole('button', { name: '저장된 보유 종목 불러오기' }).click();
-  await page.locator('.ds-confirm-dialog').getByRole('button', { name: '불러오기', exact: true }).click();
+  await startInput(page);
+  await page.getByRole('button', { name: /저장된 보유 종목 불러오기/ }).click();
   await expect(page.getByRole('textbox', { name: 'VOO 금액' })).toHaveValue('');
   await expect(page.getByRole('button', { name: '다음', exact: true })).toBeDisabled();
 });
@@ -129,9 +133,9 @@ for (const blockedStorage of [false, true]) test(`reuse preserves whole-won bala
     return route.fulfill({ json: {} });
   });
   await page.goto('/portfolio/');
+  await startInput(page);
   if (blockedStorage) await page.evaluate(() => Object.defineProperty(window, 'sessionStorage', { get() { throw new DOMException('blocked', 'SecurityError'); } }));
-  await page.getByRole('button', { name: '저장된 보유 종목 불러오기' }).click();
-  await page.locator('.ds-confirm-dialog').getByRole('button', { name: '불러오기', exact: true }).click();
+  await page.getByRole('button', { name: /저장된 보유 종목 불러오기/ }).click();
   await expect(page.getByRole('textbox', { name: '현금 금액' })).toHaveValue('49');
   await expect(page.getByRole('textbox', { name: 'VOO 금액' })).toHaveValue('1,234,567');
   await expect(page.getByRole('button', { name: '다음', exact: true })).toBeEnabled();
@@ -166,7 +170,7 @@ test('a completed report can start fresh when browser session storage is unavail
   await expect(page.getByRole('button', { name: '새 포트폴리오 분석하기', exact: true })).toBeVisible();
   await page.evaluate(() => Object.defineProperty(window, 'sessionStorage', { get() { throw new DOMException('blocked', 'SecurityError'); } }));
   await page.getByRole('button', { name: '새 포트폴리오 분석하기', exact: true }).click();
-  await expect(page.getByRole('button', { name: '저장된 보유 종목 불러오기', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /저장된 보유 종목 불러오기/ })).toBeVisible();
   await expect(page.getByRole('button', { name: '새 포트폴리오 분석하기', exact: true })).toHaveCount(0);
 });
 
@@ -221,11 +225,10 @@ test('an unidentified saved asset cannot replace and invalidate the current draf
     return route.fulfill({ json: {} });
   });
   await page.goto('/portfolio/');
-  await openRequest(page);
-  await page.getByLabel('요청사항', { exact: true }).fill('기존 방향을 유지해 주세요');
-  await page.getByRole('button', { name: '저장된 보유 종목 불러오기' }).click();
+  await startInput(page);
+  await page.getByRole('button', { name: /저장된 보유 종목 불러오기/ }).click();
   await expect(page.getByRole('alert')).toContainText('이전 종목의 종목 코드');
   await page.reload();
-  await expect(page.getByLabel('요청사항', { exact: true })).toHaveValue('기존 방향을 유지해 주세요');
-  await expect(page.locator('.rows .row')).toHaveCount(0);
+  await expect(page.getByRole('searchbox', { name: '종목 이름이나 코드로 찾기' })).toBeVisible();
+  await expect(page.locator('.fl-hold')).toHaveCount(0);
 });

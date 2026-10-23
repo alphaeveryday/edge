@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { gunzipSync } from 'node:zlib';
 import { readFileSync } from 'node:fs';
 import { blockAnalyticsHost } from '../playwright.config';
+import { startInput } from './holdings';
 
 type Event = { event: string; properties: Record<string, any> };
 function unpackReplay(value: any): any {
@@ -28,8 +29,8 @@ test('screen transitions refresh mixed visitors instead of keeping their prior t
   await page.goto('https://etforca.com/portfolio/');
   await expect.poll(() => events.some(e => e.event === '$pageview' && e.properties.is_test === true)).toBe(true);
   isTest = false;
-  await page.getByRole('button', { name: '종목부터 추천받기' }).click();
-  await expect.poll(() => events.some(e => e.event === '$pageview' && e.properties.screen === 'input_funding' && e.properties.is_test === false)).toBe(true);
+  await page.getByRole('button', { name: '아직 투자 전이에요' }).click();
+  await expect.poll(() => events.some(e => e.event === '$pageview' && e.properties.screen === 'input_plan' && e.properties.is_test === false)).toBe(true);
 });
 
 test('unknown classification withholds analytics without blocking input and recovers next screen', async ({ page, baseURL }) => {
@@ -37,11 +38,12 @@ test('unknown classification withholds analytics without blocking input and reco
   let classification: boolean | null = null;
   await page.route('**/api/portfolio/session', route => route.fulfill({ json: { is_test: classification } }));
   await page.goto('https://etforca.com/portfolio/');
-  await page.getByRole('button', { name: '종목부터 추천받기' }).click();
-  await expect(page.getByRole('button', { name: '이미 다 매수한 상태에요', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '아직 투자 전이에요' }).click();
+  await expect(page.getByRole('button', { name: '아직 몰라요', exact: true })).toBeVisible();
   expect(events).toEqual([]);
   classification = false;
-  await page.getByRole('button', { name: '이미 다 매수한 상태에요', exact: true }).click();
+  await page.getByRole('button', { name: '아직 몰라요', exact: true }).click();
+  await page.getByRole('button', { name: /^정한 때 없어요/ }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
   await expect.poll(() => events.some(e => e.event === '$pageview' && e.properties.is_test === false)).toBe(true);
 });
@@ -57,14 +59,14 @@ test('session replay shows screen content while excluding auth cookies and respe
   });
   await page.goto('https://etforca.com/portfolio/?email=private@example.com#private-token');
   await expect.poll(() => events.some(e => e.event === '$pageview')).toBe(true);
-  await page.getByRole('button', { name: '종목부터 추천받기' }).click();
+  await page.getByRole('button', { name: '아직 투자 전이에요' }).click();
   await expect.poll(() => events.some(e => e.event === '$snapshot'), { timeout: 20000 }).toBe(true);
   const mutationTime = await page.evaluate(() => {
     const p = document.createElement('p'); p.textContent = 'private-holdings-value-123456789'; p.title = 'private-title-value'; document.body.append(p);
     const input = document.createElement('input'); input.value = 'private-input-value'; document.body.append(input); input.dispatchEvent(new Event('input', { bubbles: true }));
     const chart = document.createElement('div'); chart.className = 'dividend-plot'; chart.innerHTML = '<i style="height:37.1234567%">private-financial-chart</i>'; document.body.append(chart);
     const gain = document.createElement('span'); gain.className = 'gain'; gain.textContent = 'private-profit'; document.body.append(gain);
-    const choices = document.createElement('div'); choices.className = 'chips big'; choices.innerHTML = '<button class="private-choice-marker" aria-pressed="true">private-answer</button>'; document.querySelector('.step')!.append(choices);
+    const choices = document.createElement('div'); choices.className = 'chips big'; choices.innerHTML = '<button class="private-choice-marker" aria-pressed="true">private-answer</button>'; document.querySelector('.fl-step')!.append(choices);
     document.querySelector<HTMLInputElement>('.private-tax-check')!.click();
     document.querySelector<HTMLInputElement>('.private-tax-radio')!.click();
     return Date.now();
@@ -72,7 +74,7 @@ test('session replay shows screen content while excluding auth cookies and respe
   await expect.poll(() => events.filter(e => e.event === '$snapshot').flatMap(e => unpackReplay(e.properties.$snapshot_data)).some(e => e.type === 3 && e.timestamp >= mutationTime && e.data.source === 0), { timeout: 20000 }).toBe(true);
   const serialized = JSON.stringify(unpackReplay(events));
   expect(serialized).not.toMatch(/private@example|private-token|never-record-this|auth-secret/);
-  expect(serialized).toContain('.nav__pill');
+  expect(serialized).toContain('fl-progress');
   for (const value of ['private-holdings-value-123456789', 'private-input-value', 'private-title-value', 'private-financial-chart', 'private-profit', 'private-answer']) expect(serialized).toContain(value);
   const id = events.find(e => e.event === '$pageview')!.properties.distinct_id;
   expect(events.filter(e => e.event === '$snapshot').every(e => e.properties.$session_id && e.properties.distinct_id === id)).toBe(true);
@@ -134,7 +136,7 @@ test('each input screen has one visit and visible dwell excludes hidden time wit
   const events = await instrument(page, baseURL!);
   await page.clock.install();
   await page.goto('https://etforca.com/portfolio/?email=private@example.com#secret');
-  await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /이대로 가도 될까요/ })).toBeVisible();
   await page.clock.runFor(4000);
   await expect.poll(() => events.filter(e => e.event === '$pageview').length).toBe(1);
   await page.clock.runFor(5000);
@@ -152,10 +154,10 @@ test('each input screen has one visit and visible dwell excludes hidden time wit
     document.dispatchEvent(new Event('visibilitychange'));
   });
   await page.clock.runFor(3000);
-  await page.getByRole('button', { name: '종목부터 추천받기' }).click();
+  await page.getByRole('button', { name: '아직 투자 전이에요' }).click();
   await page.clock.runFor(5000);
-  await expect.poll(() => events.filter(e => e.event === '$pageview').map(e => e.properties.screen)).toEqual(['input_holdings', 'input_funding']);
-  const dwell = events.filter(e => e.event === 'portfolio_screen_engagement' && e.properties.screen === 'input_holdings').reduce((sum, e) => sum + e.properties.visible_seconds, 0);
+  await expect.poll(() => events.filter(e => e.event === '$pageview').map(e => e.properties.screen)).toEqual(['start', 'input_plan']);
+  const dwell = events.filter(e => e.event === 'portfolio_screen_engagement' && e.properties.screen === 'start').reduce((sum, e) => sum + e.properties.visible_seconds, 0);
   expect(dwell).toBeGreaterThanOrEqual(8);
   expect(dwell).toBeLessThan(20);
   expect(JSON.stringify(events)).not.toMatch(/private@example|private-customer|#secret|email=/);
@@ -233,8 +235,8 @@ test('real navigation hands final scroll, dwell and leave events to browser beac
 test('PostHog outage does not prevent entering the next input screen', async ({ page, baseURL }) => {
   await instrument(page, baseURL!, true);
   await page.goto('https://etforca.com/portfolio/');
-  await page.getByRole('button', { name: '종목부터 추천받기' }).click();
-  await expect(page.locator('.nav__n')).toHaveText('2 / 5');
+  await page.getByRole('button', { name: '아직 투자 전이에요' }).click();
+  await expect(page.getByRole('progressbar', { name: '3단계 중 2단계 앞으로의 계획' })).toBeVisible();
 });
 
 test('expanding content updates the visible section even without scrolling', async ({ page, baseURL }) => {
@@ -361,7 +363,7 @@ test('the survey still works when PostHog and browser storage are unavailable', 
   await page.getByRole('button', { name: '건너뛰기' }).click();
   await expect(page.getByRole('status').filter({ hasText: '답해 주셔서 고마워요' })).toBeVisible();
   await page.getByRole('button', { name: '새 포트폴리오 분석하기' }).click();
-  await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /지금 갖고 있는 종목을/ })).toBeVisible();
 });
 
 test('newsletter confirmation requires a click and clears the token before any analytics', async ({ page, baseURL }) => {
@@ -394,7 +396,7 @@ test('newsletter confirmation links work in an existing tab and each token still
     return route.fulfill({ json: { status: 'confirmed', delivery_ready: false } });
   });
   await page.goto('https://etforca.com/portfolio/');
-  await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /이대로 가도 될까요/ })).toBeVisible();
   for (const [index, token] of ['private-first-confirmation-token', 'private-second-confirmation-token'].entries()) {
     await page.evaluate(value => { location.hash = 'newsletter-confirm=' + value; }, token);
     await expect(page.getByRole('heading', { name: '매일 내 ETF의 핵심 소식을 받아보세요' })).toBeVisible();
@@ -411,15 +413,17 @@ test('input funnel steps are counted once per visit without the query or the amo
   // 보고서의 핵심 지표(입력 화면 → 첫 검색 → 첫 종목 추가)를 재려면 이 이벤트가 있어야 하고, 고객 값은 남지 않아야 한다.
   const events = await instrument(page, baseURL!);
   await page.goto('https://etforca.com/portfolio/');
-  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' });
+  await startInput(page);
+  await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
+  await page.getByLabel('일반 계좌 · 종목 코드와 금액(원)').fill('nope 1');
+  await page.getByRole('button', { name: '목록에 추가' }).click();
+  const search = page.getByRole('searchbox', { name: '종목 이름이나 코드로 찾기' });
   await search.fill('zzqprivate');
   await search.blur();
   await search.fill('현금');
   await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter'); // 계좌 시트: 기본 계좌로 담기
   await page.keyboard.type('7777777');
-  await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
-  await page.getByLabel('일반 계좌 · 종목 코드와 금액(원)').fill('nope 1');
-  await page.getByRole('button', { name: '목록에 추가' }).click();
   const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
   await expect.poll(actions).toEqual(expect.arrayContaining(['input_search_opened', 'input_holding_added', 'bulk_entry_opened', 'bulk_entry_failed']));
   expect(actions().filter(a => a === 'input_search_opened')).toHaveLength(1);
@@ -431,7 +435,8 @@ test('a first search made before visitor classification finishes is still counte
   const events = await instrument(page, baseURL!);
   await page.route('https://etforca.com/api/portfolio/session', async route => { await new Promise(r => setTimeout(r, 2000)); await route.fulfill({ json: { is_test: false } }); });
   await page.goto('https://etforca.com/portfolio/');
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).focus();
+  await startInput(page);
+  await page.getByRole('searchbox', { name: '종목 이름이나 코드로 찾기' }).focus();
   await expect.poll(() => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action), { timeout: 10000 }).toContain('input_search_opened');
 });
 
@@ -439,18 +444,20 @@ test('focus moved by the form itself is not counted as the visitor opening the s
   const events = await instrument(page, baseURL!);
   await page.route('https://etforca.com/api/portfolio/workbook/catalog', route => route.fulfill({ json: { counts: { KR: 0, US: 1 }, instruments: [{ id: 'US:VOO', name: 'VOO', ticker: 'VOO', code: 'VOO', market: 'US', kind: 'etf' }] } }));
   await page.goto('https://etforca.com/portfolio/');
-  await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
-  await page.getByLabel('일반 계좌 · 종목 코드와 금액(원)').fill('VOO 1000000');
-  await page.getByRole('button', { name: '목록에 추가' }).click();
+  await startInput(page);
+  const bulk = async () => {
+    await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
+    await page.getByLabel('일반 계좌 · 종목 코드와 금액(원)').fill('VOO 1000000');
+    await page.getByRole('button', { name: '목록에 추가' }).click();
+  };
+  await bulk();
   await page.getByRole('textbox', { name: 'VOO 금액' }).press('Enter');
-  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' });
+  const search = page.getByRole('searchbox', { name: '종목 이름이나 코드로 찾기' });
   await expect(search).toBeFocused();
   // 뒤에 일어난 행동이 도착한 걸 확인한 뒤에 부재를 본다 — 이벤트는 묶음으로 보내져 늦게 올 수 있다.
-  await page.keyboard.press('Escape'); // 포커스된 검색창의 후보 목록이 아래 '여러 종목' 토글을 덮는다
-  await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
-  await expect(page.locator('details.bulk-entry')).not.toHaveAttribute('open', '');
-  await page.waitForTimeout(100); // toggle 이벤트는 비동기라, 닫힘이 처리되기 전에 다시 열면 한 번으로 합쳐진다
-  await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click();
+  // 담은 것을 빼면 '여러 종목 한 번에 넣기'가 다시 보인다. 두 번째 열기가 도착하면 그 앞의 행동도 도착했다.
+  await page.getByRole('button', { name: 'VOO 빼기' }).click();
+  await bulk();
   const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
   await expect.poll(() => actions().filter(a => a === 'bulk_entry_opened').length).toBe(2);
   expect(actions()).not.toContain('input_search_opened');
@@ -461,38 +468,16 @@ test('focus moved by the form itself is not counted as the visitor opening the s
   await expect.poll(actions).toContain('input_search_opened');
 });
 
-test('opening the folded request box is counted so its use can be judged', async ({ page, baseURL }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  const events = await instrument(page, baseURL!);
-  await page.goto('https://etforca.com/portfolio/');
-  await page.getByText('요청사항 적기 · 선택', { exact: true }).click();
-  await page.getByLabel('요청사항', { exact: true }).fill('private-request-text');
-  await expect.poll(() => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action)).toContain('request_box_opened');
-  expect(JSON.stringify(events)).not.toContain('private-request-text');
-});
-
-test('a request box that starts open on desktop is not reported as opened by the visitor', async ({ page, baseURL }) => {
-  await page.setViewportSize({ width: 1280, height: 900 });
-  const events = await instrument(page, baseURL!);
-  await page.goto('https://etforca.com/portfolio/');
-  await expect(page.getByLabel('요청사항', { exact: true })).toBeVisible();
-  // 뒤 행동이 도착한 걸 확인한 뒤 부재를 본다(이벤트는 묶음으로 늦게 올 수 있다).
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).focus();
-  const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
-  await expect.poll(actions).toContain('input_search_opened');
-  expect(actions()).not.toContain('request_box_opened');
-});
-
 test('a no-result search is counted once per search, not once per keystroke flicker', async ({ page, baseURL }) => {
   // 한글 조합 중에는 결과 0건이 깜빡인다. 한 번의 검색을 여러 번으로 세면 '못 찾음' 빈도가 부풀려진다.
   const events = await instrument(page, baseURL!);
   await page.route('https://etforca.com/api/portfolio/workbook/catalog', route => route.fulfill({ json: { counts: { KR: 0, US: 1 }, instruments: [{ id: 'US:VOO', name: 'VOO', ticker: 'VOO', code: 'VOO', market: 'US', kind: 'etf' }] } }));
   await page.goto('https://etforca.com/portfolio/');
-  const search = page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' });
+  await startInput(page);
+  const search = page.getByRole('searchbox', { name: '종목 이름이나 코드로 찾기' });
   for (const text of ['V', 'Vq', 'V', 'Vq', 'V', 'Vq']) await search.fill(text);
-  await search.blur();
-  await search.fill('Vqx'); // 닫았다가 0건인 채로 이어 친 검색도 새 검색이다
-  await page.keyboard.press('Escape'); // 후보 목록이 아래 토글을 덮는다
+  await search.fill('');
+  await search.fill('Vqx'); // 칸을 비우고 다시 찾은 것은 새 검색이다
   await page.getByText('여러 종목 한 번에 넣기', { exact: true }).click(); // 뒤 행동이 도착한 뒤 개수를 본다
   const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
   await expect.poll(actions).toContain('bulk_entry_opened');
@@ -502,33 +487,36 @@ test('a no-result search is counted once per search, not once per keystroke flic
 test('starting from recommendations is counted so the no-search path is visible', async ({ page, baseURL }) => {
   const events = await instrument(page, baseURL!);
   await page.goto('https://etforca.com/portfolio/');
-  await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
-  // 돌아와 다시 눌러도 같은 초안의 추천 시작은 한 번이다(횟수가 부풀지 않게).
-  await page.getByRole('button', { name: '앞 질문으로' }).click();
-  await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
-  await page.getByRole('button', { name: '앞 질문으로' }).click();
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).focus(); // 뒤 행동이 도착한 뒤 개수를 본다
+  await page.getByRole('button', { name: '아직 투자 전이에요' }).click();
+  // 처음 화면으로 돌아와 다시 눌러도 같은 초안의 추천 시작은 한 번이다(횟수가 부풀지 않게).
+  await page.getByRole('button', { name: '앞 단계로' }).click();
+  await page.getByRole('button', { name: '처음 화면으로' }).click();
+  await page.getByRole('button', { name: '아직 투자 전이에요' }).click();
+  await page.getByRole('button', { name: '앞 단계로' }).click();
+  await page.getByRole('searchbox', { name: '종목 이름이나 코드로 찾기' }).focus(); // 뒤 행동이 도착한 뒤 개수를 본다
   const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
   await expect.poll(actions).toContain('input_search_opened');
   expect(actions().filter(a => a === 'recommend_started')).toHaveLength(1);
 });
 
-test('a recommendation click that cannot save is not counted as a started recommendation', async ({ page, baseURL }) => {
-  const events = await instrument(page, baseURL!);
-  await page.route('https://etforca.com/api/portfolio/drafts/**', route => route.fulfill({ status: 503, json: {} }));
-  await page.goto('https://etforca.com/portfolio/');
-  await page.getByRole('button', { name: /종목부터 추천받기/ }).click();
-  await expect(page.getByRole('alert')).toBeVisible();
-  await expect(page.getByRole('heading', { name: '내 포트폴리오를 더 좋게 바꿔볼까요?' })).toBeVisible();
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).focus(); // 뒤 행동이 도착한 뒤 부재를 본다
-  const actions = () => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action);
-  await expect.poll(actions).toContain('input_search_opened');
-  expect(actions()).not.toContain('recommend_started');
-});
-
 test('opening the example result is counted', async ({ page, baseURL }) => {
   const events = await instrument(page, baseURL!);
   await page.goto('https://etforca.com/portfolio/');
-  await page.getByRole('button', { name: '예시 결과 보기' }).click();
+  await page.getByRole('button', { name: '예시 보기' }).click();
   await expect.poll(() => events.filter(e => e.event === 'portfolio_action').map(e => e.properties.action)).toContain('example_report_opened');
+});
+
+test('copying the result link is counted without the analysis id', async ({ page, baseURL }) => {
+  // 기다림 화면의 '결과 링크 복사해 두기'가 쓰이는지 본다. 링크에 든 분석 번호와 질문은 이벤트에 남지 않아야 한다.
+  const events = await instrument(page, baseURL!);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin: 'https://etforca.com' });
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'private-running-id'));
+  await page.route('https://etforca.com/api/portfolio/analyses/private-running-id', route => route.fulfill({ json: { id: 'private-running-id', state: 'running', stage: 'portfolio', started_at: new Date().toISOString(), input: { holdings: [], horizon: '3년 안', question: 'private-question' } } }));
+  await page.goto('https://etforca.com/portfolio/');
+  await page.getByRole('button', { name: '결과 링크 복사해 두기' }).click();
+  await expect(page.getByText(/링크를 복사했어요/)).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe('https://etforca.com/portfolio/?analysis=private-running-id');
+  // 결과 이벤트와 같은 이름의 자체 이벤트로, 기다리던 화면 이름을 붙여 보낸다.
+  await expect.poll(() => events.find(e => e.event === 'result_link_copied')?.properties.screen).toBe('running');
+  expect(JSON.stringify(events)).not.toMatch(/private-running-id|private-question/);
 });

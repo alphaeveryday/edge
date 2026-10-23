@@ -8,7 +8,6 @@ import { NewsletterSignup } from '../NewsletterSignup';
 import { AppDownloadSheet } from '../AppDownloadSheet';
 import { ExampleReport } from '../ExampleReport';
 import { InstrumentSearch } from '../InstrumentSearch';
-import { TaxAccounts, type TaxProfile } from '../TaxAccounts';
 
 export function DesignCatalog() {
   const [selected, setSelected] = useState('금액');
@@ -16,7 +15,6 @@ export function DesignCatalog() {
   const [submitted, setSubmitted] = useState(false);
   const [opened, setOpened] = useState<Set<string>>(() => new Set());
   const [appDownload, setAppDownload] = useState(false);
-  const [taxProfile, setTaxProfile] = useState<TaxProfile>({ residence: '대한민국 거주자', age: '15세 미만', income: '소득 없음', financial_income_tax: '아니요', irp_qualification: '해당 없음', recommended_accounts: ['연금저축'], accounts: [] });
   const { ask, confirmation, restoreFocus } = useConfirmation();
   return <main className="ds-catalog">
     <header><span className="eyebrow">Orca UI · 1.1</span><h1>같은 기준으로 만드는<br />편안한 금융 경험</h1><p>운영 화면에서 사용하는 실제 컴포넌트와 상태입니다. 입력한 내용은 저장하거나 발송하지 않아요.</p></header>
@@ -57,8 +55,7 @@ export function DesignCatalog() {
       {confirmation}
       <Button variant="secondary" onClick={() => setAppDownload(true)}>앱 다운로드 시트 열어보기</Button>
       <AppDownloadSheet open={appDownload} onClose={() => setAppDownload(false)} />
-      <TaxAccounts accounts={[]} value={taxProfile} onSave={async value => setTaxProfile(value)} />
     </section>
-    <section id="workflow"><SectionHeading title="다음 화면도 같은 방식으로" /><ol><li>사용자 과제와 다음 행동을 정해요.</li><li>기존 컴포넌트와 모든 상태를 확인해요.</li><li>공통 토큰으로 모바일·PC 화면을 만들어요.</li><li>접근성·문구·데이터·회귀 검사를 통과해요.</li><li>PR 검토 후 배포하고 실제 화면을 확인해요.</li></ol><div className="ds-examples"><a href="?preview=input">입력 화면 ↗</a><a href="?preview=result">분석 결과 ↗</a><a href="?preview=dashboard">대시보드 ↗</a></div></section>
+    <section id="workflow"><SectionHeading title="다음 화면도 같은 방식으로" /><ol><li>사용자 과제와 다음 행동을 정해요.</li><li>기존 컴포넌트와 모든 상태를 확인해요.</li><li>공통 토큰으로 모바일·PC 화면을 만들어요.</li><li>접근성·문구·데이터·회귀 검사를 통과해요.</li><li>PR 검토 후 배포하고 실제 화면을 확인해요.</li></ol><div className="ds-examples"><a href="?preview=input">시작·입력 화면 ↗</a><a href="?preview=return">다시 온 방문자 ↗</a><a href="?preview=running">분석 중 ↗</a><a href="?preview=failed">분석 실패 ↗</a><a href="?preview=result">분석 결과 ↗</a><a href="?preview=dashboard">대시보드 ↗</a></div></section>
   </main>;
 }

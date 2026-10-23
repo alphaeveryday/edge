@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { startInput } from './holdings';
 
 const catalog = JSON.parse(readFileSync(new URL('../../portfolio-worker/src/edge_portfolio/data/etf_catalog.json', import.meta.url), 'utf8'));
 
@@ -10,130 +11,139 @@ async function open(page: Page, saved: unknown = null, latest: unknown = null) {
     if (path.endsWith('/catalog')) return route.fulfill({ json: catalog });
     if (path.endsWith('/workbook')) return route.fulfill({ json: { version: saved ? 1 : 0, workbook: saved } });
     if (path.endsWith('/analyses/latest')) return route.fulfill({ json: latest });
+    if (latest && path.endsWith('/analyses/' + (latest as { id: string }).id)) return route.fulfill({ json: latest });
     return route.fulfill({ json: {} });
   });
   await page.goto('/portfolio/');
-  return page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' });
 }
-
+const search = (page: Page) => page.getByRole('searchbox', { name: '종목 이름이나 코드로 찾기' });
 async function aboveBar(page: Page, element: ReturnType<Page['locator']>) {
-  const box = (await element.boundingBox())!, bar = (await page.locator('.bar').boundingBox())!;
+  const box = (await element.boundingBox())!, bar = (await page.locator('.fl-cta').boundingBox())!;
   return box.y >= 0 && box.y + box.height <= bar.y;
 }
 
-// 입력 중단 분석의 1순위 가설: 첫 행동(종목 검색)이 첫 화면 밖이거나 하단 고정 버튼에 가려 시작 방법을 찾지 못한다.
-for (const [width, height] of [[390, 699], [360, 640]]) test(`a first visit sees the search above the fixed button at ${width}x${height}`, async ({ page }) => {
+// 이탈 분석: 해 볼 가치를 확인하기 전에 떠난다 — 첫 화면은 받을 결과를 결과와 같은 꼴(판정, 금액 → 금액)로 먼저 보이고,
+// 첫 행동(내 포트폴리오 넣기)은 작은 휴대폰에서도 화면 안에 있다.
+for (const [width, height] of [[390, 699], [360, 640]]) test(`a first visit sees the example verdict and the first action at ${width}x${height}`, async ({ page }) => {
   await page.setViewportSize({ width, height });
-  const search = await open(page);
-  await expect(search).toBeVisible();
-  expect(await aboveBar(page, search)).toBe(true);
+  await open(page);
+  await expect(page.getByRole('heading', { name: /이대로 가도 될까요/ })).toBeVisible();
+  const example = page.getByRole('region', { name: '이런 결과를 받아요' });
+  await expect(example).toContainText('하나만 바꾸면 돼요');
+  await expect(example).toContainText('250만 원 → 0원 전부 팔기');
+  await expect(page.getByRole('button', { name: '내 포트폴리오 넣기' })).toBeInViewport({ ratio: 1 });
+  // 처음 온 방문자에게 지난 분석이나 '바꾸셨나요?'를 묻지 않는다.
+  await expect(page.getByText('바꾸셨나요?')).toHaveCount(0);
+});
+
+// 입력 중단 분석의 1순위 가설: 첫 행동(종목 검색)이 첫 화면 밖이거나 하단 고정 버튼에 가려 시작 방법을 찾지 못한다.
+for (const [width, height] of [[390, 699], [360, 640]]) test(`the holdings step shows the search above the fixed button at ${width}x${height}`, async ({ page }) => {
+  await page.setViewportSize({ width, height });
+  await open(page);
+  await startInput(page);
+  await expect(search(page)).toBeVisible();
+  expect(await aboveBar(page, search(page))).toBe(true);
   // 불러올 보유가 없는 방문자에게 빈 '불러오기'를 보여 검색창을 밀지 않는다.
-  await expect(page.getByRole('button', { name: '저장된 보유 종목 불러오기' })).toHaveCount(0);
-  await expect(page.locator('#step-guidance')).toBeHidden();
+  await expect(page.getByRole('button', { name: /저장된 보유 종목 불러오기/ })).toHaveCount(0);
 });
 
 test('a visitor with saved holdings still gets the import shortcut', async ({ page }) => {
   await open(page, { assets: [{ id: 'a', instrument_id: 'US:VOO', name: 'VOO', account: '일반 계좌', category: '주식', amount: 1000000 }] });
-  await expect(page.getByRole('button', { name: '저장된 보유 종목 불러오기' })).toBeVisible();
+  await startInput(page);
+  await expect(page.getByRole('button', { name: /저장된 보유 종목 불러오기/ })).toBeVisible();
 });
 
 for (const [width, height] of [[390, 844], [360, 640], [320, 568]]) test(`keyboard entry never hides the next field behind the fixed button at ${width}x${height}`, async ({ page }) => {
   await page.setViewportSize({ width, height });
-  const search = await open(page);
+  await open(page);
+  await startInput(page);
   for (const query of ['VOO', 'QQQM', '069500', '360750']) {
-    await search.fill(query);
+    await search(page).fill(query);
     await page.keyboard.press('Enter');
+    await page.keyboard.press('Enter'); // 계좌 시트: 기본 계좌로 담기
     expect(await aboveBar(page, page.locator(':focus'))).toBe(true);
     await page.keyboard.type('1000000');
     await page.keyboard.press('Enter');
-    await expect(search).toBeFocused();
-    expect(await aboveBar(page, search)).toBe(true);
+    await expect(search(page)).toBeFocused();
+    expect(await aboveBar(page, search(page))).toBe(true);
   }
-  // 모바일 미리보기는 3줄까지만 — 나머지는 아래 계좌 카드에 있다.
-  await expect(page.locator('.portfolio-preview li.more')).toHaveText('외 1개');
-  // 작은 도넛 옆 범례에서도 종목명이 한 글자씩 꺾이지 않을 폭을 남긴다(320px 회귀).
-  const nameWidths = await page.locator('.portfolio-preview li:not(.more) > span').evaluateAll(spans => spans.filter(s => (s as HTMLElement).offsetParent).map(s => s.getBoundingClientRect().width));
-  expect(Math.min(...nameWidths)).toBeGreaterThan(72);
+  await expect(page.locator('.fl-basket__total')).toHaveText('400만 원');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
 });
 
-// 선택 항목(요청사항)은 모바일 첫 화면에서 접어 1단계를 훑는 길이를 줄이되, PC 와 이미 적은 요청은 펼친다.
-test('the optional request box is folded on phones and open on desktop', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await open(page);
-  const request = page.getByLabel('요청사항', { exact: true });
-  await expect(request).toBeHidden();
-  await page.getByText('요청사항 적기 · 선택', { exact: true }).click();
-  await expect(request).toBeVisible();
-  // 펼치면 접기 줄이 사라지므로, 키보드 사용자가 길을 잃지 않게 입력칸으로 포커스를 옮긴다.
-  await expect(request).toBeFocused();
-  // 다음 단계에 갔다 와도 방문자가 연 상자는 열린 채다(적은 요청이 숨지 않게).
-  await request.fill('배당 위주로 바꾸고 싶어요');
-  await addHolding(page);
-  await page.getByRole('button', { name: '다음', exact: true }).click();
-  await page.getByRole('button', { name: '앞 질문으로' }).click();
-  await expect(page.getByLabel('요청사항', { exact: true })).toBeVisible();
-  // 새로 열어도 이미 적은 요청이 있으면 모바일에서도 펼쳐 보인다.
-  await page.reload();
-  await expect(page.getByLabel('요청사항', { exact: true })).toHaveValue('배당 위주로 바꾸고 싶어요');
-  await expect(page.getByLabel('요청사항', { exact: true })).toBeVisible();
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await page.evaluate(() => sessionStorage.clear());
-  await page.reload();
-  await expect(page.getByLabel('요청사항', { exact: true })).toBeVisible();
-});
-
-async function addHolding(page: Page) {
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 종목 찾기' }).fill('VOO');
-  await page.keyboard.press('Enter');
-  await page.keyboard.type('1000000');
-}
-
-// 이탈 분석: 해 볼 가치를 확인하기 전에 떠난다 — 입력 전에 받을 결과를 보여주되, 닫으면 하던 자리로 돌아온다.
 test('the example result opens as a picture and returns to where the visitor was', async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 640 });
-  const search = await open(page);
-  expect(await aboveBar(page, search)).toBe(true); // 예시 링크가 첫 행동을 밀어내지 않는다
-  const trigger = page.getByRole('button', { name: '예시 결과 보기' });
+  await open(page);
+  const trigger = page.getByRole('button', { name: '예시 보기' });
   await trigger.click();
   const dialog = page.getByRole('dialog', { name: '이런 결과를 받아요' });
   await expect(dialog.getByRole('img', { name: /예시 결과/ })).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
   await expect(trigger).toBeFocused();
-  await trigger.click();
-  await dialog.getByRole('button', { name: '예시 결과 닫기' }).click();
-  await expect(dialog).toBeHidden();
 });
 
-// 처음 온 방문자는 저장한 것이 없어 대시보드가 비어 있다 — 첫 행동 대신 빈 화면으로 빠지기 전에 한 번 묻는다.
-test('a first-time visitor is asked before going to an empty dashboard', async ({ page }) => {
-  await open(page);
-  await page.getByRole('link', { name: '내 포트폴리오 ↗' }).click();
-  const ask = page.getByRole('dialog', { name: /아직 처음이라 저장된 포트폴리오가 없어요/ });
-  await expect(ask).toBeVisible();
-  await ask.getByRole('button', { name: '취소' }).click();
-  await expect(page).not.toHaveURL(/view=dashboard/);
-  await page.getByRole('link', { name: '내 포트폴리오 ↗' }).click();
-  await page.getByRole('button', { name: '대시보드로 가기' }).click();
-  await expect(page).toHaveURL(/view=dashboard/);
+// S2: 다시 온 방문자에게는 지난 판정을 먼저 보이고 "바꾸셨나요?"로 다음 길을 고르게 한다.
+const latest = { id: 'earlier', state: 'succeeded', created_at: '2026-10-21T02:00:00Z',
+  input: { holdings: [{ name: 'ACE 글로벌반도체TOP4 Plus', instrument_id: 'KR:446770', kind: 'etf', account: '일반 계좌', amount_krw: '2500000' }], horizon: '10년 이상', question: '', input_mode: 'amount',
+    preferences: { accounts: ['일반 계좌'], contribution: '이미 다 매수한 상태에요', interests: [], note: '', tax_profile: null } },
+  result: { sections: {}, sources: [], recommendation: { execution: { status: 'ready', rows: [
+    { instrument_id: 'KR:446770', name: 'ACE 글로벌반도체TOP4 Plus', account: '일반 계좌', before_krw: '2500000', target_krw: '0', buy_krw: '0', sell_krw: '2500000', cash_used_krw: '0' },
+    { instrument_id: 'KR:360750', name: 'TIGER 미국S&P500', account: '일반 계좌', before_krw: '0', target_krw: '2500000', buy_krw: '2500000', sell_krw: '0', cash_used_krw: '0' }] } } } };
+test('a returning visitor sees the last verdict and either edits a prefilled input or reopens the result', async ({ page }) => {
+  await open(page, null, latest);
+  await expect(page.getByRole('heading', { name: /다시 오셨네요/ })).toBeVisible();
+  const card = page.getByRole('region', { name: '지난 분석' });
+  await expect(card).toContainText('10월 21일');
+  // 판정은 실행표에서 계약과 같은 규칙으로 정한다: 바뀌는 종목이 둘이면 '하나만'이 아니다.
+  await expect(card).toContainText('여러 종목을 바꾸는 게 나아요');
+  await expect(card).toContainText('0원 → 250만 원 새로 사기');
+  await expect(page.getByRole('link', { name: /내 포트폴리오/ })).toHaveAttribute('href', '?view=dashboard');
+  await card.getByRole('button', { name: '바꿨어요' }).click();
+  await expect(page.getByRole('textbox', { name: 'ACE 글로벌반도체TOP4 Plus 금액' })).toHaveValue('2,500,000');
+  await page.getByRole('button', { name: '처음 화면으로' }).click();
+  await page.getByRole('button', { name: '아직이요' }).click();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('edge-portfolio-job'))).toBe('earlier');
 });
 
-test('a dashboard check that fails never traps the visitor on the input screen', async ({ page }) => {
-  await open(page);
-  await page.route('**/api/portfolio/workbook', route => route.fulfill({ status: 503, json: {} }));
-  await page.getByRole('link', { name: '내 포트폴리오 ↗' }).click();
-  await expect(page).toHaveURL(/view=dashboard/);
+// 계산하지 못한 지난 분석(실행표 없음)을 '이대로 가도 돼요'로 읽으면 고객에게 틀린 판정을 준다.
+test('a past analysis without a computed execution is not shown as keep', async ({ page }) => {
+  // 한도 초과(infeasible)로 실행할 수 없는 표는 줄이 남아 있어도 판정·금액을 보이지 않는다.
+  await open(page, null, { ...latest, result: { ...latest.result, recommendation: { execution: { ...latest.result.recommendation.execution, status: 'infeasible' } } } });
+  const card = page.getByRole('region', { name: '지난 분석' });
+  await expect(card).toContainText('지난 분석을 다시 볼 수 있어요');
+  await expect(card).not.toContainText('바꾸는 게 나아요');
+  await expect(card).not.toContainText('새로 사기');
 });
 
-test('a visitor with an earlier analysis but no saved holdings goes straight to the dashboard', async ({ page }) => {
-  // 대시보드는 최근 분석도 보여준다 — 분석을 해 본 사람에게 '처음'이라고 묻지 않는다.
-  await open(page, null, { id: 'earlier', state: 'succeeded' });
-  await page.getByRole('link', { name: '내 포트폴리오 ↗' }).click();
-  await expect(page).toHaveURL(/view=dashboard/);
+// 지난 분석으로 시작해 고친 입력은 처음 화면에 다녀와도 지난 분석 입력으로 덮이지 않는다.
+test('an edited restart survives a round trip through the return screen', async ({ page }) => {
+  await open(page, null, latest);
+  await page.getByRole('button', { name: '바뀐 포트폴리오로 다시 분석' }).click();
+  await page.getByRole('textbox', { name: 'ACE 글로벌반도체TOP4 Plus 금액' }).fill('3000000');
+  await page.getByRole('button', { name: '처음 화면으로' }).click();
+  await expect(page.getByText('작성하던 입력이 있어요')).toBeVisible();
+  await page.getByRole('button', { name: '바뀐 포트폴리오로 다시 분석' }).click();
+  await expect(page.getByRole('textbox', { name: 'ACE 글로벌반도체TOP4 Plus 금액' })).toHaveValue('3,000,000');
 });
 
-test('a visitor with a saved portfolio goes straight to the dashboard', async ({ page }) => {
-  await open(page, { assets: [{ id: 'a', instrument_id: 'US:VOO', name: 'VOO', account: '일반 계좌', category: '주식', amount: 1000000 }] });
-  await page.getByRole('link', { name: '내 포트폴리오 ↗' }).click();
-  await expect(page).toHaveURL(/view=dashboard/);
+// 지난 입력으로 시작한 것은 그 한 번뿐이다 — 그 분석이 끝난 뒤 새 분석은 지난 보유를 다시 채우지 않는다.
+test('a prefilled restart is used once and a later new analysis starts empty', async ({ page }) => {
+  await page.route('**/api/portfolio/**', route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/catalog')) return route.fulfill({ json: catalog });
+    if (path.endsWith('/analyses/latest')) return route.fulfill({ json: latest });
+    if (path.endsWith('/analyses') && route.request().method() === 'POST') return route.fulfill({ json: { id: 'done', state: 'queued' } });
+    if (path.endsWith('/analyses/done')) return route.fulfill({ json: { id: 'done', state: 'succeeded', result: { sections: { opinion: { paragraphs: ['테스트 결론'], evidence: [], limitations: [] } }, sources: [] } } });
+    return route.fulfill({ json: {} });
+  });
+  await page.goto('/portfolio/');
+  await page.getByRole('button', { name: '바뀐 포트폴리오로 다시 분석' }).click();
+  await expect(page.getByRole('textbox', { name: 'ACE 글로벌반도체TOP4 Plus 금액' })).toHaveValue('2,500,000');
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await page.getByRole('button', { name: '다음', exact: true }).click();
+  await page.getByRole('button', { name: '분석 시작하기' }).click();
+  await page.getByRole('button', { name: '새 포트폴리오 분석하기' }).click();
+  await expect(page.getByRole('searchbox', { name: '종목 이름이나 코드로 찾기' })).toBeVisible();
+  await expect(page.locator('.fl-hold')).toHaveCount(0);
 });

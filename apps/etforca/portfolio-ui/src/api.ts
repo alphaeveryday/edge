@@ -5,7 +5,7 @@ export const titles: Record<Role, string> = { question: '질문에 대한 답', 
 export type Holding = { name: string; account: string; amount_krw: string | null; kind?: 'cash' | 'etf' | 'stock'; instrument_id?: string };
 export type Instrument = { id: string; market: string; ticker: string; code: string; name: string; kind: 'etf' | 'cash' | 'stock'; symbol?: string };
 export type Catalog = { fetched_at: string; counts: { KR: number; US: number }; instruments: Instrument[] };
-export type Input = { draft_id?: string; holdings: Holding[]; question: string; horizon: string; input_mode?: string; planning?: boolean; preferences?: { accounts: string[]; contribution: string; dividend_goal?: string; interests: string[]; note: string; tax_profile: import('./TaxAccounts').TaxProfile | null } };
+export type Input = { draft_id?: string; holdings: Holding[]; question: string; horizon: string; input_mode?: string; planning?: boolean; preferences?: { accounts: string[]; contribution: string; dividend_goal?: string; interests: string[]; note: string; tax_profile: import('./accountEligibility').TaxProfile | null } };
 export type Section = { paragraphs: string[]; evidence: { source_id: string; quote: string }[]; limitations: string[] };
 export type Evaluation = { scores: { leadership: number; profitability: number; stability: number } | null; overall: number | null; reason: Section; method: string; rubric_version?: number };
 export type Allocation = { instrument_id: string; name: string; ticker: string; kind: 'cash' | 'etf' | 'stock'; account: string; weight_pct: number; amount_krw: string | null };
@@ -37,7 +37,7 @@ export type Report = {
   suggested_questions?: string[];
   type_card?: { key: string; stats?: unknown };
 };
-export type Job = { id: string; state: 'queued' | 'running' | 'succeeded' | 'failed'; stage: Role | null; input?: Input; result: Report | null; failure: string | null; started_at: string | null };
+export type Job = { id: string; state: 'queued' | 'running' | 'succeeded' | 'failed'; stage: Role | null; input?: Input; result: Report | null; failure: string | null; started_at: string | null; created_at?: string };
 
 let visitorSession: Promise<unknown> | null = null;
 export function ensureVisitorSession() {
@@ -84,7 +84,7 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
       };
       throw Object.assign(new Error(messages[body.detail] || '목록에서 종목 또는 현금을 선택하고 금액을 확인해 주세요.'), { status: response.status });
     }
-    if (response.status === 429) throw Object.assign(new Error('현재 요청이 많거나 오늘 체험 횟수를 모두 사용했어요. 잠시 후 다시 시도해 주세요.'), { status: response.status });
+    if (response.status === 429) throw Object.assign(new Error('현재 요청이 많거나 오늘 체험 횟수를 모두 사용했어요. 잠시 후 다시 시도해 주세요.'), { status: response.status, code: body.detail });
     if (response.status === 401) throw Object.assign(new Error('분석을 시작한 브라우저에서 다시 열어 주세요.'), { status: response.status });
     throw Object.assign(new Error('요청을 처리하지 못했어요. 연결 상태를 확인해 주세요.'), { status: response.status });
   }

@@ -405,11 +405,11 @@ test('the AI tab shows the original report and can start another analysis withou
   await expect(page.locator('#result')).toBeVisible();
   await expect(page.locator('.r8-past-chart')).toBeVisible();
   await page.getByRole('button', { name: '새로 분석하기', exact: true }).click();
-  await expect(page.locator('.step').first()).toBeVisible();
+  await expect(page.locator('.fl-step').first()).toBeVisible();
   await expect(page.locator('#result')).toHaveCount(0);
   await page.getByRole('button', { name: '한눈에', exact: true }).click();
   await page.getByRole('button', { name: 'AI 포폴 분석', exact: true }).click();
-  await expect(page.locator('.step').first()).toBeVisible();
+  await expect(page.locator('.fl-step').first()).toBeVisible();
 });
 
 test('latest analysis is recovered from the server even without the local result pointer', async ({ page }) => {
@@ -418,9 +418,8 @@ test('latest analysis is recovered from the server even without the local result
   await page.route('**/api/portfolio/analyses/*', r => r.fulfill({ json: job }));
   await page.goto('/portfolio/?view=dashboard');
   await page.getByRole('button', { name: 'AI 포폴 분석', exact: true }).click();
-  await expect(page.locator('.research-motion svg')).toBeVisible();
   await expect(page.locator('.progress-steps')).toHaveCount(0);
-  await expect(page.locator('.research-motion g.active')).toHaveCount(1);
+  await expect(page.locator('.fl-agent[data-s="run"]')).toHaveCount(2);
   await expect(page.getByRole('list', { name: '분석 역할과 검토 흐름' })).toBeVisible();
 });
 
