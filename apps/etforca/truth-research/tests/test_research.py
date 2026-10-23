@@ -1,6 +1,7 @@
 """오늘 오른 종목 조사: 코드가 맡은 목록·시세·공시·게시·재조사 규칙. 시세·KIND·모델 세션은 가짜로 바꾼다."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
@@ -359,7 +360,7 @@ def test_prices_update_only_price_fields_and_keep_verdicts(cfg):
     assert report["published"] and doc["pricedAt"] == "2026-10-22T11:31:00+09:00" and doc["generatedAt"] == first["generatedAt"]
     assert item["price"] == 1200.0 and item["series"][-1] == ["11:50", 1200.0]
     assert item["changePct"] == round((1200 / before["prevClose"] - 1) * 100, 2) and item["impact"] == round(item["changePct"] * 0.8, 2)
-    assert {k: item[k] for k in ("tag", "event", "finding", "sources")} == {k: before[k] for k in ("tag", "event", "finding", "sources")}
+    assert {k: item[k] for k in ("tag", "event", "finding", "sources", "marks")} == {k: before[k] for k in ("tag", "event", "finding", "sources", "marks")}
     assert json.loads(LocalStore(cfg.store).get("movers/2026-10-22.json")[0]) == doc  # 다음 조사 실행이 이어 받는 원본도 같다
     # 급등 뒤 전일 아래로 밀리면 상승률이 음수가 된다 — 되돌림 예상 폭은 0으로 두고 게시는 계속된다(계약상 음수 불가)
     report = refresh_prices(cfg.store, cfg.publish, quotes=Ticking(900.0, "2026-10-22T11:40:00+09:00"), now=NOW + timedelta(minutes=30))
@@ -471,12 +472,14 @@ def test_watch_stops_at_the_regular_session_close(cfg):
 
 def test_each_verdict_is_kept_as_a_chart_mark_with_the_price_seen_then(cfg):
     # 그래프에 판정 시점마다 점을 찍는다 — 판정이 뒤집혀도 앞 판정의 시각·가격이 남아야 언제 무엇으로 봤는지 보인다.
+    # 점의 가격은 판정 세션에 보여 준 가격이다(그래프의 Yahoo 가격 1300 도, 나중 가격도 아니다).
     _seed_news(cfg)
-    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
-    _run(cfg, src, _judging({"900010": "pending"}))
-    _run(cfg, src, _judging({"900010": "false"}), kind=FakeKind(extra=["20261022000099"]), now=NOW + timedelta(hours=1))
+    hot = _m("900010", "가나다전자", 29.9)
+    _run(cfg, FakeQuotes({"KOSDAQ": [replace(hot, price=1200.0)]}), _judging({"900010": "pending"}))
+    _run(cfg, FakeQuotes({"KOSDAQ": [replace(hot, price=1450.0)]}), _judging({"900010": "false"}),
+         kind=FakeKind(extra=["20261022000099"]), now=NOW + timedelta(hours=1))
     marks = _latest(cfg)["items"][0]["marks"]
-    assert marks == [{"at": "11:35", "tag": "pending", "price": 1300.0}, {"at": "12:35", "tag": "false", "price": 1300.0}]
+    assert marks == [{"at": "11:35", "tag": "pending", "price": 1200.0}, {"at": "12:35", "tag": "false", "price": 1450.0}]
 
 
 def test_marks_start_from_the_last_verdict_saved_before_history_existed(cfg):
