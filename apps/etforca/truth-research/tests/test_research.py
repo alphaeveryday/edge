@@ -510,6 +510,7 @@ def _tie_then(tag_after, *, finished=True):
             state["achDecision"], state["webCalls"], state["disclosureReads"] = {"tag": "pending", "margin": 0}, 10, 8
         elif tag_after:
             state["moverVerdict"], state["premiseDecision"], state["done"] = _verdict(tag_after), {"tag": tag_after, "method": "premises"}, finished
+            state["achDecision"] = {"tag": "pending", "margin": 0, "redone": True}  # 전제 검증 중 표를 다시 짠 흔적
         ws.save_state(state)
         return SessionResult(case_id=code, done=bool(state["done"]))
     run.calls = calls
@@ -553,4 +554,4 @@ def test_premise_verdict_left_unfinished_is_not_published(cfg):
     report = _run(cfg, src, _tie_then("false", finished=False))
     assert _latest(cfg)["items"][0]["tag"] == "pending" and report["judged"][0]["premise"]["decided"] is False
     seen = json.loads(LocalStore(cfg.store).get("state/movers-seen/2026-10-22.json")[0])
-    assert "premiseDecision" not in seen["900010"]
+    assert "premiseDecision" not in seen["900010"] and "redone" not in seen["900010"]["decision"]

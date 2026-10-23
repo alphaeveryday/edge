@@ -229,7 +229,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
             if result.done and _tied(ws.state):
                 # 동점이면 같은 작업 폴더(읽은 출처 그대로)에서 전제 검증 세션을 한 번 더, 따로 정한 추가 예산(웹·공시 원문 읽기 포함)으로.
                 # finish 까지 가지 못하면 그 세션의 판정은 초안이다 — 앞 판정(보류)으로 되돌린다(첫 세션과 같은 규칙)
-                first = ws.state["moverVerdict"]
+                first = {k: ws.state.get(k) for k in ("moverVerdict", "ach", "achDecision")}
                 try:
                     with ws.lock():
                         state = ws.state
@@ -244,7 +244,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
                 if not premise.done:
                     with ws.lock():
                         state = ws.state
-                        state["moverVerdict"] = first
+                        state.update(first)  # 판정·표·표 판정 모두 앞 세션 것으로(감사 기록이 게시와 어긋나지 않게)
                         state.pop("premiseDecision", None)
                         ws.save_state(state)
             state = ws.state
