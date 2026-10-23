@@ -154,13 +154,17 @@ def funding_assumptions(funding):
             for name in dict.fromkeys(funding.estimated_fields) if getattr(funding, name) is not None)]
 
 
+def uses_text_funding(request, decision=None):
+    """8차: 입력 칸의 월 납입(monthly_krw)이 글 해석보다 먼저다. 후속 질문이 납입을 새로 정하면(검증된 funding) 그 값이 먼저다.
+    후속 질문은 이 경우 저장된 funding 을 물려받지 않는다(agent.py)."""
+    return getattr(request, 'monthly_krw', None) is None or bool(getattr(request, 'funding_questions', None) and decision and decision.funding is not None)
+
+
 def resolve_funding(request, decision=None):
-    """8차: 입력 칸의 월 납입(monthly_krw)이 있으면 글 해석보다 먼저 쓴다."""
     funding = resolve_text_funding(request, decision)
-    monthly = getattr(request, 'monthly_krw', None)
-    if monthly is None or getattr(request, 'funding_questions', None) and decision and decision.funding is not None:
-        return funding  # 후속 질문이 납입을 바꾸거나 없애면(검증된 funding) 그 값이 먼저다
-    return {'additional_krw': Decimal(0), **(funding or {}), 'monthly_krw': Decimal(monthly)}
+    if uses_text_funding(request, decision):
+        return funding
+    return {'additional_krw': Decimal(0), **(funding or {}), 'monthly_krw': Decimal(request.monthly_krw)}
 
 
 def resolve_text_funding(request, decision=None):
@@ -255,7 +259,7 @@ def plan_execution(request, allocations, decision=None):
     rules = [rule for rule in decision.constraints if rule.kind == 'no_sell'] if decision else []
     no_sell_ids = set().union(*(set(rule.instrument_ids) for rule in rules)) if rules and all(rule.instrument_ids for rule in rules) else set()
     result = build_execution(request, allocations, monthly_krw=funding.get('monthly_krw'), no_sell=bool(rules), no_sell_ids=no_sell_ids)
-    if result['monthly_plan'] and decision and decision.funding is not None and getattr(request, 'monthly_krw', None) is None:
+    if result['monthly_plan'] and decision and decision.funding is not None and uses_text_funding(request, decision):
         result['assumptions'].extend(funding_assumptions(decision.funding))  # 추정한 월 납입은 가정이라고 적는다
     return result
 

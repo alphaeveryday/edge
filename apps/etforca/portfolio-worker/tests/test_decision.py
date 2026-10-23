@@ -302,6 +302,8 @@ def test_one_won_of_new_leverage_is_a_new_buy():
     # '새로 사는 레버리지 0원' 계약: 비중 반올림 허용으로 몇백 원 매수가 지나가면 안 된다
     req = holder([('US:QLD', 6000000), ('KR:360750', 4000000)], [{'kind': 'no_leverage'}])
     assert chip_checks(req, [('US:QLD', 60.004), ('KR:360750', 39.996)])['no_leverage'] == 'fail'
+    assert chip_checks(req, [('US:QLD', 60.00001), ('KR:360750', 39.99999)])['no_leverage'] == 'fail'  # 1원 매수
+    assert chip_checks(req, [('US:QLD', 60.000004), ('KR:360750', 39.999996)])['no_leverage'] == 'pass'  # 1원이 안 되는 끝자리
 
 
 def test_leverage_only_holder_with_no_sell_is_not_made_infeasible_by_monthly_money():
@@ -329,3 +331,36 @@ def test_model_may_structure_the_numeric_monthly_amount():
     req = holder([('KR:360750', 1000)], monthly_krw=500000)
     decision = Decision(funding={'source': '매달 50만원', 'monthly_krw': 500000})
     assert validate_decision(decision, req, CATALOG).funding.monthly_krw == 500000
+
+
+async def test_followup_without_new_funding_keeps_the_saved_monthly_amount():
+    # 후속 질문이 납입을 말하지 않으면 옛 글 해석(30만)이 숫자 칸(50만)을 뒤집으면 안 된다
+    import json
+    from edge_portfolio.followup import answer_question
+    from report_fixtures import final_payload
+    from test_agent import Evidence
+    report = {'input': {'holdings': [], 'planning': True, 'horizon': '10년 이상', 'monthly_krw': 500000,
+                        'preferences': {'contribution': '매달 30만원'}},
+              'decision': {'funding': {'source': '매달 30만원', 'monthly_krw': 300000}}, 'sources': Evidence.sources}
+    stages = []
+    async def model(payload):
+        if stages[-1] != 'question':
+            assert json.loads(payload['messages'][1]['content'])['active_decision']['funding'] is None
+            raise RuntimeError('FUNDING_CHECKED')
+        content = {**final_payload()['question'], 'decision': {'kind': 'review'}}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+    with pytest.raises(RuntimeError, match='FUNDING_CHECKED'):
+        await answer_question('세금은 얼마나 나와요?', report, 'test', model_call=model, evidence=Evidence(), on_stage=stages.append)
+
+
+def test_followup_estimated_monthly_amount_keeps_its_assumption():
+    # 후속 질문의 추정 납입(월 50 정도)을 쓰면 추정이라는 설명도 함께 실행표에 남는다
+    from edge_portfolio.decision import Funding
+    from edge_portfolio.execution import plan_execution
+    from edge_portfolio.followup import FollowupInput
+    req = FollowupInput(holdings=[{'name': 'KR:360750', 'instrument_id': 'KR:360750', 'amount_krw': 1000000}], horizon='10년 이상', monthly_krw=300000,
+                        question='처음\n\n후속 질문: 월 50 정도면?', funding_questions=['처음', '월 50 정도면?'])
+    changed = Decision(funding=Funding(source='월 50 정도면?', monthly_krw=500000, estimated_fields=['monthly_krw'], assumptions=['월 50만원으로 가정']))
+    plan = plan_execution(req, [{'instrument_id': 'KR:360750', 'account': '일반 계좌', 'weight_pct': 100}], changed)
+    assert plan['monthly_plan'][0]['krw'] == '500000'
+    assert '월 50만원으로 가정' in plan['assumptions']

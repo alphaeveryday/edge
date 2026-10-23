@@ -137,7 +137,7 @@ def held_weights(request):
     return held
 
 
-def chip_status(rule, weights, request, catalog, rows=()):
+def chip_status(rule, weights, request, catalog):
     """칩 하나의 결정적 판정. 부딪치면 보류하지 않고 '팔지 않기'를 먼저 지킨 뒤 남은 칩을 substituted 로 둔다."""
     held = held_weights(request)
     no_sell = any(chip.kind == 'no_sell' for chip in getattr(request, 'constraints', []))
@@ -149,12 +149,12 @@ def chip_status(rule, weights, request, catalog, rows=()):
                   and (has(key, 'leverage') if rule.kind == 'no_leverage' else catalog.get(key, {}).get('market') != 'KR')]
         if held is None:
             return 'unknown' if banned else 'pass'
-        # 1원이라도 더 사면 새로 산 것이다. 허용 오차는 원 단위 반올림(그 종목 행 수만큼의 원)뿐이다
+        # 1원이라도 더 사면 새로 산 것이다. 1원이 안 되는 끝자리(비중 소수점)만 원 단위 반올림으로 본다
         total = sum(h.amount_krw for h in request.holdings) if request.input_mode == 'amount' else None
         def bought(key):
             if not total:
                 return weights[key] > held.get(key, 0)
-            return weights[key] * total / 100 > held.get(key, 0) * total / 100 + sum(row['instrument_id'] == key for row in rows)
+            return (weights[key] - held.get(key, 0)) * total / 100 >= 1
         if any(bought(key) for key in banned):
             return 'fail'
         # 팔지 않기 때문에 가진 레버리지를 남겼다. 매달 넣는 돈을 넣지 않아 몫을 줄인다(split_monthly)
@@ -182,7 +182,7 @@ def check_constraints(decision, rows, request, catalog):
     checks = []
     for number, rule in enumerate(decision.constraints, 1):
         if rule.kind in {'no_leverage', 'kr_listed_etf_only', 'some_bonds', 'dividend'} or rule.kind == 'max_positions' and getattr(request, 'constraints', None):
-            checks.append({'constraint': number, 'kind': rule.kind, 'source': rule.source, 'status': chip_status(rule, weights, request, catalog, rows)})
+            checks.append({'constraint': number, 'kind': rule.kind, 'source': rule.source, 'status': chip_status(rule, weights, request, catalog)})
             continue
         if rule.kind == 'unverified':
             # Preserve the condition for model judgment without certifying it in code.

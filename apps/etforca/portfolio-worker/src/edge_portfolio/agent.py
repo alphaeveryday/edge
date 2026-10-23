@@ -643,7 +643,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 inherited = Decision.model_validate(prior_report.get('decision') or {})
                                 # 조건은 저장된 입력의 칩에서 다시 만든다(validate_decision). 옛 보고서의 글 조건은 잇지 않는다
                                 decision.objectives = decision.objectives or inherited.objectives
-                                if decision.funding is None and not decision.funding_text:
+                                # 숫자 칸의 월 납입이 있으면 옛 글 해석을 물려받지 않는다. 그래야 저장된 monthly_krw 가 그대로 쓰인다
+                                if decision.funding is None and not decision.funding_text and getattr(request, 'monthly_krw', None) is None:
                                     decision.funding = inherited.funding.model_copy(deep=True) if inherited.funding is not None else None
                                 decision.funding_text = zero_funding_quote(request, decision) or decision.funding_text or inherited.funding_text
                                 if followup_question:
