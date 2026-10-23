@@ -602,7 +602,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         published.update(result_fields(published, sections, final, request, checks, market.catalog, evidence.sources))
                         if published.get('answer') and (amount_error := answer_amount_error(published, request)):
                             # 분석 전체에서 두 번만, 모델 호출 예산이 남았을 때만 고쳐 쓰게 한다(조사 보완 라운드가 repairs 를 되돌려도)
-                            if answer_repairs < 2 and not finalizing and calls < MAX_MODEL_CALLS - 2:
+                            if answer_repairs < 2 and repairs < 2 and not finalizing and calls < MAX_MODEL_CALLS - 2:
                                 answer_repairs += 1
                                 raise ValueError('ANSWER_AMOUNT_MISMATCH: ' + amount_error)
                             published.pop('answer')  # 고쳐 쓰지 못한 답은 싣지 않는다. 화면은 기존 답으로 대신 보인다

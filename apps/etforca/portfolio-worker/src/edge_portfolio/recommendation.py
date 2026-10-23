@@ -173,7 +173,7 @@ def verdict_kind(request, execution):
 def clean_quote(text):
     """근거 문장에서 마크다운 머리표·링크·표 조각을 걷어 낸다. 표 행은 문장이 아니라 버린다."""
     text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text or '')
-    text = re.sub(r'^\s*#+\s*', '', text).replace('**', '').replace('__', '')
+    text = re.sub(r'(?m)^\s*#+\s*', '', text).replace('**', '').replace('__', '')
     if text.count('|') >= 2 or re.fullmatch(r'[\s|:#*\-–—]*', text):
         return ''
     return re.sub(r'\s+', ' ', text).strip()
@@ -236,7 +236,8 @@ def result_fields(published, sections, final, request, checks, catalog, sources)
             return round(sum(weight for key, weight in weights.items() if trait in traits(catalog.get(key, {}))), 1)
         def monthly_into(trait, label):
             into = any(trait in traits(catalog.get(row['instrument_id'], {})) for row in execution.get('monthly_plan', []))
-            return f'매달 넣는 돈을 {label}에 넣어 늘려요.' if into else f'매달 넣을 돈이 생기면 {label}에 넣어 늘려요.'
+            # 매달 배분은 추천 구성 안에서만 한다. 구성에 그 종목이 없으면(팔지 않아 새로 살 돈이 없으면) 그렇게 말한다
+            return f'매달 넣는 돈을 {label}에 넣어 늘려요.' if into else f'팔지 않으면 {label}를 새로 담을 돈이 없어 지금은 채우지 못해요.'
         values = {'bond': share('bond'), 'dividend': share('dividend'), 'count': len(weights),
                   'monthly_bond': monthly_into('bond', '채권 ETF'), 'monthly_dividend': monthly_into('dividend', '배당 ETF')}
         chips = {chip.kind for chip in getattr(request, 'constraints', [])}
@@ -290,6 +291,8 @@ def allowed_amounts(published, request):
         for field in fields:
             sums[(row['instrument_id'], field)] = sums.get((row['instrument_id'], field), 0) + int(row[field])
     add(*sums.values())
+    for field in fields:  # 여러 종목을 합친 총 매수·매도액('총 300만 원을 옮기세요')
+        add(sum(int(row[field]) for row in execution.get('rows', [])))
     for account in execution.get('accounts', []):
         add(*(account.get(field) for field in ('before_krw', 'target_krw', 'deposit_krw', 'withdrawal_krw')))
     monthly = {}

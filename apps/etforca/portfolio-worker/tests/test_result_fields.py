@@ -249,3 +249,15 @@ def test_relaxed_chip_is_not_applied_by_checks_or_monthly_split():
     plan = plan_execution(request, [{'instrument_id': 'KR:069500', 'account': '일반 계좌', 'weight_pct': 95},
                                     {'instrument_id': 'KR:148070', 'account': '일반 계좌', 'weight_pct': 5}], decision)
     assert len(plan['monthly_plan']) == 2  # 채권에만 몰아주지 않는다
+
+
+def test_answer_may_state_the_total_moved_across_instruments():
+    request = holder([('KR:069500', 1000000, '일반 계좌'), ('KR:360750', 2000000, '일반 계좌')])
+    published = {'recommendation': {'execution': {'rows': [row('KR:069500', 1000000, 0, sell=1000000), row('KR:360750', 2000000, 0, sell=2000000),
+                                                           row('KR:148070', 0, 1500000, buy=1500000), row('US:QLD', 0, 1500000, buy=1500000)]}},
+                 'answer': '총 300만 원을 옮기세요.'}
+    assert answer_amount_error(published, request) is None
+
+
+def test_multiline_quote_headers_are_cleaned():
+    assert clean_quote('상품 설명\n##### 총보수 0.03%') == '상품 설명 총보수 0.03%'
