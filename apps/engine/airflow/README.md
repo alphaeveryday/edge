@@ -12,7 +12,7 @@
 | `dags/edge_investor_intraday.py` | 장중 수급 DAG: `plan → collect → normalize → load → verdict` |
 | `dags/edge_source_daily.py` | 원천 관측 DAG(ALPHA-1130, Airflow 전용 레인 `source-daily`): `plan → {매크로·업종·재무} 각각 collect → normalize → load → report → verdict`. 생성 시 pause — 아래 "원천 관측 레인" |
 | `dags/edge_disclosure.py` | 공시 보충 배치 DAG(ALPHA-1407, 평일 19:30): `plan → collect → {정제 2개} → load → report → verdict`. 생성 시 pause. dev 는 10-21 전환으로 Airflow 가 실행한다(ALPHA-1425, SFN 스케줄 DISABLED) — 아래 "공시 보충 배치 레인" |
-| `dags/edge_premarket.py` | 장전 유니버스 DAG(ALPHA-1408, 평일 07:00, 원장 밖): `collect → normalize → universe → verdict`. 생성 시 pause. 아직 SFN 이 실행한다 — 아래 "장전 유니버스 레인" |
+| `dags/edge_premarket.py` | 장전 유니버스 DAG(ALPHA-1408, 평일 07:00, 원장 밖): `collect → normalize → universe → verdict`. 생성 시 pause. dev 는 10-23 전환으로 Airflow 가 실행한다(ALPHA-1429, SFN 스케줄 DISABLED) — 아래 "장전 유니버스 레인" |
 | `dags/edge_news.py` | 뉴스 DAG(ALPHA-1409, 매일 00:10·08:10): `plan → collect → normalize → {tag, load_documents} → load_assertions → assemble → report → verdict`. 생성 시 pause. 아직 SFN 이 실행한다 — 아래 "뉴스 레인" |
 | `dags/edge_dividend_daily.py` | 배당 갱신 전용 DAG: 03:00 KST, 기존 배치 종료 확인 → plan → collect → normalize → load → report. 생성 시 pause. 수집·조회 범위 계약과 활성화 순서는 `docs/design/portfolio-dividend-ledger.md` |
 | `tests/` | DagBag 파싱, terraform(슬롯·명령) 대조, exit code·당일 수집·재처리·보고·활성화 규칙. CI `test-airflow.yml`이 공식 Airflow 이미지(다이제스트 고정) 안에서 실행한다 |
@@ -1243,7 +1243,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 ## 장전 유니버스 레인(premarket, ALPHA-1408)
 
-**현재 상태(2026-10-20): 실행 경로만 있다. 운영 전환 전이다.** dev 의 평일 07:00 슬롯은 SFN `edge-dev-data-pipeline-premarket` 이 돈다. `edge_premarket` 은 pause 상태로 배포되고, `premarket_orchestrator` 는 기본값 `"SFN"` 이다.
+**현재 상태(2026-10-23): Airflow 가 실행한다(ALPHA-1429).** dev `premarket_orchestrator = "AIRFLOW"` — SFN `edge-dev-data-pipeline-premarket` 의 07:00 EventBridge 스케줄은 DISABLED 다. 평일 07:00 슬롯은 `edge_premarket`(unpause)이 돈다. SFN 상태 머신은 롤백용으로 남는다. 전환 전 10-21 21:00 수동 시험 1회가 SFN 07:00 과 같은 명령·순서로 끝났다(유니버스 무변경, 수집 3424건, 실패 ETF 0).
 
 - **원장 밖 레인이다.** 장전 수집과 마감 뒤 수집이 같은 CLI 를 쓰는데, 그 CLI 의 원장 작업은 시장 레인 소유다(`premarket_pipeline.tf` 서두).
   - 그래서 plan·report 가 없다.
@@ -1262,6 +1262,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
   - ④: SFN `edge-dev-data-pipeline-premarket`.
   - ⑤: Airflow run.
   - 전환 변수: `envs/dev/main.tf` 의 `premarket_orchestrator`. `"AIRFLOW"` 면 스케줄이 DISABLED 가 된다.
+  - 롤백 순서: `edge_premarket` pause → 위 ③~⑤ 종료 확인(queued·running·ECS 0) → 이 줄을 지우는 PR → apply. apply 를 먼저 하면 두 주체가 같은 07:00 슬롯을 돌린다.
   - 경계: 07:00 run 이 끝난 뒤, 다음 거래일 07:00 전에 바꾼다.
 - **알림이 달라진다.** SFN 의 실패·시간 초과 알람 대신 run 실패 SNS 한 통이 나간다(dagrun_timeout 포함).
   - **실행 누락 감시(ALPHA-1431).** SFN 의 스케줄러 DLQ 알람("실행이 아예 안 생김")은 스케줄이 DISABLED 면 안 운다. 대신 주기 reconcile(Airflow 호스트 밖 Fargate)이 거래일 07:32~09:00 에 그날 07:00~07:30 의 universe 성공 로그(`universe 무변경`/`universe 갱신`)를 찾는다(`ops/premarket_watch.py`).
