@@ -107,6 +107,11 @@ def _original(ws: Workspace, sid: str) -> bool:
         return True
     if sid.startswith("kind-") and sid != LIST_ID:
         return any(f"kind-{f['acptno']}" == sid for f in _mover(ws).get("filings", []))
+    return _official(ws, sid)
+
+
+def _official(ws: Workspace, sid: str) -> bool:
+    """기관(정부·거래소·법원 등) 도메인 웹 원문."""
     if not sid.startswith("web-"):
         return False
     snap = ws.snapshot(sid) or {}
@@ -202,7 +207,8 @@ def set_premises(ws: Workspace, args: dict) -> str:
             raise ToolError(f"전제 {i}: {', '.join(bad)} 는 이 세션에서 읽지 않은 출처입니다.")
         if core and about != "company":
             raise ToolError(f"전제 {i}: core 는 주가가 기대는 회사에 관한 전제만 표시합니다(업종·수급·시장 반응은 market).")
-        if status == "confirmed" and not any(_original(ws, s) for s in srcs):
+        # 확인은 회사 공시 본문·공식 원문·기관 원문만 — 거래소 투자주의·경고 같은 시장조치는 회사 주장을 확인해 주지 않는다(반박 근거로는 쓴다)
+        if status == "confirmed" and not any(_primary(ws, s) or _official(ws, s) for s in srcs):
             raise ToolError(f"전제 {i}: 원문 확인(confirmed)은 공시·회사·기관 원문이 있어야 합니다. 보도만 있으면 unverified 나 estimate 입니다.")
         if status == "refuted" and not any(s == LIST_ID or _original(ws, s) for s in srcs):
             raise ToolError(f"전제 {i}: 반박(refuted)은 원문, 또는 공시 의무가 있는 사건이 공시 목록({LIST_ID})에 없다는 근거가 있어야 합니다.")

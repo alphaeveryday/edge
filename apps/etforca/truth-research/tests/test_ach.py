@@ -283,6 +283,15 @@ def test_premise_status_needs_an_original_source_not_reports(ws):
         _premises(ws, ("계약이 맺어졌다", "company", True, "confirmed", True, [news]), ("업종이 올랐다", "market", False, "unverified", False, []))
     with pytest.raises(ToolError, match="core"):
         _premises(ws, ("업종이 올랐다", "market", True, "estimate", False, [news]), ("계약 보도", "company", False, "unverified", False, []))
+    # 거래소 투자주의 같은 시장조치는 회사 주장을 확인해 주지 않는다(반박 근거로만)
+    notice = FILING | {"acptno": "20261022000777", "submitter": "시장감시위원회", "title": "[투자주의]소수계좌 거래집중 종목"}
+    (ws.root / "mover.json").write_text(__import__("json").dumps(ws.mover() | {"filings": [FILING, notice]}, ensure_ascii=False), encoding="utf-8")
+    state = ws.state
+    state["viewed"].append("kind-20261022000777")  # 읽었다고 치고
+    ws.save_state(state)
+    with pytest.raises(ToolError, match="원문"):
+        _premises(ws, ("계약이 맺어졌다", "company", True, "confirmed", True, ["kind-20261022000777"]),
+                  ("업종이 올랐다", "market", False, "unverified", False, []))
     _read_web(ws, "web-krx", "official", "거래소가 시가총액 미달 관리종목 상장폐지 절차를 유예한다")
     _premises(ws, ("상장폐지 절차가 유예됐다", "company", False, "confirmed", True, ["web-krx"]),
               ("퇴출 위험이 사라졌다", "company", True, "refuted", True, ["web-krx"]))

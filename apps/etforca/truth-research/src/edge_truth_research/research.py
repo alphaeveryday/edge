@@ -227,19 +227,26 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind: Kind | None = None,
                 result = session.SessionResult(case_id=m.code, done=False, error=f"{type(error).__name__}: {error}")
             premise = None
             if result.done and _tied(ws.state):
-                # 동점이면 같은 작업 폴더(읽은 출처 그대로)에서 전제 검증 세션을 한 번 더, 따로 정한 추가 예산으로.
-                # 판정을 남기지 못하고 끝나도 앞 판정(보류)이 그대로 남는다
-                with ws.lock():
-                    state = ws.state
-                    prompt = _premise_prompt(m, state)
-                    state.update(done=False, premiseStage=True, webCalls=0)
-                    ws.save_state(state)
-                extra = replace(cfg, session_timeout=cfg.premise_timeout, max_tool_calls=cfg.premise_tool_calls,
-                                web_calls=cfg.premise_web_calls)
+                # 동점이면 같은 작업 폴더(읽은 출처 그대로)에서 전제 검증 세션을 한 번 더, 따로 정한 추가 예산(웹·공시 원문 읽기 포함)으로.
+                # finish 까지 가지 못하면 그 세션의 판정은 초안이다 — 앞 판정(보류)으로 되돌린다(첫 세션과 같은 규칙)
+                first = ws.state["moverVerdict"]
                 try:
+                    with ws.lock():
+                        state = ws.state
+                        prompt = _premise_prompt(m, state)
+                        state.update(done=False, premiseStage=True, webCalls=0, disclosureReads=0)
+                        ws.save_state(state)
+                    extra = replace(cfg, session_timeout=cfg.premise_timeout, max_tool_calls=cfg.premise_tool_calls,
+                                    web_calls=cfg.premise_web_calls)
                     premise = session_runner(extra, ws, code=m.code, prompt=prompt, corpus_path=corpus_path)
-                except Exception as error:  # noqa: BLE001
+                except Exception as error:  # noqa: BLE001 - 한 종목의 전제 검증 실패로 실행 전체를 멈추지 않는다
                     premise = session.SessionResult(case_id=m.code, done=False, error=f"{type(error).__name__}: {error}")
+                if not premise.done:
+                    with ws.lock():
+                        state = ws.state
+                        state["moverVerdict"] = first
+                        state.pop("premiseDecision", None)
+                        ws.save_state(state)
             state = ws.state
             table = {"ach": state.get("ach"), "decision": state.get("achDecision")}
             if state.get("premiseDecision"):

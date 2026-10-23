@@ -496,21 +496,22 @@ def test_marks_start_from_the_last_verdict_saved_before_history_existed(cfg):
 
 
 
-def _tie_then(tag_after):
-    """첫 세션은 동점(보류), 두 번째(전제 검증) 세션은 tag_after 로 판정한다(None = 판정 없이 끝남)."""
+def _tie_then(tag_after, *, finished=True):
+    """첫 세션은 동점(보류), 두 번째(전제 검증) 세션은 tag_after 로 판정한다(None = 판정 없이 끝남, finished=False = 판정 뒤 시간 초과)."""
     calls = []
 
     def run(cfg, ws, *, code, prompt, corpus_path):
         state = ws.state
-        calls.append((code, cfg.session_timeout, cfg.max_tool_calls, cfg.web_calls, state.get("premiseStage", False), state.get("webCalls")))
+        calls.append((code, cfg.session_timeout, cfg.max_tool_calls, cfg.web_calls, state.get("premiseStage", False),
+                      state.get("webCalls"), state.get("disclosureReads")))
         if not state.get("premiseStage"):
             state["moverVerdict"], state["done"] = _verdict("pending"), True
             state["ach"] = {"hypotheses": [{"id": "H1", "text": "유예", "kind": "other"}], "evidence": []}
-            state["achDecision"], state["webCalls"] = {"tag": "pending", "margin": 0}, 10
+            state["achDecision"], state["webCalls"], state["disclosureReads"] = {"tag": "pending", "margin": 0}, 10, 8
         elif tag_after:
-            state["moverVerdict"], state["premiseDecision"], state["done"] = _verdict(tag_after), {"tag": tag_after, "method": "premises"}, True
+            state["moverVerdict"], state["premiseDecision"], state["done"] = _verdict(tag_after), {"tag": tag_after, "method": "premises"}, finished
         ws.save_state(state)
-        return SessionResult(case_id=code, done=True)
+        return SessionResult(case_id=code, done=bool(state["done"]))
     run.calls = calls
     return run
 
@@ -522,7 +523,7 @@ def test_tied_verdict_gets_one_premise_session_with_its_own_budget(cfg):
     runner = _tie_then("false")
     report = _run(cfg, src, runner)
     first, second = runner.calls
-    assert not first[4] and second[1:] == (cfg.premise_timeout, cfg.premise_tool_calls, cfg.premise_web_calls, True, 0)
+    assert not first[4] and second[1:] == (cfg.premise_timeout, cfg.premise_tool_calls, cfg.premise_web_calls, True, 0, 0)
     assert _latest(cfg)["items"][0]["tag"] == "false" and report["judged"][0]["premise"]["decided"]
     seen = json.loads(LocalStore(cfg.store).get("state/movers-seen/2026-10-22.json")[0])
     assert seen["900010"]["premiseDecision"]["method"] == "premises"
@@ -543,3 +544,13 @@ def test_clear_verdicts_do_not_open_a_premise_session(cfg):
     runner = _judging({"900010": "false"})
     report = _run(cfg, FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), runner)
     assert runner.calls == ["900010"] and "premise" not in report["judged"][0]
+
+
+def test_premise_verdict_left_unfinished_is_not_published(cfg):
+    # 전제 검증이 판정을 남긴 뒤 고치다 시간이 끝나면 그 판정은 초안이다 — 허위매물 같은 낙인을 초안으로 싣지 않고 앞 판정(보류)으로 둔다.
+    _seed_news(cfg)
+    src = FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]})
+    report = _run(cfg, src, _tie_then("false", finished=False))
+    assert _latest(cfg)["items"][0]["tag"] == "pending" and report["judged"][0]["premise"]["decided"] is False
+    seen = json.loads(LocalStore(cfg.store).get("state/movers-seen/2026-10-22.json")[0])
+    assert "premiseDecision" not in seen["900010"]
