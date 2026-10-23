@@ -266,18 +266,25 @@ def contribution_room(request, account):
     return min([max(Decimal(0), ANNUAL_LIMIT_MAN[account] * 10000 - paid), *stated])
 
 
-def split_monthly(monthly, target, room_left):
-    """매달 넣을 돈을 목표 비중대로 나눈다. 올해 남은 한도로 첫 달 몫도 못 받는 계좌는 빼고 나머지에 다시 나눈다.
+def limit_group(account):
+    return 'PENSION' if account in PENSION_ACCOUNTS else account  # 연금저축·IRP 는 한도 하나를 나눠 쓴다
+
+
+def split_monthly(monthly, target, room_left, stocks=()):
+    """매달 넣을 돈을 목표 비중대로 나눈다. 보유 개별주에는 넣지 않고(더 사지 않는다), 올해 남은 한도(limit_group 별)로
+    첫 달 몫도 못 받는 계좌는 빼고 나머지에 다시 나눈다.
     ponytail: 12개월 누적 한도와 일부만 남은 한도는 계좌를 통째로 뺄 뿐 잘라 넣지 않는다 — 한도가 빠듯한 고객이 늘면 계좌별로 자른다"""
-    keys = [key for key in target if key[0] != 'CASH:KRW']
+    keys = [key for key in target if key[0] != 'CASH:KRW' and key[0] not in stocks]
     while keys:
         share = sum(target[key] for key in keys)
         plan = dict(zip(keys, allocate_amounts(monthly, [target[key] * 100 / share for key in keys])))
-        full = {key[1] for key in keys if room_left.get(key[1]) is not None
-                and sum(value for other, value in plan.items() if other[1] == key[1]) > room_left[key[1]]}
+        used = {}
+        for key, value in plan.items():
+            used[limit_group(key[1])] = used.get(limit_group(key[1]), 0) + value
+        full = {group for group, value in used.items() if room_left.get(group) is not None and value > room_left[group]}
         if not full:
             return [{'account': key[1], 'instrument_id': key[0], 'krw': str(value)} for key, value in plan.items()]
-        keys = [key for key in keys if key[1] not in full]
+        keys = [key for key in keys if limit_group(key[1]) not in full]
     return []
 
 
@@ -300,10 +307,16 @@ def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no
     target = {(row['instrument_id'], row['account']): Decimal(str(row['weight_pct'])) for row in allocations}
     if len(target) != len(allocations) or not target or sum(target.values()) != 100 or any(not w.is_finite() or w <= 0 for w in target.values()):
         raise ValueError('INVALID_EXECUTION_ALLOCATION')
+    stocks = {holding.instrument_id for holding in request.holdings if holding.kind == 'stock'}
     def monthly_plan(deposits):
         if monthly:
-            rooms = {key[1]: contribution_room(request, key[1]) for key in target}
-            result['monthly_plan'] = split_monthly(monthly, target, {account: room - deposits.get(account, 0) for account, room in rooms.items() if room is not None})
+            room_left = {}
+            for account in {key[1] for key in target}:
+                room = contribution_room(request, account)
+                if room is not None:  # 연금 두 계좌는 같은 한도에서 두 계좌에 넣은 돈을 함께 뺀다
+                    group = limit_group(account)
+                    room_left[group] = room - sum(value for name, value in deposits.items() if limit_group(name) == group)
+            result['monthly_plan'] = split_monthly(monthly, target, room_left, stocks)
             if not result['monthly_plan']:
                 result['assumptions'].append('추천 계좌에 올해 남은 납입 한도가 없어 매달 넣을 곳을 정하지 않았어요.')
     if total <= 0:
@@ -326,7 +339,6 @@ def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no
             'cash_used_krw': str(-delta if cash else 0)})
     # 고객이 넣은 개별주는 유지·축소만 한다. 종목 전체로 순매수가 생기면 실행할 수 없다.
     # 모든 실행 경로(추천 게시·리밸런싱 계산·저장안 실행)가 이 함수를 거친다. 허용 오차는 원 단위 반올림(행 수).
-    stocks = {holding.instrument_id for holding in request.holdings if holding.kind == 'stock'}
     net = {}
     for row in result['rows']:
         if row['instrument_id'] in stocks:
@@ -346,7 +358,8 @@ def build_execution(request, allocations, *, monthly_krw=None, no_sell=False, no
         before = sum(value for key, value in current.items() if key[1] == account)
         after = sum(value for key, value in amounts.items() if key[1] == account)
         movable = current.get(('CASH:KRW', account), Decimal(0)) if account == '일반 계좌' else Decimal(0)
-        tolerance = sum(1 for key in target if key[1] == account)
+        # 원 단위 반올림(행마다 1원)과 비중의 소수점 8자리 한 칸(행마다 총액의 1e-10)만큼 허용한다. 큰 금액에서도 경계를 따를 수 있게
+        tolerance = sum(1 for key in target if key[1] == account) * (1 + total / 10**10)
         deposit, withdrawal = max(Decimal(0), after - before), max(Decimal(0), before - after)
         deposits[account] = deposit
         room = contribution_room(request, account)

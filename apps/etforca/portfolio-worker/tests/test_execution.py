@@ -645,3 +645,22 @@ def test_no_sale_rounding_matches_the_final_constraint_check():
     plan = build_execution(req, rows, no_sell=True)
     verdict = check_constraints(Decision(constraints=[{'kind': 'no_sell', 'source': '매도 금지'}]), rows, req, {})[0]['status']
     assert (plan['status'] == 'ready') == (verdict == 'pass')
+
+
+def test_monthly_money_respects_the_shared_pension_limit_and_never_buys_more_of_a_held_stock():
+    # 연금저축·IRP 에 반씩 2,000만 원을 매달 넣으면 첫 달부터 합산 1,800만 원을 넘는다. 그 몫은 넣지 않는다
+    split = build_execution(request([], planning=True), [{'instrument_id': 'KR:379800', 'account': '연금저축', 'weight_pct': 50},
+                                                          {'instrument_id': 'KR:379800', 'account': 'IRP', 'weight_pct': 50}], monthly_krw=20000000)
+    assert split['monthly_plan'] == []
+    # 보유 개별주는 유지·축소만 한다. 매달 넣는 돈도 개별주를 더 사는 데 쓰지 않는다
+    stock = AnalysisInput(holdings=[{'name': 'x', 'instrument_id': 'KR:005930', 'kind': 'stock', 'amount_krw': 1000000}], horizon='10년 이상')
+    rows = [{'instrument_id': 'KR:005930', 'account': '일반 계좌', 'weight_pct': 50}, {'instrument_id': 'KR:069500', 'account': '일반 계좌', 'weight_pct': 50}]
+    assert [row['instrument_id'] for row in build_execution(stock, rows, monthly_krw=100000)['monthly_plan']] == ['KR:069500']
+
+
+def test_account_bounds_can_be_followed_for_the_largest_allowed_amounts():
+    # 비중은 소수점 8자리라 3,000억 원이면 한 칸이 30원이다. 돌려준 경계를 그대로 따른 배치가 반올림 때문에 막히면 추천이 사라진다
+    req = request([('KR:069500', 100000000000, 'ISA'), ('US:VOO', 200000000000, '일반 계좌')], preferences={'tax_profile': tax_profile(('ISA', '0'))})
+    plan = build_execution(req, [{'instrument_id': 'KR:069500', 'account': 'ISA', 'weight_pct': Decimal('33.33333333')},
+                                 {'instrument_id': 'US:VOO', 'account': '일반 계좌', 'weight_pct': Decimal('66.66666667')}])
+    assert plan['status'] == 'ready'
