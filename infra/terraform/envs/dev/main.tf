@@ -639,6 +639,12 @@ module "data_pipeline" {
   # 두 주체가 같은 07:00 슬롯을 돌린다(apps/engine/airflow/README.md "장전 유니버스 레인"의 전환·롤백).
   premarket_orchestrator = "AIRFLOW"
 
+  # 뉴스 레인(ALPHA-1409·1447). 10-24 전환: 매일 00:10·08:10 슬롯은 Airflow `edge_news` 가 실행한다. AIRFLOW 면 위
+  # news_schedule_state(ENABLED)가 DISABLED 로 덮이고, 슬롯 대조(OPS_NEWS_SCHED_HHMM)는 그 ENABLED 에서 그대로 파생된다.
+  # 롤백은 edge_news pause → 종료 확인(queued·running·ECS 0) → 이 줄을 지우는 PR → apply 순서다. apply 를 먼저 하면
+  # 두 주체가 같은 슬롯을 계획한다(apps/engine/airflow/README.md "뉴스 레인"의 전환·롤백).
+  news_orchestrator = "AIRFLOW"
+
   # 컷오버(ALPHA-588): 원장 도입(ALPHA-530) 때 "Planner 첫 스케줄런 검증 후"를 조건으로 미뤄 둔
   # 대조 스케줄. 켜기 전 실제 스케줄 런(`etf-daily:2026-07-27T15:40`, FAILED)에 OPS_RUN_KEY 를
   # 지정해 수동 1회 대조로 판정을 확인했다 — orchestration NULL→FAILED 동기화, 자기 기록이
