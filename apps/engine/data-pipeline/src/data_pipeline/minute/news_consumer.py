@@ -604,8 +604,10 @@ def news_consumer_cli(settings, *, max_ticks: int | None = None) -> int:
     만료로 회수된다. realtime·backfill 은 핸들러가 같고 큐만 달라, 같은 스텝을
     `DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL` 만 바꿔 서비스 2개로 띄운다.
 
-    LLM 자격증명은 env(`LLM_API_KEY` 등, tag-news 관례)다 — llm.py 는 env 를 모르고,
-    DATA_PIPELINE_* 는 수집 설정 네임스페이스라 LLM 이 거기 안 든다(run.py tag-news 단서).
+    태거는 `TAGGER_BACKEND` env 가 고른다(`tagging.backend`, 기본 llm). llm 이면 LLM 자격증명이
+    env(`LLM_API_KEY` 등, tag-news 관례)다 — llm.py 는 env 를 모르고, DATA_PIPELINE_* 는 수집 설정
+    네임스페이스라 LLM 이 거기 안 든다(run.py tag-news 단서). roberta 면 기동 때 레이크에서 모델
+    묶음을 받고 LLM 키가 필요 없다.
     `--max-ticks` 는 로컬 확인용 — 배선 오류 신호(poison·misrouted·orphan·ahead)가
     있으면 1 로 끝난다.
     """

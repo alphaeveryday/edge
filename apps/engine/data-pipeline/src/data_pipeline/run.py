@@ -11,8 +11,10 @@
         [--limit N] [--window-days N]
         [--interval-sec N]
 
-태깅(tag-news)은 LLM 설정을 **env** 로 받는다 — `LLM_API_KEY`(필수)·`LLM_BASE_URL`·`LLM_MODEL`
-(analysis-engine analyze_daily.py 와 같은 관례). 수집 설정(`DATA_PIPELINE_*`)이 아니다.
+태깅(tag-news·assemble-events·news-consumer)은 태거를 **env** 로 고른다 — `TAGGER_BACKEND=llm`(기본)이면
+LLM 설정 `LLM_API_KEY`(필수)·`LLM_BASE_URL`·`LLM_MODEL`(analysis-engine analyze_daily.py 와 같은 관례),
+`roberta` 면 로컬 모델 묶음(레이크 `models/tagger/<버전>/`, 로컬은 `TAGGER_MODEL_DIR`)을 쓰고 LLM 키가
+필요 없다(ALPHA-1446). 수집 설정(`DATA_PIPELINE_*`)이 아니다.
 
 수집 날짜창(--from/--to) — 뉴스·가격·공시와 KRX ETF 단일 거래일 백필에 사용한다.
 FMP ETF holdings 는 현재 스냅샷이라 창이 없다.
