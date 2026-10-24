@@ -71,3 +71,4 @@
 | [0061](0061-product-axis-directory-layout.md) | 제품 축 디렉터리 배치와 src/ 제거 ([0001](0001-monorepo-structure.md)·[0029](0029-apps-plane-grouping.md) 일부 대체) | 승인됨 |
 | [0062](0062-truth-agent-pi-harness-direct-publish.md) | 기만 검증 에이전트는 pi 하네스로 돌리고, 검사를 통과한 결과를 사이트에 바로 게시 | 제안됨 |
 | [0063](0063-app-sync-batch-scheduled-task.md) | ETF Orca 동기화를 Spring Batch 예약 태스크로 실행 | 승인됨 |
+| [0064](0064-local-roberta-news-tagger.md) | 뉴스 태깅을 로컬 RoBERTa로 바꾸고, 스레드 단계는 시간 공백 규칙으로 나눈다 | 제안됨 |
