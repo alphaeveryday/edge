@@ -487,6 +487,9 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # read=0 으로 성공한다. 멱등이라 겹침 비용은 스캔뿐.
 # TAGGER_BACKEND=roberta 면 LLM 2콜 대신 기사마다 로컬 모델이 제목+리드로 분류·추출하고, 1분 단건
 # 조립과 같은 변환으로 적재한다(ko 기사만, LLM_API_KEY 불필요 — tag-news 단서와 같은 env).
+# 같은 런 tag-news 가 같은 태거·같은 본문(지문)으로 내린 판정은 다시 추론하지 않고 재사용한다
+# (ALPHA-1449 — quality_log `tagger_reused`). 없거나 본문이 바뀐 기사만 모델을 돌린다. 캐시를 못 읽으면
+# 재추론으로 진행하고 `tagger_cache_errors` 로 센다(느려질 수 있다).
 # 뉴스 스레드(ALPHA-508, ADR-0064): 키는 타입 + 주체 회사(증권사 리포트는 증권사 원문까지)이고, 같은
 # 키의 마지막 보도에서 183일 넘게 끊기면 새 스레드(thread_key 끝 `||since=<UTC 시각>`), 스레드 안에서
 # 하루 넘게 끊겼다 다시 나온 보도는 FOLLOW_UP_STAGE 다. 회사가 없을 때만 UNKNOWN. 공시는 identity 키

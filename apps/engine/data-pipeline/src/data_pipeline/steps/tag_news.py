@@ -430,6 +430,36 @@ def _read_feature(
     return rows, mirror_keys, part_rows, mirror_ids
 
 
+def current_results(storage: Storage, language: str, published_date: str,
+                    tagger_version: str) -> dict[str, dict]:
+    """그 파티션에서 `tagger_version`·현 온톨로지로 내린 판정 — article_id → {fingerprint, result}.
+
+    assemble-events 의 로컬 태거 경로(ALPHA-1449)가 같은 모델 판정을 다시 추론하지 않으려고 읽는다.
+    재시도 대상(llm_error)은 판정이 아니라 뺀다. 본문이 바뀌었는지는 호출부가 지문으로 대조한다
+    (`input_fingerprint`). 여기서 돌려주는 result 는 `extract_assertions` 반환과 같은 키를 쓴다.
+    """
+    rows, _mirror_keys, _part_rows, _mirror_ids = _read_feature(storage, language, published_date)
+    out: dict[str, dict] = {}
+    for article_id, row in _merge_by_article(rows).items():
+        if (row.get("tagger_version") != tagger_version
+                or row.get("ontology_version") != ontology_version()
+                or row.get("status") in RETRYABLE_STATUSES):
+            continue
+        out[article_id] = {
+            "fingerprint": row.get("input_fingerprint"),
+            "result": {"status": row.get("status"), "doc_class": row.get("doc_class"),
+                       "assertions": json.loads(row.get("assertions") or "[]"),
+                       "reasons": json.loads(row.get("reasons") or "[]"),
+                       "tagger_version": tagger_version},
+        }
+    return out
+
+
+def input_fingerprint(article: dict) -> str:
+    """판정이 어느 본문에서 나왔는지의 지문 — `current_results` 의 대조용 공개 이름."""
+    return _input_fingerprint(article)
+
+
 def _tagged_at(row: object) -> str:
     """병합 승자 판정 축 — 결측·비문자열은 가장 오래된 것으로 본다.
 
