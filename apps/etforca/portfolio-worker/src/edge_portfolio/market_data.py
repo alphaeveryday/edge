@@ -520,6 +520,15 @@ class MarketData:
             self.current = {'CASH:KRW': 1}
             self.baseline_kind = 'new_cash'
 
+    async def use_saved(self, keys):
+        """Prefill preloaded archives so the provider queue only serves what they lack."""
+        if self.loader is None:  # An injected loader is the whole price source.
+            from .dashboard_work import saved_prices
+            saved = await asyncio.to_thread(saved_prices, [key for key in keys if key not in self.records], self.as_of)
+            self.records.update(saved)
+            for key in saved:
+                self.failures.pop(key, None)
+
     async def get(self, rows):
         target = weights(rows)
         key = tuple(sorted(target.items()))
@@ -551,6 +560,7 @@ class MarketData:
                 primary.add('FX')
             try:
                 async with asyncio.timeout(65):
+                    await self.use_saved(needed)
                     await asyncio.gather(*(fetch(i, needed[i]) for i in sorted(primary)))
                     await asyncio.gather(*(fetch(i, symbol) for i, symbol in needed.items() if i not in primary))
             except TimeoutError:

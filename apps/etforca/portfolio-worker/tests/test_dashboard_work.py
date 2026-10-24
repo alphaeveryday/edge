@@ -689,3 +689,20 @@ def test_analyses_keep_the_global_admission_limit_without_backtests(isolated_db)
     with store.connect() as db:
         db.execute("UPDATE portfolio_jobs SET state='failed'")
     assert store.submit('analysis-owner', 'analysis-key', {'holdings': []})['id']
+
+
+def test_analysis_reuses_only_archives_as_current_as_a_new_fetch():
+    # ALPHA-1437: a reused archive must equal what the provider would return for as_of,
+    # otherwise the analysis would silently compare an older window.
+    import json
+    from edge_portfolio.price_fetch import serialize
+    as_of = date(2026, 10, 16)
+    def saved(days, **extra):
+        prices = [100. + i for i in range(len(days))]
+        frame = pd.DataFrame({'Close': prices, 'Adj Close': prices}, index=pd.to_datetime(days))
+        return json.loads(serialize({'frame': frame, 'currency': 'KRW', 'source_url': 'https://example.com', 'history_complete': True, **extra}))
+    current = work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15', '2026-10-16']), as_of)
+    assert [str(d.date()) for d in current['frame'].index] == ['2026-10-14', '2026-10-15'], 'The as_of session is cut like a fetch'
+    assert work.analysis_archive('KR:069500', saved(['2026-10-13', '2026-10-14']), as_of) is None, 'Missing the last finished session'
+    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], history_complete=False), as_of) is None, 'Recent quotes only'
+    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], return_basis='price'), as_of) is None

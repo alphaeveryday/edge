@@ -812,3 +812,41 @@ async def test_dividend_chip_shows_trailing_yields_so_the_model_can_favor_higher
     result = await optimizer.tool({'combinations': groups})
     assert result['income_yields_pct'] == {}
     assert all(row['income_yield_pct'] is None for row in result['candidates'])
+
+
+class SavedPrices:
+    """portfolio_dashboard_prices as the market preload leaves it, without a database."""
+    def __init__(self, payloads):
+        self.payloads = payloads
+    def __enter__(self):
+        return self
+    def __exit__(self, *_):
+        return False
+    def execute(self, _, params):
+        return SimpleNamespace(fetchall=lambda: [{'instrument': key, 'payload': self.payloads[key]} for key in params[0] if key in self.payloads])
+
+
+async def test_twelve_holdings_with_a_slow_provider_do_not_time_out_together(monkeypatch):
+    # ALPHA-1437: one provider slot served twelve holdings one by one until the shared
+    # 180-second budget ran out, so every holding failed at once. Preloaded archives
+    # must answer immediately; only the instrument without one may wait and fail alone.
+    import json
+    from edge_portfolio import store
+    from edge_portfolio.price_fetch import serialize
+    held = [f'KR:H{number:02d}' for number in range(12)]
+    request, market, _ = batch()
+    market.catalog = {key: {'ticker': key[3:], 'market': 'KR', 'kind': 'etf'} for key in [*held, 'KR:NEW']}
+    market.current = {key: 1 / 12 for key in held}
+    payloads = {key: json.loads(serialize({**record(finish=110 + n), 'history_complete': True})) for n, key in enumerate(held)}
+    monkeypatch.setattr(store, 'connect', lambda: SavedPrices(payloads))
+    asked = []
+    async def slow(symbol, _, **kwargs):
+        asked.append(symbol)
+        await asyncio.sleep(10)
+    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', slow)
+    # Reading the archives counts toward the budget, so leave room for that but not for the provider.
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', 3)
+    result = await Optimizer(market, request).tool({'combinations': [[held[0], held[1]], ['KR:NEW']]})
+    assert asked == ['NEW.KS'], 'Saved archives must not queue behind the provider again'
+    assert market.failures == {'KR:NEW': 'PRICE_COLLECTION_TIMEOUT'}
+    assert result['status'] != 'unavailable' and result['candidates']
