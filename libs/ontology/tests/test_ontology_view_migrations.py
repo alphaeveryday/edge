@@ -22,18 +22,29 @@ def _text(raw):
 
 
 def _latest_definitions():
-    """View name -> (migration, text) of the newest migration that (re)creates it; dropped views are removed."""
+    """View name -> (migration, its text, offset of the last CREATE of that view); dropped views are removed.
+
+    The last statement wins, also inside one migration: PostgreSQL applies them in order.
+    """
     latest = {}
     for path in sorted(MIGRATIONS.glob('V*.sql')):
         sql = _text(path.read_text(encoding='utf8'))
-        for verb, name, rename in STATEMENT.findall(sql):
+        for match in STATEMENT.finditer(sql):
+            verb, name, rename = match.groups()
             if verb.upper().startswith('CREATE'):
-                latest[name] = (path.name, sql)
+                latest[name] = (path.name, sql, match.start())
             elif verb.upper().startswith('DROP'):
                 latest.pop(name, None)
             elif rename:
                 raise AssertionError(f'{path.name}: rename ontology_view.{name} as DROP + CREATE so the file follows')
     return latest
+
+
+def _matches(file_text, sql, at):
+    """The file's statement (from its CREATE) is exactly the text at the last definition's offset."""
+    start = STATEMENT.search(file_text)
+    body = file_text[start.start():] if start else file_text
+    return sql[at:at + len(body)] == body and sql[at + len(body):at + len(body) + 1] in ('', '\n')
 
 
 def test_every_view_file_is_the_newest_migration_definition_of_that_view():
@@ -42,8 +53,8 @@ def test_every_view_file_is_the_newest_migration_definition_of_that_view():
     assert files
     assert sorted(set(files) - set(latest)) == [], 'view files no migration creates (or a migration dropped)'
     assert sorted(set(latest) - set(files)) == [], 'migrated views with no file in sql/views'
-    stale = [f'{name}: {latest[name][0]}' for name, text in files.items() if text not in latest[name][1]]
-    assert stale == [], 'view file differs from its newest migration; add a migration with the same text'
+    stale = [f'{name}: {latest[name][0]}' for name, text in files.items() if not _matches(text, *latest[name][1:])]
+    assert stale == [], 'view file differs from the newest definition of that view; add a migration with the same text'
 
 
 if __name__ == '__main__':
