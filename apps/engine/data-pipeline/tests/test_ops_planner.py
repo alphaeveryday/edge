@@ -571,6 +571,24 @@ def test_due_slots_weekend_is_per_lane(monkeypatch):
     assert grace["news:2026-08-01T15:30"] is False
 
 
+def test_due_slots_judges_the_dividend_lane_every_day(monkeypatch):
+    # WHY(ALPHA-1443): 10-21 03:00 배당 run 은 수집 창 검사에서 plan 전에 죽어 원장에 행이 없었는데, 배당 레인이 판정
+    #      목록 밖이라 PLANNER_MISSING 이 0건이었다. 슬롯 env 가 들어오면 그 시각의 run_key 를 물어야 하고, 매일 도는
+    #      레인이라 토요일에도 금요일로 떨어지지 않고 그날 슬롯을 문다. 키는 원장에 실제로 찍힌 형식 그대로다.
+    monkeypatch.delenv("OPS_DIVIDEND_DAILY_SCHED_HHMM", raising=False)
+    sat = datetime(2026, 10, 24, 4, 0, tzinfo=planner_mod.KST)
+    assert sat.weekday() == 5, "픽스처가 토요일이 아니면 주말 축을 안 가린다"
+    assert not [k for k, _ in entry._due_slots(sat) if k.startswith("dividend-daily:")]
+
+    monkeypatch.setenv("OPS_DIVIDEND_DAILY_SCHED_HHMM", "03:00")
+    monkeypatch.setenv("OPS_DIVIDEND_DAILY_SCHED_WEEKEND", "true")
+    assert [(k, g) for k, g in entry._due_slots(sat) if k.startswith("dividend-daily:")] == [
+        ("dividend-daily:2026-10-24T03:00", True),      # 04:00 = 슬롯 + 30분 유예 경과 → 결측이면 연다
+    ]
+    # 유예 안(03:20)에는 아직 결측으로 보지 않는다 — 창 안에서 늦게 뜬 run 에 거짓 이슈를 열지 않게.
+    assert dict(entry._due_slots(sat.replace(hour=3, minute=20)))["dividend-daily:2026-10-24T03:00"] is False
+
+
 def test_malformed_weekend_env_fails_loud(monkeypatch):
     # WHY(ALPHA-874): 값이 있는데 못 읽었을 때 조용히 평일 전용으로 떨어지면 그 레인 주말 런의
     #      결측 탐지가 소리 없이 사라진다 — `_lane_sched_hhmms` 와 정확히 같은 축이다(Rule 12).

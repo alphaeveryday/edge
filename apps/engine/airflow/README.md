@@ -14,7 +14,7 @@
 | `dags/edge_disclosure.py` | 공시 보충 배치 DAG(ALPHA-1407, 평일 19:30): `plan → collect → {정제 2개} → load → report → verdict`. 생성 시 pause. dev 는 10-21 전환으로 Airflow 가 실행한다(ALPHA-1425, SFN 스케줄 DISABLED) — 아래 "공시 보충 배치 레인" |
 | `dags/edge_premarket.py` | 장전 유니버스 DAG(ALPHA-1408, 평일 07:00, 원장 밖): `collect → normalize → universe → verdict`. 생성 시 pause. dev 는 10-23 전환으로 Airflow 가 실행한다(ALPHA-1429, SFN 스케줄 DISABLED) — 아래 "장전 유니버스 레인" |
 | `dags/edge_news.py` | 뉴스 DAG(ALPHA-1409, 매일 00:10·08:10): `plan → collect → normalize → {tag, load_documents} → load_assertions → assemble → report → verdict`. 생성 시 pause. 아직 SFN 이 실행한다 — 아래 "뉴스 레인" |
-| `dags/edge_dividend_daily.py` | 배당 갱신 전용 DAG: 03:00 KST, 기존 배치 종료 확인 → plan → collect → normalize → load → report. 생성 시 pause. 수집·조회 범위 계약과 활성화 순서는 `docs/design/portfolio-dividend-ledger.md` |
+| `dags/edge_dividend_daily.py` | 배당 갱신 전용 DAG: 03:00 KST, 기존 배치 종료 확인 → plan → collect → normalize → load → report. 생성 시 pause. run 실패 시 SNS 실패 통보, 03:00 슬롯 결측 판정은 `ops` 태스크 정의 `OPS_DIVIDEND_DAILY_SCHED_HHMM`(모듈 local `dividend_daily_schedule_hhmm`, ALPHA-1443). 수집·조회 범위 계약과 활성화 순서는 `docs/design/portfolio-dividend-ledger.md` |
 | `tests/` | DagBag 파싱, terraform(슬롯·명령) 대조, exit code·당일 수집·재처리·보고·활성화 규칙. CI `test-airflow.yml`이 공식 Airflow 이미지(다이제스트 고정) 안에서 실행한다 |
 | `dags/edge_investor_intraday_verify.py` | 격리 검증 DAG — 운영 DAG 와 같은 `build_dag`·EdgeStep, 검증 전용 클러스터·태스크 정의, conf 장애 주입. `EDGE_VERIFY_CLUSTER` 가 있을 때만 등록 |
 | `Dockerfile` · `deploy/entrypoint.sh` | 배포 이미지(공식 이미지 + DAG + `config/`). entrypoint 가 메타DB 연결·UI 비밀번호 파일을 만든다 |
