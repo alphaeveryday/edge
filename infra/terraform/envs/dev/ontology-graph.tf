@@ -16,6 +16,7 @@ module "ontology_graph" {
 
   password_parameter_arn = "arn:aws:ssm:${var.region}:393229433969:parameter/edge/dev/ontology-graph/password"
   # 지금은 SSM 터널용 임시 바스천(edge-dev-tmp-bastion-view, Terraform 밖)만. 분석 워커를 붙일 때 워커 보안 그룹을 더한다.
+  # 바스천을 없앨 때는 이 목록에서 먼저 빼고 apply 한다(규칙이 남아 있으면 보안 그룹 삭제가 막힌다).
   client_security_group_ids = ["sg-0d7392109fd270848"]
 }
 
@@ -29,3 +30,4 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_ontology_graph" {
 }
 
 output "ontology_graph_service_name" { value = module.ontology_graph.service_name }
+output "ontology_graph_bolt_uri" { value = module.ontology_graph.bolt_uri }

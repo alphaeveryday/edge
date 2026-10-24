@@ -91,6 +91,27 @@ resource "aws_efs_mount_target" "this" {
   security_groups = [aws_security_group.efs.id]
 }
 
+# ── 접속 주소 ───────────────────────────────────────────
+# 작업은 켜질 때마다 사설 IP가 바뀐다. 예약 실행 태스크(급등주 조사·전망 배치)는 Service Connect 를 못 쓰므로
+# VPC 내부 DNS 이름(A 레코드)으로 찾는다: puppygraph.<name>.internal
+resource "aws_service_discovery_private_dns_namespace" "this" {
+  name = "${var.name}.internal"
+  vpc  = var.vpc_id
+}
+
+resource "aws_service_discovery_service" "this" {
+  name = "puppygraph"
+  dns_config {
+    namespace_id   = aws_service_discovery_private_dns_namespace.this.id
+    routing_policy = "MULTIVALUE"
+    dns_records {
+      ttl  = 10
+      type = "A"
+    }
+  }
+  health_check_custom_config {}
+}
+
 # ── 작업과 서비스 ───────────────────────────────────────
 resource "aws_ecs_task_definition" "this" {
   family                   = var.name
@@ -149,6 +170,9 @@ resource "aws_ecs_service" "this" {
     security_groups  = [aws_security_group.this.id]
     assign_public_ip = false
   }
+  service_registries {
+    registry_arn = aws_service_discovery_service.this.arn
+  }
   # 개수는 아래 예약이 정한다.
   lifecycle {
     ignore_changes = [desired_count]
@@ -162,6 +186,10 @@ resource "aws_appautoscaling_target" "this" {
   scalable_dimension = "ecs:service:DesiredCount"
   min_capacity       = 0
   max_capacity       = 1
+  # 아래 예약이 낮(1/1)·밤(0/0)으로 바꾼다. 무시하지 않으면 plan 마다 이 값이 변경으로 보인다.
+  lifecycle {
+    ignore_changes = [min_capacity, max_capacity]
+  }
 }
 
 resource "aws_appautoscaling_scheduled_action" "on" {
