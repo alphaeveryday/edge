@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { isApiError } from '@/api';
 import { Toast } from '@/components/Toast';
 import { usePush } from '@/features/notification/push';
@@ -58,20 +59,22 @@ export default function RootLayout() {
   const base = scheme === 'dark' ? DarkTheme : DefaultTheme;
   const navTheme = { ...base, colors: { ...base.colors, background: colors.bg } };
   return (
-    <QueryClientProvider client={queryClient}>
-      <ThemeProvider value={navTheme}>
-        <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
-        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
-          <Stack.Screen name="index" />
-          <Stack.Screen name="community/write" options={{ presentation: 'fullScreenModal' }} />
-          <Stack.Screen name="menu" options={{ fullScreenGestureEnabled: true }} />
-          <Stack.Screen name="login" options={{ presentation: 'fullScreenModal' }} />
-          <Stack.Screen name="auth/signup" options={{ presentation: 'fullScreenModal' }} />
-          <Stack.Screen name="auth/reset" options={{ presentation: 'fullScreenModal' }} />
-          <Stack.Screen name="auth/nick" options={{ presentation: 'fullScreenModal', gestureEnabled: false }} />
-        </Stack>
-        <Toast />
-      </ThemeProvider>
-    </QueryClientProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <QueryClientProvider client={queryClient}>
+        <ThemeProvider value={navTheme}>
+          <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
+          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.bg } }}>
+            <Stack.Screen name="index" />
+            <Stack.Screen name="community/write" options={{ presentation: 'fullScreenModal' }} />
+            <Stack.Screen name="menu" options={{ fullScreenGestureEnabled: true }} />
+            <Stack.Screen name="login" options={{ presentation: 'fullScreenModal' }} />
+            <Stack.Screen name="auth/signup" options={{ presentation: 'fullScreenModal' }} />
+            <Stack.Screen name="auth/reset" options={{ presentation: 'fullScreenModal' }} />
+            <Stack.Screen name="auth/nick" options={{ presentation: 'fullScreenModal', gestureEnabled: false }} />
+          </Stack>
+          <Toast />
+        </ThemeProvider>
+      </QueryClientProvider>
+    </GestureHandlerRootView>
   );
 }
