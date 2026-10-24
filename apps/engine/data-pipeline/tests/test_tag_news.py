@@ -326,6 +326,35 @@ def test_tagger_version_change_forces_retag(tmp_path):
     assert _read_feature(storage, "ko", "2026-07-01")[0]["tagger_version"] == TAGGER_VERSION
 
 
+class _CountingTagger:
+    """RobertaTagger 대역(ALPHA-1446) — 사건 1건을 내고 호출 수를 센다."""
+
+    def __init__(self, version: str):
+        self.version, self.calls = version, 0
+
+    def parse(self, title, lead):
+        """고정 사건 1건."""
+        self.calls += 1
+        return {"doc_class": "EVENT", "events": [{
+            "event_type_code": "COMPANY.CONTRACT.SIGNING", "predicate_code": None,
+            "arguments": [{"role_code": "SUPPLIER", "text": "삼성전자"}], "confidence": 0.9}]}
+
+
+def test_injected_tagger_version_decides_retagging(tmp_path):
+    """WHY(ALPHA-1446): 재태깅 축은 **실제로 돌린 태거**의 버전이다. 전역 env 버전과 비교하면
+    주입한 태거가 자기 결과를 매 런 다시 태깅하고(비용·값 흔들림), LLM 판정과 섞여도 구분이 안 된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete([])) == 0  # LLM 판정이 먼저 있다
+
+    roberta = _CountingTagger("tagging-roberta-test")
+    assert tag_news.run(storage, "R2", tagger=roberta) == 0
+    assert roberta.calls == 1  # 다른 태거의 판정이라 다시 태깅
+    assert tag_news.run(storage, "R3", tagger=roberta) == 0
+    assert roberta.calls == 1  # 자기 판정은 건너뛴다
+    assert _read_feature(storage, "ko", "2026-07-01")[0]["tagger_version"] == "tagging-roberta-test"
+
+
 def test_english_articles_are_not_tagged(tmp_path):
     """프롬프트가 한국어 전용이다 — 영어 기사에 씌우면 품질이 조용히 무너진다."""
     storage = LocalStorage(tmp_path / "lake")

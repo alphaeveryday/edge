@@ -853,6 +853,15 @@ def canonical_business_segment_fact_partition(report_date: str) -> str:
     return f"canonical/disclosures/business_segment_fact/report_date={report_date}"
 
 
+def tagger_model_prefix(version: str) -> str:
+    """로컬 뉴스 태거 모델 묶음(ALPHA-1446)의 키 프리픽스 — 버전마다 불변 디렉터리.
+
+    데이터가 아니라 운영 산출물(학습된 가중치)이라 raw·canonical·feature 존 밖에 둔다.
+    묶음 형식은 `tagging/roberta.py` 독스트링이 정본이다.
+    """
+    return f"models/tagger/{version}/"
+
+
 def quality_log_key(dataset: str, checked_date: str, run_id: str) -> str:
     """정제 품질 로그(검증 실행당 1건) 키.
 

@@ -769,8 +769,8 @@ def classify_with_tagger(tagger, rows: list[dict], view: ProcessRegistry,
 
     기사마다 `extract_assertions(tagger=...)` 로 문서 분류·타입·인자를 뽑고, 1분 단건 조립과
     **같은** `to_classification` 으로 cls 형상을 만든다 — 두 writer 가 같은 변환을 지나야 같은
-    기사에 같은 계보가 선다. 모델은 기사당 사건 1건만 낸다. 태거 실패·primary 미해소는 적재하지
-    않고 사유로 센다(자국이 안 남아 다음 런에 재시도된다 — LLM 게이트 드롭과 같은 규약).
+    기사에 같은 계보가 선다. 모델은 기사당 사건 1건만 낸다. primary 미해소는 적재하지 않고 사유로
+    센다(LLM 게이트 드롭과 같은 규약). 태거 실패는 예외로 올린다(LLM 호출 실패와 같은 규약).
     """
     from ..minute.event_assembly import to_classification  # 그 모듈이 이 모듈을 읽는다(순환 회피)
 
@@ -785,8 +785,12 @@ def classify_with_tagger(tagger, rows: list[dict], view: ProcessRegistry,
             {"article_id": row["article_id"], "title": row["title"], "lead_text": row.get("lead_text")},
             tagger=tagger)
         if result["status"] != "ok":
-            _drop("tagger_error")
-            continue
+            # 추론 실패는 판정이 아니라 '물어보지도 못했다'다 — 드롭으로 세고 넘어가면 런이
+            # 성공으로 끝나 SFN 실패 경로가 안 돈다. LLM 경로(_complete_json 재시도 소진)처럼
+            # 올려 이 날짜를 롤백하고 exit 1 로 드러낸다.
+            raise RuntimeError(
+                f"태거 실패: article_id={row['article_id']} status={result['status']} "
+                f"{result.get('reasons')}")
         if not result["assertions"]:
             continue  # 사건 없는 기사(시세·분석·홍보) — 조립 대상이 아니다
         assertion = result["assertions"][0]

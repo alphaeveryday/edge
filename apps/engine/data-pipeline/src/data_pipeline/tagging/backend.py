@@ -16,11 +16,12 @@ import os
 import tempfile
 from pathlib import Path
 
+from ..lake import tagger_model_prefix
 from .extract import ROBERTA_TAGGER_VERSION, TAGGER_BACKEND
 
 logger = logging.getLogger(__name__)
 
-MODEL_PREFIX = f"models/tagger/{ROBERTA_TAGGER_VERSION}/"
+MODEL_PREFIX = tagger_model_prefix(ROBERTA_TAGGER_VERSION)
 
 
 def load_tagger(storage):

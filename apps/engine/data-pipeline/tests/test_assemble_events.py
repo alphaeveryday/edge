@@ -1749,7 +1749,7 @@ class _FakeTagger:
 def test_tagger_batch_uses_the_same_conversion_as_the_minute_lane():
     """WHY(ALPHA-1446): 배치와 1분 단건 조립이 같은 기사에 다른 계보를 세우면 안 된다 — 배치의
     로컬 태거 경로는 단건 경로의 `to_classification` 을 그대로 지나야 한다. 사건 없는 기사는
-    조립 대상이 아니고, 태거 실패·primary 미해소는 적재하지 않되 사유로 센다(다음 런 재시도)."""
+    조립 대상이 아니고, primary 미해소는 적재하지 않되 사유로 센다."""
     from edge_ontology import load_process_registry
     from data_pipeline.entity_resolution import ResolutionIndex
     from data_pipeline.minute.event_assembly import to_classification
@@ -1770,7 +1770,7 @@ def test_tagger_batch_uses_the_same_conversion_as_the_minute_lane():
         "미해소": {"doc_class": "EVENT", "events": [unresolved]},
     })
     rows = [{"article_id": a, "title": t, "lead_text": "리드", "tickers": ["005930"]}
-            for a, t in (("a1", "삼성전자 수주"), ("a2", "시황"), ("a3", "미해소"), ("a4", "실패"))]
+            for a, t in (("a1", "삼성전자 수주"), ("a2", "시황"), ("a3", "미해소"))]
     drops, types = {}, {}
 
     out = assemble_events.classify_with_tagger(tagger, rows, view, entity_index, resolution_index,
@@ -1784,5 +1784,12 @@ def test_tagger_batch_uses_the_same_conversion_as_the_minute_lane():
         minute_assertion, article_id="a1", view=view, entity_index=entity_index,
         ticker_by_entity={"inst_SAMSUNG": "005930"}, res_index=resolution_index)
     assert out["a1"]["entity_id"] == "inst_SAMSUNG"
-    assert drops == {"primary_unresolved": 1, "tagger_error": 1}
+    assert drops == {"primary_unresolved": 1}
     assert types == {"COMPANY.CONTRACT.SIGNING": 2}
+
+    # 태거 실패는 드롭이 아니라 런 실패다 — 드롭으로 세면 런이 성공으로 끝나 SFN 실패 경로가
+    # 안 돌고, 기본 창(당일)을 지난 기사는 다시 시도되지 않는다(LLM 호출 실패와 같은 규약).
+    with pytest.raises(RuntimeError, match="태거 실패"):
+        assemble_events.classify_with_tagger(
+            tagger, [{"article_id": "a4", "title": "실패", "lead_text": None, "tickers": []}],
+            view, entity_index, resolution_index)
