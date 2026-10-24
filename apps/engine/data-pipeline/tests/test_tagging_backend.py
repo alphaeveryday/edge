@@ -5,10 +5,25 @@
 판정했는지가 거짓이 된다. RobertaTagger 자체(torch)는 여기서 읽지 않는다.
 """
 
+import os
+import subprocess
+import sys
+
 import pytest
 
 from data_pipeline.lake import LocalStorage
 from data_pipeline.tagging import backend
+
+
+def test_default_backend_is_llm_when_env_is_unset():
+    # WHY: 기본값이 roberta 로 바뀌면 모델 묶음 업로드·태스크 크기 조정 전에 배포된 이미지가 바로
+    # 로컬 모델로 기동하다 죽는다. 값은 import 시점에 정해지므로 env 를 지운 새 프로세스에서 본다.
+    env = {k: v for k, v in os.environ.items() if k != "TAGGER_BACKEND"}
+    out = subprocess.run(
+        [sys.executable, "-c", "from data_pipeline.tagging import extract as e; "
+                               "print(e.TAGGER_BACKEND, e.TAGGER_VERSION == e.LLM_TAGGER_VERSION)"],
+        env=env, capture_output=True, text=True, check=True)
+    assert out.stdout.split() == ["llm", "True"]
 
 
 def test_llm_backend_keeps_the_complete_fn_path(monkeypatch):
