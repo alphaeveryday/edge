@@ -16,17 +16,33 @@ PROMPTS = Path(__file__).resolve().parent / "prompts"
 __all__ = ["SessionResult", "run", "command"]
 
 
-def command(cfg, prompt: str) -> list[str]:
-    """pi 실행 명령. 허용 도구는 확장이 등록한 목록과 같다."""
+def command(cfg, prompt: str, *, graph: bool = False, system: Path | None = None) -> list[str]:
+    """pi 실행 명령. 허용 도구는 확장이 등록한 목록과 같다(그래프 도구는 graph 일 때만)."""
     from .toolspec import specs
-    names = ",".join(s["name"] for s in specs(web=bool(cfg.exa_key)))
+    names = ",".join(s["name"] for s in specs(web=bool(cfg.exa_key), graph=graph))
     cli = cfg.pi_dir / "node_modules" / "@earendil-works" / "pi-coding-agent" / "dist" / "cli.js"
     return ["node", str(cli), "--mode", "json", "--no-session", "--offline",
             "--no-extensions", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
             "-e", str(cfg.pi_dir / "extension.ts"), "--tools", names,
             "--model", cfg.model, "--thinking", cfg.thinking,
-            "--system-prompt", str(PROMPTS / "system.md"),
+            "--system-prompt", str(system or PROMPTS / "system.md"),
             prompt]
+
+
+def _graph(cfg, ws: Workspace) -> bool:
+    """그래프 도구를 여는가: 국내 종목 세션이고 그래프 DB 주소가 있을 때(사건 그래프는 국내 뉴스·공시로 만든다)."""
+    from .markets import US, of_exchange
+    return bool(cfg.graph_uri) and of_exchange((ws.mover() or {}).get("market", "")) is not US
+
+
+def _system(ws: Workspace) -> Path:
+    """그래프 도구를 여는 세션의 시스템 지시: 기본 지시 + 사건 메뉴(코드가 온톨로지에서 만든다)."""
+    from . import graph
+    path = ws.root / ".pi" / "system.md"
+    path.write_text((PROMPTS / "system.md").read_text(encoding="utf-8").rstrip() +
+                    "\n\n## 사건 메뉴 (company_events·find_events 의 타입·수치 코드)\n"
+                    "형식: 타입코드 라벨 | 술어 | 역할(*필수) | 수치코드(단위계열)\n" + graph.menu() + "\n", encoding="utf-8")
+    return path
 
 
 def _env(cfg, ws: Workspace, corpus_path: Path) -> dict:
@@ -37,6 +53,7 @@ def _env(cfg, ws: Workspace, corpus_path: Path) -> dict:
         "TRUTH_SESSION_DIR": str(ws.root), "TRUTH_PYTHON": cfg.python, "TRUTH_MAX_TOOL_CALLS": str(cfg.max_tool_calls),
         "TRUTH_CORPUS": str(corpus_path), "TRUTH_WEB_CALL_LIMIT": str(cfg.web_calls),
     })
+    env["TRUTH_GRAPH"] = "1" if _graph(cfg, ws) else "0"  # pi 확장이 그래프 도구를 등록할지
     if cfg.exa_key:
         env["EXA_API_KEY"] = cfg.exa_key
     else:
@@ -48,7 +65,9 @@ def run(cfg, ws: Workspace, *, code: str, prompt: str, corpus_path: Path) -> Ses
     """세션을 실행하고 결과를 돌려준다. 시간 초과·비정상 종료는 error 에 적는다(실행 전체를 멈추지 않는다)."""
     result = SessionResult(case_id=code, done=False)
     (ws.root / ".pi").mkdir(exist_ok=True)
-    proc = subprocess.Popen(command(cfg, prompt), cwd=ws.root, env=_env(cfg, ws, corpus_path),
+    graph = _graph(cfg, ws)
+    cmd = command(cfg, prompt, graph=graph, system=_system(ws) if graph else None)
+    proc = subprocess.Popen(cmd, cwd=ws.root, env=_env(cfg, ws, corpus_path),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=os.name == "posix")
     try:
         stdout, stderr = proc.communicate(timeout=cfg.session_timeout)

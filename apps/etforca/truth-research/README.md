@@ -23,6 +23,7 @@ uv run --package edge-truth-research pytest apps/etforca/truth-research/tests -q
 | `TRUTH_PUBLISH` | ✓ | 공개 데이터 위치(`s3://<랜딩>/truth/data` 또는 로컬 폴더) |
 | `DEEPSEEK_RESIST_NEWS_API_KEY` | ✓ | 모델 키(truth-agent 와 같은 시크릿) |
 | `TRUTH_DB_HOST` · `TRUTH_DB_PASSWORD` | ✓ | 국내 보도(빅카인즈)를 읽는 운영 PostgreSQL. 계정은 분석 엔진의 읽기 전용 `edge_analysis_v2_reader`(`TRUTH_DB_USER` 로 바꿀 수 있다), 비밀번호는 시크릿 `edge/analysis-v2/readonly`. 붙지 못하면 실행이 실패한다 |
+| `GRAPH_URI` · `GRAPH_PASSWORD` | | 국내 종목 사건 그래프(PuppyGraph Bolt, `bolt://puppygraph.<name>.internal:7687`)와 그 로그인. 있으면 국내 세션에 `company_events`·`find_events` 와 사건 메뉴를 연다(`graph.py`). 그래프는 평일 05:30~16:00 KST 에만 떠 있다 |
 | `RDS_CA_PATH` | | 서버 인증서 검증용 RDS CA 묶음(이미지 기본 `/app/rds-ca.pem`) |
 | `EXA_API_KEY` | | 웹 검색·원문. 없으면 웹 도구를 끈다 |
 | `TRUTH_SEC_CONTACT` | 미국 | SEC 요청 머리글의 연락처 이메일(없으면 SEC 가 403). 없으면 미국 공시 조회가 실패해 보류로 싣는다 |

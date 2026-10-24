@@ -48,6 +48,7 @@ def main(argv: list[str] | None = None) -> int:
     tool.add_argument("name")
     spec = sub.add_parser("tool-specs", help="도구 목록 JSON (pi 확장용)")
     spec.add_argument("--web", choices=["0", "1"], default="0")
+    spec.add_argument("--graph", choices=["0", "1"], default="0")
     args = parser.parse_args(argv)
 
     if args.command == "tool":
@@ -55,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "tool-specs":
         from .toolspec import specs
         sys.stdout.reconfigure(encoding="utf-8")
-        print(json.dumps(specs(web=args.web == "1"), ensure_ascii=False))
+        print(json.dumps(specs(web=args.web == "1", graph=args.graph == "1"), ensure_ascii=False))
         return 0
     logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stdout)
     from .markets import MARKETS

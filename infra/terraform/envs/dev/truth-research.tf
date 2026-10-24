@@ -24,6 +24,11 @@ module "truth_research" {
   db_secret_arn        = data.aws_secretsmanager_secret.analysis_v2_reader.arn
   db_security_group_id = module.rds.security_group_id
 
+  # 국내 종목 사건 그래프(ALPHA-1453)
+  graph_uri                    = module.ontology_graph.bolt_uri
+  graph_security_group_id      = module.ontology_graph.security_group_id
+  graph_password_parameter_arn = "arn:aws:ssm:${var.region}:393229433969:parameter/edge/dev/ontology-graph/password"
+
   # 미국 공시(SEC) 요청 연락처 — truth 사이트 처리방침(privacy.html)에 공개한 운영 연락처와 같다
   sec_contact = "asm.alphaeveryday@gmail.com"
 }

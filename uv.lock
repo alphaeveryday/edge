@@ -525,8 +525,10 @@ name = "edge-truth-research"
 version = "0.1.0"
 source = { editable = "apps/etforca/truth-research" }
 dependencies = [
+    { name = "edge-ontology" },
     { name = "edge-truth-agent" },
     { name = "jsonschema" },
+    { name = "neo4j" },
     { name = "psycopg", extra = ["binary"] },
 ]
 
@@ -537,8 +539,10 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "edge-ontology", editable = "libs/ontology" },
     { name = "edge-truth-agent", editable = "apps/etforca/truth-agent" },
     { name = "jsonschema", specifier = ">=4.23,<5" },
+    { name = "neo4j", specifier = ">=5" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.1" },
 ]
 

@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+from datetime import date
 import json
 from pathlib import Path
 import re
@@ -20,7 +21,7 @@ from edge_truth_agent.tools import (SHOW_CHARS, ToolError, _corpus_path, _kst_da
                                     web_fetch, web_search)
 from edge_truth_agent.workspace import Workspace
 
-from . import ach
+from . import ach, graph
 from .kind import Kind, KindError, is_market_notice
 from .markets import US, of_exchange
 from .sec import Sec, SecError
@@ -364,8 +365,65 @@ def finish(ws: Workspace, args: dict) -> str:
     return "완료"
 
 
+def _today(ws: Workspace) -> date:
+    """세션을 연 실행의 장 날짜(작업 폴더에 적힌 today)."""
+    return date.fromisoformat(str(ws.state["today"]))
+
+
+def company_events(ws: Workspace, args: dict) -> str:
+    """국내 세션 전용: 이 종목 회사가 참여한 최근 사건(그래프). 같은 일을 다룬 기사들은 한 줄로 묶는다."""
+    if _us(ws):
+        raise ToolError("국내 종목 세션에서만 쓰는 도구입니다")
+    days = int(args.get("days") or 90)
+    if not 1 <= days <= 365:
+        raise ToolError("days 는 1~365 입니다")
+    try:
+        events = graph.company_events(_mover(ws).get("code", ""), _today(ws), days)
+    except graph.GraphError as error:
+        raise ToolError(str(error)) from None
+    if not events:
+        return f"최근 {days}일 이 회사가 참여한 사건이 그래프에 없습니다(뉴스·공시에서 뽑힌 사건만 있다 — 없다고 일이 없었다는 뜻은 아니다)."
+    types, labels = graph.registry()
+    lines = [f"최근 {days}일 사건 {len(events)}건(같은 일은 묶음, 최신순). 근거로 쓰려면 기사·공시를 직접 읽는다:"]
+    for e in events[:20]:
+        arts = ", ".join(f"news-{a[:16]}" for a in e["articles"]) or "기사 id 없음"
+        stage = f" | 단계 {e['stage']}" if e["stage"] else ""
+        lines.append(f"- {e['date']} | {e['type']} {labels.get(e['type'], '')} {e['predicate'] or ''} | 이 회사 {e['role']} | "
+                     f"{e['what'][:160]} | 보도 {e['reports']}건{stage} | {arts}")
+    if len(events) > 20:
+        lines.append(f"(그 밖 {len(events) - 20}건 생략 — days 를 줄여 다시 볼 수 있다)")
+    return "\n".join(lines)
+
+
+def find_events(ws: Workspace, args: dict) -> str:
+    """국내 세션 전용: 다른 회사의 같은 타입 사건 중 수치 조건에 맞는 선례(그래프)."""
+    if _us(ws):
+        raise ToolError("국내 종목 세션에서만 쓰는 도구입니다")
+    days = int(args.get("days") or 180)
+    if not 1 <= days <= 730:
+        raise ToolError("days 는 1~730 입니다")
+    try:
+        found = graph.similar_events(str(args.get("event_type", "")), str(args.get("metric", "")), str(args.get("op", "")),
+                                     str(args.get("value", "")), str(args.get("unit", "")), str(args.get("basis", "")),
+                                     _today(ws), days)
+    except ValueError as error:
+        raise ToolError(str(error)) from None
+    except graph.GraphError as error:
+        raise ToolError(str(error)) from None
+    head = (f"최근 {found['days']}일 {args.get('event_type')} 중 {args.get('metric')} {args.get('op')} {args.get('value')} "
+            f"{args.get('unit')}({args.get('basis')}): 맞음 {len(found['matched'])}건, 모름 {found['unknown']}건"
+            "(단위·기준이 다르거나 값이 불확실 — 안 맞는다는 뜻이 아니다)")
+    if found["truncated"]:
+        head += f". 후보가 많아 최신 {found['scanned']}행만 봤다 — days 를 줄이면 빠짐이 없다"
+    lines = [head] + [f"- {m['date']} | {', '.join(m['who']) or '회사 미상'} | {m['value']} {m['unit']} {m['basis']} | {m['what'][:140]}"
+                      for m in found["matched"][:15]]
+    if len(found["matched"]) > 15:
+        lines.append(f"(그 밖 {len(found['matched']) - 15}건 생략)")
+    return "\n".join(lines)
+
+
 TOOLS = {f.__name__: f for f in (view_news, search_news, web_search, web_fetch, read_disclosure, set_hypotheses, add_evidence,
-                                   set_premises, set_verdict, finish)}
+                                   set_premises, set_verdict, finish, company_events, find_events)}
 
 
 def run(name: str, args: dict, root: Path) -> str:

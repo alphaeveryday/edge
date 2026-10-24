@@ -42,7 +42,8 @@ resource "aws_iam_role_policy" "execution_secret" {
   name = "${var.name}-execution-secret"
   role = aws_iam_role.execution.id
   policy = jsonencode({ Version = "2012-10-17", Statement = [
-    { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [var.runtime_secret_arn, var.db_secret_arn] }
+    { Effect = "Allow", Action = ["secretsmanager:GetSecretValue"], Resource = [var.runtime_secret_arn, var.db_secret_arn] },
+    { Effect = "Allow", Action = ["ssm:GetParameters"], Resource = [var.graph_password_parameter_arn] }
   ] })
 }
 
@@ -103,6 +104,16 @@ resource "aws_vpc_security_group_egress_rule" "db" {
   description                  = "news database (read-only)"
 }
 
+# 국내 종목 사건 그래프(PuppyGraph Bolt, ALPHA-1453). 그래프 보안 그룹으로만 나간다.
+resource "aws_vpc_security_group_egress_rule" "graph" {
+  security_group_id            = aws_security_group.this.id
+  referenced_security_group_id = var.graph_security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 7687
+  to_port                      = 7687
+  description                  = "ontology graph (read-only queries)"
+}
+
 # 로고: 회사 홈페이지 상당수가 http 만 연다(KIND 회사 개요의 주소가 http).
 resource "aws_vpc_security_group_egress_rule" "http" {
   security_group_id = aws_security_group.this.id
@@ -146,11 +157,13 @@ resource "aws_ecs_task_definition" "this" {
       # 미국 공시(SEC EDGAR)는 연락처가 든 User-Agent 를 요구한다
       TRUTH_SEC_CONTACT = var.sec_contact
       TRUTH_DB_HOST     = var.db_host
+      GRAPH_URI         = var.graph_uri
     } : { name = k, value = v }]
     # 모델·웹 키는 truth-agent 와 같은 시크릿·같은 키, 국내 보도 DB 비밀번호는 분석 엔진의 읽기 계정 시크릿(ALPHA-1450)
     secrets = concat([for key in ["DEEPSEEK_RESIST_NEWS_API_KEY", "EXA_API_KEY"] : {
       name = key, valueFrom = "${var.runtime_secret_arn}:${key}::"
-    }], [{ name = "TRUTH_DB_PASSWORD", valueFrom = "${var.db_secret_arn}:password::" }])
+      }], [{ name = "TRUTH_DB_PASSWORD", valueFrom = "${var.db_secret_arn}:password::" },
+    { name = "GRAPH_PASSWORD", valueFrom = var.graph_password_parameter_arn }])
     logConfiguration = {
       logDriver = "awslogs"
       options = {
