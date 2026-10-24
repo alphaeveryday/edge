@@ -93,16 +93,24 @@ async def test_rate_limit_stops_all_fetching_so_live_customer_analyses_keep_the_
         calls.append(symbol)
         raise ValueError('PRICE_PROVIDER_RATE_LIMIT')
     monkeypatch.setattr('edge_portfolio.market_data.fetch_prices', fetch)
-    records, outcomes, stopped = await past_review.collect_prices({'KR:069500': 2, 'US:VOO': 1, 'FX': 1}, AS_OF, pause=0)
+    records, outcomes, stopped, _ = await past_review.collect_prices({'KR:069500': 2, 'US:VOO': 1, 'FX': 1}, AS_OF, pause=0)
     assert calls == ['069500.KS'] and outcomes['KR:069500'][0] == 'PRICE_PROVIDER_RATE_LIMIT' and stopped == 'RATE_LIMIT'
     calls.clear()
     async def fallback(symbol, as_of, **options):
         calls.append(symbol)
         return {**record('KRW'), 'primary_failure': 'PRICE_PROVIDER_RATE_LIMIT'}  # 대체 공급자가 받아 준 가격
     monkeypatch.setattr('edge_portfolio.market_data.fetch_prices', fallback)
-    records, outcomes, stopped = await past_review.collect_prices({'KR:069500': 2, 'US:VOO': 1}, AS_OF, pause=0)
+    records, outcomes, stopped, _ = await past_review.collect_prices({'KR:069500': 2, 'US:VOO': 1}, AS_OF, pause=0)
     assert calls == ['069500.KS'] and outcomes['KR:069500'][0] is None and stopped == 'RATE_LIMIT', \
         'A usable fallback price still means Yahoo is throttling this host'
+
+
+async def test_saved_archives_are_used_first_like_the_analysis(prices, monkeypatch):
+    # 분석은 미리 저장된 가격을 먼저 쓰고 모자란 종목만 공급자에게 묻는다. 검토도 같아야 분석이 실제로 볼 실패를 잰다
+    monkeypatch.setattr('edge_portfolio.dashboard_work.saved_prices', lambda keys, as_of: {'KR:069500': record('KRW')} if 'KR:069500' in keys else {})
+    records, outcomes, stopped, saved = await past_review.collect_prices({'KR:069500': 2, 'US:VOO': 1}, AS_OF, pause=0)
+    assert '069500.KS' not in prices and saved == {'KR:069500'} and outcomes['KR:069500'] == (None, 0.0)
+    assert 'KR:069500' in records and stopped is None
 
 
 async def test_fetching_waits_while_customer_analyses_are_queued(prices, monkeypatch):
@@ -140,7 +148,8 @@ def test_review_only_reads_and_every_connection_is_read_only(monkeypatch, capsys
             assert self.read_only, 'A connection opened during the review must refuse writes'
             self.queries.append(query)
             return self
-        def fetchall(self): return [{'id': job(1), 'input': payload([KR]), 'result': None}]
+        def fetchall(self):  # 지난 분석 읽기에만 행을 준다. 저장된 가격 읽기(portfolio_dashboard_prices)는 비어 있다
+            return [] if 'portfolio_dashboard_prices' in self.queries[-1] else [{'id': job(1), 'input': payload([KR]), 'result': None}]
         def fetchone(self): return {'n': 0}
     monkeypatch.setattr(store, 'connect', DB)
     monkeypatch.setattr(past_review, 'busy', BUSY)  # 고객 분석 대기 확인도 같은 읽기 전용 연결로 센다

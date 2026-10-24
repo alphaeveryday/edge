@@ -75,7 +75,7 @@ def review():
         return 'REVIEW '+json.dumps({'review':'timed_out'})
     finally:
         subprocess.run(['docker','rm','-f',name],capture_output=True)
-print('REVIEW '+json.dumps({'review':'skipped','reason':'LOW_HOST_MEMORY','available_mb':available}) if available < 600 else review())
+print('REVIEW '+json.dumps({'review':'skipped','reason':'LOW_HOST_MEMORY','available_mb':available}) if available < 800 else review())
 '''
 
 

@@ -108,14 +108,18 @@ def busy():
 
 
 async def collect_prices(ids_by_use, as_of, budget=PRICE_BUDGET_SECONDS, pause=PRICE_PAUSE_SECONDS):
-    """분석과 같은 경로(fetch_prices, 같은 공급자 시간 제한)로 종목마다 한 번만 받는다. 많이 쓰인 종목부터, 상한까지.
+    """분석과 같은 순서로 받는다: 미리 저장된 가격(saved_prices)을 먼저 쓰고, 모자란 종목만 같은 공급자 경로
+    (fetch_prices, 같은 시간 제한)로 종목마다 한 번만, 많이 쓰인 종목부터, 상한까지.
     고객 분석이 돌면 기다리고, 공급자가 호출 제한을 걸면 멈춘다(같은 호스트의 고객 분석이 같은 공급자를 쓴다)."""
     from .catalog import price_symbol
+    from .dashboard_work import saved_prices
     from .market_data import fetch_prices, price_failure
     from .optimizer import PRICE_TIMEOUT_SECONDS
-    records, outcomes, stopped = {}, {}, None
+    records = await asyncio.to_thread(saved_prices, [key for key in ids_by_use if key != 'FX'], as_of)
+    saved = set(records)
+    outcomes, stopped = {key: (None, 0.0) for key in saved}, None
     started = time.monotonic()
-    for key in sorted(ids_by_use, key=lambda key: (-ids_by_use[key], key)):
+    for key in sorted((key for key in ids_by_use if key not in saved), key=lambda key: (-ids_by_use[key], key)):
         while time.monotonic() - started <= budget and busy():
             await asyncio.sleep(BUSY_WAIT_SECONDS)
         if time.monotonic() - started > budget:
@@ -137,7 +141,7 @@ async def collect_prices(ids_by_use, as_of, budget=PRICE_BUDGET_SECONDS, pause=P
             stopped = 'RATE_LIMIT'
             break
         await asyncio.sleep(pause)
-    return records, outcomes, stopped
+    return records, outcomes, stopped, saved
 
 
 def baseline_price(ids, records, outcomes, as_of):
@@ -256,7 +260,7 @@ async def review(rows, *, as_of, llm_samples=0, key=None, budget=PRICE_BUDGET_SE
             ids, reason = None, 'ERROR:' + error_codes(error)[0]
         baselines[row['id']] = (ids, reason)
         uses.update(ids or ())
-    records, outcomes, stopped = await collect_prices(uses, as_of, budget, pause)
+    records, outcomes, stopped, saved = await collect_prices(uses, as_of, budget, pause)
     from .optimizer import PRICE_COLLECTION_BUDGET_SECONDS
     for row, _ in checked:
         ids, reason = baselines[row['id']]
@@ -271,7 +275,7 @@ async def review(rows, *, as_of, llm_samples=0, key=None, budget=PRICE_BUDGET_SE
     summary = {
         'as_of': as_of.isoformat(), 'rows': len(rows), 'distinct_inputs': len(inputs), 'contract_passed': len(checked),
         'stages': {stage: dict(counter.most_common()) for stage, counter in report.counts.items()},
-        'prices': {'instruments': len(uses), 'attempted': len(outcomes), 'stopped': stopped,
+        'prices': {'instruments': len(uses), 'saved': len(saved), 'attempted': len(outcomes) - len(saved), 'stopped': stopped,
                    'failures': dict(Counter(failure or 'OK' for failure, _ in outcomes.values()).most_common()),
                    'seconds': quantiles([seconds for _, seconds in outcomes.values()])},
     }
