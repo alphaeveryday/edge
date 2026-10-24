@@ -181,9 +181,9 @@ class _FakeCursor:
         elif upper.startswith("SELECT THREAD_ID, COUNT"):
             self._rows = [(t, n) for t, n in conn.prior_thread_counts.items() if t in params[0]]
         elif upper.startswith("SELECT MAX(SE.AVAILABLE_AT) FROM EVENT_THREAD_LINK"):
-            # 늦게 온 과거 보도의 직전 보도 시각(ALPHA-508) — news_report_times[thread_id] 중 at 미만 최댓값.
-            tid, at = params
-            earlier = [x for x in conn.news_report_times.get(tid, []) if x < at]
+            # 늦게 온 과거 보도의 직전 보도 시각(ALPHA-508) — news_report_times[thread_id] 중 at 이하 최댓값.
+            tid, at, _self_id = params
+            earlier = [x for x in conn.news_report_times.get(tid, []) if x <= at]
             self._rows = [(max(earlier) if earlier else None,)]
         elif upper.startswith("SELECT EM.SOURCE_EVENT_ID"):
             self._rows = list(conn.dart_measures)
@@ -944,6 +944,24 @@ def test_late_report_inside_a_segment_uses_the_gap_to_its_previous_report(monkey
     links = {r[0]: r for r in _batch(conn, "event_thread_link")}
     assert links["evt_follow"][1] == links["evt_dup"][1] == tid
     assert (links["evt_follow"][3], links["evt_dup"][3]) == ("FOLLOW_UP_STAGE", "DUPLICATE_REBROADCAST")
+
+
+def test_same_time_backfilled_reports_are_one_follow_up_and_one_rebroadcast(monkeypatch):
+    """WHY: 같은 시각 보도 둘을 함께 백필하면 두 번째의 직전 보도는 첫 번째(간격 0)다 — 같은 시각을
+    빼고 그 앞 보도와 비교하면 둘 다 후속이 되어, 순서대로 들어왔을 때와 판정이 달라진다."""
+    ts = datetime.fromisoformat
+    key = _news_key("inst_SUP", "2026-01-01T09:00:00+09:00", _CONTRACT)
+    tid = _stable_id("thr", key)
+    conn = _FakeConn(news_segments=[(ts("2026-01-01T09:00:00+09:00"), ts("2026-01-10T09:00:00+09:00"),
+                                     key, tid)], prior_thread_counts={tid: 2})
+    conn.news_report_times = {tid: [ts("2026-01-01T09:00:00+09:00"), ts("2026-01-10T09:00:00+09:00")]}
+    rv = {"SUPPLIER": "inst_SUP"}
+    a = _multi_role_event("evt_a", rv, "2026-01-03T09:00:00+09:00")
+    b = _multi_role_event("evt_b", rv, "2026-01-03T09:00:00+09:00")
+    assemble_events.thread_events(conn, [a, b])
+
+    novelty = sorted(r[3] for r in _batch(conn, "event_thread_link"))
+    assert novelty == ["DUPLICATE_REBROADCAST", "FOLLOW_UP_STAGE"]
 
 
 def test_mixed_timezone_reports_are_ordered_by_real_time(monkeypatch):

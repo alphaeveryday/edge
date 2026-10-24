@@ -1278,14 +1278,15 @@ def _news_segments(conn, bases: list[str]) -> dict[str, list[list]]:
     return out
 
 
-def _previous_report_at(conn, thread_id: str, at: datetime) -> datetime | None:
-    """그 스레드에서 `at` 보다 이른 마지막 보도 시각(DB) — 늦게 온 과거 보도의 하루 공백 판정용."""
+def _previous_report_at(conn, thread_id: str, at: datetime, source_event_id: str) -> datetime | None:
+    """그 스레드에서 `at` 이전(같은 시각 포함, 자기 자신 제외) 마지막 보도 시각(DB) — 늦게 온 과거
+    보도의 하루 공백 판정용. 같은 시각을 빼면 같은 시각 재보도가 그보다 앞 보도와 비교돼 후속이 된다."""
     with conn.cursor() as cur:
         cur.execute(
             "SELECT max(se.available_at) FROM event_thread_link l"
             " JOIN source_event se ON se.source_event_id = l.source_event_id"
-            " WHERE l.thread_id = %s AND se.available_at < %s",
-            (thread_id, at),
+            " WHERE l.thread_id = %s AND se.available_at <= %s AND l.source_event_id <> %s",
+            (thread_id, at, source_event_id),
         )
         row = cur.fetchone()
     return _ts(row[0]) if row and row[0] is not None else None
@@ -1436,8 +1437,8 @@ def thread_events(conn, events: list[dict]) -> int:
         seg, gap = _assign_news_segment(segs, base, at)
         if gap is None and len(segs) == before and at < last_before[seg[0]]:
             # 늦게 온 과거 보도 — 같은 스레드에서 이 보도 직전 보도와의 간격으로 하루 공백을 잰다.
-            prior_times = [x for x in run_times.get(seg[0], []) if x < at]
-            db_prev = _previous_report_at(conn, seg[1], at)
+            prior_times = [x for x in run_times.get(seg[0], []) if x <= at]
+            db_prev = _previous_report_at(conn, seg[1], at, event["source_event_id"])
             prev = max([*prior_times, *([db_prev] if db_prev else [])], default=None)
             gap = at - prev if prev is not None else None
         gaps[event["source_event_id"]] = gap
