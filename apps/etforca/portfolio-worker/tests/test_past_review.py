@@ -105,6 +105,30 @@ async def test_rate_limit_stops_all_fetching_so_live_customer_analyses_keep_the_
         'A usable fallback price still means Yahoo is throttling this host'
 
 
+async def test_fallback_failure_keeps_the_primary_rate_limit(monkeypatch):
+    # 위 검사가 기대는 사실: 대체 공급자도 실패하면 그 예외에 1차 공급자의 실패가 붙어 나온다
+    from edge_portfolio import market_data
+    async def provider(symbol, as_of, *, provider='yahoo', **options):
+        raise ValueError('PRICE_PROVIDER_RATE_LIMIT' if provider == 'yahoo' else 'PRICE_PROVIDER_UNAVAILABLE')
+    monkeypatch.setattr(market_data, '_fetch_prices', provider)
+    with pytest.raises(ValueError) as caught:
+        await market_data.fetch_prices('069500.KS', AS_OF)
+    assert str(caught.value) == 'PRICE_PROVIDER_UNAVAILABLE' and caught.value.primary_failure == 'PRICE_PROVIDER_RATE_LIMIT'
+
+
+async def test_rate_limit_hidden_behind_a_failed_fallback_still_stops_fetching(monkeypatch):
+    # Yahoo 가 호출 제한을 걸고 대체 공급자도 실패하면 예외에는 대체 실패만 남는다. 1차 실패를 놓치면 계속 묻고 실제 분석까지 돌린다
+    calls = []
+    async def fetch(symbol, as_of, **options):
+        calls.append(symbol)
+        error = ValueError('PRICE_PROVIDER_UNAVAILABLE')
+        error.primary_failure = 'PRICE_PROVIDER_RATE_LIMIT'
+        raise error
+    monkeypatch.setattr('edge_portfolio.market_data.fetch_prices', fetch)
+    _, outcomes, stopped, _ = await past_review.collect_prices({'KR:069500': 2, 'US:VOO': 1}, AS_OF, pause=0)
+    assert calls == ['069500.KS'] and stopped == 'RATE_LIMIT'
+
+
 async def test_saved_archives_are_used_first_like_the_analysis(prices, monkeypatch):
     # 분석은 미리 저장된 가격을 먼저 쓰고 모자란 종목만 공급자에게 묻는다. 검토도 같아야 분석이 실제로 볼 실패를 잰다
     monkeypatch.setattr('edge_portfolio.dashboard_work.saved_prices', lambda keys, as_of: {'KR:069500': record('KRW')} if 'KR:069500' in keys else {})

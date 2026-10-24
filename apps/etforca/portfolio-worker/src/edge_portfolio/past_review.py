@@ -129,15 +129,16 @@ async def collect_prices(ids_by_use, as_of, budget=PRICE_BUDGET_SECONDS, pause=P
         try:
             records[key] = await fetch_prices(price_symbol(key), as_of, provider_timeout=PRICE_TIMEOUT_SECONDS,
                                               on_raw=lambda record, key=key: records.__setitem__(key, record))
-            limit = None
+            limit = primary = None
         except Exception as error:
             limit = price_failure(error)
+            primary = getattr(error, 'primary_failure', None)
         # 분석도 원본 기록을 먼저 받았으면 그것으로 계산한다(optimizer 의 fetch 와 같다)
         failure = None if key in records else limit
         outcomes[key] = (failure, time.monotonic() - began)
         # 대체 공급자로 가격은 받았어도 Yahoo 가 호출 제한을 걸었으면 더 묻지 않는다
         record = records.get(key) or {}
-        if 'PRICE_PROVIDER_RATE_LIMIT' in (limit, record.get('primary_failure'), (record.get('price_recovery') or {}).get('reason')):
+        if 'PRICE_PROVIDER_RATE_LIMIT' in (limit, primary, record.get('primary_failure'), (record.get('price_recovery') or {}).get('reason')):
             stopped = 'RATE_LIMIT'
             break
         await asyncio.sleep(pause)
