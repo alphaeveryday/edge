@@ -187,3 +187,17 @@ async def test_llm_samples_yield_to_live_customers_and_to_provider_rate_limits(m
     monkeypatch.setattr('edge_portfolio.market_data.fetch_prices', limited)
     summary = await past_review.review([{'id': job(1), 'input': payload([KR]), 'result': None}], as_of=AS_OF, llm_samples=1, pause=0)
     assert summary['llm'] == 'skipped_rate_limited' and calls == []
+
+
+async def test_llm_samples_stop_after_a_replay_hits_a_rate_limit_or_the_deadline(monkeypatch):
+    calls = []
+    async def run_analysis(request, key, on_stage):
+        calls.append(key)
+        return {'optimization': {'status': 'available', 'failures': {'US:VOO': 'PRICE_PROVIDER_RATE_LIMIT'}}}
+    monkeypatch.setattr('edge_portfolio.agent.run_analysis', run_analysis)
+    from edge_portfolio.contracts import AnalysisInput
+    samples = [({'id': job(n)}, AnalysisInput.model_validate(payload([KR]))) for n in (1, 2)]
+    results = await past_review.llm_replays(samples, 'k')
+    assert len(calls) == 1 and results[1] == {'job': job(2), 'status': 'skipped_rate_limited'}
+    results = await past_review.llm_replays(samples, 'k', deadline=past_review.time.monotonic() + 10)
+    assert len(calls) == 1 and [r['status'] for r in results] == ['skipped_deadline'] * 2, 'A replay that cannot finish before the host cut-off never starts'

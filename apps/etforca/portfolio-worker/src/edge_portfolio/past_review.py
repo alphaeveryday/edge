@@ -23,6 +23,8 @@ PRICE_BUDGET_SECONDS = 1200
 PRICE_PAUSE_SECONDS = 1
 BUSY_WAIT_SECONDS = 5
 LLM_TIMEOUT_SECONDS = 300
+TOTAL_SECONDS = 3000  # 호스트가 3300초에 컨테이너를 끊는다. 그 전에 모은 결과를 찍는다
+RATE_LIMITS = ('PRICE_PROVIDER_RATE_LIMIT', 'EXA_RATE_LIMIT')
 MAX_LLM_SAMPLES = 5
 EXAMPLES_PER_CODE = 3
 OUTPUT_LIMIT = 20000  # SSM 표준 출력은 약 24KB 에서 잘린다
@@ -219,6 +221,7 @@ class Report:
 
 
 async def review(rows, *, as_of, llm_samples=0, key=None, budget=PRICE_BUDGET_SECONDS, pause=PRICE_PAUSE_SECONDS):
+    deadline = time.monotonic() + TOTAL_SECONDS
     report = Report()
     inputs = distinct_inputs(rows)
     checked = []
@@ -270,23 +273,29 @@ async def review(rows, *, as_of, llm_samples=0, key=None, budget=PRICE_BUDGET_SE
     if llm_samples and 'PRICE_PROVIDER_RATE_LIMIT' in summary['prices']['failures']:
         summary['llm'] = 'skipped_rate_limited'  # 실제 분석도 같은 공급자를 쓴다. 고객 분석 몫을 남긴다
     elif llm_samples:
-        summary['llm'] = await llm_replays(checked[:min(llm_samples, MAX_LLM_SAMPLES)], key)
+        summary['llm'] = await llm_replays(checked[:min(llm_samples, MAX_LLM_SAMPLES)], key, deadline)
     summary['examples'] = dict(report.examples)
     return summary
 
 
-async def llm_replays(samples, key):
-    """최근 서로 다른 입력을 실제 분석으로 돌린다(worker 와 같은 저장 입력 판정). 상태·실패 코드·시간만 남긴다."""
+async def llm_replays(samples, key, deadline=None):
+    """최근 서로 다른 입력을 실제 분석으로 돌린다(worker 와 같은 저장 입력 판정). 상태·실패 코드·시간만 남긴다.
+    고객 분석이 길게 이어지거나 남은 시간이 한 건에 모자라거나 공급자가 호출 제한을 걸면 나머지는 건너뛴다."""
     from .agent import run_analysis
     from .worker import failure_codes
-    results = []
+    deadline = deadline or time.monotonic() + TOTAL_SECONDS
+    results, stop = [], None
     for row, request in samples:
         waited = 0
-        while waited < LLM_TIMEOUT_SECONDS and busy():
+        while not stop and waited < LLM_TIMEOUT_SECONDS and busy():
             await asyncio.sleep(BUSY_WAIT_SECONDS)
             waited += BUSY_WAIT_SECONDS
         if waited >= LLM_TIMEOUT_SECONDS:
-            results.append({'job': row['id'], 'status': 'skipped_busy'})  # 고객 분석이 길게 이어지면 그 몫을 뺏지 않는다
+            results.append({'job': row['id'], 'status': 'skipped_busy'})
+            continue
+        stop = stop or ('skipped_deadline' if time.monotonic() + LLM_TIMEOUT_SECONDS > deadline else None)
+        if stop:
+            results.append({'job': row['id'], 'status': stop})
             continue
         started = time.monotonic()
         try:
@@ -296,8 +305,12 @@ async def llm_replays(samples, key):
             status = str(optimization.get('status', 'none'))
             entry = {'status': 'succeeded', 'optimization': status if SAFE_FIELD.fullmatch(status) else 'other',
                      'candidates': len(optimization.get('candidates', []))}
+            seen = json.dumps(result, default=str)
         except Exception as error:
             entry = {'status': 'failed', 'codes': [code(item) for item in failure_codes(error)]}
+            seen = f'{entry["codes"]} {error!r}'
+        # ponytail: 결과 전체에서 호출 제한 코드를 찾는다. 분석이 제한 표시를 따로 내면 그것으로 바꾼다
+        stop = 'skipped_rate_limited' if any(limit in seen for limit in RATE_LIMITS) else None
         results.append({'job': row['id'], **entry, 'seconds': round(time.monotonic() - started, 1)})
     return results
 

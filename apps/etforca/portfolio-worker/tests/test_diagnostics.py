@@ -66,28 +66,31 @@ def test_replay_reads_only_failed_analysis_without_mutation_or_private_output(di
 @pytest.mark.parametrize('memory,running,stdout,expected', [
     (4096, '', 'PRIVATE log line 1234567\nREVIEW {"rows": 3}\n', {'rows': 3}),
     (4096, '', 'PRIVATE traceback only\n', {'review': 'unavailable', 'returncode': 1}),
-    (4096, 'abc123\n', '', {'review': 'skipped', 'reason': 'ALREADY_RUNNING'}),
+    (4096, True, '', {'review': 'skipped', 'reason': 'ALREADY_RUNNING'}),
     (300, '', '', {'review': 'skipped', 'reason': 'LOW_HOST_MEMORY', 'available_mb': 300}),
 ])
 def test_past_review_runs_in_a_disposable_container_and_prints_only_its_summary(diagnostics, monkeypatch, capsys, memory, running, stdout, expected):
     import io
     import subprocess
     calls = []
+    def flock(file, flags):
+        if running:
+            raise BlockingIOError
+    monkeypatch.setitem(sys.modules, 'fcntl', SimpleNamespace(flock=flock, LOCK_EX=2, LOCK_NB=4))
     def run(command, **options):
         calls.append(command)
-        if command[:2] == ['docker', 'ps']:
-            return SimpleNamespace(stdout=running, stderr='', returncode=0)
         return SimpleNamespace(stdout=stdout, stderr='PRIVATE stderr', returncode=1 if 'REVIEW' not in stdout else 0)
     monkeypatch.setattr(subprocess, 'run', run)
     script = diagnostics.review_script(90, 2)
-    exec(compile(script, 'review', 'exec'), {'open': lambda path: io.StringIO(f'MemTotal: 1 kB\nMemAvailable: {memory * 1024} kB\n')})
+    meminfo = f'MemTotal: 1 kB\nMemAvailable: {memory * 1024} kB\n'
+    exec(compile(script, 'review', 'exec'), {'open': lambda path, *mode: io.StringIO(meminfo if path == '/proc/meminfo' else '')})
     output = capsys.readouterr().out
     assert 'PRIVATE' not in output
     assert json.loads(output.removeprefix('REVIEW ')) == expected
     review = [command for command in calls if 'edge_portfolio.past_review' in command]
     if memory < 600 or running:
         assert review == [], 'A busy host or a review already in progress is never doubled up'
-        assert not [command for command in calls if 'rm' in command], "Another run's container is never removed"
+        assert calls == [], "Another run's container is never touched"
         return
     # 분석 중인 worker 컨테이너(exec)가 아니라 제 메모리 상한을 가진 1회용 컨테이너(run --rm)에서 돈다
     command = review[0]
