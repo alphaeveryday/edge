@@ -1,5 +1,6 @@
 # 랜딩 전망 내보내기(ALPHA-1267) — 매일 08:00 KST 에 그날 발행된 전망 화면을 랜딩 버킷의
 # outlook/<코드>.json 으로 쓴다. etforca.com 의 종목 검색이 이 파일을 읽는다.
+# 같은 화면으로 검색 엔진용 종목 페이지(etf/<코드>, 방향 제외)와 etf/sitemap.xml 도 쓴다(ALPHA-1454, page.html).
 #
 # 랜딩의 것이라 분석 모듈 밖에 둔다. 전망은 분석 v2 조회 API(IAM 인증)로만 읽으므로 VPC·DB 자격이 없다.
 # 전망 배치(06:00 시작, 08:00 마감)는 08:00 전에 끝난다는 전제다 — 늦게 끝난 날의 대비는 두지 않는다.
@@ -11,10 +12,22 @@ locals {
   api_id = regex("^https://([a-z0-9]+)\\.execute-api\\.", var.api_url)[0]
 }
 
+# 종목 페이지(ALPHA-1454)를 그리는 틀과 이름표를 함수와 함께 묶는다. 이름표는 환경 변수 한도(4KB)를 넘어 파일로 둔다.
 data "archive_file" "handler" {
   type        = "zip"
-  source_file = "${path.module}/handler.py"
   output_path = "${path.root}/.terraform/${var.name}.zip"
+  source {
+    content  = file("${path.module}/handler.py")
+    filename = "handler.py"
+  }
+  source {
+    content  = file("${path.module}/page.html")
+    filename = "page.html"
+  }
+  source {
+    content  = jsonencode(var.etf_names)
+    filename = "etf_names.json"
+  }
 }
 
 resource "aws_cloudwatch_log_group" "this" {
@@ -33,7 +46,7 @@ resource "aws_iam_role_policy" "this" {
     { Effect = "Allow", Action = ["logs:CreateLogStream", "logs:PutLogEvents"], Resource = "${aws_cloudwatch_log_group.this.arn}:*" },
     # 종목별 전망 조회 한 경로만. 분석을 시작하는 POST 는 주지 않는다.
     { Effect = "Allow", Action = ["execute-api:Invoke"], Resource = "arn:aws:execute-api:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:${local.api_id}/*/GET/v2/etfs/*/outlook" },
-    { Effect = "Allow", Action = ["s3:PutObject"], Resource = "${var.bucket_arn}/outlook/*" }
+    { Effect = "Allow", Action = ["s3:PutObject"], Resource = ["${var.bucket_arn}/outlook/*", "${var.bucket_arn}/etf/*"] }
   ] })
 }
 

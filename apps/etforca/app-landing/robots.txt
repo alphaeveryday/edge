@@ -2,3 +2,4 @@ User-agent: *
 Allow: /
 
 Sitemap: https://etforca.com/sitemap.xml
+Sitemap: https://etforca.com/etf/sitemap.xml
