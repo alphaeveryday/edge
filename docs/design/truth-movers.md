@@ -2,7 +2,7 @@
 
 etforca.com/truth/today. 오늘 급등한 국내·미국 주식마다 **왜 올랐는지**를 공시·보도와 대조해(경쟁가설 분석, ACH) 판정하고 공개한다. 목적은 투자자가 기관·회사의 과장이나 근거 없는 테마에 당하지 않게 하는 것이다.
 
-조사 에이전트 `apps/etforca/truth-research` 가 돈다. 기만 사건 검증 에이전트 `truth-agent`([truth-service.md](truth-service.md))와 같은 구조다(pi 하네스 + DeepSeek, 종목당 세션 하나, ECS Fargate 단발 태스크). 이미지·태스크·스케줄은 따로이고, 저장소 버킷·실행 키(DeepSeek·Exa)·뉴스 말뭉치·웹 도구는 truth-agent 것을 함께 쓴다. 화면은 truth-web `today.html`.
+조사 에이전트 `apps/etforca/truth-research` 가 돈다. 기만 사건 검증 에이전트 `truth-agent`([truth-service.md](truth-service.md))와 같은 구조다(pi 하네스 + DeepSeek, 종목당 세션 하나, ECS Fargate 단발 태스크). 이미지·태스크·스케줄은 따로이고, 저장소 버킷·실행 키(DeepSeek·Exa)·웹 도구는 truth-agent 것을 함께 쓴다. 화면은 truth-web `today.html`.
 
 ## 1. 판정 태그
 

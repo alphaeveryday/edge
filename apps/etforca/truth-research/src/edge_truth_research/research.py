@@ -164,6 +164,15 @@ def exa_news(key: str, m: Mover, since: str) -> list[dict]:
     return sorted(out, key=lambda w: w.get("publishedDate") or "", reverse=True)
 
 
+def _kst_iso(published: str) -> str | None:
+    """빅카인즈 발행 시각 → ISO(+09:00). DB 의 'YYYY-MM-DD HH:MM:SS'(한국 시각)도, 오프셋이 붙은 ISO 도 받는다.
+    날짜만이면 None(시각을 모르면 판정 뒤 새 보도인지 가릴 수 없다). 예전 말뭉치의 ISO 값에 '+09:00' 을 덧붙여
+    읽기 실패하던 일(미국 빅카인즈 대체 기사가 새 보도로 안 세짐)을 막는다."""
+    if len(published) < 16:
+        return None
+    return published if "T" in published else published.replace(" ", "T") + "+09:00"
+
+
 def _after(published: str | None, judged: str | None) -> bool:
     """발행 시각이 판정 시각보다 뒤인가. 어느 쪽이든 읽을 수 없으면 아니다(새 보도로 세지 않는다)."""
     try:
@@ -328,7 +337,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind=None, session_runner
         arts = {m.code: [] if web.get(m.code) else _articles(texts, m.name) for m in risers}
         # 보도 발행 시각(미국 재조사 판단용): 웹은 원문 메타데이터(UTC), 빅카인즈는 한국 시각
         news_at = {w["id"]: w.get("publishedDate") for ws_ in web.values() for w in ws_} | \
-            {a.id: a.published.replace(" ", "T") + "+09:00" for a_ in arts.values() for a in a_ if len(a.published) >= 16}
+            {a.id: _kst_iso(a.published) for a_ in arts.values() for a in a_ if _kst_iso(a.published)}
         evidence = {m.code: {"filings": filed[m.code],
                              "news": sorted(w["id"] for w in web[m.code]) if web.get(m.code) else sorted(a.id for a in arts[m.code])}
                     for m in risers}

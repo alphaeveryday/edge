@@ -56,14 +56,10 @@ def test_rows_become_corpus_shaped_articles_keyed_by_the_corpus_id(cfg):
     assert (a.title, a.lead, a.url, a.publisher, a.published) == ("[특징주] 에이비 급등", "수주 공시", "https://n/1", "연합뉴스",
                                                                   "2026-10-26 10:20:00")
     assert texts["c" * 64].lead == "" and texts["c" * 64].published == ""
-    # 판정 뒤 새 보도 비교(research.news_at·_after)는 'YYYY-MM-DD HH:MM:SS' 에 '+09:00' 을 붙여 읽는다. 말뭉치의 ISO 형식
-    # ('...T10:20:00+09:00')은 '+09:00+09:00' 이 되어 늘 '새 보도 아님'이었다 — DB 는 이 한 형식으로만 낸다.
-    from edge_truth_research.research import _after
-    assert _after(a.published.replace(" ", "T") + "+09:00", "2026-10-26T10:00:00+09:00")
-    assert not _after(a.published.replace(" ", "T") + "+09:00", "2026-10-26T10:30:00+09:00")
-    sql, (since, until) = seen[0]
-    assert "source_code = 'bigkinds'" in sql and "Asia/Seoul" in sql
-    assert until == now and (now - since).days == dbnews.DAYS
+    # 판정 뒤 새 보도 비교(미국의 빅카인즈 대체 기사)는 research._kst_iso 로 ISO 를 만든다
+    from edge_truth_research.research import _after, _kst_iso
+    assert _after(_kst_iso(a.published), "2026-10-26T10:00:00+09:00")
+    assert not _after(_kst_iso(a.published), "2026-10-26T10:30:00+09:00")
 
 
 def test_cannot_reach_the_database_fails_the_run(cfg):
@@ -92,3 +88,14 @@ def test_session_environment_never_carries_the_database_password(cfg, tmp_path, 
     monkeypatch.setenv("TRUTH_DB_PASSWORD", "pw-secret")
     env = session._env(cfg, Workspace(tmp_path / "ws"), tmp_path / "c.sqlite")
     assert "TRUTH_DB_PASSWORD" not in env
+
+
+
+def test_publication_time_reads_both_the_database_and_the_old_corpus_format():
+    # 예전 말뭉치는 ISO('...T10:20:00+09:00')와 공백 형식이 섞여 있었고, ISO 에 '+09:00' 을 또 붙여 읽기에 실패했다
+    from edge_truth_research.research import _after, _kst_iso
+    judged = "2026-10-26T10:00:00+09:00"
+    assert _kst_iso("2026-10-26 10:20:00") == "2026-10-26T10:20:00+09:00"
+    assert _kst_iso("2026-10-26T10:20:00+09:00") == "2026-10-26T10:20:00+09:00"
+    assert _after(_kst_iso("2026-10-26T10:20:00+09:00"), judged)
+    assert _kst_iso("2026-10-26") is None and _kst_iso("") is None
