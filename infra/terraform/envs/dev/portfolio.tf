@@ -105,7 +105,7 @@ resource "aws_instance" "portfolio" {
   associate_public_ip_address = true
   user_data                   = file("${path.module}/portfolio-bootstrap.sh")
   root_block_device {
-    volume_size           = 50
+    volume_size           = 80 # 50GB filled with per-deploy host builds (2026-10-24); builds now run on GitHub
     volume_type           = "gp3"
     encrypted             = true
     delete_on_termination = false
