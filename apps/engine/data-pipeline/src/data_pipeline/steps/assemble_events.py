@@ -1307,7 +1307,8 @@ def _assign_news_segment(segs: list[list], base: str, at: datetime) -> tuple[lis
     elif nxt is not None and nxt[2] - at <= NEWS_THREAD_WINDOW:
         seg = nxt
     else:
-        key = f"{base}||since={at.isoformat()}"
+        # 시작 시각은 UTC 로 적는다 — 같은 순간이 표기(+09:00/+00:00)에 따라 다른 thread_id 가 되지 않게.
+        key = f"{base}||since={at.astimezone(timezone.utc).isoformat()}"
         seg = [key, _stable_id("thr", key), at, at]
         segs.append(seg)
         segs.sort(key=lambda g: g[2])

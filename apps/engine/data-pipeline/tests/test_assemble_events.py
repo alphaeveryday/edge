@@ -13,7 +13,7 @@ stage 메뉴 통제(자유텍스트 오염 차단), novelty 세분(CORRECTION·D
 
 import io
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
@@ -54,7 +54,7 @@ _CONTRACT_PRED = "SIGN"
 
 def _news_key(entity_id: str, available_at, event_type_code: str = _ETYPE, firm: str = "") -> str:
     """뉴스 스레드 구간 키(ALPHA-508) — assemble_events._news_thread_base + `||since=<시작 시각>`."""
-    since = datetime.fromisoformat(str(available_at)).isoformat()
+    since = datetime.fromisoformat(str(available_at)).astimezone(timezone.utc).isoformat()
     analyst = f"||analyst={firm}" if firm else ""
     return f"news:event_type_id={event_type_code}||company={entity_id}{analyst}||since={since}"
 
@@ -962,6 +962,17 @@ def test_same_time_backfilled_reports_are_one_follow_up_and_one_rebroadcast(monk
 
     novelty = sorted(r[3] for r in _batch(conn, "event_thread_link"))
     assert novelty == ["DUPLICATE_REBROADCAST", "FOLLOW_UP_STAGE"]
+
+
+def test_new_segment_id_does_not_depend_on_the_timezone_notation(monkeypatch):
+    """WHY: 1분 경로(+09:00)와 배치(DB timestamptz, +00:00)가 같은 순간을 다르게 적어도 같은 thread_id 가
+    나와야 한다 — 표기마다 ID 가 다르면 처음 처리한 writer 에 따라 외부 참조가 갈린다."""
+    ids = []
+    for at in ("2026-07-01T09:00:00+09:00", "2026-07-01T00:00:00+00:00"):
+        conn = _FakeConn()
+        assemble_events.thread_events(conn, [_multi_role_event("evt", {"SUPPLIER": "inst_SUP"}, at)])
+        ids.append(_batch(conn, "event_thread_link")[0][1])
+    assert ids[0] == ids[1]
 
 
 def test_mixed_timezone_reports_are_ordered_by_real_time(monkeypatch):
