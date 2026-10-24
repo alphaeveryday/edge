@@ -3,16 +3,24 @@
 etforca.com 의 종목 검색이 읽는 파일(outlook/<코드>.json)을 만든다. 전망은 분석 v2 조회 API 로만 읽는다 —
 분석 DB·내부 코드에 기대지 않는다. 스케줄러가 매일 08:00 KST 에 부른다(전망 배치는 06:00 시작, 08:00 마감).
 
+같은 화면으로 검색 엔진에 여는 종목 페이지(etf/<코드>)와 그 sitemap(etf/sitemap.xml)도 쓴다(ALPHA-1454).
+
 수동 실행은 event 로 범위를 좁힌다: {"etf_codes": ["091160"], "date": "2026-10-12"}.
 """
+import html
 import json
 import os
+import string
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 KST = timezone(timedelta(hours=9))
+SITE = 'https://etforca.com'
+PAGE = string.Template(Path(__file__).with_name('page.html').read_text(encoding='utf-8'))
 
 
 def strip_internal(node):
@@ -22,6 +30,38 @@ def strip_internal(node):
     if isinstance(node, list):
         return [strip_internal(value) for value in node]
     return node
+
+
+def render_page(code, name, screen):
+    """검색 엔진에 여는 종목 페이지. 전망 화면에서 '오늘 일어난 일'(factors)과 참고 기사만 싣는다.
+
+    방향·결론·요약·근거 판단 문장(outlook·conclusion·summary_card·detail 의 문장)은 공개 웹에 두지 않고 앱으로 넘긴다
+    — 종목별 방향을 검색 결과에 매일 노출하지 않기로 했다. 문장은 LLM 이 쓴 글이라 전부 escape 하고,
+    기사 주소는 http(s) 만 링크로 단다.
+    """
+    esc = html.escape
+    facts = screen['factors']
+    if not facts:
+        raise ValueError('오늘 일어난 일(factors)이 비었다')
+    links = {link['url']: link['title'] for item in screen['detail']['items'] for link in item.get('source_links', [])
+             if link.get('url', '').startswith(('https://', 'http://'))}
+    when = datetime.fromisoformat(screen['publication']['analysis_at']).astimezone(KST)
+    # 설치를 종목 페이지별로 세도록 Play 링크에 꼬리표를 단다(랜딩은 ALPHA-1451)
+    referrer = urllib.parse.urlencode({'utm_source': 'etforca.com', 'utm_medium': 'etf_page', 'utm_campaign': code})
+    play = 'https://play.google.com/store/apps/details?' + urllib.parse.urlencode({'id': 'com.alphaeveryday.etforca', 'hl': 'ko', 'referrer': referrer})
+    return PAGE.substitute(
+        name=esc(name), code=esc(code), url=f'{SITE}/etf/{code}', description=esc(facts[0]['sentence']),
+        when=f'{when.month}월 {when.day}일 {when:%H:%M}',
+        facts='\n'.join(f'<li><b>{esc(fact["type"])}</b>{esc(fact["sentence"])}</li>' for fact in facts),
+        news='\n'.join(f'<li><a href="{esc(url)}" target="_blank" rel="nofollow noopener">{esc(title)}</a></li>'
+                       for url, title in list(links.items())[:8]),
+        play=esc(play))
+
+
+def sitemap(codes):
+    """종목 페이지 주소 목록. 첫 페이지는 랜딩 배포의 sitemap.xml 이 맡고, robots.txt 가 둘 다 가리킨다."""
+    urls = ''.join(f'<url><loc>{SITE}/etf/{code}</loc></url>' for code in codes)
+    return f'<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>\n'
 
 
 def export(codes, day, fetch, put, pause=lambda: None, out_of_time=lambda: False):
@@ -73,13 +113,26 @@ def handler(event, context):
                 return None
             raise
 
+    names = json.loads(Path(__file__).with_name('etf_names.json').read_text(encoding='utf-8'))
+
     def put(code, body):
         # no-cache: 랜딩 CDN 의 기본 캐시가 24시간이라, 없으면 어제 전망이 하루 더 보인다.
         s3.put_object(Bucket=bucket, Key=f'outlook/{code}.json', Body=body.encode('utf-8'),
                       ContentType='application/json; charset=utf-8', CacheControl='no-cache')
+        # 검색용 페이지는 JSON 뒤에 쓴다 — 페이지가 실패해도 랜딩 검색은 갱신되고, 실패는 그 종목의 오류로 남는다.
+        # 확장자 없는 키다(CloudFront 에 주소 변환이 없다. truth/ 와 같은 방식).
+        s3.put_object(Bucket=bucket, Key=f'etf/{code}', Body=render_page(code, names.get(code, code), json.loads(body)).encode('utf-8'),
+                      ContentType='text/html; charset=utf-8', CacheControl='no-cache')
 
-    return export(event.get('etf_codes') or json.loads(os.environ['ETF_CODES']),
-                  event.get('date') or datetime.now(KST).date().isoformat(),
-                  fetch, put, pause=lambda: time.sleep(0.25),  # 조회 API 한도가 초당 5건이다
-                  # 조회 제한(30초)과 저장을 한 번 더 감당할 시간이 남았을 때만 다음 종목으로 간다
-                  out_of_time=lambda: context.get_remaining_time_in_millis() < 60_000)
+    all_codes = json.loads(os.environ['ETF_CODES'])
+    try:
+        return export(event.get('etf_codes') or all_codes,
+                      event.get('date') or datetime.now(KST).date().isoformat(),
+                      fetch, put, pause=lambda: time.sleep(0.25),  # 조회 API 한도가 초당 5건이다
+                      # 조회 제한(30초)과 저장을 한 번 더 감당할 시간이 남았을 때만 다음 종목으로 간다
+                      out_of_time=lambda: context.get_remaining_time_in_millis() < 60_000)
+    finally:
+        # sitemap 은 내보내기 뒤에 쓴다 — 여기서 실패해도 전망 갱신은 이미 끝났고, 실패는 함수 오류로 알람이 된다.
+        # 수동 실행으로 좁힌 범위가 아니라 전체 목록으로 쓴다 — 좁히면 나머지 종목이 검색 엔진에서 빠진다.
+        s3.put_object(Bucket=bucket, Key='etf/sitemap.xml', Body=sitemap(all_codes).encode('utf-8'),
+                      ContentType='application/xml', CacheControl='no-cache')

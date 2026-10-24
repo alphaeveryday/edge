@@ -889,6 +889,7 @@ module "landing_export" {
   bucket_name       = module.landing_site.bucket_name
   bucket_arn        = module.landing_site.bucket_arn
   etf_codes         = local.outlook_etf_codes
+  etf_names         = local.outlook_etf_names
   scheduler_dlq_arn = module.data_pipeline.scheduler_dlq_arn
   alarm_topic_arn   = module.data_pipeline.alarm_topic_arn
 }

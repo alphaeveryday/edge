@@ -72,6 +72,7 @@
 - `assets/og.png`(1200x630)에는 페이지 제목 문구가 그림으로 들어 있다. 제목을 바꾸면 그림도 다시 만든다.
 - 구글 서치 콘솔에는 URL 접두어 속성 `https://etforca.com` 으로 등록했다(팀 구글 계정). 소유 확인은 머리의 `google-site-verification` 메타 태그로 한다. 이 태그를 지우면 소유 확인이 풀린다.
 - 네이버 서치어드바이저에는 등록하지 않았다. 등록할 때 `https://etforca.com/sitemap.xml` 을 제출한다.
+- ETF별 오늘 이슈 페이지(`/etf/<코드>`, 148개)는 이 폴더가 아니라 전망 내보내기 람다(`infra/terraform/modules/landing-export`, 틀은 `page.html`)가 매일 08:00 에 만든다(ALPHA-1454). 전망의 방향·결론·근거 판단은 싣지 않고 '오늘 일어난 일'과 참고 기사만 싣는다. 그 주소 목록 `etf/sitemap.xml` 도 람다가 쓰고, `robots.txt` 가 두 sitemap 을 함께 가리킨다. 지난 날짜 페이지는 남기지 않는다.
 
 ## 푸터 링크
 

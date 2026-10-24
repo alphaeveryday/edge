@@ -23,6 +23,11 @@ variable "etf_codes" {
   type        = list(string)
 }
 
+variable "etf_names" {
+  description = "코드 → 종목 이름. 종목 페이지(etf/<코드>) 제목에 쓴다. 없는 코드는 코드로 적는다."
+  type        = map(string)
+}
+
 variable "alarm_topic_arn" {
   description = "내보내기 실패 알람을 보낼 SNS 토픽"
   type        = string
