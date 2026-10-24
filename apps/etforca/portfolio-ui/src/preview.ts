@@ -37,8 +37,6 @@ export async function previewRequest<T>(path: string, init?: RequestInit): Promi
   else if (path === '/workbook/newsletter' && !body) result = { subscribed: false };
   else if (path.endsWith('/newsletter')) result = { status: 'pending', delivery_ready: true };
   else if (path === '/newsletter/confirm') result = { status: 'confirmed', delivery_ready: true };
-  else if (path === '/backtests') result = { id: 'preview-backtest' };
-  else if (path.startsWith('/backtests/')) result = { state: 'succeeded', result: { history: report.recommendation!.historical_performance, return_pct: 34.5, excluded: [] } };
   else if (path === '/workbook/tracking') {
     const saved = await previewRequest<Saved>('/workbook');
     const w = saved.workbook;

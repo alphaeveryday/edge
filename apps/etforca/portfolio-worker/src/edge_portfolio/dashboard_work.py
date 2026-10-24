@@ -1,20 +1,17 @@
-"""Daily dashboard valuation and queued backtests on the existing worker."""
+"""Daily dashboard valuation on the existing worker."""
 import asyncio
 import json
 import logging
 import math
 from datetime import date, datetime, timedelta
 from functools import lru_cache
-from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from pydantic import Field, model_validator
 from psycopg.types.json import Jsonb
 
 from . import store
 from .catalog import directory, price_symbol
-from .contracts import StrictModel
 
 log = logging.getLogger(__name__)
 
@@ -52,28 +49,6 @@ def identify(asset, *, strict=True, fx=None):
     return asset
 
 
-class Allocation(StrictModel):
-    instrument_id: str = Field(max_length=40)
-    weight_pct: float = Field(gt=0, le=100, allow_inf_nan=False, strict=True)
-
-
-class Backtest(StrictModel):
-    allocations: list[Allocation] = Field(min_length=1, max_length=20)
-    start: date | None = None
-    end: date | None = None
-
-    @model_validator(mode='after')
-    def valid(self):
-        allowed = {r['id'] for r in directory(include_stocks=True)['instruments']} | {'CASH:KRW'}
-        if any(a.instrument_id not in allowed for a in self.allocations):
-            raise ValueError('SELECT_LISTED_INSTRUMENT')
-        if abs(sum(a.weight_pct for a in self.allocations) - 100) > .01:
-            raise ValueError('INVALID_MARKET_WEIGHTS')
-        if self.end and self.end >= today() or self.start and self.start >= today() or self.start and self.end and self.start >= self.end:
-            raise ValueError('INVALID_PERIOD')
-        return self
-
-
 def initialize(db):
     from . import dashboard_quotes
     dashboard_quotes.initialize(db)
@@ -85,10 +60,6 @@ def initialize(db):
         PRIMARY KEY(owner,day))''')
     db.execute('''CREATE TABLE IF NOT EXISTS portfolio_dashboard_prices (
         instrument text PRIMARY KEY, day date NOT NULL, payload jsonb NOT NULL)''')
-    db.execute('''CREATE TABLE IF NOT EXISTS portfolio_backtests (
-        id text PRIMARY KEY, owner text NOT NULL, input jsonb NOT NULL, state text NOT NULL DEFAULT 'queued',
-        created_at timestamptz NOT NULL DEFAULT now(), lease_until timestamptz, result jsonb)''')
-    db.execute('CREATE INDEX IF NOT EXISTS portfolio_backtest_owner ON portfolio_backtests(owner,created_at)')
 
 
 def tracking(owner):
@@ -97,31 +68,6 @@ def tracking(owner):
         days = db.execute('SELECT day,payload FROM portfolio_dashboard_days WHERE owner=%s ORDER BY day', (owner,)).fetchall()
         archives = db.execute('SELECT version,payload FROM portfolio_workbook_archives WHERE owner=%s ORDER BY version DESC', (owner,)).fetchall()
     return {'market': market, 'days': [{'date': str(r['day']), **r['payload']} for r in days], 'archives': archives}
-
-
-def submit(owner, body):
-    payload = body.model_dump(mode='json')
-    with store.connect() as db:
-        db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('backtest:' + owner,))
-        active = db.execute("SELECT id,input FROM portfolio_backtests WHERE owner=%s AND state IN ('queued','running') ORDER BY created_at LIMIT 1", (owner,)).fetchone()
-        if active:
-            if active['input'] == payload:
-                return {'id': active['id']}
-            raise ValueError('BACKTEST_BUSY')
-        count = db.execute("SELECT count(*) AS n FROM portfolio_backtests WHERE owner=%s AND created_at>now()-interval '1 day'", (owner,)).fetchone()['n']
-        if count >= 50:
-            raise ValueError('BACKTEST_LIMIT')
-        db.execute('SELECT pg_advisory_xact_lock(1266)')
-        if store.queued_count(db) >= 20:
-            raise ValueError('QUEUE_FULL')
-        key = str(uuid4())
-        db.execute('INSERT INTO portfolio_backtests(id,owner,input) VALUES (%s,%s,%s)', (key, owner, Jsonb(payload)))
-    return {'id': key}
-
-
-def read_backtest(owner, key):
-    with store.connect() as db:
-        return db.execute('SELECT id,state,result FROM portfolio_backtests WHERE id=%s AND owner=%s', (key, owner)).fetchone()
 
 
 @lru_cache(maxsize=16)
@@ -451,84 +397,30 @@ def valuation(workbook, records, prior, day):
             'dividend_missing': dividend_missing, 'pending_splits': pending_splits}
 
 
-def run_backtest(body, records, day, failures):
-    import pandas as pd
-    from .market_data import comparison, comparison_bounds, weights, year_before
-    day = min(day, date.fromisoformat(body['end']) + timedelta(days=1)) if body.get('end') else day
-    allocation = weights(body['allocations'])
-    excluded = [k for k in allocation if k != 'CASH:KRW' and (k not in records or k.startswith('US:') and 'FX' not in records or records[k].get('return_basis') == 'price')]
-    for key in allocation.keys() - set(excluded) - {'CASH:KRW'}:
-        try:
-            last_close(records[key])
-            comparison_bounds({key}, records, day, column='Adj Close')
-        except (ValueError, KeyError):
-            excluded.append(key)
-    target = {k: v for k, v in allocation.items() if k not in excluded}
-    if not target:
-        raise ValueError('PRICE_UNAVAILABLE')
-    total = sum(target.values())
-    if set(target) == {'CASH:KRW'}:
-        end = pd.Timestamp(body.get('end') or day - timedelta(days=1))
-        start = pd.Timestamp(body.get('start') or year_before(end.date()))
-    else:
-        start, end = comparison_bounds(set(target), records, day)
-        if body.get('start'):
-            start = max(start, pd.Timestamp(body['start']))
-        if body.get('end'):
-            end = pd.Timestamp(body['end'])
-    if start >= end:
-        raise ValueError('NO_COMMON_PRICE_HISTORY')
-    history = comparison({k: v / total for k, v in target.items()}, None, records, day, bounds=(start, end))
-    points = history['points']
-    if len(points) < 2:
-        raise ValueError('NO_COMMON_PRICE_HISTORY')
-    baseline = points[0]['recommended']
-    history.update(points=[{**p, 'recommended': round(p['recommended'] / baseline * 1000000, 2)} for p in points],
-                   basis=f"{points[0]['date']} ~ {points[-1]['date']} · 100만 원 · 분배금 전액 재투자")
-    return {'history': history, 'excluded': excluded, 'return_pct': round((points[-1]['recommended'] / baseline - 1) * 100, 2)}
-
-
-async def work_once(stopping=None, *, kind=None):
+async def work_once(stopping=None):
     if stopping and stopping.is_set():
         return False
     with store.connect() as db:
-        job = db.execute("""SELECT * FROM portfolio_backtests WHERE state='queued' OR state='running' AND lease_until<now()
-                ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone() if kind != 'valuation' else None
         book = db.execute("""SELECT * FROM portfolio_workbooks WHERE refresh_after<=now()
-                ORDER BY refresh_after FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone() if kind != 'backtest' else None
-        if book and (not job or book['refresh_after'] <= job['created_at']):
-            job = None
+                ORDER BY refresh_after FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone()
+        if book:
             book = db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '10 minutes' WHERE owner=%s RETURNING *", (book['owner'],)).fetchone()
-        elif job:
-            book = None
-            job = db.execute("UPDATE portfolio_backtests SET state='running',lease_until=now()+interval '10 minutes' WHERE id=%s RETURNING *", (job['id'],)).fetchone()
-    if not job and not book:
+    if not book:
         return False
-    day = today()
     try:
         async with asyncio.timeout(240):
-            if job:
-                collection_day = min(day, date.fromisoformat(job['input']['end']) + timedelta(days=1)) if job['input'].get('end') else day
-                records, failures = await records_for([a['instrument_id'] for a in job['input']['allocations']], collection_day)
-                result = run_backtest(job['input'], records, day, failures)
-                with store.connect() as db:
-                    db.execute("UPDATE portfolio_backtests SET state='succeeded',result=%s WHERE id=%s AND lease_until=%s", (Jsonb(result), job['id'], job['lease_until']))
-            else:
-                assets = [identify(a, strict=False, fx=book['payload'].get('fx')) for a in book['payload']['assets']]
-                from .dashboard_quotes import project
-                with store.connect() as db:
-                    current = db.execute('SELECT version,refresh_after FROM portfolio_workbooks WHERE owner=%s FOR UPDATE', (book['owner'],)).fetchone()
-                    if current['version'] != book['version'] or current['refresh_after'] != book['refresh_after']:
-                        return True
-                    if assets != book['payload']['assets']:
-                        db.execute('UPDATE portfolio_workbooks SET payload=%s WHERE owner=%s', (Jsonb({**book['payload'], 'assets': assets}), book['owner']))
-                    project(db, book['owner'], book['version'], {**book['payload'], 'assets': assets}, record_day=True)
-                    db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 minute' WHERE owner=%s", (book['owner'],))
+            assets = [identify(a, strict=False, fx=book['payload'].get('fx')) for a in book['payload']['assets']]
+            from .dashboard_quotes import project
+            with store.connect() as db:
+                current = db.execute('SELECT version,refresh_after FROM portfolio_workbooks WHERE owner=%s FOR UPDATE', (book['owner'],)).fetchone()
+                if current['version'] != book['version'] or current['refresh_after'] != book['refresh_after']:
+                    return True
+                if assets != book['payload']['assets']:
+                    db.execute('UPDATE portfolio_workbooks SET payload=%s WHERE owner=%s', (Jsonb({**book['payload'], 'assets': assets}), book['owner']))
+                project(db, book['owner'], book['version'], {**book['payload'], 'assets': assets}, record_day=True)
+                db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 minute' WHERE owner=%s", (book['owner'],))
     except Exception as error:
-        log.warning('dashboard task failed kind=%s code=%s', 'backtest' if job else 'valuation', type(error).__name__)
+        log.warning('dashboard task failed kind=%s code=%s', 'valuation', type(error).__name__)
         with store.connect() as db:
-            if job:
-                db.execute("UPDATE portfolio_backtests SET state='failed',result=%s WHERE id=%s AND lease_until=%s", (Jsonb({'message': '가격 자료를 가져오지 못했어요. 잠시 후 다시 조회해 주세요.'}), job['id'], job['lease_until']))
-            else:
-                db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 minute' WHERE owner=%s AND version=%s AND refresh_after=%s", (book['owner'], book['version'], book['refresh_after']))
+            db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 minute' WHERE owner=%s AND version=%s AND refresh_after=%s", (book['owner'], book['version'], book['refresh_after']))
     return True

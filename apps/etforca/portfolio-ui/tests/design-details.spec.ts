@@ -84,19 +84,17 @@ test('the action stays reachable and never covers the end of the form', async ({
 });
 
 test('a wide performance chart stays readable and pointer selection tracks the same data after resizing', async ({ page }) => {
-  // 결과 화면은 8차 지난 기간 칸으로 바뀌었고, 같은 성과 그래프(PerformanceChart)는 대시보드 백테스트에 남는다.
+  // 결과 화면은 8차 지난 기간 칸으로 바뀌었고 백테스트는 없앴다. 같은 성과 그래프(PerformanceChart)는 대시보드 수익 기록에 남는다.
   await page.goto('/portfolio/?preview=dashboard');
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
-  await page.getByRole('button', { name: '과거 수익률 조회', exact: true }).click();
+  await page.getByRole('button', { name: '수익 기록', exact: true }).click();
   const chart = page.locator('.report-history svg');
   const box = await chart.boundingBox();
   expect(box!.height).toBeLessThanOrEqual(301);
   await chart.hover({ position: { x: box!.width - 18, y: 60 } });
-  await expect(page.locator('.history-date')).toHaveText('2026-10-01');
+  await expect(page.locator('.history-date')).toHaveText('2026-10-18');
   await page.setViewportSize({ width: 320, height: 900 });
   await expect.poll(async () => chart.evaluate((el: SVGSVGElement) => Math.abs(el.viewBox.baseVal.width - el.getBoundingClientRect().width))).toBeLessThan(2);
   await chart.hover({ position: { x: 0, y: 60 } });
-  await expect(page.locator('.history-date')).toHaveText('2024-11-01');
+  await expect(page.locator('.history-date')).toHaveText('2026-10-16');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

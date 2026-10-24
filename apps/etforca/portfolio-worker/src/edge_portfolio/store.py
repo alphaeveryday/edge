@@ -23,9 +23,7 @@ def connect():
 
 
 def queued_count(db):
-    return db.execute("""SELECT
-        (SELECT count(*) FROM portfolio_jobs WHERE state IN ('queued','running')) +
-        (SELECT count(*) FROM portfolio_backtests WHERE state IN ('queued','running')) AS n""").fetchone()['n']
+    return db.execute("SELECT count(*) AS n FROM portfolio_jobs WHERE state IN ('queued','running')").fetchone()['n']
 
 
 def initialize():

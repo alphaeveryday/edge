@@ -75,8 +75,6 @@ test('preview edits and reloads without sending customer API or analytics traffi
   await expect(page.getByRole('heading', { name: '배당 달력', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '수익 기록', exact: true }).click();
   await expect(page.getByRole('heading', { name: '일별 수익 기록' })).toBeVisible();
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await expect(page.locator('.dashboard-main')).toContainText('내 조합 백테스트');
   expect(calls).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

@@ -35,18 +35,6 @@ test('partial daily profit stays visible and an imported QLD average survives sa
   await expect(page.getByLabel(/평균매수가/)).toHaveValue('80');
 });
 
-for (const amount of [500000, 0]) test(`copying holdings excludes zero balances instead of producing invalid allocations: ${amount}`, async ({ page }) => {
-  const cash: Asset = { ...asset, id: 'cash', instrument_id: 'CASH:KRW', name: '현금', category: '현금', quantity: null, amount: 0 };
-  await mock(page, { version: 1, workbook: { ...workbook, assets: [asset, cash] } });
-  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { ...tracking, market: { ...tracking.market, payload: { ...tracking.market.payload, assets: [{ ...tracking.market.payload.assets[0], value: amount }, { id: 'cash', value: 0, profit: 0 }] } } } }));
-  await page.goto('/portfolio/?view=dashboard');
-  await expect(page.locator('.holding-edit')).toHaveCount(2);
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
-  await expect(page.locator('.backtest-rows input')).toHaveCount(amount ? 1 : 0);
-  if (amount) await expect(page.getByLabel('KODEX 200 비중 (%)')).toHaveValue('100');
-  else await expect(page.getByRole('alert')).toContainText('보유금액이 있는 종목을 먼저 담아 주세요.');
-});
 async function mock(page: Page, saved: Saved = { version: 1, workbook }) {
   await page.route('**/api/portfolio/**', async r => {
     const path = new URL(r.request().url()).pathname;
@@ -85,24 +73,6 @@ for (const stock of [
   await page.locator('.holding-edit').filter({ hasText: stock.name }).click();
   await expect(dialog.getByLabel('보유 수량', { exact: true })).toHaveValue('2.5');
   await expect(dialog.getByLabel(/평균매수가/)).toHaveValue('100');
-  await dialog.getByRole('button', { name: '취소', exact: true }).click();
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('combobox', { name: /백테스트에 담은 종목 찾기/ }).fill(stock.ticker);
-  await page.getByRole('option', { name: new RegExp(stock.name) }).click();
-  await expect(page.getByLabel(`${stock.name} 비중 (%)`)).toBeVisible();
-});
-
-test('tiny positive holdings stay represented by a valid hundredth-percent allocation', async ({ page }) => {
-  const cash: Asset = { ...asset, id: 'cash', instrument_id: 'CASH:KRW', name: '현금', category: '현금', quantity: null, amount: 100000000 };
-  await mock(page, { version: 1, workbook: { ...workbook, assets: [asset, cash] } });
-  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { ...tracking, market: { ...tracking.market, payload: { ...tracking.market.payload, assets: [{ ...tracking.market.payload.assets[0], value: 1 }, { id: 'cash', value: 100000000, profit: 0 }] } } } }));
-  await page.goto('/portfolio/?view=dashboard');
-  await expect(page.locator('.holding-edit')).toHaveCount(2);
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
-  await expect(page.getByLabel('KODEX 200 비중 (%)')).toHaveValue('0.01');
-  await expect(page.getByLabel('현금 비중 (%)')).toHaveValue('99.99');
-  await expect(page.getByRole('alert')).toContainText('0.01%보다 작은 보유분');
 });
 
 test('an unavailable first tracking response never presents the old import amount as current value', async ({ page }) => {
@@ -112,20 +82,6 @@ test('an unavailable first tracking response never presents the old import amoun
   await expect(page.getByRole('alert')).toContainText('자동 기록을 불러오지 못했어요.');
   await expect(page.locator('.dashboard-stats article').first().locator('strong')).toHaveText('—');
   await expect(page.locator('.holdings-table tbody tr')).not.toContainText('1,000,000원');
-});
-
-for (const status of [401, 404]) test(`an expired backtest connection preserves the composition and permits a retry: ${status}`, async ({ page }) => {
-  await mock(page);
-  await page.route('**/api/portfolio/backtests', r => r.fulfill({ json: { id: 'job' } }));
-  await page.route('**/api/portfolio/backtests/job', r => r.fulfill({ status, json: {} }));
-  await page.goto('/portfolio/?view=dashboard');
-  await expect(page.locator('.holding-edit')).toHaveCount(1);
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
-  await page.getByRole('button', { name: '과거 수익률 조회', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('백테스트 연결이 만료됐어요. 다시 조회해 주세요.');
-  await expect(page.getByLabel('KODEX 200 비중 (%)')).toHaveValue('100');
-  await expect(page.getByRole('button', { name: '과거 수익률 조회', exact: true })).toBeEnabled();
 });
 
 test('an older poll cannot replace the fresh valuation returned after saving', async ({ page }) => {
@@ -183,28 +139,42 @@ test('holdings need only instrument quantity and optional average, never a custo
   await expect(page.getByLabel(/평균매수가/)).not.toHaveAttribute('required', '');
 });
 
-test('the overview replaces redundant tabs with a working backtest', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await expect(page.getByRole('navigation', { name: '대시보드' }).getByRole('button')).toHaveText(['한눈에', '배당 달력', '수익 기록', '백테스트', 'AI 포폴 분석']);
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
-  await page.getByRole('button', { name: '과거 수익률 조회', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '기간 수익률 +34.5%' })).toBeVisible();
-  await expect(page.locator('.history-legend')).toContainText('내 조합');
+test('the dashboard offers no backtest tab, and an old backtest link opens the overview', async ({ page }) => {
+  // 백테스트는 서버 API 까지 없앴다 — 탭이 남거나 옛 북마크가 빈 화면을 열면 안 된다.
+  await page.goto('/portfolio/?preview=dashboard&tab=backtest');
+  await expect(page.getByRole('navigation', { name: '대시보드' }).getByRole('button')).toHaveText(['한눈에', '배당 달력', '수익 기록', 'AI 포폴 분석']);
+  await expect(page.getByRole('button', { name: '한눈에', exact: true })).toHaveAttribute('aria-current', 'page');
 });
 
-test('preview backtests and daily records make no customer requests', async ({ page }) => {
+test('daily records show the latest five days and fold the older ones away', async ({ page }) => {
+  // 기록은 하루에 한 줄씩 끝없이 쌓인다 — 기본은 최근 5일만 보여 화면이 늘어지지 않게 한다.
+  await mock(page);
+  const days = Array.from({ length: 8 }, (_, i) => ({ date: `2026-10-${String(11 + i).padStart(2, '0')}`, value: 500000 + i, assets: tracking.market.payload.assets, fx: null }));
+  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { ...tracking, days } }));
+  await page.goto('/portfolio/?view=dashboard&tab=returns');
+  const records = page.locator('#return-records article');
+  await expect(records).toHaveCount(5);
+  await expect(records.first().locator('time')).toHaveText('2026-10-18');
+  const more = page.getByRole('button', { name: '지난 기록 3일 더 보기' });
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await expect(more).toHaveAttribute('aria-controls', 'return-records');
+  await more.click();
+  await expect(records).toHaveCount(8);
+  await expect(records.last().locator('time')).toHaveText('2026-10-11');
+  await page.getByRole('button', { name: '접기', exact: true }).click();
+  await expect(records).toHaveCount(5);
+  await expect(page.getByRole('button', { name: '지난 기록 3일 더 보기' })).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('preview daily records make no customer requests', async ({ page }) => {
   const traffic: string[] = [];
   page.on('request', r => { if (/\/api\/portfolio|posthog\.com/.test(r.url())) traffic.push(r.url()); });
   await page.goto('/portfolio/?preview=dashboard');
   await page.getByRole('button', { name: '수익 기록', exact: true }).click();
   await expect(page.locator('.return-records article')).toHaveCount(3);
-  await expect(page.locator('.dashboard-main form')).toHaveCount(1); // Only the hidden backtest form remains.
+  await expect(page.locator('.dashboard-main form')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /지난 기록/ })).toHaveCount(0); // 5일 이하면 접을 것이 없다.
   await expect(page.getByRole('button', { name: '월 기록 저장' })).toHaveCount(0);
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
-  await page.getByRole('button', { name: '과거 수익률 조회', exact: true }).click();
-  await expect(page.getByRole('heading', { name: /기간 수익률/ })).toBeVisible();
   expect(traffic).toEqual([]);
 });
 
@@ -227,7 +197,7 @@ test('a forecast never pretends to know a confirmed future payment day', async (
   await page.getByRole('button', { name: '배당 달력', exact: true }).click();
   await expect(page.locator('.dashboard-main')).toContainText('지급월과 금액은 실제 공시에 따라 달라질 수');
   await expect(page.locator('.dividend-calendar')).toHaveCount(0);
-  await expect(page.locator('input[type=date]')).toHaveCount(2); // Backtest period, no invented dividend date.
+  await expect(page.locator('input[type=date]')).toHaveCount(0); // No invented dividend date.
 });
 
 test('seed conversion preserves total money even for tiny portfolios and leaves no negative remainder', () => {
@@ -316,18 +286,6 @@ test('cash can be added without quantity average price or currency fields', asyn
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
   await expect(page.locator('.dashboard-stats')).toContainText('123,456원');
   await expect(page.getByRole('button', { name: '종목 추가', exact: true })).toBeFocused();
-});
-
-test('backtest edits stay available when navigating to another dashboard tab', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('combobox', { name: '백테스트에 담은 종목 찾기' }).fill('VOO');
-  await page.getByRole('option', { name: /Vanguard/ }).click();
-  await page.getByLabel('시작일 · 선택').fill('2020-01-01');
-  await page.getByRole('button', { name: '한눈에', exact: true }).click();
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await expect(page.getByLabel('시작일 · 선택')).toHaveValue('2020-01-01');
-  await expect(page.getByLabel(/Vanguard.*비중/)).toHaveValue('100');
 });
 
 test('unknown legacy instruments require a real catalog match instead of fetching guessed symbols', async ({ page }) => {
@@ -454,22 +412,6 @@ test('mixed legacy weights and known cash remain editable without an impossible 
   expect(updated[0].quantity).toBe(10);
   expect(updated[0].weight).toBeNull();
   expect(updated[1].amount).toBe(100000);
-});
-
-test('a temporary polling outage resumes the accepted backtest without submitting another job', async ({ page }) => {
-  await mock(page);
-  let submits = 0, polls = 0;
-  await page.route('**/api/portfolio/backtests', r => { submits++; return r.fulfill({ json: { id: 'retained' } }); });
-  await page.route('**/api/portfolio/backtests/retained', r => ++polls === 1 ? r.fulfill({ status: 503, json: {} }) : r.fulfill({ json: { state: 'succeeded', result: { return_pct: 25, excluded: [], history: { points: [], currency: 'KRW', basis: '', method: '', source_url: '' } } } }));
-  await page.goto('/portfolio/?view=dashboard');
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
-  await page.getByRole('button', { name: '과거 수익률 조회', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('조회 연결을 다시 시도');
-  await expect(page.getByRole('button', { name: '내 보유 종목으로 시작' })).toBeDisabled();
-  await expect(page.getByRole('heading', { name: '기간 수익률 +25%' })).toBeVisible({ timeout: 10000 });
-  await expect(page.getByRole('alert')).toHaveCount(0);
-  expect(submits).toBe(1);
 });
 
 

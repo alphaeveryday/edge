@@ -27,7 +27,7 @@ def test_dashboard_catalog_is_complete_unique_and_separate_from_analysis(monkeyp
 
 
 @pytest.mark.parametrize('key,symbol,currency', CASES)
-async def test_stock_save_quotes_profit_dividends_and_backtest_share_existing_storage(isolated_db, monkeypatch, key, symbol, currency):
+async def test_stock_save_quotes_profit_and_dividends_share_existing_storage(isolated_db, monkeypatch, key, symbol, currency):
     day = date(2026, 10, 18)
     monkeypatch.setattr(work, 'today', lambda: day)
     holding = {**asset(), 'instrument_id': key, 'currency': currency, 'account': '일반 계좌'}
@@ -62,7 +62,6 @@ async def test_stock_save_quotes_profit_dividends_and_backtest_share_existing_st
     with store.connect() as db:
         assert db.execute('SELECT instrument FROM portfolio_dashboard_prices WHERE instrument=%s', (key,)).fetchone()
         assert db.execute('SELECT instrument FROM portfolio_quote_refresh WHERE instrument=%s', (key,)).fetchone()
-    assert work.Backtest(allocations=[{'instrument_id': key, 'weight_pct': 100.}]).allocations[0].instrument_id == key
 
 
 @pytest.mark.parametrize('key,symbol,currency', CASES)

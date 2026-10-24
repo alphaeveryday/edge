@@ -137,14 +137,14 @@ async def work_once(stopping=None):
 async def dashboard_loop(stopping):
     from .dashboard_work import work_once as dashboard_once
     from .dashboard_quotes import collection_loop
-    async def loop(kind):
+    async def loop():
         while not stopping.is_set():
             try:
-                await dashboard_once(stopping, kind=kind)
+                await dashboard_once(stopping)
             except Exception as error:
-                log.warning('dashboard loop failed kind=%s code=%s; retrying', kind, type(error).__name__)
+                log.warning('dashboard loop failed kind=%s code=%s; retrying', 'valuation', type(error).__name__)
             await asyncio.sleep(1)
-    await asyncio.gather(loop('valuation'), loop('backtest'), collection_loop(stopping))
+    await asyncio.gather(loop(), collection_loop(stopping))
 
 
 async def main():
