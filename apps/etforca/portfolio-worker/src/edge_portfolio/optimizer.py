@@ -320,7 +320,8 @@ class Optimizer:
             unknown_count = rejected_count = 0
             dividends_by_id = {}
             income_failures = {}
-            if 'income' in self.decision.objectives:
+            # '배당 받기' 칩도 분배율을 붙인다: 모델이 분배율 높은 ETF에 무게를 두려면 숫자가 보여야 한다
+            if 'income' in self.decision.objectives or any(rule.kind == 'dividend' for rule in self.decision.constraints):
                 for ids_in_group, rows in zip(eligible, results):
                     if not rows:
                         continue
@@ -352,6 +353,7 @@ class Optimizer:
                            'service_eligible_vectors': service_count, 'customer_rejected_vectors': rejected_count,
                            'customer_unknown_vectors': unknown_count,
                            'income_failures': income_failures,
+                           'income_yields_pct': {key: value['trailing_yield_pct'] for key, value in dividends_by_id.items() if value},
                            'reason': None if candidates else 'CUSTOMER_CONSTRAINT_UNVERIFIED' if unknown_count else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if rejected_count else 'SERVICE_CRITERIA_NOT_MET',
                            'search_scope': 'Submitted combinations only; 10% grid, positive ETF weights, zero cash; no global impossibility claim',
                            'start_date': str(frame.index[0].date()), 'end_date': str(frame.index[-1].date()),
@@ -476,7 +478,7 @@ class Optimizer:
 
 
 TOOL = {'type': 'function', 'function': {'name': 'optimize_portfolios',
-    'description': '고객 요청과 투자 의도에 맞게 선정한 ETF 조합 1~10개를 비교하고 고객 제약을 검사한다. 통과 후보를 초과수익률, 오버퍼폼 기간 비율 순으로 정렬하며 고객 목적 적합성은 LLM이 판단한다. MDD는 선택 기준이 아니다. preferred_allocations로 LLM이 설계한 소수점 8자리까지의 비중을 그대로 검산한다. 고객 제약을 통과하면 비교 자료가 부족해도 추천 후보에 남기고 미계산 지표만 null이다. 자동 탐색은 10% 단위다. 새 ETF 조합이나 다른 비중도 재검토할 수 있다. 현금 0%, 조합당 최대 5종, 전체 40종. 현재 revision의 후보만 선택한다.',
+    'description': '고객 요청과 투자 의도에 맞게 선정한 ETF 조합 1~10개를 비교하고 고객 제약을 검사한다. 통과 후보를 초과수익률, 오버퍼폼 기간 비율 순으로 정렬하며 고객 목적 적합성은 LLM이 판단한다. MDD는 선택 기준이 아니다. 목적에 income이 있거나 고객이 배당 받기를 고르면 ETF별 최근 12개월 분배율(분배금 합계 ÷ 최근 종가) income_yields_pct와 후보별 비중 가중 income_yield_pct를 붙이고, 자료가 없으면 null과 income_failures로 알린다. preferred_allocations로 LLM이 설계한 소수점 8자리까지의 비중을 그대로 검산한다. 고객 제약을 통과하면 비교 자료가 부족해도 추천 후보에 남기고 미계산 지표만 null이다. 자동 탐색은 10% 단위다. 새 ETF 조합이나 다른 비중도 재검토할 수 있다. 현금 0%, 조합당 최대 5종, 전체 40종. 현재 revision의 후보만 선택한다.',
     'parameters': {'type': 'object', 'properties': {'combinations': {'type': 'array', 'minItems': 1, 'maxItems': 10,
         'items': {'type': 'array', 'minItems': 1, 'maxItems': 5, 'items': {'type': 'string'}}},
         'preferred_allocations': {'type': 'array', 'maxItems': 5, 'items': {'type': 'object', 'properties': {

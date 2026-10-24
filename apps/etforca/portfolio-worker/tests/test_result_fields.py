@@ -301,3 +301,18 @@ def test_amounts_with_an_omitted_one_are_checked(answer):
     assert answer_amount_error(published, request)
     published['answer'] = '5백만 원은 그대로예요.'
     assert answer_amount_error(published, request) is None
+
+
+@pytest.mark.parametrize('chips', [[{'kind': 'dividend'}], [{'kind': 'no_sell'}]])
+async def test_dividend_yield_instruction_reaches_the_model_only_with_the_dividend_chip(chips):
+    # '배당 받기'를 고른 고객에게만 분배율 높은 ETF에 무게를 두라고 지시한다. 다른 고객의 후보 선택은 그대로다
+    from edge_portfolio.agent import DIVIDEND_INSTRUCTION, run_analysis
+    from test_agent import Evidence
+    async def model(payload):
+        context = json.loads(payload['messages'][1]['content'])
+        assert context.get('dividend_instruction') == (DIVIDEND_INSTRUCTION if chips[0]['kind'] == 'dividend' else None)
+        raise RuntimeError('INSTRUCTION_CHECKED')
+    request = AnalysisInput(holdings=[], planning=True, horizon='10년 이상', question='무엇을 살까요?', constraints=chips)
+    with pytest.raises(RuntimeError, match='INSTRUCTION_CHECKED'):
+        await run_analysis(request, 'test', lambda _: None, model_call=model, evidence=Evidence())
+    assert '최근 12개월 분배금 합계 ÷ 최근 종가' in DIVIDEND_INSTRUCTION and '팔지 않기가 먼저' in DIVIDEND_INSTRUCTION

@@ -39,6 +39,17 @@ MAX_MODEL_CALLS = 100
 MAX_CONTEXT_BYTES = 1000000
 ANALYSIS_TIMEOUT_SECONDS = 600
 MODEL_CALL_TIMEOUT_SECONDS = 90
+# '배당 받기' 칩을 고른 고객에게만 붙인다. 50% 선은 코드가 검사하고, 이 글은 그 안에서 무엇을 고를지 정한다
+DIVIDEND_INSTRUCTION = (
+    "고객이 '배당 받기'를 골랐다. 배당 ETF 합계 50% 선은 코드가 검사한다. 그 선 안에서 후보를 고를 때 분배율이 높은 ETF에 더 무게를 둔다. "
+    '분배율은 최근 12개월 분배금 합계 ÷ 최근 종가다. optimize_portfolios 결과의 income_yields_pct(ETF별)와 후보별 income_yield_pct(비중 가중), '
+    'read_portfolio_history의 dividends[].trailing_yield_pct만 분배율로 쓴다. '
+    '같은 역할의 배당 ETF가 여럿이면 분배율이 높은 쪽을 먼저 조합에 넣고, 배당 ETF 비중을 50%보다 높인 안도 함께 제출해 견준다. '
+    '후보를 견줄 때는 이 고객에게 한해 income_yield_pct를 초과수익률·오버퍼폼 기간 비율과 함께 본다. 분배율이 더 높은 후보를 기본으로 두고, 분배율이 낮은 후보를 고르면 그 이유를 적는다. '
+    '분배율만 보고 고르지 않는 상품: 커버드콜·프리미엄 인컴 ETF처럼 분배금이 높아도 같은 기간 총수익률(단독 조합의 excess_pp)이 낮아 원금이 줄어드는 상품, 레버리지·인버스 상품. '
+    '칩끼리 부딪치면 기존 순서를 따른다. 팔지 않기가 먼저이고, 레버리지 빼기·국내 상장 ETF만을 지킨 범위 안에서만 분배율을 견준다. '
+    '분배율 숫자는 도구가 준 값이 있을 때만 쓴다. 값이 null이거나 income_failures에 있으면 숫자 없이 분배율을 확인하지 못했다고 적는다. '
+    '웹에서 찾은 선행·연환산 분배율로 이 숫자를 대신하지 않는다.')
 TOOLS = [
     {"type": "function", "function": {"name": "search_etfs", "description": "ETF 등록 ID를 이름·티커로 찾는다. 정확 일치 우선, 공백·하이픈 차이를 허용한다. 결과가 8개면 offset을 8씩 늘려 다음 후보를 읽는다. 상품 근거 조회와 별개다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "offset": {"type": "integer", "minimum": 0, "maximum": 200}}, "required": ["query"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "search_sources", "description": "Exa에서 ETF 공식 자료와 반대 근거 검색. 개인정보를 검색어에 넣지 않는다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "objective": {"type": "string"}}, "required": ["query", "objective"], "additionalProperties": False}}},
@@ -188,6 +199,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
             # 고객은 채팅처럼 이어 묻는다. 앞선 질문과 답을 알아야 "그럼", "그거" 같은 질문을 이해한다.
             context['conversation'] = conversation
         context['followup_instruction'] = '후속 질문에 직접 답하고 저장된 결정을 설명하거나 보완하세요. 기존 고객 필수 제약은 유지합니다. 이전 보고서는 과거 판단이며 이번에 새로 확인한 사실과 구분합니다. 리밸런싱은 기존 추천의 실행표부터 확인하고 변경이 필요할 때만 새 후보를 제안하세요.' + (' conversation은 이 분석에서 앞서 주고받은 질문과 답 문단(답에서 제안한 비중이 있으면 proposed_allocations)입니다. 이번 질문이 "그럼", "그거"처럼 앞선 답을 가리키면 그 답을 기준으로 해석하세요. 앞선 답에 적힌 수치만 이어 쓰고, 적히지 않은 앞선 계산값을 지어내지 마세요. 앞선 답과 결론이 달라지면 무엇이 왜 바뀌었는지 밝히세요.' if conversation else '')
+    if any(chip.kind == 'dividend' for chip in getattr(request, 'constraints', [])):
+        context['dividend_instruction'] = DIVIDEND_INSTRUCTION
     messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
     sections, trace, published = {}, [], {}
     outlook = OutlookReader(request, datetime.fromisoformat(context['as_of']))
