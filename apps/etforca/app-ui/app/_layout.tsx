@@ -9,6 +9,7 @@ import { AppState } from 'react-native';
 import { isApiError } from '@/api';
 import { Toast } from '@/components/Toast';
 import { usePush } from '@/features/notification/push';
+import { startAds } from '@/lib/ads';
 import { trackScreen } from '@/lib/analytics';
 import { useSession } from '@/store/session';
 import { useColors, useScheme, useThemePref } from '@/theme/theme';
@@ -50,7 +51,7 @@ export default function RootLayout() {
   // 화면 전환·키보드 뒤로 드러나는 맨 뒤 창의 배경색
   useEffect(() => { SystemUI.setBackgroundColorAsync(colors.bg); }, [colors.bg]);
   useEffect(() => {
-    if ((loaded || error) && restored && themeRestored) splashMin.then(() => SplashScreen.hideAsync());
+    if ((loaded || error) && restored && themeRestored) splashMin.then(() => SplashScreen.hideAsync()).then(startAds);
   }, [loaded, error, restored, themeRestored]);
   if (!loaded && !error) return null;
   // 끌어서 닫을 때 화면 뒤로 드러나는 스택 바탕의 팔레트 색

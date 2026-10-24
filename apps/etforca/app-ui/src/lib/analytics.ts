@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import PostHog from 'posthog-react-native';
 import { create } from 'zustand';
+import { setAdsCollection } from '@/lib/ads';
 import { useSession } from '@/store/session';
 
 type Props = Record<string, string | number | boolean>;
@@ -34,6 +35,7 @@ export const useAnalyticsOn = create<{ on: boolean; setOn: (on: boolean) => void
   setOn: (on) => {
     set({ on });
     if (on) client?.optIn(); else client?.optOut();
+    setAdsCollection(on);
   },
 }));
 client?.ready().then(() => useAnalyticsOn.setState({ on: !client.optedOut }));
