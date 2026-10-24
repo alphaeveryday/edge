@@ -123,14 +123,13 @@ class _FakeCursor:
             self._rows = list(getattr(conn, "issuer_mapping", {}).items())
         elif upper.startswith("SELECT THREAD_KEY, THREAD_ID"):
             self._rows = list(getattr(conn, "thread_ids", {}).items())
-        elif upper.startswith("SELECT DISTINCT ON (B.BASE) B.BASE, T.LAST_STATE_AT"):
-            # 뉴스 스레드 구간 조회(ALPHA-508) — base 마다 `{base}||since=` 로 시작하는 최근 구간 1건.
-            self._rows = []
-            for base in params[0]:
-                hits = [seg for seg in conn.news_segments if seg[1].startswith(base + "||since=")]
-                if hits:
-                    last_at, key, tid = max(hits, key=lambda seg: seg[0])
-                    self._rows.append((base, last_at, key, tid))
+        elif upper.startswith("SELECT B.BASE, T.THREAD_KEY, T.THREAD_ID, T.OPENED_AT"):
+            # 뉴스 스레드 구간 조회(ALPHA-508) — base 마다 `{base}||since=` 로 시작하는 구간 전부(시작 순).
+            # news_segments 항목: (opened_at, last_state_at, thread_key, thread_id).
+            self._rows = [(base, key, tid, opened, last)
+                          for base in params[0]
+                          for opened, last, key, tid in sorted(conn.news_segments)
+                          if key.startswith(base + "||since=")]
         elif upper.startswith("SELECT I.INSTRUMENT_ID, I.TICKER"):
             # assemble_events도 load_assertions와 같은 해소 인덱스를 쓴다. 이 테스트의
             # 관심사는 ticker 축이므로 이름/발행사 축은 비워 실제 5열 계약만 모사한다.
@@ -222,7 +221,7 @@ class _FakeConn:
         # DART 승격 대조 대역(ALPHA-547) — 측정행·공시 사실. 기본 빈 목록 = 승격 없음.
         self.dart_measures = list(dart_measures)
         self.dart_facts = list(dart_facts)
-        # 기존 뉴스 스레드 구간 대역(ALPHA-508): (last_state_at, thread_key, thread_id).
+        # 기존 뉴스 스레드 구간 대역(ALPHA-508): (opened_at, last_state_at, thread_key, thread_id).
         self.news_segments = list(news_segments)
 
     def cursor(self):
@@ -878,7 +877,8 @@ def test_news_thread_continues_the_latest_db_segment(monkeypatch):
     열면 같은 사건이 날짜마다 갈라지고 모든 보도가 FIRST 가 된다."""
     key = _news_key("inst_SUP", "2026-07-01T09:00:00+09:00", _CONTRACT)
     tid = _stable_id("thr", key)
-    seg = (datetime.fromisoformat("2026-07-10T09:00:00+09:00"), key, tid)
+    seg = (datetime.fromisoformat("2026-07-01T09:00:00+09:00"),
+           datetime.fromisoformat("2026-07-10T09:00:00+09:00"), key, tid)
     conn = _FakeConn(prior_thread_counts={tid: 3}, news_segments=[seg])
     rv = {"SUPPLIER": "inst_SUP"}
     later = _multi_role_event("evt_later", rv, "2026-07-12T09:00:00+09:00")   # 2일 뒤 → 후속
@@ -892,6 +892,42 @@ def test_news_thread_continues_the_latest_db_segment(monkeypatch):
     assemble_events.thread_events(far, [_multi_role_event("evt_far", rv, "2027-03-01T09:00:00+09:00")])
     [link] = _batch(far, "event_thread_link")
     assert link[1] != tid and link[3] == "FIRST_IN_THREAD"
+
+
+def test_late_past_report_joins_its_own_segment_not_the_latest(monkeypatch):
+    """WHY: 백필·UNKNOWN 재평가로 늦게 온 과거 보도가 가장 최근 구간에 붙으면, 몇 달 뒤 다른 사건의
+    스레드에 섞이고 그 스레드의 시작 시각까지 과거로 끌려간다 — 처리 순서가 계보를 바꾼다. 과거
+    보도는 그 시각의 구간(또는 창 안이면 바로 다음 구간)에 붙어야 한다."""
+    rv = {"SUPPLIER": "inst_SUP"}
+    k1 = _news_key("inst_SUP", "2026-07-01T09:00:00+09:00", _CONTRACT)
+    k2 = _news_key("inst_SUP", "2027-03-01T09:00:00+09:00", _CONTRACT)
+    t1, t2 = _stable_id("thr", k1), _stable_id("thr", k2)
+    ts = datetime.fromisoformat
+    segs = [(ts("2026-07-01T09:00:00+09:00"), ts("2026-07-20T09:00:00+09:00"), k1, t1),
+            (ts("2027-03-01T09:00:00+09:00"), ts("2027-03-05T09:00:00+09:00"), k2, t2)]
+    conn = _FakeConn(news_segments=segs, prior_thread_counts={t1: 2, t2: 2})
+    mid = _multi_role_event("evt_mid", rv, "2026-07-25T09:00:00+09:00")      # 7월 구간 안
+    early = _multi_role_event("evt_early", rv, "2026-06-01T09:00:00+09:00")  # 첫 구간 앞, 창 안
+    assemble_events.thread_events(conn, [mid, early])
+
+    links = {r[0]: r[1] for r in _batch(conn, "event_thread_link")}
+    assert links == {"evt_mid": t1, "evt_early": t1}
+    [header] = [r for r in _batch(conn, "event_thread") if r[0] == t1]
+    assert str(header[4]).startswith("2026-06-01")      # 시작이 앞당겨진 건 7월 구간이다
+
+
+def test_news_company_comes_only_from_company_roles(monkeypatch):
+    """WHY: 회사가 비고 제품 개념·규제기관만 해소된 기사를 그 개념·기관으로 묶으면, 서로 다른 회사의
+    배터리 계약·공정위 조사가 한 스레드가 된다. 회사 종별 역할이 없으면 UNKNOWN 이다."""
+    conn = _FakeConn()
+    concept_only = _multi_role_event("evt_c", {"CONTRACT_OBJECT": "concept_battery"})
+    authority_only = _multi_role_event("evt_a", {"AUTHORITY": "actor_auth_kr_ftc"},
+                                       etype="COMPANY.LEGAL.REGULATORY_ACTION")
+    assemble_events.thread_events(conn, [concept_only, authority_only])
+
+    links = {r[0]: r for r in _batch(conn, "event_thread_link")}
+    assert all(links[e][3] == "UNKNOWN" and links[e][6] == "missing primary company"
+               for e in ("evt_c", "evt_a"))
 
 
 def test_news_analyst_report_thread_is_split_by_firm(monkeypatch):
@@ -1004,7 +1040,8 @@ def test_novelty_seeds_stage_and_prior_from_db(monkeypatch):
     tid = _stable_id("thr", key)
     conn = _FakeConn(prior_thread_counts={tid: 2},
                      thread_current_stages={tid: "DEFINITIVE_SIGNED"},
-                     news_segments=[(datetime.fromisoformat("2026-07-16T08:00:00+09:00"), key, tid)])
+                     news_segments=[(datetime.fromisoformat("2026-07-15T09:00:00+09:00"),
+                                     datetime.fromisoformat("2026-07-16T08:00:00+09:00"), key, tid)])
     rv = {"SUPPLIER": "inst_SUP", "CUSTOMER": "inst_CUST", "CONTRACT_OBJECT": "concept_hbm"}
     dup = _multi_role_event("evt_dup", rv, "2026-07-16T09:00:00+09:00",
                             stage="DEFINITIVE_SIGNED")

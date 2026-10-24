@@ -1205,6 +1205,9 @@ NEWS_THREAD_WINDOW = timedelta(days=183)
 NEWS_STORY_GAP = timedelta(days=1)
 _ANALYST_TYPE_PREFIX = "MARKET_INFO."
 _NO_COMPANY = "<news: no primary company>"
+# 회사 축이 될 수 있는 역할 종별. 평가자(증권사·신용평가사)는 회사가 아니라 구분자다.
+_COMPANY_KINDS = frozenset({"ISSUER", "COMPANY_ENTITY"})
+_EVALUATOR_ROLES = frozenset({"ANALYST_FIRM", "RATING_AGENCY"})
 
 
 def _ts(value: object) -> datetime:
@@ -1215,11 +1218,14 @@ def _ts(value: object) -> datetime:
 def _news_thread_base(event: dict, role_values: dict[str, str]) -> str | None:
     """뉴스 스레드 키의 구간 앞부분 — 타입 + 주체 회사(+증권사). 주체가 없으면 None(UNKNOWN).
 
-    주체는 1분 단건 조립의 primary 선정과 같은 순서다: 타입의 primary 역할 → 필수 역할 → 남은
-    역할 코드 사전순, 그 역할의 첫 값(정렬). 증권사는 해소 여부와 무관하게 원문을 정규화해 쓴다 —
-    해소된 기사와 안 된 기사가 갈리면 같은 리포트가 두 스레드로 나뉜다.
+    주체는 **회사 종별 역할**(ISSUER·COMPANY_ENTITY, 평가자 제외)에서만 고른다 — 규제기관·규칙·
+    제품 개념이 회사 자리에 들어가면 서로 다른 회사의 보도가 그 기관·개념 스레드로 합쳐진다.
+    순서는 1분 단건 조립의 primary 선정과 같다: 타입의 primary 역할 → 필수 역할 → 남은 역할 코드
+    사전순, 그 역할의 첫 값(정렬). 증권사는 해소 여부와 무관하게 원문을 정규화해 쓴다 — 해소된
+    기사와 안 된 기사가 갈리면 같은 리포트가 두 스레드로 나뉜다.
     """
-    present = {r: v for r, v in role_values.items() if v}
+    present = {r: v for r, v in role_values.items()
+               if v and r not in _EVALUATOR_ROLES and role_entity_kind(r) in _COMPANY_KINDS}
     if not present:
         return None
     tv = load_process_registry().get(event["event_type_code"])
@@ -1233,25 +1239,53 @@ def _news_thread_base(event: dict, role_values: dict[str, str]) -> str | None:
     return base
 
 
-def _latest_news_segments(conn, bases: list[str]) -> dict[str, list]:
-    """base → [thread_key, thread_id, last_state_at] — 그 키의 가장 최근 스레드 구간(DB).
+def _news_segments(conn, bases: list[str]) -> dict[str, list[list]]:
+    """base → 그 키의 스레드 구간 전부 [[thread_key, thread_id, opened_at, last_state_at], ...](시작 순).
 
     구간 키는 `{base}||since=<ISO 시각>` 이다. 접두 비교는 `starts_with` 로 한다 — 범위 비교
     (`>= base AND < base~`)는 DB 기본 정렬(언어별 collation)이 문장부호를 무시하면 어긋나 기존
-    구간을 못 찾고 매번 새 스레드를 연다. base 전부를 한 쿼리로 찾는다.
+    구간을 못 찾고 매번 새 스레드를 연다. 최신 구간만이 아니라 전부 읽는 이유: 늦게 온 과거 보도
+    (백필·UNKNOWN 재평가)는 그 시각의 구간에 붙어야 한다. base 전부를 한 쿼리로 찾는다.
     """
     if not bases:
         return {}
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT DISTINCT ON (b.base) b.base, t.last_state_at, t.thread_key, t.thread_id"
+            "SELECT b.base, t.thread_key, t.thread_id, t.opened_at, t.last_state_at"
             " FROM unnest(%s::text[]) AS b(base)"
             " JOIN event_thread t ON starts_with(t.thread_key, b.base || '||since=')"
-            " ORDER BY b.base, t.last_state_at DESC",
+            " ORDER BY b.base, t.opened_at",
             (list(bases),),
         )
         rows = cur.fetchall()
-    return {base: [key, str(thread_id), _ts(last_at)] for base, last_at, key, thread_id in rows}
+    out: dict[str, list[list]] = {}
+    for base, key, thread_id, opened_at, last_at in rows:
+        out.setdefault(base, []).append([key, str(thread_id), _ts(opened_at), _ts(last_at)])
+    return out
+
+
+def _assign_news_segment(segs: list[list], base: str, at: datetime) -> tuple[list, timedelta | None]:
+    """보도 시각 `at` 의 구간을 고르거나 새로 연다 → (구간, gap). segs 를 제자리에서 갱신한다.
+
+    직전 구간(시작 ≤ at)이 창 안이면 거기, 아니면 다음 구간(시작 > at)이 창 안이면 거기(그 구간의
+    시작을 앞당긴다), 둘 다 아니면 새 구간이다. gap 은 같은 구간 직전 보도와의 간격 — 순서대로
+    들어온 보도만 알 수 있어서, 구간 마지막 보도보다 이른 보도(늦게 온 과거 보도)와 새 구간은 None.
+    """
+    prev = next((g for g in reversed(segs) if g[2] <= at), None)
+    nxt = next((g for g in segs if g[2] > at), None)
+    if prev is not None and at - prev[3] <= NEWS_THREAD_WINDOW:
+        seg = prev
+    elif nxt is not None and nxt[2] - at <= NEWS_THREAD_WINDOW:
+        seg = nxt
+    else:
+        key = f"{base}||since={at.isoformat()}"
+        seg = [key, _stable_id("thr", key), at, at]
+        segs.append(seg)
+        segs.sort(key=lambda g: g[2])
+        return seg, None
+    gap = at - seg[3] if at >= seg[3] else None
+    seg[2], seg[3] = min(seg[2], at), max(seg[3], at)
+    return seg, gap
 
 
 def _stage_rank(event_type_code: str, stage: str | None) -> int | None:
@@ -1300,7 +1334,9 @@ def thread_events(conn, events: list[dict]) -> int:
     **뉴스**(source_class NEWS): 키는 타입 + 주체 회사(+증권사)이고(`_news_thread_base`), 같은 키의
     마지막 보도에서 `NEWS_THREAD_WINDOW` 를 넘게 끊기면 새 스레드 구간(`||since=<시각>`)을 연다.
     스레드 안 직전 보도와 `NEWS_STORY_GAP` 을 넘게 벌어진 보도는 FOLLOW_UP_STAGE 다. 주체 회사가
-    없을 때만 UNKNOWN 이다. 근거·창 결정은 ADR-0064.
+    없을 때만 UNKNOWN 이다. 근거·창 결정은 ADR-0064. 이 키 이전(identity 키)으로 묶인 뉴스 스레드는
+    이어받지 않는다 — 키의 의미가 달라 옮길 대응이 없어, 전환 시점부터 새 키로 시작한다(옛 스레드·
+    링크는 그대로 남는다).
 
     **공시**: thread_key 는 그 타입의 `identity_roles` 값들로 구성한다(엔진 정본 §2). identity 를 못
     채우는 이벤트(개념·날짜 역할 등 미해소)는 thread 를 만들지 않고
@@ -1355,19 +1391,12 @@ def thread_events(conn, events: list[dict]) -> int:
 
     # 뉴스 구간 배정 — 시각 순으로, 같은 base 의 마지막 보도에서 창을 넘으면 새 구간(새 스레드).
     # gap 은 같은 구간 직전 보도와의 간격(novelty 의 하루 공백 규칙 입력), 새 구간이면 None.
-    segments = _latest_news_segments(conn, sorted({b for _e, b in news_keyed}))
+    segments = _news_segments(conn, sorted({b for _e, b in news_keyed}))
     news_ids: dict[str, str] = {}
     gaps: dict[str, timedelta | None] = {}
     for event, base in sorted(news_keyed, key=lambda eb: _ts(eb[0]["available_at"])):
-        at = _ts(event["available_at"])
-        seg = segments.get(base)
-        if seg is None or at - seg[2] > NEWS_THREAD_WINDOW:
-            key = f"{base}||since={at.isoformat()}"
-            seg = segments[base] = [key, _stable_id("thr", key), at]
-            gaps[event["source_event_id"]] = None
-        else:
-            gaps[event["source_event_id"]] = at - seg[2]
-            seg[2] = max(seg[2], at)
+        seg, gaps[event["source_event_id"]] = _assign_news_segment(
+            segments.setdefault(base, []), base, _ts(event["available_at"]))
         news_ids[seg[0]] = seg[1]
         keyed.append((event, seg[0]))
 
