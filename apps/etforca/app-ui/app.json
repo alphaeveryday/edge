@@ -53,6 +53,9 @@
             "enableMinifyInReleaseBuilds": true,
             "enableShrinkResourcesInReleaseBuilds": true,
             "extraMavenRepos": ["https://devrepo.kakao.com/nexus/content/groups/public/"]
+          },
+          "ios": {
+            "useFrameworks": "static"
           }
         }
       ],
@@ -66,6 +69,25 @@
         {
           "icon": "./assets/notification-icon.png",
           "color": "#3D34E0"
+        }
+      ],
+      "@react-native-firebase/app",
+      [
+        "expo-tracking-transparency",
+        {
+          "userTrackingPermission": "맞춤 광고 효과 측정에 사용됩니다."
+        }
+      ],
+      [
+        "react-native-fbsdk-next",
+        {
+          "appID": "",
+          "clientToken": "",
+          "displayName": "etf orca",
+          "scheme": "",
+          "advertiserIDCollectionEnabled": true,
+          "autoLogAppEventsEnabled": true,
+          "isAutoInitEnabled": false
         }
       ]
     ],
