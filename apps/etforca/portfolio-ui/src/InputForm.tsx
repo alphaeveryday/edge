@@ -361,7 +361,7 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
       <section className="fl-recap" aria-labelledby="recap-title"><h2 className="fl-card__title" id="recap-title">입력 요약</h2>
         <dl>
           <div data-current={step === 0}><dt>{steps[0]}</dt><dd>{holdings.length ? <><b>종목 {holdings.length}개{mode === 'percent' ? totalOk && ` · ${wonText(Number(total) * 1e4)}` : ` · ${wonText(amountSum)}`}</b>
-            <div className="fl-allocation" aria-hidden="true">{barSegments}</div><small>{groups.join(' · ')}</small></> : <small>{fresh ? '처음 시작해요' : '아직 담지 않았어요'}</small>}</dd></div>
+            <div className="fl-allocation" aria-hidden="true">{barSegments}</div><small>{groups.join(' · ')}</small></> : <small>{fresh ? '가진 종목 없이 시작해요' : '아직 담지 않았어요'}</small>}</dd></div>
           <div data-current={step === 1}><dt>{steps[1]}</dt><dd>{plan ? <small>아직 정하지 않았어요</small> : <p className="fl-recap__tags">{planText.map(s => <span key={s} className="fl-badge">{s}</span>)}</p>}</dd></div>
           <div data-current={step === 2}><dt>{steps[2]}</dt><dd>{question.trim() ? <q>{question.trim()}</q> : <small>아직 적지 않았어요</small>}
             {!!chipText.length && <p className="fl-recap__tags">{chipText.map(s => <span key={s} className="fl-badge">{s}</span>)}</p>}</dd></div>
