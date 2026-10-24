@@ -655,18 +655,18 @@ async def test_analysis_waits_only_for_what_the_store_lacks_and_reports_the_coll
     stored = {'KR:A': record()}
     reads, requested = [], []
     polls = iter([{}, {'KR:B': None}, {'KR:C': 'PRICE_STALE', 'KR:D': 'PRICE_PUBLICATION_SUPERSEDED'}])
-    def saved_prices(keys, as_of, rejected=None, collected=False):
-        reads.append((keys, collected))
+    def saved_prices(keys, as_of, rejected=None, fetched_since=None):
+        reads.append((keys, fetched_since))
         rejected.update({key: 'PRICE_HISTORY_INCOMPLETE' for key in keys if key not in stored})
         return {key: stored[key] for key in keys if key in stored}
     def request(keys):
         assert reads[-1][0] == keys, 'A missing instrument is requested before the next one is read'
         requested.extend(keys)
         stored['KR:B'] = record()  # The collector will publish B.
-        return 'requested'
+        return 'at:' + keys[0]
     monkeypatch.setattr(work, 'saved_prices', saved_prices)
     monkeypatch.setattr(preload, 'request_prices', request)
-    monkeypatch.setattr(preload, 'finished_requests', lambda keys, requested: next(polls))
+    monkeypatch.setattr(preload, 'finished_requests', lambda requested: next(polls))
     monkeypatch.setattr(market_data, 'fetch_prices', lambda *a, **k: pytest.fail('analysis must not call a provider'))
     records, failures = {}, {'KR:A': 'PRICE_QUEUE_TIMEOUT'}
     await preload.stored_prices(['KR:A', 'KR:B', 'KR:C', 'KR:D'], date(2026, 10, 12), records, failures, poll=0)
@@ -674,11 +674,11 @@ async def test_analysis_waits_only_for_what_the_store_lacks_and_reports_the_coll
     assert set(records) == {'KR:A', 'KR:B'}
     assert failures == {'KR:C': 'PRICE_STALE', 'KR:D': 'PRICE_HISTORY_INCOMPLETE'}, \
         'A collector code outside the price failures falls back to why the stored record is unusable'
-    assert (['KR:B'], True) in reads and (['KR:C'], False) in reads, 'Only a published whole-history fetch relaxes the checks'
+    assert (['KR:B'], 'at:KR:B') in reads and (['KR:C'], 'at:KR:C') in reads, 'Each instrument is judged against its own request time'
 
 
 async def test_a_deadline_keeps_every_price_already_read(monkeypatch):
-    def saved_prices(keys, as_of, rejected=None, collected=False):
+    def saved_prices(keys, as_of, rejected=None, fetched_since=None):
         if keys == ['KR:B']:
             import time
             time.sleep(.2)
@@ -692,9 +692,9 @@ async def test_a_deadline_keeps_every_price_already_read(monkeypatch):
 
 
 async def test_a_lost_request_status_fails_the_waiting_prices_instead_of_the_analysis(monkeypatch):
-    monkeypatch.setattr(work, 'saved_prices', lambda keys, as_of, rejected=None, collected=False: {})
+    monkeypatch.setattr(work, 'saved_prices', lambda keys, as_of, rejected=None, fetched_since=None: {})
     monkeypatch.setattr(preload, 'request_prices', lambda keys: 'requested')
-    def lost(keys, requested):
+    def lost(requested):
         raise RuntimeError('statement timeout')
     monkeypatch.setattr(preload, 'finished_requests', lost)
     failures = {}
@@ -704,7 +704,7 @@ async def test_a_lost_request_status_fails_the_waiting_prices_instead_of_the_ana
 
 async def test_a_store_that_cannot_take_requests_fails_missing_prices_with_the_reason(monkeypatch):
     # A read-only review container (or a database fault) cannot queue requests; waiting would only burn the budget.
-    monkeypatch.setattr(work, 'saved_prices', lambda keys, as_of, rejected=None, collected=False: rejected.update({k: 'PRICE_STALE' for k in keys}) or {})
+    monkeypatch.setattr(work, 'saved_prices', lambda keys, as_of, rejected=None, fetched_since=None: rejected.update({k: 'PRICE_STALE' for k in keys}) or {})
     def refuse(keys):
         raise RuntimeError('read only')
     monkeypatch.setattr(preload, 'request_prices', refuse)
@@ -726,17 +726,19 @@ async def test_urgent_request_is_served_at_any_hour_beside_customer_work_with_th
     monkeypatch.setattr(market_data, 'fetch_prices', load)
     night = NOW.replace(hour=3)
     assert not await preload.collect_one(now=night), 'Scheduled refreshes keep their window and yield to customers'
-    assert preload.finished_requests(['KR:069500'], requested) == {}
+    assert preload.finished_requests({'KR:069500': requested}) == {}
     assert await preload.collect_one(now=night, urgent=True)
     assert calls == [('069500.KS', None)], 'Only the waiting instrument, with its whole archive'
-    assert preload.finished_requests(['KR:069500'], requested) == {'KR:069500': None}
+    assert preload.finished_requests({'KR:069500': requested}) == {'KR:069500': None}
     with store.connect() as db:
-        assert db.execute("SELECT 1 FROM portfolio_dashboard_prices WHERE instrument='KR:069500'").fetchone()
+        payload = db.execute("SELECT payload FROM portfolio_dashboard_prices WHERE instrument='KR:069500'").fetchone()['payload']
+    assert payload['whole_history'] is True and datetime.fromisoformat(payload['requested_at']) >= requested, \
+        'The stored record itself says it is whole and fetched after the request'
     assert not await preload.collect_one(now=night, urgent=True), 'A served request is not fetched again'
     later = preload.request_prices(['KR:069500'])
-    assert preload.finished_requests(['KR:069500'], requested) == {'KR:069500': None}, \
+    assert preload.finished_requests({'KR:069500': requested}) == {'KR:069500': None}, \
         'Another analysis requesting the same instrument does not hide the answer already given'
-    assert preload.finished_requests(['KR:069500'], later) == {}
+    assert preload.finished_requests({'KR:069500': later}) == {}
     with store.connect() as db:
         db.execute("UPDATE portfolio_market_preload SET urgent_at=NULL WHERE instrument='KR:069500'")
     async def fail(*args, **kwargs):
@@ -744,4 +746,4 @@ async def test_urgent_request_is_served_at_any_hour_beside_customer_work_with_th
     monkeypatch.setattr(market_data, 'fetch_prices', fail)
     requested = preload.request_prices(['KR:360750'])
     assert await preload.collect_one(now=night, urgent=True)
-    assert preload.finished_requests(['KR:360750'], requested) == {'KR:360750': 'PRICE_STALE'}
+    assert preload.finished_requests({'KR:360750': requested}) == {'KR:360750': 'PRICE_STALE'}

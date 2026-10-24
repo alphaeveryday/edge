@@ -708,13 +708,17 @@ def test_analysis_uses_a_stored_archive_only_when_it_is_whole_and_current():
     current = work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15', '2026-10-16']), as_of)
     assert [str(d.date()) for d in current['frame'].index] == ['2026-10-14', '2026-10-15'], 'The as_of session is cut like a fetch'
     assert rejected(saved(['2026-10-13', '2026-10-14'])) == 'PRICE_STALE', 'Missing the last finished session'
-    # Just published by the collector's whole-history fetch: what that fetch returned is what a fetch allows.
-    assert work.analysis_archive('KR:069500', saved(['2026-10-13', '2026-10-14']), as_of, collected=True)
-    # Yahoo closes with fallback returns are stored incomplete only so the collector retries Yahoo.
-    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], history_complete=False, return_basis='adjusted'),
-                                 as_of, collected=True)
+    # Fetched after the analysis asked: as current as the provider allows, so a week's age (price_status) is the bound.
+    from datetime import timezone
+    asked = datetime(2026, 10, 16, 1, tzinfo=timezone.utc)
+    after, before = '2026-10-16T01:00:05+00:00', '2026-10-16T00:59:00+00:00'
+    assert work.analysis_archive('KR:069500', saved(['2026-10-13', '2026-10-14'], requested_at=after), as_of, fetched_since=asked)
     with pytest.raises(ValueError, match='PRICE_STALE'):
-        work.analysis_archive('KR:069500', saved(['2026-10-01', '2026-10-02']), as_of, collected=True)
+        work.analysis_archive('KR:069500', saved(['2026-10-13', '2026-10-14'], requested_at=before), as_of, fetched_since=asked)
+    with pytest.raises(ValueError, match='PRICE_STALE'):
+        work.analysis_archive('KR:069500', saved(['2026-10-01', '2026-10-02'], requested_at=after), as_of, fetched_since=asked)
+    # Yahoo closes with fallback returns from a whole-history fetch are stored incomplete only so the collector retries Yahoo.
+    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], history_complete=False, whole_history=True), as_of)
     assert rejected(saved(['2026-10-14', '2026-10-15'], history_complete=False)) == 'PRICE_HISTORY_INCOMPLETE', 'Recent quotes only'
     # What a fetch would have returned is usable as-is: the analysis has no better source to wait for.
     assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], return_basis='price'), as_of)

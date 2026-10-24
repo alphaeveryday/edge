@@ -100,16 +100,18 @@ def request_prices(keys):
     return requested
 
 
-def finished_requests(keys, requested):
-    """{key: failure code or None} for instruments whose whole-history fetch finished after `requested`.
+def finished_requests(requested):
+    """{key: failure code or None} for instruments whose whole-history fetch finished after their own request time
+    ({key: time}).
     Judged by served_at, not urgent_at, so another analysis requesting the same instrument cannot hide the answer.
     A provider cool-down fails all at once."""
     with store.connect() as db:
         if db.execute("""SELECT 1 FROM portfolio_market_preload WHERE last_error='PRICE_PROVIDER_RATE_LIMIT'
                 AND failed_at>now()-interval '15 minutes' LIMIT 1""").fetchone():
-            return {key: 'PRICE_PROVIDER_RATE_LIMIT' for key in keys}
-        rows = db.execute('''SELECT instrument,CASE WHEN failed_at>=served_at THEN last_error END AS failure
-            FROM portfolio_market_preload WHERE instrument=ANY(%s) AND served_at>=%s''', (list(keys), requested)).fetchall()
+            return {key: 'PRICE_PROVIDER_RATE_LIMIT' for key in requested}
+        rows = db.execute('''SELECT p.instrument,CASE WHEN p.failed_at>=p.served_at THEN p.last_error END AS failure
+            FROM portfolio_market_preload p JOIN unnest(%s::text[],%s::timestamptz[]) r(instrument,at) USING(instrument)
+            WHERE p.served_at>=r.at''', (list(requested), list(requested.values()))).fetchall()
     return {row['instrument']: row['failure'] for row in rows}
 
 
@@ -120,13 +122,13 @@ async def stored_prices(keys, as_of, records, failures, *, poll=1.0):
     from .dashboard_work import saved_prices
     from .market_data import PRICE_FAILURES
     rejected = {}
-    async def read(key, collected=False):
-        found = await asyncio.to_thread(saved_prices, [key], as_of, rejected, collected=collected)
+    async def read(key, fetched_since=None):
+        found = await asyncio.to_thread(saved_prices, [key], as_of, rejected, fetched_since=fetched_since)
         if key in found:
             records[key] = found[key]
             failures.pop(key, None)
         return key in found
-    missing, requested = [], None
+    requested = {}
     for key in keys:
         if key in records or await read(key):
             continue
@@ -138,21 +140,20 @@ async def stored_prices(keys, as_of, records, failures, *, poll=1.0):
             log.warning('price request unavailable code=%s', type(error).__name__)
             failures[key] = rejected.get(key, 'PRICE_READ_FAILED')
             continue
-        missing.append(key)
-        requested = requested or at
-    while missing:
+        requested[key] = at
+    while requested:
         await asyncio.sleep(poll)
         try:
-            done = await asyncio.to_thread(finished_requests, missing, requested)
+            done = await asyncio.to_thread(finished_requests, requested)
         except Exception as error:
             log.warning('price request status unavailable code=%s', type(error).__name__)
-            failures.update({key: 'PRICE_READ_FAILED' for key in missing})
+            failures.update({key: 'PRICE_READ_FAILED' for key in requested})
             return
         for key, failure in done.items():
-            # A published whole-history fetch is taken as stored; after a failed one only a current whole record is.
-            if not await read(key, collected=not failure):
+            # A record fetched after this request is as current as the provider allows.
+            if not await read(key, fetched_since=requested[key]):
                 failures[key] = (failure if failure in PRICE_FAILURES else None) or rejected.get(key, 'PRICE_UNAVAILABLE')
-        missing = [key for key in missing if key not in done]
+            del requested[key]
 
 
 def in_window(now):
@@ -218,6 +219,8 @@ async def collect_one(stopping=None, *, now=None, session=None, urgent=False):
             raise ValueError('PRICE_STALE')
         record.update(actions_checked_on=str(now.date()), requested_at=requested_at,
                       fetched_at=datetime.now(ZoneInfo('UTC')).isoformat())
+        if not job['quote']:
+            record['whole_history'] = True  # Fetched from the first listed day, whatever history_complete says.
         with store.connect() as db:
             if not db.execute('SELECT 1 FROM portfolio_market_preload WHERE instrument=%s AND lease_until=%s FOR UPDATE',
                               (key, job['lease_until'])).fetchone():

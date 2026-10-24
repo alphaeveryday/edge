@@ -782,7 +782,7 @@ async def test_twelve_holdings_answer_from_the_store_and_only_the_missing_one_wa
     monkeypatch.setattr(store, 'connect', lambda: SavedPrices(payloads))
     asked = []
     monkeypatch.setattr('edge_portfolio.market_preload.request_prices', lambda keys: asked.extend(keys) or 'requested')
-    monkeypatch.setattr('edge_portfolio.market_preload.finished_requests', lambda keys, requested: {})
+    monkeypatch.setattr('edge_portfolio.market_preload.finished_requests', lambda requested: {})
     monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', 1.5)
     result = await Optimizer(market, request).tool({'combinations': [[held[0], held[1]], ['KR:NEW']]})
     assert asked == ['KR:NEW'], 'Stored archives must not be requested from the collector again'
