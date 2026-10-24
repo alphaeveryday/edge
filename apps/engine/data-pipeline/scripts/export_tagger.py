@@ -19,12 +19,14 @@ torch·transformers 가 필요하다(이미지에는 있고 CI 환경에는 없�
 import argparse
 import json
 import pathlib
+import sys
 
 import torch
 from torch import nn
 from transformers import AutoConfig, AutoModel, AutoModelForQuestionAnswering, AutoTokenizer
 
-from data_pipeline.tagging.roberta import Classifier
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))  # eval_tagging.py 와 같은 방식
+from data_pipeline.tagging.roberta import Classifier  # noqa: E402
 
 
 def _roles(catalog: dict, event_type: str) -> list[str]:

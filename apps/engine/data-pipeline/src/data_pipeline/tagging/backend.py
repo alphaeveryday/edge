@@ -41,7 +41,8 @@ def load_tagger(storage):
 
 def _download(storage) -> str:
     """레이크의 모델 묶음을 임시 디렉터리로 내려받는다. 비었으면 기동을 거부한다."""
-    keys = storage.list_keys(MODEL_PREFIX)
+    # 끝이 `/` 인 키는 S3 콘솔이 만드는 폴더 표시(0바이트)라 파일이 아니다.
+    keys = [k for k in storage.list_keys(MODEL_PREFIX) if not k.endswith("/")]
     if not keys:
         raise RuntimeError(f"모델 묶음이 없다: {MODEL_PREFIX} — 업로드 후 기동해야 한다")
     root = Path(tempfile.mkdtemp(prefix="tagger-")).resolve()

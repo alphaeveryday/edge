@@ -148,14 +148,26 @@ class Classifier(nn.Module):
 
 
 def _quantized(model: nn.Module, weights: Path) -> nn.Module:
-    """빈 fp32 뼈대를 그 자리에서 int8 로 바꾼 뒤 int8 가중치를 붓는다.
+    """뼈대의 nn.Linear 를 빈 int8 Linear 로 바꿔 끼운 뒤 int8 가중치를 붓는다.
 
-    fp32 가중치 파일을 읽고 변환하면 순간 메모리가 4.9GB 까지 오른다(연구 실측) —
-    운영 태스크(3GB)에 안 들어간다. 가중치는 텐서만 읽는다(weights_only, 피클 실행 없음).
+    fp32 가중치 파일을 읽고 변환하면 순간 메모리가 4.9GB 까지 오른다(연구 실측) — 운영
+    태스크(3GB)에 안 들어간다. 바꿔 끼우기는 fp32 값을 읽지 않는다: quantize_dynamic 은 기존
+    가중치의 범위를 관측하는데, 초기화를 건너뛴 뼈대의 값은 쓰레기(NaN 포함 가능)다.
+    가중치는 텐서만 읽는다(weights_only, 피클 실행 없음).
     """
-    torch.ao.quantization.quantize_dynamic(model, {nn.Linear}, dtype=torch.qint8, inplace=True)
+    _swap_linear(model)
     model.load_state_dict(torch.load(weights, map_location="cpu", weights_only=True))
     return model.eval()
+
+
+def _swap_linear(module: nn.Module) -> None:
+    """하위 nn.Linear 를 같은 모양의 동적 int8 Linear(0 가중치)로 바꾼다 — quantize_dynamic 과 같은 모듈형."""
+    for name, child in module.named_children():
+        if type(child) is nn.Linear:
+            setattr(module, name, torch.ao.nn.quantized.dynamic.Linear(
+                child.in_features, child.out_features, bias_=child.bias is not None, dtype=torch.qint8))
+        else:
+            _swap_linear(child)
 
 
 def _best_span(context: str, sequence_ids: list, offsets: list, start: list, end: list) -> str | None:
