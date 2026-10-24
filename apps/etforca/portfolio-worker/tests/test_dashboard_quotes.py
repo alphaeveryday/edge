@@ -99,8 +99,8 @@ async def test_saves_serve_shared_prices_immediately_and_only_new_instrument_is_
     assert await quotes.collect_once()
     assert not await quotes.collect_once()
     assert fetched == ['069500.KS', '360750.KS']
-    await work.work_once(kind='valuation')
-    await work.work_once(kind='valuation')
+    await work.work_once()
+    await work.work_once()
     assert work.tracking('second')['market']['payload']['pending_prices'] == []
 
 
@@ -122,11 +122,11 @@ async def test_slow_provider_and_duplicate_collectors_cannot_block_saved_values(
         dashboard.save('owner', dashboard.Save(version=1, workbook=dashboard.Workbook(assets=[changed])))
         assert time.monotonic() - before < 1
         assert work.tracking('owner')['market']['version'] == 2
-        assert await work.work_once(kind='valuation')
+        assert await work.work_once()
     finally:
         release.set()
         await pending
-    await work.work_once(kind='valuation')
+    await work.work_once()
     assert work.tracking('owner')['market']['payload']['assets'][0]['quantity'] == 20
 
 
@@ -174,12 +174,12 @@ async def test_previous_day_actions_cannot_value_a_new_post_split_quantity(isola
     monkeypatch.setattr(market_data, 'fetch_prices', fetch)
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
     await quotes.collect_once()
-    await work.work_once(kind='valuation')
+    await work.work_once()
     previous = work.tracking('owner')
     monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 19))
     monkeypatch.setattr(work, 'price_end', lambda *args: date(2026, 10, 17))
     dashboard.save('owner', dashboard.Save(version=1, workbook=dashboard.Workbook(assets=[{**asset(), 'quantity': 20.}])))
-    await work.work_once(kind='valuation')
+    await work.work_once()
     current = work.tracking('owner')
     assert current['market']['payload']['assets'] == previous['market']['payload']['assets']
     assert current['market']['payload']['pending_prices'] == ['a']
@@ -253,7 +253,7 @@ async def test_legacy_names_are_canonicalized_before_the_collector_checks_activi
     from psycopg.types.json import Jsonb
     with store.connect() as db:
         db.execute('INSERT INTO portfolio_workbooks(owner,version,payload) VALUES (%s,1,%s)', ('legacy', Jsonb({'assets': [{**asset(), 'instrument_id': None}]})))
-    await work.work_once(kind='valuation')
+    await work.work_once()
     calls = []
     async def fetch(ids, *args, **kwargs):
         calls.extend(ids)
