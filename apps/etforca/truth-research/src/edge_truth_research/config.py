@@ -40,6 +40,7 @@ class Config:
     db_user: str = "edge_analysis_v2_reader"
     db_password: str | None = None
     db_ca: str = "/app/rds-ca.pem"
+    graph_uri: str | None = None   # 그래프 DB(bolt://…). 있으면 국내 세션에 그래프 도구를 연다(ALPHA-1453)
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -64,4 +65,5 @@ class Config:
             db_user=os.environ.get("TRUTH_DB_USER", "edge_analysis_v2_reader"),
             db_password=_need("TRUTH_DB_PASSWORD"),
             db_ca=os.environ.get("RDS_CA_PATH", "/app/rds-ca.pem"),
+            graph_uri=os.environ.get("GRAPH_URI") or None,
         )

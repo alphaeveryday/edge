@@ -35,7 +35,7 @@ infra/terraform/
     ├── landing-export/     # 랜딩 전망 내보내기: 매일 08:00 KST 에 분석 v2 조회 API 로 그날 전망을 읽어 랜딩 버킷 outlook/<코드>.json 과 검색용 etf/<코드> 페이지·etf/sitemap.xml 에 쓰는 Lambda(zip)·스케줄·실패 경보 — ALPHA-1267·1454
     ├── truth-agent/        # 투자정보 기만 검증 에이전트: 매시 예약 Fargate 태스크(스케줄러 → RunTask)·비공개 저장 버킷·키 시크릿 그릇(실패 알림 없음 — 로그·runs/ 보고로 본다), 결과는 랜딩 버킷 truth/data/ 에 게시 — ADR-0062, ALPHA-1415
     ├── truth-research/     # 오늘의 급등주 조사 에이전트: 장중 매시 예약 Fargate 태스크(국내 KST·미국 America/New_York)와 매분 가격 갱신, 저장 버킷·키 시크릿은 truth-agent 것을 함께 쓴다 — ALPHA-1438
-    ├── ontology-graph/     # 그래프 DB(PuppyGraph) ECS 서비스: 평일 05:30~16:00 KST 예약 켜기/끄기, 기동마다 같은 작업의 업로더가 매핑(`libs/ontology/.../sql/puppygraph-schema.json`)을 올림, 접속은 VPC 내부 DNS `puppygraph.<name>.internal:7687` — ALPHA-1342
+    ├── ontology-graph/     # 그래프 DB(PuppyGraph) ECS 서비스: 평일 05:30~16:00 KST 예약 켜기/끄기, 기동마다 같은 작업의 업로더가 매핑(`libs/ontology/.../sql/puppygraph-schema.json`)을 올림, 접속은 VPC 내부 DNS `puppygraph.<name>.internal:7687`(조회만 하는 클라이언트는 7687 만, 지금 급등주 조사 — ALPHA-1453) — ALPHA-1342
     ├── proxy-site/         # CloudFront(커스텀 오리진 창문)+Route53 alias — 데모 표면(박스 서빙) — ALPHA-632
     └── demo-onprem/        # 가상 온프렘 데모 박스: EC2 + SG + IAM(SSM·ECR) + user-data(docker/compose 부트스트랩) — ADR-0033
 ```

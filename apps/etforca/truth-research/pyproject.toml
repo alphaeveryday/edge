@@ -6,11 +6,14 @@ requires-python = ">=3.12"
 dependencies = [
     "jsonschema>=4.23,<5",
     "psycopg[binary]>=3.1", # 국내 보도를 운영 DB 에서 읽는다(dbnews)
+    "neo4j>=5", # 국내 종목 사건 그래프(PuppyGraph Bolt) 조회 — graph.py
+    "edge-ontology", # 사건 타입 메뉴(graph.menu) — 워크스페이스 멤버
     "edge-truth-agent", # 저장소·뉴스 말뭉치·웹 도구·작업 폴더·세션 이벤트 읽기를 그대로 쓴다 — 워크스페이스 멤버
 ]
 
 [tool.uv.sources]
 edge-truth-agent = { workspace = true }
+edge-ontology = { workspace = true }
 
 [dependency-groups]
 dev = ["pytest>=8"]

@@ -106,3 +106,18 @@ variable "db_security_group_id" {
   type        = string
   description = "RDS 보안 그룹. 태스크는 이 그룹으로만 5432 를 나간다."
 }
+
+variable "graph_uri" {
+  type        = string
+  description = "국내 종목 사건 그래프(bolt://…:7687). 평일 05:30~16:00 KST 에만 떠 있다(ALPHA-1453)."
+}
+
+variable "graph_security_group_id" {
+  type        = string
+  description = "그래프 서비스 보안 그룹. 태스크는 이 그룹으로만 7687 을 나간다."
+}
+
+variable "graph_password_parameter_arn" {
+  type        = string
+  description = "그래프 관리자 비밀번호 SSM SecureString ARN(GRAPH_PASSWORD 로 주입)."
+}

@@ -53,10 +53,26 @@ SPECS = [
            "reasons": {"type": "array", "maxItems": 3, "items": {**_STR, "description": "가른 증거 한 줄(160자 이내)"}}},
           ["event_title", "event_kind", "claim", "finding", "reasons"])),
     ("finish", "세션을 끝낸다. 판정을 남긴 뒤에만 끝난다.", _obj({"summary": _STR}, ["summary"])),
+    # 국내 세션 + 그래프 DB 가 있을 때만(ALPHA-1453). 결과는 실마리다 — 증거는 거기 적힌 기사·공시를 직접 읽어 넣는다.
+    ("company_events", "이 회사가 참여한 최근 사건(뉴스·공시에서 뽑힌 사건 그래프): 날짜·사건 타입·이 회사 역할·내용·보도 수·대표 기사 id. "
+     "급등 전에 진행 중이던 일(계약 협상·증자 절차 등)이 있었는지 볼 때 쓴다. 증거로 쓰려면 적힌 news- id 를 view_news 로 읽는다.",
+     _obj({"days": {"type": "integer", "minimum": 1, "maximum": 365, "description": "최근 며칠 (기본 90)"}}, [])),
+    ("find_events", "다른 회사의 같은 타입 사건 중 수치 조건에 맞는 선례를 찾는다(사건 메뉴의 타입·수치 코드). 이번 일이 흔한 크기인지 볼 때 쓴다. "
+     "단위·기준이 다르거나 값이 불확실한 사건은 '모름'으로 따로 센다.",
+     _obj({"event_type": {**_STR, "description": "사건 메뉴의 타입 코드 (예: COMPANY.CONTRACT.SIGNING)"},
+           "metric": {**_STR, "description": "그 타입의 수치 코드 (예: CONTRACT_VALUE)"},
+           "op": {"type": "string", "enum": ["gte", "lte"]},
+           "value": {**_STR, "description": "기준값 숫자 (예: '100000000000' = 1천억 원)"},
+           "unit": {**_STR, "description": "저장 단위 (예: KRW·USD·PERCENT·DAY)"},
+           "basis": {"type": "string", "enum": ["TOTAL", "ANNUAL", "QUARTERLY", "UNKNOWN"], "description": "총액·연간 등 기준"},
+           "days": {"type": "integer", "minimum": 1, "maximum": 730, "description": "최근 며칠 (기본 180)"}},
+          ["event_type", "metric", "op", "value", "unit", "basis"])),
 ]
+GRAPH_TOOLS = ("company_events", "find_events")
 
 
-def specs(*, web: bool) -> list[dict]:
-    """도구 목록. 웹 키가 없으면 웹 도구를 뺀다."""
+def specs(*, web: bool, graph: bool = False) -> list[dict]:
+    """도구 목록. 웹 키가 없으면 웹 도구를, 국내 세션에 그래프 DB 가 없으면 그래프 도구를 뺀다."""
     return [{"name": name, "description": desc, "parameters": params}
-            for name, desc, params in SPECS if web or name not in ("web_search", "web_fetch")]
+            for name, desc, params in SPECS
+            if (web or name not in ("web_search", "web_fetch")) and (graph or name not in GRAPH_TOOLS)]
