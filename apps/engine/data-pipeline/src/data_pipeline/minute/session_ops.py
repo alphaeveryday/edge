@@ -70,7 +70,8 @@ ENV_NEWS_SOURCE_GROUP = "MINUTE_SESSION_NEWS_SOURCE_GROUP"
 # 뉴스 생산자(news-worker) 서비스명 — 공용 목록(ENV_SERVICES)과 분리한다. 뉴스 세션
 # 계획이 실패한 날 news-worker 까지 올리면 세션 부재 기동 거부로 하루 종일 재기동
 # 루프(비용·알람 소음)를 돌기 때문에, 이 목록은 **뉴스 세션이 선 날만** 올린다.
-# 소비자 2종은 공용 목록에 남는다 — 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관.
+# realtime 소비자는 공용 목록에 남는다. backfill 소비자는 빠진다 — 생산자가 없고 수동 redrive 때만
+# 운영자가 올린다(terraform `session_unmanaged_services`, ALPHA-1449).
 ENV_NEWS_WORKER_SERVICES = "MINUTE_SESSION_NEWS_WORKER_SERVICES"
 # 공시(ALPHA-875) — 뉴스와 **같은 성질**이다: 유니버스 없는 소스 단위 레인이고, 생산자가
 # 세션 결속이라 세션이 선 날만 올려야 한다. 그래서 같은 축 두 개를 그대로 갖는다.
