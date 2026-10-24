@@ -1,5 +1,6 @@
 """The dividend refresh must not compete with the existing batch schedule."""
 import importlib
+import re
 import socket
 import sys
 from types import SimpleNamespace
@@ -9,6 +10,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "dags"))
+TF = Path(__file__).resolve().parents[4] / "infra/terraform/modules/data-pipeline"
 KST = timezone(timedelta(hours=9))
 
 
@@ -113,3 +115,30 @@ def test_cleared_collector_cannot_submit_outside_current_admission(module, monke
     monkeypatch.setattr(module, "batch_window_clear", lambda: True)
     collector._start_task()
     assert submitted == [True]
+
+
+def test_slot_matches_the_missed_run_judgment(module):
+    # WHY(ALPHA-1443): Reconciler 는 `OPS_DIVIDEND_DAILY_SCHED_HHMM` 시각의 run 이 원장에 없으면 PLANNER_MISSING 을 연다.
+    # 10-21 03:00 run 은 창 검사에서 plan 전에 죽어 원장에 행이 없었는데, 이 env 가 없어 결측 이슈가 0건이었다.
+    # cron 변수가 없는 레인이라 Terraform 이 DAG 에서 시각을 뽑지 못한다 — 한쪽만 옮기면 매일 거짓 결측이 열리고 진짜 결측은 안 보인다.
+    text = (TF / "ops_ledger.tf").read_text()
+    slots = re.search(r'dividend_daily_schedule_hhmm\s*=\s*"([^"]*)"', text)[1].split(",")
+    assert sorted(f"{int(m)} {int(h)} * * *" for h, m in (s.split(":") for s in slots)) == sorted(module.CRONS)
+    # 매일 도는 레인이다 — 주말 플래그가 빠지면 토·일 결측이 조용히 판정에서 빠진다.
+    assert re.search(r'OPS_DIVIDEND_DAILY_SCHED_HHMM\s*=\s*local\.dividend_daily_schedule_hhmm', text)
+    assert re.search(r'OPS_DIVIDEND_DAILY_SCHED_WEEKEND\s*=\s*"true"', text)
+
+
+def test_failed_run_publishes_to_the_alarm_topic(module, monkeypatch):
+    # WHY(ALPHA-1443): 이 DAG 만 실패 통보가 없어 10-21 창 놓침 FAILED 가 메일 없이 지나갔다. 창을 놓친 FAILED 도
+    # 통보 대상이다 — 그날 배당 수집이 없었다는 사실은 사람이 알아야 한다.
+    assert module.dag.on_failure_callback is module._notify_failure
+    assert module.build_dag(notify=False).on_failure_callback is None
+    sent = []
+    monkeypatch.setattr(module, "ALARM_TOPIC", "arn:aws:sns:ap-northeast-2:0:alarm")
+    monkeypatch.setattr(module, "SnsHook", lambda: SimpleNamespace(publish_to_target=lambda **kw: sent.append(kw)))
+    run = SimpleNamespace(run_id="scheduled__2026-10-20T18:00:00+00:00", dag_id="edge_dividend_daily")
+    module._notify_failure({"dag_run": run, "reason": "task_failure"})
+    assert sent == [{"target_arn": "arn:aws:sns:ap-northeast-2:0:alarm",
+                     "subject": "[dividend-daily] FAILED — airflow scheduled__2026-10-20T18:00:00+00:00",
+                     "message": "dag=edge_dividend_daily run=scheduled__2026-10-20T18:00:00+00:00 reason=task_failure"}]

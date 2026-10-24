@@ -106,6 +106,9 @@ locals {
   # `airflow/tests/test_source_daily_dag.py` 가 대조한다. 변수가 아닌 이유: 환경이 재정의하면 그 대조가 기본값만 보고
   # 통과한다 — DAG 를 끄는 환경이 생기면 그때 변수로 올리고 테스트가 실제 값을 읽게 한다. 빈 값 = 결측 판정 없음.
   source_daily_schedule_hhmm = "05:20"
+  # 배당 레인(ALPHA-1443) — 원천 관측과 같은 이유로 여기 적는다. DAG(`airflow/dags/edge_dividend_daily.py` CRONS)와 같은지
+  # `airflow/tests/test_dividend_daily_dag.py` 가 대조한다.
+  dividend_daily_schedule_hhmm = "03:00"
 
   daily_schedule_weekend = tostring(local._day_weekend[join("|", regex(local._cron_day_re, var.schedule_expression))])
   news_schedule_weekend = tostring(local._day_weekend[one(distinct([
@@ -231,6 +234,9 @@ resource "aws_ecs_task_definition" "ops" {
       # 원천 관측 레인(ALPHA-1140) — Airflow 전용이라 cron 변수가 없다. 시각은 DAG 와 테스트로 묶는다(위 locals).
       OPS_SOURCE_DAILY_SCHED_HHMM    = local.source_daily_schedule_hhmm
       OPS_SOURCE_DAILY_SCHED_WEEKEND = "true"
+      # 배당 레인(ALPHA-1443) — 같은 규약. 이게 없으면 03:00 run 이 아예 안 떠도 PLANNER_MISSING 이 열리지 않는다.
+      OPS_DIVIDEND_DAILY_SCHED_HHMM    = local.dividend_daily_schedule_hhmm
+      OPS_DIVIDEND_DAILY_SCHED_WEEKEND = "true"
       # 장전 레인 실행 누락 감시(ALPHA-1431) — 장전 컨테이너가 쓰는 로그 그룹. 빈 값이면 감시 없음.
       OPS_PREMARKET_LOG_GROUP = aws_cloudwatch_log_group.this.name
     }) : { name = k, value = v }]
