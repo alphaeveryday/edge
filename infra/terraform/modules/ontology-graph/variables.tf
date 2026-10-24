@@ -36,3 +36,19 @@ variable "off_schedule" {
   type        = string
   description = "끄는 시각(Asia/Seoul)."
 }
+variable "credentials_parameter_arn" {
+  type        = string
+  description = "SecureString SSM 매개변수 ARN. 값은 JSON {username, password, db_username, db_password}. Terraform 밖에서 만든다."
+}
+variable "schema_json" {
+  type        = string
+  description = "PuppyGraph 매핑(노드·엣지, 자격 증명 없음). 업로더가 기동마다 올린다."
+}
+variable "db_host" {
+  type        = string
+  description = "매핑이 읽는 뷰가 있는 PostgreSQL 호스트."
+}
+variable "loader_image" {
+  type        = string
+  description = "업로더 이미지(파이썬 표준 라이브러리만 쓴다). 다이제스트로 고정한다."
+}
