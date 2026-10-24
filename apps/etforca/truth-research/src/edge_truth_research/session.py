@@ -36,12 +36,12 @@ def _graph(cfg, ws: Workspace) -> bool:
 
 
 def _system(ws: Workspace) -> Path:
-    """그래프 도구를 여는 세션의 시스템 지시: 기본 지시 + 사건 메뉴(코드가 온톨로지에서 만든다)."""
+    """그래프 도구를 여는 세션의 시스템 지시: 기본 지시 + 사건 그래프 스킬(저장 구조·수치·탐색법 + 온톨로지 타입 목록).
+    pi 의 스킬 로딩은 read·bash 도구로 파일을 여는 방식이라(세션에 그 도구를 주지 않는다) 본문을 지시에 바로 넣는다."""
     from . import graph
     path = ws.root / ".pi" / "system.md"
     path.write_text((PROMPTS / "system.md").read_text(encoding="utf-8").rstrip() +
-                    "\n\n## 사건 메뉴 (company_events·find_events 의 타입·수치 코드)\n"
-                    "형식: 타입코드 라벨 | 술어 | 역할(*필수) | 수치코드(단위계열)\n" + graph.menu() + "\n", encoding="utf-8")
+                    "\n\n" + graph.skill() + "\n", encoding="utf-8")
     return path
 
 
@@ -69,9 +69,9 @@ def run(cfg, ws: Workspace, *, code: str, prompt: str, corpus_path: Path) -> Ses
     if graph:
         try:
             system = _system(ws)
-        except Exception as error:  # noqa: BLE001 - 메뉴를 못 만들면 그래프 도구 없이 조사한다(세션을 잃지 않는다)
+        except Exception as error:  # noqa: BLE001 - 스킬을 못 만들면 그래프 도구 없이 조사한다(세션을 잃지 않는다)
             graph = False
-            log.warning(json.dumps({"event": "graph_menu_failed", "code": code, "reason": f"{type(error).__name__}: {str(error)[:200]}"},
+            log.warning(json.dumps({"event": "graph_skill_failed", "code": code, "reason": f"{type(error).__name__}: {str(error)[:200]}"},
                                    ensure_ascii=False))
     cmd = command(cfg, prompt, graph=graph, system=system)
     proc = subprocess.Popen(cmd, cwd=ws.root, env=_env(cfg, ws, corpus_path, graph),

@@ -57,16 +57,17 @@ SPECS = [
     ("company_events", "이 회사가 참여한 최근 사건(뉴스·공시에서 뽑힌 사건 그래프): 날짜·사건 타입·이 회사 역할·내용·보도 수·대표 기사 id. "
      "급등 전에 진행 중이던 일(계약 협상·증자 절차 등)이 있었는지 볼 때 쓴다. 증거로 쓰려면 적힌 news- id 를 view_news 로 읽는다.",
      _obj({"days": {"type": "integer", "minimum": 1, "maximum": 365, "description": "최근 며칠 (기본 90)"}}, [])),
-    ("find_events", "다른 회사의 같은 타입 사건 중 수치 조건에 맞는 선례를 찾는다(사건 메뉴의 타입·수치 코드). 이번 일이 흔한 크기인지 볼 때 쓴다. "
-     "단위·기준이 다르거나 값이 불확실한 사건은 '모름'으로 따로 센다.",
-     _obj({"event_type": {**_STR, "description": "사건 메뉴의 타입 코드 (예: COMPANY.CONTRACT.SIGNING)"},
+    ("find_events", "다른 회사의 같은 타입 사건 중 수치 조건에 맞는 선례를 센다(사건 그래프 스킬 4절의 타입·수치·단위). 이번 일이 흔한 크기인지 볼 때 쓴다. "
+     "단위가 다르거나 값이 불확실한 사건은 '모름'으로 따로 센다.",
+     _obj({"event_type": {**_STR, "description": "사건 타입 코드 (예: COMPANY.CONTRACT.SIGNING)"},
            "metric": {**_STR, "description": "그 타입의 수치 코드 (예: CONTRACT_VALUE)"},
            "op": {"type": "string", "enum": ["gte", "lte"]},
-           "value": {**_STR, "description": "기준값 숫자 (예: '100000000000' = 1천억 원)"},
-           "unit": {**_STR, "description": "저장 단위 (예: KRW·USD·PERCENT·DAY)"},
-           "basis": {"type": "string", "enum": ["TOTAL", "ANNUAL", "QUARTERLY", "UNKNOWN"], "description": "총액·연간 등 기준"},
+           "value": {**_STR, "description": "기준값 숫자, 원·주·% 단위 그대로 (예: '45000000000' = 450억 원, '30' = 30%)"},
+           "unit": {"type": "string", "enum": ["KRW", "USD", "PCT", "COUNT", "DAY", "YEARS", "MONTHS"], "description": "저장 단위"},
+           "basis": {"type": "string", "enum": ["TOTAL", "ANNUAL", "QUARTERLY", "UNKNOWN"],
+                     "description": "총액·연간 등 기준. 보통 생략한다 — 저장값 대부분이 UNKNOWN 이라 생략하면 기준 무관으로 찾는다"},
            "days": {"type": "integer", "minimum": 1, "maximum": 730, "description": "최근 며칠 (기본 180)"}},
-          ["event_type", "metric", "op", "value", "unit", "basis"])),
+          ["event_type", "metric", "op", "value", "unit"])),
 ]
 GRAPH_TOOLS = ("company_events", "find_events")
 

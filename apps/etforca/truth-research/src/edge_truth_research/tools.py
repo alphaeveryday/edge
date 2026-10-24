@@ -414,8 +414,8 @@ def find_events(ws: Workspace, args: dict) -> str:
     except graph.GraphError as error:
         raise ToolError(str(error)) from None
     head = (f"최근 {found['days']}일 {args.get('event_type')} 중 {args.get('metric')} {args.get('op')} {args.get('value')} "
-            f"{args.get('unit')}({args.get('basis')}): 맞음 {len(found['matched'])}건, 모름 {found['unknown']}건"
-            "(같은 일의 여러 보도는 한 건, 이 회사 사건은 뺐다. 모름은 단위·기준이 다르거나 값이 불확실 — 안 맞는다는 뜻이 아니다)")
+            f"{args.get('unit')}({args.get('basis') or '기준 무관'}): 맞음 {len(found['matched'])}건, 모름 {found['unknown']}건"
+            "(같은 일의 여러 보도는 한 건, 이 회사 사건은 뺐다. 모름은 단위·기준이 다르거나 값이 없거나 대략·범위 — 안 맞는다는 뜻이 아니다)")
     if found["truncated"]:
         head += f". 후보가 많아 최신 {found['scanned']}행만 봤다 — days 를 줄이면 빠짐이 없다"
     lines = [head] + [f"- {m['date']} | {', '.join(m['who']) or '회사 미상'} | {m['value']} {m['unit']} {m['basis']} | {m['what'][:140]} | 보도 {m['reports']}건"

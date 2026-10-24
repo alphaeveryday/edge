@@ -1,9 +1,11 @@
-"""국내 종목 사건 그래프 도구와 사건 메뉴 (ALPHA-1453).
+"""국내 종목 사건 그래프 도구와 사건 그래프 스킬 (ALPHA-1453, ALPHA-1455).
 
 WHY: 그래프는 기사마다 사건을 따로 뽑아 같은 일이 여러 줄이고, 수치를 문자열로 돌려준다. 모델이 '보도 9건 = 일 9건'으로
 읽거나, 단위·기준이 다른 값을 같은 줄에 세우면 선례 판단이 틀린다. 그래프가 꺼져 있으면(평일 05:30~16:00 밖) 도구는
 오류를 알려야 하고 세션은 계속돼야 한다. 미국 세션에는 그래프 도구가 열리지 않는다(사건은 국내 뉴스·공시로 만든다).
+스킬이 저장값과 다른 이름(단위 계열 PERCENT 등)이나 온톨로지에 없는 코드를 알려 주면 모델이 그대로 따라 해 0건을 받는다.
 """
+import re
 from datetime import date
 
 import pytest
@@ -18,13 +20,27 @@ def _title(kind, body, day="2026-10-12"):
     return f"{kind} / {body} / {day}"
 
 
-def test_menu_lists_every_ontology_type_with_its_codes_and_stays_small():
-    text = graph.menu()
-    types, _ = graph.registry()
-    assert len(text.splitlines()) == len(types)
-    line = next(l for l in text.splitlines() if l.startswith("COMPANY.CONTRACT.SIGNING "))
-    assert "SUPPLIER*" in line and "CONTRACT_VALUE(CURRENCY)" in line and "SIGN" in line
+def test_skill_lists_every_ontology_type_and_stays_small():
+    text = graph.skill()
+    types, labels = graph.registry()
+    for code in types:
+        head, _, rest = code.partition(".")
+        assert re.search(rf"^- {re.escape(head)}: .*{re.escape(rest)} {re.escape(labels.get(code, ''))}", text, re.M), code
     assert len(text) < 12000  # 세션마다 시스템 지시에 붙는다 — 약 4천 토큰 이하
+
+
+def test_skill_metric_table_names_only_real_type_metric_pairs_in_stored_units():
+    # WHY: 표의 (타입·수치·단위)를 그대로 find_events 에 넣는다 — 온톨로지가 거부하거나 저장 단위가 아니면 도구가 오류·0건이다
+    types, _ = graph.registry()
+    rows = re.findall(r"^\| ([A-Z_.]+) \| ([A-Z_]+) \| ([A-Z]+) \|", graph.skill(), re.M)
+    assert len(rows) >= 20
+    family = {"KRW": "CURRENCY", "USD": "CURRENCY", "PCT": "PERCENT", "COUNT": "COUNT",
+              "DAY": "DURATION_DAYS", "YEARS": "DURATION_DAYS", "MONTHS": "DURATION_DAYS"}
+    assert set(family) == set(graph.UNITS)
+    for event_type, metric, unit in rows:
+        assert event_type in types and metric in types[event_type].quantities, (event_type, metric)
+        assert family[unit] == types[event_type].quantities[metric].unit_family, (event_type, metric, unit)  # 금액에 PCT 같은 줄 방지
+    assert "PERCENT" not in graph.skill().split("## 4.")[1]  # 표·탐색법에는 저장 단위만
 
 
 def test_company_events_folds_differently_worded_reports_of_the_same_happening_and_keeps_article_ids():
@@ -72,18 +88,39 @@ def test_similar_events_compares_decimals_and_counts_other_units_as_unknown_not_
     assert found["unknown"] == 4 and found["scanned"] == 9 and not found["truncated"]
 
 
+def test_similar_events_without_basis_matches_unknown_basis_and_shows_it():
+    # WHY: 저장 기준의 대부분이 UNKNOWN 이다 — 기준을 맞춰야만 세면 계약 선례의 절반이 '모름'으로 빠진다
+    rows = [_measure("e1", "500000000000", basis="UNKNOWN"), _measure("e2", "400000000000", basis="TOTAL"),
+            _measure("e3", "82000000", unit="USD")]
+    found = graph.similar_events("COMPANY.CONTRACT.SIGNING", "CONTRACT_VALUE", "gte", "100000000000", "KRW", "",
+                                 TODAY, 180, run=lambda q, p: rows)
+    assert [(m["value"], m["basis"]) for m in found["matched"]] == [("500,000,000,000", "UNKNOWN"), ("400,000,000,000", "TOTAL")]
+    assert found["unknown"] == 1  # 단위가 다른 것만 모름
+
+
+def test_similar_events_reads_news_days_and_disclosure_day_as_one_unit():
+    # WHY: 계약 기간은 공시에서 DAY, 뉴스 파서에서 DAYS 로 저장된다 — 한쪽만 맞추면 다른 쪽 선례가 '모름'으로 빠진다
+    rows = [_measure("e1", "900", unit="DAY"), _measure("e2", "1000", unit="DAYS")]
+    found = graph.similar_events("COMPANY.CONTRACT.SIGNING", "CONTRACT_DURATION", "gte", "365", "DAY", "",
+                                 TODAY, 180, run=lambda q, p: rows)
+    assert sorted(m["value"] for m in found["matched"]) == ["1,000", "900"] and found["unknown"] == 0
+
+
 @pytest.mark.parametrize("args, message", [
-    (("COMPANY.NOPE", "CONTRACT_VALUE", "gte", "1"), "메뉴에 없는"),
+    (("COMPANY.NOPE", "CONTRACT_VALUE", "gte", "1"), "온톨로지에 없는"),
     (("COMPANY.CONTRACT.SIGNING", "DEAL_VALUE", "gte", "1"), "수치가 아닙니다"),
     (("COMPANY.CONTRACT.SIGNING", "CONTRACT_VALUE", "gt", "1"), "gte·lte"),
     (("COMPANY.CONTRACT.SIGNING", "CONTRACT_VALUE", "gte", "nan"), "유한한"),
     (("COMPANY.CONTRACT.SIGNING", "CONTRACT_VALUE", "gte", "1천억"), "숫자가 아닙니다"),
+    (("COMPANY.CONTRACT.SIGNING", "CONTRACT_VALUE", "gte", "1", "CURRENCY"), "저장 단위가 아닙니다"),  # 단위 계열 이름
+    (("COMPANY.CONTRACT.SIGNING", "CONTRACT_VALUE", "gte", "1", "KRW", "YEARLY"), "기준이 아닙니다"),
 ])
-def test_similar_events_rejects_codes_outside_the_menu_before_querying(args, message):
+def test_similar_events_rejects_codes_outside_the_ontology_before_querying(args, message):
     def never(q, p):
         raise AssertionError("잘못된 입력으로 그래프를 조회하지 않는다")
+    args = (*args, "KRW", "TOTAL")[:6]
     with pytest.raises(ValueError, match=message):
-        graph.similar_events(*args, "KRW", "TOTAL", TODAY, 180, run=never)
+        graph.similar_events(*args, TODAY, 180, run=never)
 
 
 def _ws(tmp_path, market="KOSDAQ"):
@@ -99,7 +136,7 @@ def test_graph_down_is_a_tool_error_the_session_can_read(tmp_path, monkeypatch):
     ws = _ws(tmp_path)
     with pytest.raises(tools.ToolError, match="GRAPH_URI"):
         tools.company_events(ws, {})
-    with pytest.raises(tools.ToolError, match="메뉴에 없는"):
+    with pytest.raises(tools.ToolError, match="온톨로지에 없는"):
         tools.find_events(ws, {"event_type": "X", "metric": "Y", "op": "gte", "value": "1", "unit": "KRW", "basis": "TOTAL"})
 
 
@@ -116,7 +153,7 @@ def test_us_sessions_get_no_graph_tools(tmp_path, cfg):
     cmd = session.command(with_graph, "p", graph=True, system=session._system(kr))
     assert "company_events" in cmd[cmd.index("--tools") + 1]
     system = (kr.root / ".pi" / "system.md").read_text(encoding="utf-8")
-    assert "## 사건 메뉴" in system and "COMPANY.CONTRACT.SIGNING" in system
+    assert "# 사건 그래프 스킬" in system and "COMPANY: " in system and "CONTRACT.SIGNING 계약 체결" in system
     assert session._env(with_graph, us, tmp_path / "c.sqlite")["TRUTH_GRAPH"] == "0"
 
 
@@ -153,7 +190,7 @@ def test_a_hung_graph_query_returns_as_a_tool_error_within_the_deadline(monkeypa
     release.set()
 
 
-def test_menu_failure_runs_the_session_without_graph_tools(tmp_path, cfg, monkeypatch):
+def test_skill_failure_runs_the_session_without_graph_tools(tmp_path, cfg, monkeypatch):
     from dataclasses import replace
     calls = {}
 
@@ -168,7 +205,7 @@ def test_menu_failure_runs_the_session_without_graph_tools(tmp_path, cfg, monkey
         return Proc()
     monkeypatch.setattr(session.subprocess, "Popen", popen)
     monkeypatch.setattr(session, "_read_events", lambda *a, **k: None)
-    monkeypatch.setattr(graph, "menu", lambda: (_ for _ in ()).throw(ImportError("edge_ontology")))
+    monkeypatch.setattr(graph, "skill", lambda: (_ for _ in ()).throw(ImportError("edge_ontology")))
     session.run(replace(cfg, graph_uri="bolt://graph:7687"), _ws(tmp_path), code="138360", prompt="p", corpus_path=tmp_path / "c")
     assert "company_events" not in calls["cmd"][calls["cmd"].index("--tools") + 1]
     assert calls["env"]["TRUTH_GRAPH"] == "0"
