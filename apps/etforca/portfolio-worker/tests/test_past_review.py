@@ -83,7 +83,7 @@ async def test_price_budget_stops_fetching_and_reports_unchecked_analyses(prices
     rows = [{'id': job(1), 'input': payload([KR]), 'result': None}]
     summary = await past_review.review(rows, as_of=AS_OF, budget=-1, pause=0)
     assert prices == []
-    assert summary['prices']['stopped_early'] is True
+    assert summary['prices']['stopped'] == 'BUDGET'
     assert summary['stages']['price_analysis'] == {'NOT_CHECKED': 1}
 
 
@@ -93,8 +93,16 @@ async def test_rate_limit_stops_all_fetching_so_live_customer_analyses_keep_the_
         calls.append(symbol)
         raise ValueError('PRICE_PROVIDER_RATE_LIMIT')
     monkeypatch.setattr('edge_portfolio.market_data.fetch_prices', fetch)
-    records, outcomes = await past_review.collect_prices({'KR:069500': 2, 'US:VOO': 1, 'FX': 1}, AS_OF, pause=0)
-    assert calls == ['069500.KS'] and outcomes['KR:069500'][0] == 'PRICE_PROVIDER_RATE_LIMIT'
+    records, outcomes, stopped = await past_review.collect_prices({'KR:069500': 2, 'US:VOO': 1, 'FX': 1}, AS_OF, pause=0)
+    assert calls == ['069500.KS'] and outcomes['KR:069500'][0] == 'PRICE_PROVIDER_RATE_LIMIT' and stopped == 'RATE_LIMIT'
+    calls.clear()
+    async def fallback(symbol, as_of, **options):
+        calls.append(symbol)
+        return {**record('KRW'), 'primary_failure': 'PRICE_PROVIDER_RATE_LIMIT'}  # 대체 공급자가 받아 준 가격
+    monkeypatch.setattr('edge_portfolio.market_data.fetch_prices', fallback)
+    records, outcomes, stopped = await past_review.collect_prices({'KR:069500': 2, 'US:VOO': 1}, AS_OF, pause=0)
+    assert calls == ['069500.KS'] and outcomes['KR:069500'][0] is None and stopped == 'RATE_LIMIT', \
+        'A usable fallback price still means Yahoo is throttling this host'
 
 
 async def test_fetching_waits_while_customer_analyses_are_queued(prices, monkeypatch):

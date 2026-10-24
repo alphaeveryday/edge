@@ -113,26 +113,31 @@ async def collect_prices(ids_by_use, as_of, budget=PRICE_BUDGET_SECONDS, pause=P
     from .catalog import price_symbol
     from .market_data import fetch_prices, price_failure
     from .optimizer import PRICE_TIMEOUT_SECONDS
-    records, outcomes = {}, {}
+    records, outcomes, stopped = {}, {}, None
     started = time.monotonic()
     for key in sorted(ids_by_use, key=lambda key: (-ids_by_use[key], key)):
         while time.monotonic() - started <= budget and busy():
             await asyncio.sleep(BUSY_WAIT_SECONDS)
         if time.monotonic() - started > budget:
+            stopped = 'BUDGET'
             break
         began = time.monotonic()
         try:
             records[key] = await fetch_prices(price_symbol(key), as_of, provider_timeout=PRICE_TIMEOUT_SECONDS,
                                               on_raw=lambda record, key=key: records.__setitem__(key, record))
-            failure = None
+            limit = None
         except Exception as error:
-            # 분석도 원본 기록을 먼저 받았으면 그것으로 계산한다(optimizer 의 fetch 와 같다)
-            failure = None if key in records else price_failure(error)
+            limit = price_failure(error)
+        # 분석도 원본 기록을 먼저 받았으면 그것으로 계산한다(optimizer 의 fetch 와 같다)
+        failure = None if key in records else limit
         outcomes[key] = (failure, time.monotonic() - began)
-        if failure == 'PRICE_PROVIDER_RATE_LIMIT':
+        # 대체 공급자로 가격은 받았어도 Yahoo 가 호출 제한을 걸었으면 더 묻지 않는다
+        record = records.get(key) or {}
+        if 'PRICE_PROVIDER_RATE_LIMIT' in (limit, record.get('primary_failure'), (record.get('price_recovery') or {}).get('reason')):
+            stopped = 'RATE_LIMIT'
             break
         await asyncio.sleep(pause)
-    return records, outcomes
+    return records, outcomes, stopped
 
 
 def baseline_price(ids, records, outcomes, as_of):
@@ -251,7 +256,7 @@ async def review(rows, *, as_of, llm_samples=0, key=None, budget=PRICE_BUDGET_SE
             ids, reason = None, 'ERROR:' + error_codes(error)[0]
         baselines[row['id']] = (ids, reason)
         uses.update(ids or ())
-    records, outcomes = await collect_prices(uses, as_of, budget, pause)
+    records, outcomes, stopped = await collect_prices(uses, as_of, budget, pause)
     from .optimizer import PRICE_COLLECTION_BUDGET_SECONDS
     for row, _ in checked:
         ids, reason = baselines[row['id']]
@@ -266,11 +271,11 @@ async def review(rows, *, as_of, llm_samples=0, key=None, budget=PRICE_BUDGET_SE
     summary = {
         'as_of': as_of.isoformat(), 'rows': len(rows), 'distinct_inputs': len(inputs), 'contract_passed': len(checked),
         'stages': {stage: dict(counter.most_common()) for stage, counter in report.counts.items()},
-        'prices': {'instruments': len(uses), 'attempted': len(outcomes), 'stopped_early': len(outcomes) < len(uses),
+        'prices': {'instruments': len(uses), 'attempted': len(outcomes), 'stopped': stopped,
                    'failures': dict(Counter(failure or 'OK' for failure, _ in outcomes.values()).most_common()),
                    'seconds': quantiles([seconds for _, seconds in outcomes.values()])},
     }
-    if llm_samples and 'PRICE_PROVIDER_RATE_LIMIT' in summary['prices']['failures']:
+    if llm_samples and stopped == 'RATE_LIMIT':
         summary['llm'] = 'skipped_rate_limited'  # 실제 분석도 같은 공급자를 쓴다. 고객 분석 몫을 남긴다
     elif llm_samples:
         summary['llm'] = await llm_replays(checked[:min(llm_samples, MAX_LLM_SAMPLES)], key, deadline)
@@ -287,15 +292,12 @@ async def llm_replays(samples, key, deadline=None):
     results, stop = [], None
     for row, request in samples:
         waited = 0
-        while not stop and waited < LLM_TIMEOUT_SECONDS and busy():
+        while not stop and waited < LLM_TIMEOUT_SECONDS and time.monotonic() + LLM_TIMEOUT_SECONDS <= deadline and busy():
             await asyncio.sleep(BUSY_WAIT_SECONDS)
             waited += BUSY_WAIT_SECONDS
-        if waited >= LLM_TIMEOUT_SECONDS:
-            results.append({'job': row['id'], 'status': 'skipped_busy'})
-            continue
         stop = stop or ('skipped_deadline' if time.monotonic() + LLM_TIMEOUT_SECONDS > deadline else None)
-        if stop:
-            results.append({'job': row['id'], 'status': stop})
+        if stop or waited >= LLM_TIMEOUT_SECONDS:
+            results.append({'job': row['id'], 'status': stop or 'skipped_busy'})
             continue
         started = time.monotonic()
         try:
