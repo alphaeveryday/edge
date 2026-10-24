@@ -1,7 +1,7 @@
 # 그래프 도구의 PuppyGraph(ALPHA-1342). 평일 05:30 KST에 켜서(06:00 전망 배치 전) 16:00 KST에 끈다(사용자 결정 2026-10-14).
 # 하루 10.5시간 × 평일 약 22일 × 시간당 약 0.175달러(2 vCPU·16GB) = 월 약 40달러.
 # 주말 배치(06:00 매일) 시간에는 꺼져 있다. 그래프 도구는 아직 운영 분석 경로에 붙지 않았다.
-# 비밀번호 매개변수는 Terraform 밖에서 만든다. 첫 기동 뒤 스키마를 한 번 올리면 EFS에 남는다.
+# 비밀번호 매개변수는 Terraform 밖에서 만든다. 매핑은 같은 작업의 업로더가 기동마다 올린다.
 module "ontology_graph" {
   source       = "../../modules/ontology-graph"
   name         = "edge-dev-ontology-graph"
@@ -15,6 +15,12 @@ module "ontology_graph" {
   off_schedule = "cron(0 16 ? * MON-FRI *)"
 
   password_parameter_arn = "arn:aws:ssm:${var.region}:393229433969:parameter/edge/dev/ontology-graph/password"
+  # DB 계정(ontology_graph_ro)과 관리자 비밀번호가 든 JSON. 10/5 시험 때 만든 매개변수를 그대로 쓴다(Terraform 밖).
+  credentials_parameter_arn = "arn:aws:ssm:${var.region}:393229433969:parameter/edge/dev/ontology-puppygraph-pilot/credentials"
+  # 매핑 원본은 온톨로지 라이브러리에 있다. 바뀌면 이 파일이 apply 경로(terraform-apply.yml paths)에 걸려 새 작업 정의가 된다.
+  schema_json  = file("${path.root}/../../../../libs/ontology/src/edge_ontology/sql/puppygraph-schema.json")
+  db_host      = module.rds.address
+  loader_image = "public.ecr.aws/docker/library/python:3.12-slim@sha256:a0f57064cbdcd6285fa45f51237ab0b35ea8ebaed06a1f5973e89e19dfb86704"
   # 지금은 SSM 터널용 임시 바스천(edge-dev-tmp-bastion-view, Terraform 밖)만. 분석 워커를 붙일 때 워커 보안 그룹을 더한다.
   # 바스천을 없앨 때는 이 목록에서 먼저 빼고 apply 한다(규칙이 남아 있으면 보안 그룹 삭제가 막힌다).
   client_security_group_ids = ["sg-0d7392109fd270848"]

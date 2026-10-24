@@ -1,6 +1,19 @@
 # 그래프 도구가 읽는 PuppyGraph. 평일 배치 전부터 장 마감 뒤까지만 켠다(ALPHA-1342).
 # 10/5 시험 작업(edge-dev-ontology-puppygraph-pilot)은 손으로 띄운 단독 작업이라 멈추면 다시 뜨지 않았고,
-# 다시 띄우면 스키마를 다시 올려야 했다. 여기서는 서비스가 켜고 끄며, 스키마는 EFS에 남아 다음 기동에 다시 읽힌다.
+# 다시 띄우면 스키마를 다시 올려야 했다. 여기서는 서비스가 켜고 끄며, 같은 작업의 업로더가 기동마다 매핑을 올린다.
+# PuppyGraph 1.13 은 스키마 저장소를 컨테이너 안(/home/ubuntu/registry.db)에 두고, 저장 경로를 EFS 에 두면 데이터 백엔드가
+# 뜨지 않는다(2026-10-24 실측). 그래서 보존 대신 매번 다시 올린다. 매핑 원본: libs/ontology/.../sql/puppygraph-schema.json
+
+locals {
+  logs = {
+    logDriver = "awslogs"
+    options = {
+      "awslogs-group"         = aws_cloudwatch_log_group.this.name
+      "awslogs-region"        = var.region
+      "awslogs-stream-prefix" = "ecs"
+    }
+  }
+}
 
 resource "aws_cloudwatch_log_group" "this" {
   name              = "/ecs/${var.name}"
@@ -27,13 +40,13 @@ resource "aws_iam_role_policy_attachment" "execution" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# 비밀번호는 Terraform 밖에서 만든 SecureString 매개변수에서 기동 때 읽는다(값이 상태 파일에 남지 않는다).
+# 비밀번호·DB 계정은 Terraform 밖에서 만든 SecureString 매개변수에서 기동 때 읽는다(값이 상태 파일에 남지 않는다).
 resource "aws_iam_role_policy" "execution_password" {
   name = "${var.name}-password"
   role = aws_iam_role.execution.id
   policy = jsonencode({
     Version   = "2012-10-17"
-    Statement = [{ Effect = "Allow", Action = ["ssm:GetParameters"], Resource = [var.password_parameter_arn] }]
+    Statement = [{ Effect = "Allow", Action = ["ssm:GetParameters"], Resource = [var.password_parameter_arn, var.credentials_parameter_arn] }]
   })
 }
 
@@ -48,7 +61,7 @@ resource "aws_vpc_security_group_egress_rule" "all" {
   security_group_id = aws_security_group.this.id
   ip_protocol       = "-1"
   cidr_ipv4         = "0.0.0.0/0"
-  description       = "image pull, source database, EFS"
+  description       = "image pull, source database"
 }
 
 # 7687 = Bolt(그래프 조회), 8081 = 스키마 업로드·관리 화면.
@@ -60,35 +73,6 @@ resource "aws_vpc_security_group_ingress_rule" "clients" {
   from_port                    = each.value[1]
   to_port                      = each.value[1]
   description                  = "graph clients"
-}
-
-# ── 스키마 보존 ─────────────────────────────────────────
-resource "aws_efs_file_system" "this" {
-  encrypted = true
-  tags      = { Name = var.name }
-}
-
-resource "aws_security_group" "efs" {
-  name        = "${var.name}-efs"
-  description = "NFS for ${var.name}"
-  vpc_id      = var.vpc_id
-  tags        = { Name = "${var.name}-efs" }
-}
-
-resource "aws_vpc_security_group_ingress_rule" "efs" {
-  security_group_id            = aws_security_group.efs.id
-  referenced_security_group_id = aws_security_group.this.id
-  ip_protocol                  = "tcp"
-  from_port                    = 2049
-  to_port                      = 2049
-  description                  = "from the graph task"
-}
-
-resource "aws_efs_mount_target" "this" {
-  count           = length(var.subnet_ids)
-  file_system_id  = aws_efs_file_system.this.id
-  subnet_id       = var.subnet_ids[count.index]
-  security_groups = [aws_security_group.efs.id]
 }
 
 # ── 접속 주소 ───────────────────────────────────────────
@@ -109,7 +93,6 @@ resource "aws_service_discovery_service" "this" {
       type = "A"
     }
   }
-  health_check_custom_config {}
 }
 
 # ── 작업과 서비스 ───────────────────────────────────────
@@ -124,13 +107,6 @@ resource "aws_ecs_task_definition" "this" {
     cpu_architecture        = "X86_64"
     operating_system_family = "LINUX"
   }
-  volume {
-    name = "storage"
-    efs_volume_configuration {
-      file_system_id     = aws_efs_file_system.this.id
-      transit_encryption = "ENABLED"
-    }
-  }
   container_definitions = jsonencode([{
     name         = "puppygraph"
     image        = var.image
@@ -140,19 +116,26 @@ resource "aws_ecs_task_definition" "this" {
     environment = [
       { name = "PUPPYGRAPH_USERNAME", value = var.username },
       { name = "QUERY_TIMEOUT", value = "30s" },
-      # 올린 스키마가 여기 남아 다음 기동에 다시 읽힌다.
-      { name = "STORAGE_PATH_ROOT", value = "/data/puppygraph" },
     ]
-    secrets     = [{ name = "PUPPYGRAPH_PASSWORD", valueFrom = var.password_parameter_arn }]
-    mountPoints = [{ sourceVolume = "storage", containerPath = "/data" }]
-    logConfiguration = {
-      logDriver = "awslogs"
-      options = {
-        "awslogs-group"         = aws_cloudwatch_log_group.this.name
-        "awslogs-region"        = var.region
-        "awslogs-stream-prefix" = "ecs"
-      }
-    }
+    secrets          = [{ name = "PUPPYGRAPH_PASSWORD", valueFrom = var.password_parameter_arn }]
+    logConfiguration = local.logs
+    }, {
+    # 서버가 준비되면 매핑을 올리고 끝난다(필수 아님 — 끝나도 작업은 계속 돈다). 실패는 graph_schema_failed 로그로 남는다.
+    name      = "schema-loader"
+    image     = var.loader_image
+    essential = false
+    command   = ["python", "-c", file("${path.module}/load_schema.py")]
+    environment = [
+      { name = "GRAPH_SCHEMA_GZ", value = base64gzip(jsonencode(jsondecode(var.schema_json))) },
+      { name = "DB_HOST", value = var.db_host },
+      { name = "PUPPYGRAPH_USERNAME", value = var.username },
+    ]
+    # 관리자 비밀번호는 서버와 같은 매개변수에서 읽는다. DB 계정만 credentials 매개변수에서 쓴다.
+    secrets = [
+      { name = "PUPPYGRAPH_PASSWORD", valueFrom = var.password_parameter_arn },
+      { name = "GRAPH_CREDENTIALS", valueFrom = var.credentials_parameter_arn },
+    ]
+    logConfiguration = local.logs
   }])
 }
 
@@ -162,7 +145,7 @@ resource "aws_ecs_service" "this" {
   task_definition = aws_ecs_task_definition.this.arn
   launch_type     = "FARGATE"
   desired_count   = 0
-  # 같은 EFS 저장소를 두 작업이 함께 쓰지 않게, 교체 때는 먼저 내리고 새로 띄운다.
+  # 그래프는 한 대만 돈다. 교체 때는 먼저 내리고 새로 띄운다.
   deployment_minimum_healthy_percent = 0
   deployment_maximum_percent         = 100
   network_configuration {
@@ -177,7 +160,6 @@ resource "aws_ecs_service" "this" {
   lifecycle {
     ignore_changes = [desired_count]
   }
-  depends_on = [aws_efs_mount_target.this]
 }
 
 resource "aws_appautoscaling_target" "this" {
