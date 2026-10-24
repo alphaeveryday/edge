@@ -60,6 +60,7 @@
 - 안드로이드(UA 에 `Android`)에서는 다운로드 단추를 모두 Google Play 로 보내고 문구의 "App Store" 를 "Google Play" 로 바꾼다(ALPHA-1440). 따로 둔 Google Play 단추는 겹치므로 뺀다.
 - 그 밖의 휴대폰(iOS)은 그대로 App Store 로 간다.
 - 안드로이드가 아닌 모든 기기에서는 히어로·마지막 CTA 의 App Store 단추 옆에 "Google Play에서 다운로드" 단추(`data-play`)를 함께 둔다. 이 단추는 데스크톱에서도 QR 창 없이 Google Play 웹 페이지로 간다(웹에서 로그인한 폰으로 설치할 수 있다). 안드로이드에서 쓰는 Google Play 주소도 이 단추에서 읽으므로, 주소가 바뀌면 `landing.html` 의 `data-play` 단추 두 개와 QR 창 링크를 함께 고친다.
+- Google Play 로 가는 링크에는 모두 `referrer` 를 붙인다(ALPHA-1451). 랜딩 주소의 `utm_source`·`utm_medium`·`utm_campaign`·`utm_content` 를 그대로 넘기고, 없으면 `utm_source=etforca.com&utm_medium=landing&utm_campaign=landing` 이다. 설치 수는 Play Console 사용자 확보 보고서의 UTM 채널에서 본다. App Store 링크는 아직 꼬리표가 없다(App Store Connect 제공자 토큰 `pt` 필요).
 - 하단 고정 바는 다운로드 단추가 있는 줄(`data-cta-zone`: 히어로 단추 줄·포트폴리오 점검·마지막 CTA)이 화면에 보이는 동안 숨는다. 히어로는 글 묶음 전체가 아니라 단추 줄만 본다 — 휴대폰 첫 화면 카드가 길어 단추가 화면 밖으로 밀려도 바가 숨어 있던 문제(ALPHA-1445).
 
 ## 검색과 공유 미리보기

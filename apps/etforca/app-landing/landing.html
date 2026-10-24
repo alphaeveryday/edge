@@ -1664,6 +1664,11 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     $$('a[href*="apps.apple.com"]').forEach((a) => { a.href = play; a.textContent = a.textContent.replace('App Store', 'Google Play'); });
     $$('[data-play]').forEach((b) => b.remove());
   }
+  // 설치를 광고·소재별로 세도록 들어온 utm 을 Google Play 링크의 referrer 로 넘긴다(Play Console 사용자 확보 보고서의 UTM 채널). 광고 없이 오면 etforca.com 으로 남긴다
+  const qs = new URLSearchParams(location.search);
+  const ref = new URLSearchParams({ utm_source: qs.get('utm_source') || 'etforca.com', utm_medium: qs.get('utm_medium') || 'landing', utm_campaign: qs.get('utm_campaign') || 'landing' });
+  if (qs.get('utm_content')) ref.set('utm_content', qs.get('utm_content'));
+  $$('a[href*="play.google.com"]').forEach((a) => { const u = new URL(a.href); u.searchParams.set('referrer', ref); a.href = u; });
   // 전망은 같은 도메인의 outlook/<코드>.json 에서 읽는다. 매일 08:00에 그날 발행된 앱 화면 응답이 그대로 올라온다(infra/terraform/modules/landing-export).
   // 파일이 없으면 null. 읽다 실패하면(통신 오류, 깨진 파일) 던진다 — 어느 쪽이든 카드가 준비 중이라고 알린다
   const getOutlook = (code) => fetch(`outlook/${code}.json`).then((r) => (r.ok ? r.json() : null));
