@@ -95,13 +95,13 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   계약은 유지한다. 구 진단(쌍 없음)도 계속 읽으며 운영 주의 판정은 API가 별도로 제공한다.
   observer와 wrapper가 구조·닫힌 사유
   어휘·크기·현재 `ops_attempt_id`·성공 exit를 다시 검증한 뒤 `ops_task_attempt`에 저장하므로,
-  같은 run의 재시도가 바뀐 로그를 내면 각 attempt에는 자기 진단만 남는다. 정상 런에서 확인한
-  정식명 변형 별칭은 canonical master가 실제로 존재하고 단일 종목일 때만 assertion 해소에
-  사용한다. event 조립에서는 그 canonical ticker가 기사 mentions 허용집합에도 있어야 한다.
-  그룹명·브랜드처럼 상장사 귀속이 해석인 표현은 별칭에 포함하지 않는다.
-  2026-09-19 미해소 재현으로 검증한 정식명·약칭 28개 표기를 추가했다(ALPHA-1080).
-  공백·괄호·법인표기를 일반적으로 제거하는 규칙이 아니라 명시적 별칭이며, 다른 종목의
-  실제 이름과 충돌하면 `ambiguous`로 남긴다.
+  같은 run의 재시도가 바뀐 로그를 내면 각 attempt에는 자기 진단만 남는다. 완전일치로 못
+  찾은 회사 표기는 표기 매칭(조사·법인 표기·공백·영문↔한글 읽기 정규화, 끝 괄호 병기)과
+  별칭 명부 `instrument_aliases.tsv`로 한 번 더 찾는다(ALPHA-850, ADR-0065). 명부는
+  `scripts/build_instrument_aliases.py`가 운영 해소기로 검사해 다시 쓰고, 대상 종목이 마스터에
+  없거나 다른 종목 이름과 부딪히면 넣지 않는다. 같은 키가 두 종목을 가리키면 `ambiguous`로
+  남긴다. 그룹명·브랜드·비상장 자회사처럼 상장사 귀속이 해석인 표현은 별칭에 포함하지 않는다.
+  DeepSeek 조립 경로에서는 별칭이 가리키는 ticker가 기사 mentions 허용집합에도 있어야 한다.
 - **ETF 수집 완전성**(ALPHA-611) — `NAV_COLLECTION_KIS`·`ETF_PROFILE_COLLECTION_KIS`·
   `ETF_HOLDINGS_COLLECTION_KRX` 세 작업은 Planner가 실행 전에
   `krx_etf.source.etf_map`의 key(our_etf_id)를 기대 snapshot으로 고정하고, 공통 수집 스텝이

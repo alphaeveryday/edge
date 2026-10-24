@@ -30,6 +30,8 @@ from datetime import datetime
 
 import json
 
+from edge_ontology import load_relations
+
 from ..config import DbConfig
 from ..db import connect, stable_domain_id
 from ..entity_resolution import load_resolution_index, resolve
@@ -192,9 +194,12 @@ def to_classification(
         mention = raw.get("text")
         if not isinstance(mention, str) or not mention.strip():
             continue
-        entity_id, _reason = resolve(res_index, mention)
-        ticker = ticker_by_entity.get(entity_id) if entity_id else None
         role = str(raw.get("role_code") or "")
+        # 모델이 뽑은 회사 표기는 조사·법인 표기·영문/한글 읽기가 섞여 온다 — 종목이 올 수 있는
+        # 역할(`_validate_extraction` 의 instrument 역할과 같은 판정)에만 표기 매칭을 켠다(ALPHA-850).
+        # 기사 종목 목록(mentions)으로 후보를 좁히지 않는다: 모델이 사건 참여자로 뽑은 회사가 곧 근거다.
+        entity_id, _reason = resolve(res_index, mention, allow_aliases=_instrument_role(role))
+        ticker = ticker_by_entity.get(entity_id) if entity_id else None
         if ticker:
             resolved_tickers.add(ticker)
             ticker_by_role.setdefault(role, ticker)
@@ -254,7 +259,15 @@ def to_classification(
         "measures": measures,
     }
     return _validate_extraction(item, view, gate_cls, entity_index, resolved_tickers,
-                                res_index, allow_aliases=False)
+                                res_index, allow_aliases=True)
+
+
+def _instrument_role(role: str) -> bool:
+    """종목(instrument)으로 해소되는 역할인가 — 명부(기관)·채번(개념) 역할이 아닌 실체 역할."""
+    relations = load_relations()
+    relation = relations.get(role)
+    return (relation is not None and relation.is_entity
+            and not relations.sections_for(role) and not relations.can_mint(role))
 
 
 def _thread_event(created: dict, cls: dict, published_at: str) -> dict:
