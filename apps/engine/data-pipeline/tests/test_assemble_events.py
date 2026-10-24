@@ -52,9 +52,11 @@ _CONTRACT = "COMPANY.CONTRACT.SIGNING"
 _CONTRACT_PRED = "SIGN"
 
 
-def _thread_key(entity_id: str, event_type_code: str = _ETYPE, role: str = _IDENTITY_ROLE) -> str:
-    """계약 thread_key(단일 identity 역할) — assemble_events._thread_key 와 같은 형식."""
-    return f"event_type_id={event_type_code}||required:{role}={entity_id}"
+def _news_key(entity_id: str, available_at, event_type_code: str = _ETYPE, firm: str = "") -> str:
+    """뉴스 스레드 구간 키(ALPHA-508) — assemble_events._news_thread_base + `||since=<시작 시각>`."""
+    since = datetime.fromisoformat(str(available_at)).isoformat()
+    analyst = f"||analyst={firm}" if firm else ""
+    return f"news:event_type_id={event_type_code}||company={entity_id}{analyst}||since={since}"
 
 
 _CONTRACT_KEY = ("event_type_id=COMPANY.CONTRACT.SIGNING||required:SUPPLIER=inst_SUP"
@@ -121,6 +123,14 @@ class _FakeCursor:
             self._rows = list(getattr(conn, "issuer_mapping", {}).items())
         elif upper.startswith("SELECT THREAD_KEY, THREAD_ID"):
             self._rows = list(getattr(conn, "thread_ids", {}).items())
+        elif upper.startswith("SELECT DISTINCT ON (B.BASE) B.BASE, T.LAST_STATE_AT"):
+            # 뉴스 스레드 구간 조회(ALPHA-508) — base 마다 `{base}||since=` 로 시작하는 최근 구간 1건.
+            self._rows = []
+            for base in params[0]:
+                hits = [seg for seg in conn.news_segments if seg[1].startswith(base + "||since=")]
+                if hits:
+                    last_at, key, tid = max(hits, key=lambda seg: seg[0])
+                    self._rows.append((base, last_at, key, tid))
         elif upper.startswith("SELECT I.INSTRUMENT_ID, I.TICKER"):
             # assemble_events도 load_assertions와 같은 해소 인덱스를 쓴다. 이 테스트의
             # 관심사는 ticker 축이므로 이름/발행사 축은 비워 실제 5열 계약만 모사한다.
@@ -153,22 +163,24 @@ class _FakeCursor:
                 u = bsql.upper()
                 if u.startswith("INSERT INTO EVENT_ARGUMENT "):
                     for r in brows:
-                        ea_by_se.setdefault(r[0], []).append((r[1], r[2]))  # (role_code, entity_id)
+                        # (role_code, entity_id, mention_text)
+                        ea_by_se.setdefault(r[0], []).append((r[1], r[2], r[5]))
                 elif u.startswith("INSERT INTO SOURCE_EVENT "):
                     for r in brows:
                         # (event_type_code, available_at, lifecycle_stage, predicate_code)
                         se_meta[r[0]] = (r[2], r[6], r[4], r[7])
-            out = list(conn.unthreaded_events)
+            # 사전 존재분은 mention_text 없이 7열로 적어도 된다(8열째 None).
+            out = [tuple(r) + (None,) * (8 - len(r)) for r in conn.unthreaded_events]
             for sid, (etype, avail, stage, predicate) in se_meta.items():
                 # LEFT JOIN 모사 — 아규먼트 0건 이벤트도 role_code/entity_id NULL 한 행으로 나온다
                 # (INNER 로 모사하면 실 DB 와 갈려 anchorless 이벤트의 UNKNOWN 링크를 못 검증한다).
-                for role_code, entity_id in ea_by_se.get(sid) or [(None, None)]:
-                    out.append((sid, etype, avail, stage, predicate, role_code, entity_id))
+                for role_code, entity_id, mention in ea_by_se.get(sid) or [(None, None, None)]:
+                    out.append((sid, etype, avail, stage, predicate, role_code, entity_id, mention))
             self._rows = out
         elif upper.startswith("SELECT THREAD_ID, CURRENT_STAGE"):
-            self._rows = [(t, s) for t, s in conn.thread_current_stages.items()]
+            self._rows = [(t, s) for t, s in conn.thread_current_stages.items() if t in params[0]]
         elif upper.startswith("SELECT THREAD_ID, COUNT"):
-            self._rows = [(t, n) for t, n in conn.prior_thread_counts.items()]
+            self._rows = [(t, n) for t, n in conn.prior_thread_counts.items() if t in params[0]]
         elif upper.startswith("SELECT EM.SOURCE_EVENT_ID"):
             self._rows = list(conn.dart_measures)
         elif upper.startswith("SELECT DD.ISSUER_ACTOR_ID"):
@@ -190,7 +202,7 @@ class _FakeCursor:
 class _FakeConn:
     def __init__(self, instruments=None, assembled_articles=(), doc_overrides=None,
                  assertion_rows=None, prior_thread_counts=None, unthreaded_events=(),
-                 thread_current_stages=None, dart_measures=(), dart_facts=()):
+                 thread_current_stages=None, dart_measures=(), dart_facts=(), news_segments=()):
         self.log: list = []
         self.batches: list = []
         self.instruments = instruments or [("005930", "inst_SAMSUNG"), ("000660", "inst_HYNIX"),
@@ -210,6 +222,8 @@ class _FakeConn:
         # DART 승격 대조 대역(ALPHA-547) — 측정행·공시 사실. 기본 빈 목록 = 승격 없음.
         self.dart_measures = list(dart_measures)
         self.dart_facts = list(dart_facts)
+        # 기존 뉴스 스레드 구간 대역(ALPHA-508): (last_state_at, thread_key, thread_id).
+        self.news_segments = list(news_segments)
 
     def cursor(self):
         cur = _FakeCursor(self)
@@ -278,9 +292,9 @@ def test_event_lineage_matches_engine_derivation(tmp_path, monkeypatch):
     assert arg[4:] == ("subject", None, "ISSUER", None)
     [ev] = _batch(conn, "event_evidence")
     assert ev[1] == evt_id and ev[3] == "TITLE"
-    # threading: 첫 이벤트는 FIRST_IN_THREAD, thread_id 는 identity_roles 기반 계약 키.
+    # threading: 첫 이벤트는 FIRST_IN_THREAD, thread_id 는 뉴스 구간 키(타입+회사+시작 시각).
     [link] = _batch(conn, "event_thread_link")
-    thread_id = _stable_id("thr", _thread_key("inst_SAMSUNG"))
+    thread_id = _stable_id("thr", _news_key("inst_SAMSUNG", se[6]))
     assert (link[1], link[3]) == (thread_id, "FIRST_IN_THREAD")
     # 게이트 콜(1번째 호출) 입력의 tickers 는 entity_index 교집합이어야 한다(엔진 규칙).
     assert calls[0]["items"][0]["tickers"] == ["005930"]
@@ -512,10 +526,10 @@ def test_in_universe_non_kodex_event_is_threaded(tmp_path, monkeypatch):
     assert assemble_events.run(storage, "R1", db=_db(),
                                complete_fn=_default_llm("a1", ticker="999999"),
                                from_date="2026-07-15", to_date="2026-07-15") == 0
-    assert len(_batch(conn, "source_event")) == 1
+    [se] = _batch(conn, "source_event")
     # 999999 → inst_OTHER 도 계보가 선다(과거엔 event_thread_link == [] 였다).
     [link] = _batch(conn, "event_thread_link")
-    thread_id = _stable_id("thr", _thread_key("inst_OTHER"))
+    thread_id = _stable_id("thr", _news_key("inst_OTHER", se[6]))
     assert (link[1], link[3]) == (thread_id, "FIRST_IN_THREAD")
     log = _log(storage)
     assert log["events_created"] == 1 and log["threaded"] == 1
@@ -541,7 +555,7 @@ def test_rerun_threads_preexisting_unthreaded_event(tmp_path, monkeypatch):
                                from_date="2026-07-15", to_date="2026-07-15") == 0
     assert _batch(conn, "source_event") == []  # 신규 조립 없음
     [link] = _batch(conn, "event_thread_link")
-    thread_id = _stable_id("thr", _thread_key("inst_OTHER"))
+    thread_id = _stable_id("thr", _news_key("inst_OTHER", "2026-07-15T09:00:00+09:00"))
     assert (link[0], link[1], link[3]) == ("evt_stale", thread_id, "FIRST_IN_THREAD")
     log = _log(storage)
     assert log["events_created"] == 0 and log["threaded"] == 1
@@ -791,35 +805,110 @@ def test_stage_inside_lifecycle_menu_is_kept(tmp_path, monkeypatch):
 # ── threading / novelty ──────────────────────────────────────────────────────
 def _multi_role_event(source_event_id: str, role_values: dict,
                       available_at="2026-07-15T09:00:00+09:00",
-                      stage=None, predicate=None, etype=_CONTRACT):
+                      stage=None, predicate=None, etype=_CONTRACT, source_class="NEWS",
+                      analyst_firm=None):
     return {"source_event_id": source_event_id, "event_type_code": etype,
             "available_at": available_at, "role_values": role_values,
-            "lifecycle_stage": stage, "predicate_code": predicate}
+            "lifecycle_stage": stage, "predicate_code": predicate,
+            "source_class": source_class, "analyst_firm": analyst_firm}
 
 
-def test_contract_signing_splits_thread_by_customer(monkeypatch):
-    """계약 불변식: CONTRACT.SIGNING identity=SUPPLIER·CUSTOMER·CONTRACT_OBJECT 라, 같은
-    공급사라도 CUSTOMER 가 다르면 **다른 thread** 다. 엔티티 하나로 키를 만들던 옛 구현은
-    이 둘을 한 스레드로 뭉갰다(신규 계약이 기존 계약의 FOLLOW_UP 으로 오독). WHY: novelty·
-    prior_event_count 가 이 키 위에서 나오므로, 키가 CUSTOMER 를 안 보면 사건 계보가 틀린다.
-
-    v4 다중역할 기록으로 CUSTOMER 가 event_argument 에 실리는 경로가 실제로 생겼다 —
-    thread_key 로직은 identity 가 채워졌을 때 올바로 갈라야 한다."""
+def test_disclosure_contract_still_splits_thread_by_customer(monkeypatch):
+    """공시는 identity 계약 그대로다(ALPHA-508 은 뉴스만 바꾼다): CONTRACT.SIGNING identity=
+    SUPPLIER·CUSTOMER·CONTRACT_OBJECT 라 같은 공급사라도 CUSTOMER 가 다르면 다른 thread 다.
+    WHY: 공시는 사건마다 구조화된 정확한 당사자를 주므로, 회사 단위로 뭉치면 서로 다른 계약이
+    한 계보가 된다."""
     conn = _FakeConn()
     ev_a = _multi_role_event("evt_a", {"SUPPLIER": "inst_SUP", "CUSTOMER": "inst_CUST1",
-                                       "CONTRACT_OBJECT": "concept_battery"})
+                                       "CONTRACT_OBJECT": "concept_battery"},
+                             source_class="DISCLOSURE")
     ev_b = _multi_role_event("evt_b", {"SUPPLIER": "inst_SUP", "CUSTOMER": "inst_CUST2",
-                                       "CONTRACT_OBJECT": "concept_battery"})
+                                       "CONTRACT_OBJECT": "concept_battery"},
+                             source_class="DISCLOSURE")
     assemble_events.thread_events(conn, [ev_a, ev_b])
 
     links = {r[0]: r for r in _batch(conn, "event_thread_link")}
-    assert links["evt_a"][1] != links["evt_b"][1]         # 다른 thread_id
-    assert links["evt_a"][3] == "FIRST_IN_THREAD" and links["evt_b"][3] == "FIRST_IN_THREAD"
-    # 같은 공급사·같은 계약대상, CUSTOMER 만 다름 → 키가 CUSTOMER 를 반영한다(역할 순서=identity_roles).
+    assert links["evt_a"][1] != links["evt_b"][1]
     key_a = ("event_type_id=COMPANY.CONTRACT.SIGNING||required:SUPPLIER=inst_SUP"
              "||required:CUSTOMER=inst_CUST1||required:CONTRACT_OBJECT=concept_battery")
     assert links["evt_a"][1] == _stable_id("thr", key_a)
-    assert len(_batch(conn, "event_thread")) == 2
+
+
+def test_news_thread_is_company_and_type_within_the_window(monkeypatch):
+    """WHY(ALPHA-508, ADR-0064 T5): 뉴스 스레드는 같은 회사·같은 타입을 창 안에서 하나로 묶는다 —
+    기사 추출은 상대방(CUSTOMER 등)을 자주 못 채워, identity 키면 과반이 UNKNOWN 이 되거나 같은
+    사건이 갈렸다. 다른 회사는 다른 스레드다. 스레드 안에서 하루 넘게 끊겼다 다시 나온 보도는
+    후속 단계, 같은 날 재보도는 재보도다."""
+    conn = _FakeConn()
+    sup = {"SUPPLIER": "inst_SUP"}
+    e1 = _multi_role_event("evt_1", {**sup, "CUSTOMER": "inst_CUST1"}, "2026-07-01T09:00:00+09:00")
+    e2 = _multi_role_event("evt_2", sup, "2026-07-01T15:00:00+09:00")           # 같은 날
+    e3 = _multi_role_event("evt_3", {**sup, "CUSTOMER": "inst_CUST2"}, "2026-07-20T09:00:00+09:00")
+    other = _multi_role_event("evt_o", {"SUPPLIER": "inst_OTHER"}, "2026-07-01T10:00:00+09:00")
+    assemble_events.thread_events(conn, [e3, other, e2, e1])  # 순서 뒤섞기 — 시각 정렬이 판정 축
+
+    links = {r[0]: r for r in _batch(conn, "event_thread_link")}
+    key = _news_key("inst_SUP", "2026-07-01T09:00:00+09:00", _CONTRACT)
+    assert {links[e][1] for e in ("evt_1", "evt_2", "evt_3")} == {_stable_id("thr", key)}
+    assert links["evt_o"][1] != links["evt_1"][1]
+    assert {e: links[e][3] for e in ("evt_1", "evt_2", "evt_3", "evt_o")} == {
+        "evt_1": "FIRST_IN_THREAD", "evt_2": "DUPLICATE_REBROADCAST",
+        "evt_3": "FOLLOW_UP_STAGE", "evt_o": "FIRST_IN_THREAD"}
+
+
+def test_news_thread_opens_a_new_segment_after_the_window(monkeypatch):
+    """WHY: 창(6개월)보다 오래 끊긴 같은 회사·타입 보도는 다른 사건이다 — 시간 제한 없이 묶으면
+    한 회사의 같은 타입이 반년 넘게 한 스레드가 되는 메가 스레드가 된다(진단 D1)."""
+    conn = _FakeConn()
+    rv = {"SUPPLIER": "inst_SUP"}
+    old = _multi_role_event("evt_old", rv, "2026-01-02T09:00:00+09:00")
+    new = _multi_role_event("evt_new", rv, "2026-07-20T09:00:00+09:00")   # 199일 뒤
+    assemble_events.thread_events(conn, [new, old])
+
+    links = {r[0]: r for r in _batch(conn, "event_thread_link")}
+    assert links["evt_new"][1] == _stable_id(
+        "thr", _news_key("inst_SUP", "2026-07-20T09:00:00+09:00", _CONTRACT))
+    assert links["evt_old"][1] != links["evt_new"][1]
+    assert links["evt_old"][3] == links["evt_new"][3] == "FIRST_IN_THREAD"
+
+
+def test_news_thread_continues_the_latest_db_segment(monkeypatch):
+    """WHY: 런을 넘어서도 같은 스레드가 이어져야 한다 — DB 의 가장 최근 구간이 창 안이면 그 thread_id
+    와 링크 수(prior)를 이어받아 재보도·후속을 판정하고, 창 밖이면 새 구간을 연다. 런마다 새로
+    열면 같은 사건이 날짜마다 갈라지고 모든 보도가 FIRST 가 된다."""
+    key = _news_key("inst_SUP", "2026-07-01T09:00:00+09:00", _CONTRACT)
+    tid = _stable_id("thr", key)
+    seg = (datetime.fromisoformat("2026-07-10T09:00:00+09:00"), key, tid)
+    conn = _FakeConn(prior_thread_counts={tid: 3}, news_segments=[seg])
+    rv = {"SUPPLIER": "inst_SUP"}
+    later = _multi_role_event("evt_later", rv, "2026-07-12T09:00:00+09:00")   # 2일 뒤 → 후속
+    assemble_events.thread_events(conn, [later])
+
+    [link] = _batch(conn, "event_thread_link")
+    assert (link[1], link[3]) == (tid, "FOLLOW_UP_STAGE")
+    assert _batch(conn, "thread_discovery_snapshot")[0][2] == 3
+
+    far = _FakeConn(prior_thread_counts={tid: 3}, news_segments=[seg])
+    assemble_events.thread_events(far, [_multi_role_event("evt_far", rv, "2027-03-01T09:00:00+09:00")])
+    [link] = _batch(far, "event_thread_link")
+    assert link[1] != tid and link[3] == "FIRST_IN_THREAD"
+
+
+def test_news_analyst_report_thread_is_split_by_firm(monkeypatch):
+    """WHY: 증권사 리포트는 같은 종목이라도 증권사가 다르면 다른 사건이다(같은 날 여러 증권사가 낸다).
+    증권사는 해소 여부와 무관하게 원문으로 가른다 — 띄어쓰기 차이는 같은 증권사다."""
+    etype = "MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE"
+    conn = _FakeConn()
+    rv = {"RATED_ENTITY": "inst_SAMSUNG"}
+    a = _multi_role_event("evt_a", rv, "2026-07-01T09:00:00+09:00", etype=etype, analyst_firm="NH투자증권")
+    b = _multi_role_event("evt_b", rv, "2026-07-01T10:00:00+09:00", etype=etype, analyst_firm="NH 투자증권")
+    c = _multi_role_event("evt_c", rv, "2026-07-01T11:00:00+09:00", etype=etype, analyst_firm="대신증권")
+    assemble_events.thread_events(conn, [a, b, c])
+
+    links = {r[0]: r for r in _batch(conn, "event_thread_link")}
+    assert links["evt_a"][1] == links["evt_b"][1] == _stable_id(
+        "thr", _news_key("inst_SAMSUNG", "2026-07-01T09:00:00+09:00", etype, firm="nh투자증권"))
+    assert links["evt_c"][1] != links["evt_a"][1]
 
 
 def test_thread_link_preserves_disclosure_source_class(monkeypatch):
@@ -844,7 +933,8 @@ def test_missing_identity_role_emits_unknown(monkeypatch):
     missing_identity_policy=EMIT_UNKNOWN_LINK_ONLY). WHY: 없는 identity 로 억지 스레드를
     세우면 서로 다른 계약이 다시 한 스레드로 뭉개져 옛 버그가 재발한다."""
     conn = _FakeConn()
-    ev = _multi_role_event("evt_x", {"SUPPLIER": "inst_SUP"})  # CUSTOMER·CONTRACT_OBJECT 결측
+    ev = _multi_role_event("evt_x", {"SUPPLIER": "inst_SUP"},  # CUSTOMER·CONTRACT_OBJECT 결측
+                           source_class="DISCLOSURE")
     assemble_events.thread_events(conn, [ev])
 
     [link] = _batch(conn, "event_thread_link")
@@ -862,12 +952,24 @@ def test_falsy_identity_value_is_treated_as_missing(monkeypatch):
     바로 그 뭉갬이 값 검사 누락으로 재발한다."""
     conn = _FakeConn()
     ev = _multi_role_event("evt_n", {"SUPPLIER": "inst_SUP", "CUSTOMER": None,
-                                     "CONTRACT_OBJECT": ""})
+                                     "CONTRACT_OBJECT": ""}, source_class="DISCLOSURE")
     assemble_events.thread_events(conn, [ev])
 
     [link] = _batch(conn, "event_thread_link")
     assert link[1] is None and link[3] == "UNKNOWN"
     assert "CUSTOMER" in link[6] and "CONTRACT_OBJECT" in link[6]
+    assert _batch(conn, "event_thread") == []
+
+
+def test_news_without_any_company_emits_unknown(monkeypatch):
+    """WHY: 뉴스 스레드는 회사가 축이다 — 해소된 참여자가 하나도 없으면(None·빈값 포함) 억지 스레드를
+    세우지 않고 UNKNOWN 으로 사유를 남긴다. 그런 이벤트를 한 키로 접으면 무관한 기사가 한 계보가 된다."""
+    conn = _FakeConn()
+    ev = _multi_role_event("evt_none", {"SUPPLIER": None, "CUSTOMER": ""})
+    assemble_events.thread_events(conn, [ev])
+
+    [link] = _batch(conn, "event_thread_link")
+    assert link[1] is None and link[3] == "UNKNOWN" and link[6] == "missing primary company"
     assert _batch(conn, "event_thread") == []
 
 
@@ -897,10 +999,12 @@ def test_novelty_seeds_stage_and_prior_from_db(monkeypatch):
     """런을 넘어선 novelty — 기존 스레드의 current_stage(DB 시드)와 prior 링크 수를 기준으로
     같은 단계 재보도=DUPLICATE_REBROADCAST, 전진=FOLLOW_UP_STAGE, 정정 술어(REVISE)=CORRECTION.
     WHY: 배치 내부 상태만 보면 재실행·백필에서 같은 단계 재보도가 매번 FOLLOW_UP 으로 나와
-    PIT 재현이 깨진다."""
-    tid = _stable_id("thr", _CONTRACT_KEY)
+    PIT 재현이 깨진다. (같은 날 보도라 하루 공백 규칙은 끼어들지 않는다.)"""
+    key = _news_key("inst_SUP", "2026-07-15T09:00:00+09:00", _CONTRACT)
+    tid = _stable_id("thr", key)
     conn = _FakeConn(prior_thread_counts={tid: 2},
-                     thread_current_stages={tid: "DEFINITIVE_SIGNED"})
+                     thread_current_stages={tid: "DEFINITIVE_SIGNED"},
+                     news_segments=[(datetime.fromisoformat("2026-07-16T08:00:00+09:00"), key, tid)])
     rv = {"SUPPLIER": "inst_SUP", "CUSTOMER": "inst_CUST", "CONTRACT_OBJECT": "concept_hbm"}
     dup = _multi_role_event("evt_dup", rv, "2026-07-16T09:00:00+09:00",
                             stage="DEFINITIVE_SIGNED")
@@ -943,11 +1047,11 @@ def test_unthreaded_query_reevaluates_unknown_links(tmp_path, monkeypatch):
     assert "etl.source_event_id IS NULL OR" in fetch_sql
 
 
-def test_run_logs_unknown_thread_for_unfillable_type(tmp_path, monkeypatch):
-    """run 이 UNKNOWN 을 threaded 로 뭉치지 않고 unknown_thread 로 갈라 로그에 남긴다(Rule 12).
-    EARNINGS.RESULT_RELEASE 는 identity=[ISSUER, REPORTING_PERIOD] 인데 REPORTING_PERIOD 는
-    entity 로 해소되지 않아 라이브에서 UNKNOWN 이 된다 — 이런 흔한 타입이 로그에서 안 보이면
-    스레드 커버리지 저하를 아무도 모른다."""
+def test_run_threads_news_whose_identity_roles_cannot_be_filled(tmp_path, monkeypatch):
+    """WHY(ALPHA-508): EARNINGS.RESULT_RELEASE 는 identity=[ISSUER, REPORTING_PERIOD] 인데
+    REPORTING_PERIOD 는 entity 로 해소되지 않아, identity 키 시절엔 흔한 실적 기사가 전부 UNKNOWN
+    이었다(진단 당시 뉴스 이벤트의 58%). 뉴스 키는 회사+타입이라 이제 스레드가 선다 — run 로그도
+    threaded 로 세고 unknown_thread 는 0 이다."""
     etype, pred = "COMPANY.EARNINGS.RESULT_RELEASE", "REPORT"
     storage = LocalStorage(tmp_path / "lake")
     _write_news(storage, "ko", "2026-07-15", [_article("a1")])
@@ -960,9 +1064,9 @@ def test_run_logs_unknown_thread_for_unfillable_type(tmp_path, monkeypatch):
                                complete_fn=_default_llm("a1", etype=etype, pred=pred),
                                from_date="2026-07-15", to_date="2026-07-15") == 0
     [link] = _batch(conn, "event_thread_link")
-    assert link[1] is None and link[3] == "UNKNOWN" and "REPORTING_PERIOD" in link[6]
+    assert link[1] is not None and link[3] == "FIRST_IN_THREAD"
     log = _log(storage)
-    assert log["events_created"] == 1 and log["threaded"] == 0 and log["unknown_thread"] == 1
+    assert log["events_created"] == 1 and log["threaded"] == 1 and log["unknown_thread"] == 0
 
 
 # ── 분류 병렬화(ALPHA-520) — v4 2콜 체인에서도 게이트 배치는 동시 실행 ──────
@@ -1557,10 +1661,10 @@ def test_authority_participant_resolves_through_registry(tmp_path, monkeypatch):
     assert args[("AUTHORITY", "actor_auth_kr_ftc")][4:] == (
         "subject", "공정위", "AUTHORITY_OR_RULE", 0)
     assert args[("TARGET_COMPANY", "inst_SAMSUNG")][6] == "COMPANY_ENTITY"
-    # 그래도 스레드는 UNKNOWN 이다 — identity 에 LEGAL_ISSUE 가 남아 있다(개념 역할, FixB).
-    # 이 테스트가 검증하는 건 **적재**지 스레드 형성이 아니다. 뭉뚱그리면 안 된다.
+    # 뉴스 스레드는 회사+타입이라(ALPHA-508) identity 의 개념 역할(LEGAL_ISSUE)이 비어도 선다.
+    # 이 테스트가 검증하는 건 **적재**지 스레드 형성이 아니다 — 스레드는 회사 축만 확인한다.
     [link] = _batch(conn, "event_thread_link")
-    assert link[3] == "UNKNOWN" and "LEGAL_ISSUE" in link[6]
+    assert link[3] == "FIRST_IN_THREAD"
 
 
 def test_unknown_authority_stays_unresolved(tmp_path, monkeypatch):

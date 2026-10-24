@@ -133,3 +133,20 @@ def test_institution_partner_resolves_without_enabling_realtime_instrument_alias
         "삼성전자": "inst_SAMSUNG", "금융감독원": "actor_auth_kr_fss", "현대자동차": None,
     }
     assert cls["primary_ticker"] == "005930"
+
+
+def test_thread_event_carries_analyst_firm_text_for_the_news_key():
+    """WHY(ALPHA-508): 뉴스 스레드 키는 증권사 리포트를 증권사 원문으로 가른다 — 1분 경로가 그 원문을
+    안 실으면 배치(fetch_unthreaded_events, event_argument.mention_text)와 키가 갈려 같은 리포트가
+    두 스레드가 된다. 해소 안 된 증권사여도 원문은 실린다."""
+    cls = {"event_type_code": "MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE", "predicate_code": "RAISE",
+           "lifecycle_stage": None, "anchor_role": None,
+           "arguments": [{"role_code": "RATED_ENTITY", "entity_id": "inst_SAMSUNG",
+                          "mention_text": "삼성전자"},
+                         {"role_code": "ANALYST_FIRM", "entity_id": None,
+                          "mention_text": "대신증권"}]}
+    created = {"source_event_id": "evt_1", "entity_id": "inst_SAMSUNG",
+               "available_at": "2026-07-15T09:00:00+09:00"}
+    event = event_assembly._thread_event(created, cls, "2026-07-15T09:00:00+09:00")
+    assert event["analyst_firm"] == "대신증권"
+    assert event["role_values"] == {"RATED_ENTITY": "inst_SAMSUNG"}

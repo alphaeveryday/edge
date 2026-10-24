@@ -277,9 +277,14 @@ def _thread_event(created: dict, cls: dict, published_at: str) -> dict:
     if cls["anchor_role"] and not any(
             a["entity_id"] == primary_entity for a in cls["arguments"]):
         role_lists.setdefault(cls["anchor_role"], []).append(str(primary_entity))
+    # 증권사 원문 — 뉴스 스레드 키의 증권사 구분(ALPHA-508). 배치(fetch_unthreaded_events)도 같은
+    # event_argument.mention_text 를 싣는다.
+    analyst_firm = next((a.get("mention_text") for a in cls["arguments"]
+                         if a["role_code"] == "ANALYST_FIRM" and a.get("mention_text")), None)
     return {
         "source_event_id": created["source_event_id"],
         "event_type_code": cls["event_type_code"],
+        "analyst_firm": analyst_firm,
         "available_at": created.get("available_at") or published_at,
         "lifecycle_stage": cls["lifecycle_stage"],
         "predicate_code": cls["predicate_code"],

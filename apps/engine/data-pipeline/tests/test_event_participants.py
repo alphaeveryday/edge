@@ -67,8 +67,9 @@ def test_actor_identity_reuses_historical_thread_id_and_novelty():
     conn.issuer_mapping = {"share": "actor"}
     key = "event_type_id=COMPANY.CAPITAL.DIVIDEND_DECISION||required:ISSUER=actor"
     conn.thread_ids = {key: "historical_thread"}
+    # identity 키·키 이전은 공시 경로의 계약이다(뉴스는 ALPHA-508 에서 회사+시간 창 키).
     event = _multi_role_event("new_event", {"ISSUER": "share"},
-                              etype="COMPANY.CAPITAL.DIVIDEND_DECISION")
+                              etype="COMPANY.CAPITAL.DIVIDEND_DECISION", source_class="DISCLOSURE")
     module.thread_events(conn, [event])
     [link] = _batch(conn, "event_thread_link")
     assert link[1] == "historical_thread"
