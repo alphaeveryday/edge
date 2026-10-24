@@ -90,15 +90,24 @@ _MIN_STEM_AFTER_NAME_FINAL = 3
 # 끝에 붙은 괄호 병기 하나: `밖(안)` 뒤에는 조사만 올 수 있다 — `KGM(옛 쌍용차)그룹` 처럼 괄호 뒤에
 # 다른 말이 이어지면 그 표기는 괄호 안의 회사가 아니다.
 _PAREN = re.compile(r"^(?P<out>[^()\[\]]+)[(\[](?P<inner>[^()\[\]]+)[)\]](?P<tail>[^()\[\]]*)$")
+# 괄호 안 옛 사명 표시(`SOOP(옛 아프리카TV)`). 띄어 쓴 것만 — `구영테크` 같은 사명 첫 글자를 떼지 않게.
+_FORMER_MARK = re.compile(r"^(옛|구|전)\s+")
+
+
+def _plain(text: str) -> str:
+    """읽기 변환 전 단계 — NFKC, 법인 표기·공백·기호·`보통주` 제거, 영문 소문자."""
+    t = _LEGAL_FORM.sub("", unicodedata.normalize("NFKC", text))
+    return _DROP.sub("", t).casefold().removesuffix("보통주")
+
+
+def _reading(plain: str) -> str:
+    """영문 글자 → 한글 읽기. C 는 `씨`·`시` 둘 다로 읽힌다(ISC → 아이에스씨·아이에스시) — 하나로 접는다."""
+    return "".join(_LETTER_READING.get(ch, ch) for ch in plain).replace("씨", "시")
 
 
 def match_key(text: str) -> str:
     """표기 매칭 키 — 같은 회사를 다르게 쓴 표기가 같은 문자열이 되게 한다."""
-    t = _LEGAL_FORM.sub("", unicodedata.normalize("NFKC", text))
-    t = _DROP.sub("", t).casefold()
-    t = t.removesuffix("보통주")
-    # C 는 `씨`·`시` 둘 다로 읽힌다(ISC → 아이에스씨·아이에스시) — 키에서는 하나로 접는다.
-    return "".join(_LETTER_READING.get(ch, ch) for ch in t).replace("씨", "시")
+    return _reading(_plain(text))
 
 
 @functools.lru_cache(maxsize=1)
@@ -166,7 +175,9 @@ def load_resolution_index(conn, aliases=None) -> ResolutionIndex:
         if not alias or entity_id is None:
             continue
         if alias in by_key and by_key[alias] != entity_id:
+            # 충돌한 표기는 어느 API 로도 한 종목이 되면 안 된다 — 먼저 넣은 역매핑도 지운다.
             by_key[alias] = _AMBIGUOUS
+            alias_ticker_by_key.pop(alias, None)
             continue
         alias_ticker_by_key[alias] = ticker
         if alias in by_key:
@@ -191,15 +202,20 @@ def load_resolution_index(conn, aliases=None) -> ResolutionIndex:
 
 def _lookup(index: ResolutionIndex, text: str) -> tuple[bool, str | None]:
     """정규화 키(그대로, 끝 조사 하나 뗀 것) → (찾았나, entity_id | None=충돌)."""
-    key = match_key(text)
+    plain = _plain(text)
+    key = _reading(plain)
     if key in index.by_match_key:
         return True, index.by_match_key[key]
+    # 조사는 읽기 변환 **전** 원문 끝에서만 뗀다 — 영문 E·K·Y 의 읽기(`이`·`케이`·`와이`)가 조사 `이`로 끝나
+    # `SKE`→`에스케이이`→`SK` 처럼 다른 표기가 접히지 않게.
     # 떼는 방법이 여럿일 수 있다(`액트로는` = `액트로`+`는` 또는 `액트`+`로는`). 맞는 종목이 갈리면 모호다.
     hits = set()
     for particle in _PARTICLES:
-        stem = key.removesuffix(particle)
+        if not plain.endswith(particle):
+            continue
+        stem = _reading(plain[: -len(particle)])
         min_stem = _MIN_STEM_AFTER_NAME_FINAL if particle in _NAME_FINAL_PARTICLES else 2
-        if stem != key and len(stem) >= min_stem and stem in index.by_match_key:
+        if len(stem) >= min_stem and stem in index.by_match_key:
             hits.add(index.by_match_key[stem])
     if not hits:
         return False, None
@@ -207,17 +223,22 @@ def _lookup(index: ResolutionIndex, text: str) -> tuple[bool, str | None]:
 
 
 def _match(index: ResolutionIndex, text: str) -> tuple[str | None, str]:
-    """표기 매칭 — 전체 표기, 안 되면 끝 괄호 병기의 밖·안. 둘이 다른 종목이면 모호."""
+    """표기 매칭 — 전체 표기, 안 되면 끝 괄호 병기의 밖·안.
+
+    괄호 병기는 밖과 안이 **둘 다 같은 종목**으로 풀릴 때만 그 종목이다. 한쪽만 풀리면 병기가 아니라
+    수식일 수 있다(`삼성전자(노조)`·`삼성전자서비스(삼성전자)`) — 연결하지 않는다. 둘이 다른 종목이면 모호.
+    """
     found, entity_id = _lookup(index, text)
     if found:
         return (entity_id, ALIAS_RESOLVED) if entity_id is not _AMBIGUOUS else (None, AMBIGUOUS)
     paren = _PAREN.match(unicodedata.normalize("NFKC", text).strip())
     if paren is None or (paren["tail"].strip() and paren["tail"].strip() not in _PARTICLES):
         return None, UNRESOLVED
-    hits = [_lookup(index, part) for part in (paren["out"], paren["inner"])]
+    hits = [_lookup(index, part)
+            for part in (paren["out"], _FORMER_MARK.sub("", paren["inner"].strip()))]
     ids = {entity_id for found, entity_id in hits if found}
-    if not ids:
-        return None, UNRESOLVED
+    if not all(found for found, _ in hits):
+        return (None, AMBIGUOUS) if _AMBIGUOUS in ids else (None, UNRESOLVED)
     if len(ids) > 1 or _AMBIGUOUS in ids:
         return None, AMBIGUOUS
     return ids.pop(), ALIAS_RESOLVED
@@ -274,6 +295,7 @@ def check_alias_candidates(
     `master` 는 별칭 없이 만든 인덱스(`load_resolution_index(conn, aliases=())`), `candidates` 는
     (alias, ticker, source) 순서열이다. 판정은 **운영 해소기 그 자체**로 한다:
       unknown_ticker  마스터에 없는 종목
+      empty           정규화하면 아무것도 안 남는 표기
       redundant       별칭 없이도 이미 그 종목으로 풀린다(정규화가 맡는다)
       conflict        다른 종목으로 풀리거나 모호하다 — 넣으면 그 종목의 이름을 망가뜨린다
       clash           후보끼리 같은 매칭 키에 다른 종목 — 어느 쪽도 넣지 않는다
@@ -296,7 +318,10 @@ def check_alias_candidates(
             rejected.append((alias, ticker, source, "conflict"))
             continue
         key = match_key(alias)
-        if key in clashed:
+        if not key:
+            # 정규화하면 빈 표기(`.`·`(주)`·`보통주`) — 완전일치로만 남아 무의미한 표기가 종목이 된다.
+            rejected.append((alias, ticker, source, "empty"))
+        elif key in clashed:
             rejected.append((alias, ticker, source, "clash"))
         elif key in accepted and accepted[key][1] != ticker:
             clashed.add(key)

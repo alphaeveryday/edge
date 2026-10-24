@@ -257,8 +257,9 @@ def test_same_company_spellings_resolve_through_matching():
     # C 는 씨·시 둘 다로 읽힌다.
     assert resolve(index, "아이에스시", allow_aliases=True) == ("inst_ISC", ALIAS_RESOLVED)
     assert resolve(index, "아이에스씨가", allow_aliases=True) == ("inst_ISC", ALIAS_RESOLVED)
-    # 끝 괄호 병기: 밖·안이 같은 종목이면 그 종목.
+    # 끝 괄호 병기: 밖·안이 같은 종목이면 그 종목. 괄호 안 옛 사명 표시(`옛 `)는 떼고 본다.
     assert resolve(index, "삼성전자(005930)", allow_aliases=True) == ("inst_SAMSUNG", ALIAS_RESOLVED)
+    assert resolve(index, "DB하이텍(옛 디비하이텍)", allow_aliases=True) == ("inst_DBHITEK", ALIAS_RESOLVED)
     # 기본 경로(allow_aliases=False)는 완전일치만 — 표기 매칭을 켜는 건 호출부 결정이다.
     assert resolve(index, "디비하이텍") == (None, UNRESOLVED)
 
@@ -267,13 +268,18 @@ def test_matching_never_attaches_a_part_group_or_other_company():
     """WHY: 틀린 회사에 붙이는 것이 미연결보다 나쁘다 — 노조·그룹·자회사·다른 상장사 이름의 앞부분을
     그 회사로 보면 사건 계보가 조용히 오염된다. 부분일치는 하지 않는다."""
     index = _index(_VARIANT_MASTER)
-    for text in ("삼성전자 노조", "삼성", "삼성전자 반도체부문", "SK하이닉스그룹", "DB하이텍 노조는"):
+    # 영문 글자 읽기가 조사로 끝나도(E→이) 조사로 떼지 않는다 — `SK하이닉스E`·`005930E` 는 다른 표기다.
+    for text in ("삼성전자 노조", "삼성", "삼성전자 반도체부문", "SK하이닉스그룹", "DB하이텍 노조는",
+                 "SK하이닉스E", "005930E"):
         assert resolve(index, text, allow_aliases=True) == (None, UNRESOLVED), text
     # 다른 상장사(삼성전자서비스)는 그 회사로 — 앞부분(삼성전자)으로 접히지 않는다.
     assert resolve(index, "삼성전자서비스는", allow_aliases=True) == ("inst_SAMSUNG_SVC", ALIAS_RESOLVED)
     # 괄호 밖·안이 다른 종목이면 고르지 않는다. 괄호 뒤에 조사 아닌 말이 이어지면 괄호 안을 쓰지 않는다.
     assert resolve(index, "삼성전자(SK하이닉스)", allow_aliases=True) == (None, AMBIGUOUS)
     assert resolve(index, "삼성(005930)그룹", allow_aliases=True) == (None, UNRESOLVED)
+    # 괄호 한쪽만 풀리면 병기가 아니라 수식일 수 있다 — 연결하지 않는다.
+    for text in ("삼성전자(노조)", "삼성전자 협력사(삼성전자)", "노조(삼성전자)"):
+        assert resolve(index, text, allow_aliases=True) == (None, UNRESOLVED), text
 
 
 def test_particle_stripping_does_not_turn_another_name_into_a_listed_company():
@@ -316,6 +322,7 @@ def test_alias_candidates_are_checked_by_the_resolver_itself():
         ("하이닉", "000660", "model"),            # 후보끼리 충돌 — 둘 다 거부
         ("하이닉", "005930", "model"),
         ("없는회사", "123456", "model"),          # 마스터에 없는 종목
+        ("(주)", "005380", "model"),              # 정규화하면 빈 표기
     ])
     assert accepted == [("현대자동차", "005380", "manual")]
     reasons = {(a, t): r for a, t, _s, r in rejected}
@@ -323,6 +330,15 @@ def test_alias_candidates_are_checked_by_the_resolver_itself():
     assert reasons[("삼성전자", "000660")] == "conflict"
     assert reasons[("하이닉", "000660")] == reasons[("하이닉", "005930")] == "clash"
     assert reasons[("없는회사", "123456")] == "unknown_ticker"
+    assert reasons[("(주)", "005380")] == "empty"
+
+
+def test_alias_registered_for_two_tickers_is_ambiguous_on_every_api():
+    """WHY: 명부에서 한 표기가 두 종목을 가리키면 resolve 는 모호인데, 역매핑이 남아 resolve_alias_ticker(DeepSeek
+    경로)만 먼저 넣은 종목을 돌려주면 같은 표기가 경로마다 다른 회사가 된다."""
+    index = load_resolution_index(_FakeConn(_MASTER), aliases=[("새별칭", "005930"), ("새별칭", "000660")])
+    assert resolve(index, "새별칭", allow_aliases=True) == (None, AMBIGUOUS)
+    assert resolve_alias_ticker(index, "새별칭") is None
 
 
 def test_shipped_alias_registry_is_well_formed():

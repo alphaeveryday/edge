@@ -4,7 +4,9 @@
 것을 명부로 관리한다. 후보는 세 곳에서 온다:
   1. 지금 명부(사람·강모델이 넣은 것 — source 를 그대로 둔다)
   2. `--krx`: 레이크 KRX 종목기본정보 최신 스냅샷의 법적 명칭·약명(`에스케이하이닉스`·`화승코퍼레이션`)
-  3. `--candidates <jsonl>`: 강모델이 만든 후보 {ticker, alias, kind} (여러 번 줄 수 있다)
+  3. `--candidates <jsonl>`: 강모델이 만든 후보 {ticker, alias, kind} (여러 번 줄 수 있다).
+     ⚠️ 옛 사명(kind=former_name)은 **"지금도 이 상장사를 가리키는가" 검증을 거친 것만** 넣는다 — 지주사 전환·분할로
+     이름이 자회사에 넘어간 경우(`포스코`)가 섞이면 실제 기사의 틀린 연결이 늘었다(ALPHA-850 측정, ADR-0065).
 모든 후보는 운영 해소기로 검사한다(`entity_resolution.check_alias_candidates`) — 이미 풀리는 것은
 빼고, 다른 종목 이름을 망가뜨리는 것은 거부한다. 거부 목록은 stderr 에 낸다.
 
@@ -93,7 +95,7 @@ def main() -> None:
     reasons = collections.Counter(r[3] for r in rejected)
     print(f"후보 {len(candidates)} → 채택 {len(accepted)}, 제외 {dict(reasons)}", file=sys.stderr)
     for alias, ticker, source, reason in rejected:
-        if reason in ("conflict", "clash", "unknown_ticker"):
+        if reason != "redundant":
             print(f"  거부 {reason}: {alias} → {ticker} ({source})", file=sys.stderr)
     if args.write:
         body = "".join(f"{a}\t{t}\t{s}\n" for a, t, s in accepted)
