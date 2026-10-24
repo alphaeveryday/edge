@@ -51,6 +51,35 @@ print(jobs.stdout if jobs.returncode == 0 else json.dumps({'jobs':'unavailable'}
 '''
 
 
+# 지난 분석 전체 검토: 1회용 worker 컨테이너(제 메모리 상한, 분석 중인 worker 와 다른 cgroup)에서 읽기만 한다.
+# 출력은 REVIEW 한 줄(집계·job id)뿐이고 stderr(로그·추적)는 호스트 밖으로 내보내지 않는다.
+REVIEW_TIMEOUT_SECONDS = 3300
+REVIEW_SCRIPT = r'''
+import json,subprocess
+compose = ['docker','compose','--env-file','/opt/edge-portfolio/runtime.env','-f','/opt/edge-portfolio/current/deploy/compose.yml']
+available = next(int(line.split()[1]) for line in open('/proc/meminfo') if line.startswith('MemAvailable:')) // 1024
+def review():
+    name = 'portfolio-past-review'
+    subprocess.run(['docker','rm','-f',name],capture_output=True)
+    try:
+        run = subprocess.run(compose+['run','--rm','--no-deps','-T','--name',name,'worker','python','-m','edge_portfolio.past_review',str(days),str(samples)],
+                             capture_output=True,text=True,timeout=deadline)
+        safe = [line for line in run.stdout.splitlines() if line.startswith('REVIEW ')]
+        return safe[-1] if safe else 'REVIEW '+json.dumps({'review':'unavailable','returncode':run.returncode})
+    except subprocess.TimeoutExpired:
+        return 'REVIEW '+json.dumps({'review':'timed_out'})
+    finally:
+        subprocess.run(['docker','rm','-f',name],capture_output=True)
+print('REVIEW '+json.dumps({'review':'skipped','reason':'LOW_HOST_MEMORY','available_mb':available}) if available < 600 else review())
+'''
+
+
+def review_script(days, llm_samples):
+    if not 0 <= days <= 3650 or not 0 <= llm_samples <= 5:
+        raise ValueError('Invalid review options')
+    return f'days, samples, deadline = {days!r}, {llm_samples!r}, {REVIEW_TIMEOUT_SECONDS!r}' + REVIEW_SCRIPT
+
+
 def host_script(job_id):
     if not job_id:
         return HOST_SCRIPT
@@ -66,13 +95,15 @@ print(safe[-1] if safe else '{{"replay":"unavailable"}}')
 def main():
     if os.getenv('GITHUB_ACTIONS') != 'true' or os.getenv('GITHUB_REF') != 'refs/heads/dev':
         raise RuntimeError('Diagnostics require the GitHub dev workflow')
-    script = host_script(os.getenv('PORTFOLIO_REPLAY_JOB_ID', ''))
+    reviewing = os.getenv('PORTFOLIO_REVIEW_PAST') == 'true'
+    script = review_script(int(os.getenv('PORTFOLIO_REVIEW_DAYS') or 90), int(os.getenv('PORTFOLIO_REVIEW_LLM_SAMPLES') or 0))         if reviewing else host_script(os.getenv('PORTFOLIO_REPLAY_JOB_ID', ''))
+    timeout = REVIEW_TIMEOUT_SECONDS + 300 if reviewing else 360
     ssm = boto3.client('ssm', region_name='ap-northeast-2')
     config = json.loads(ssm.get_parameter(Name='/edge/portfolio/deployment')['Parameter']['Value'])
     encoded = base64.b64encode(script.encode()).decode()
     command = ssm.send_command(InstanceIds=[config['instance_id']], DocumentName='AWS-RunShellScript',
-        Parameters={'commands': [f"python3 -c \"import base64; exec(base64.b64decode('{encoded}'))\""], 'executionTimeout': ['360']})['Command']['CommandId']
-    for _ in range(78):
+        Parameters={'commands': [f"python3 -c \"import base64; exec(base64.b64decode('{encoded}'))\""], 'executionTimeout': [str(timeout)]})['Command']['CommandId']
+    for _ in range(timeout // 5 + 6):
         time.sleep(5)
         result = ssm.get_command_invocation(CommandId=command, InstanceId=config['instance_id'])
         if result['Status'] == 'Success':
