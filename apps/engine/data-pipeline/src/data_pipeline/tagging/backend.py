@@ -31,12 +31,28 @@ def load_tagger(storage):
     model_dir = os.environ.get("TAGGER_MODEL_DIR", "").strip() or _download(storage)
     from .roberta import RobertaTagger  # torch 는 roberta 일 때만 읽는다
 
-    tagger = RobertaTagger(model_dir)
+    tagger = RobertaTagger(model_dir, threads=cpu_threads())
     if tagger.version != ROBERTA_TAGGER_VERSION:
         # 코드가 기대한 모델과 다른 묶음이다 — 그대로 돌면 tagger_version 이 거짓말을 한다.
         raise RuntimeError(
             f"모델 묶음 버전 불일치: 묶음={tagger.version!r} 코드={ROBERTA_TAGGER_VERSION!r}")
     return tagger
+
+
+def cpu_threads() -> int | None:
+    """추론 스레드 수 — 배포가 `TAGGER_THREADS` 로 준 값(태스크 vCPU 수). 없으면 None(보이는 CPU 수).
+
+    Fargate 1 vCPU 태스크는 CPU 가 2개로 보이고, 할당량은 태스크 단위라 컨테이너 cgroup 에도 안
+    보인다(cpu.cfs_quota_us = -1, 2026-10-24 실측). 보이는 수대로 스레드 2개를 띄우면 1 vCPU 안에서
+    서로 다퉈 기사당 4.1초, 1개면 2.2초다. 크기를 아는 쪽(terraform)이 값을 넣는다.
+    """
+    raw = os.environ.get("TAGGER_THREADS", "").strip()
+    if not raw:
+        return None
+    threads = int(raw)
+    if threads < 1:
+        raise RuntimeError(f"TAGGER_THREADS 는 1 이상이다: {raw!r}")
+    return threads
 
 
 def _download(storage) -> str:
