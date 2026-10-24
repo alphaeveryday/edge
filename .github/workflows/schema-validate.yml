@@ -243,6 +243,16 @@ jobs:
       - name: Ontology view files match migrations (ALPHA-1448)
         run: python3 libs/ontology/tests/test_ontology_view_migrations.py
 
+      # 위 대조는 마이그레이션 문장을 읽는다. 실제 적용 결과(뷰 목록)를 파일 목록과 한 번 더 맞대어,
+      # 어떤 형태의 DROP·이름 변경이든 파일이 남거나 빠지면 실패시킨다.
+      - name: Ontology views in the migrated database match the view files (ALPHA-1448)
+        run: |
+          docker exec edge-ci-pg psql -X -At -U edge -d edge \
+            -c "SELECT viewname FROM pg_views WHERE schemaname = 'ontology_view' ORDER BY 1" | LC_ALL=C sort > "$RUNNER_TEMP/db-views"
+          ls libs/ontology/src/edge_ontology/sql/views | sed 's/\.sql$//' | LC_ALL=C sort > "$RUNNER_TEMP/file-views"
+          diff "$RUNNER_TEMP/db-views" "$RUNNER_TEMP/file-views" \
+            || { echo "::error::ontology_view 의 뷰 목록과 libs/ontology/.../sql/views 파일 목록이 다릅니다"; exit 1; }
+
       # ── 온프렘 세트(migrations-onprem/) — 별도 ephemeral DB에 독립 적용·검증 ──
       - name: Create onprem database
         run: docker exec edge-ci-pg createdb -U edge edge_onprem
