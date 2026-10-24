@@ -30,6 +30,19 @@ resource "aws_s3_bucket_versioning" "portfolio_releases" {
   bucket = aws_s3_bucket.portfolio_releases.id
   versioning_configuration { status = "Enabled" }
 }
+# Release bundles now carry the whole image. A deploy reads its bundle right after upload and rollback re-releases
+# from git, so old bundles only cost storage. admin-verification/ is left alone.
+resource "aws_s3_bucket_lifecycle_configuration" "portfolio_releases" {
+  bucket = aws_s3_bucket.portfolio_releases.id
+  rule {
+    id     = "expire-old-releases"
+    status = "Enabled"
+    filter { prefix = "releases/" }
+    expiration { days = 30 }
+    noncurrent_version_expiration { noncurrent_days = 1 }
+    abort_incomplete_multipart_upload { days_after_initiation = 1 }
+  }
+}
 resource "aws_s3_bucket_public_access_block" "portfolio_releases" {
   bucket                  = aws_s3_bucket.portfolio_releases.id
   block_public_acls       = true
@@ -105,7 +118,7 @@ resource "aws_instance" "portfolio" {
   associate_public_ip_address = true
   user_data                   = file("${path.module}/portfolio-bootstrap.sh")
   root_block_device {
-    volume_size           = 50
+    volume_size           = 80 # 50GB filled with per-deploy host builds (2026-10-24); builds now run on GitHub
     volume_type           = "gp3"
     encrypted             = true
     delete_on_termination = false
