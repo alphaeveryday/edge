@@ -16,10 +16,15 @@ FROM python:3.12-slim-bookworm AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    TRUTH_PI_DIR=/opt/truth/pi
+    TRUTH_PI_DIR=/opt/truth/pi \
+    RDS_CA_PATH=/app/rds-ca.pem
 ARG GIT_SHA=unknown
 ENV GIT_SHA=${GIT_SHA}
 WORKDIR /app
+
+# 국내 보도를 운영 DB 에서 읽는다(dbnews) — 서버 인증서를 RDS CA 로 검증한다(analysis-engine-v2 이미지와 같은 CA 묶음).
+RUN python -c "import urllib.request; urllib.request.urlretrieve('https://truststore.pki.rds.amazonaws.com/ap-northeast-2/ap-northeast-2-bundle.pem', '/app/rds-ca.pem')" \
+ && grep -q "BEGIN CERTIFICATE" /app/rds-ca.pem
 
 COPY --from=pi /usr/local/bin/node /usr/local/bin/node
 COPY --from=pi /pi /opt/truth/pi

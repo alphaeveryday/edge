@@ -26,7 +26,7 @@ from edge_truth_agent.tools import _web_id
 from edge_truth_agent.store import open_store
 from edge_truth_agent.workspace import Workspace
 
-from . import logos, session
+from . import dbnews, logos, session
 from .kind import Kind, is_market_warning
 from .markets import KR, US, Market, of_exchange
 from .quotes import Chart, Mover, Quotes
@@ -164,6 +164,15 @@ def exa_news(key: str, m: Mover, since: str) -> list[dict]:
     return sorted(out, key=lambda w: w.get("publishedDate") or "", reverse=True)
 
 
+def _kst_iso(published: str) -> str | None:
+    """빅카인즈 발행 시각 → ISO(+09:00). DB 의 'YYYY-MM-DD HH:MM:SS'(한국 시각)도, 오프셋이 붙은 ISO 도 받는다.
+    날짜만이면 None(시각을 모르면 판정 뒤 새 보도인지 가릴 수 없다). 예전 말뭉치의 ISO 값에 '+09:00' 을 덧붙여
+    읽기 실패하던 일(미국 빅카인즈 대체 기사가 새 보도로 안 세짐)을 막는다."""
+    if len(published) < 16:
+        return None
+    return published if "T" in published else published.replace(" ", "T") + "+09:00"
+
+
 def _after(published: str | None, judged: str | None) -> bool:
     """발행 시각이 판정 시각보다 뒤인가. 어느 쪽이든 읽을 수 없으면 아니다(새 보도로 세지 않는다)."""
     try:
@@ -219,6 +228,11 @@ def _marks(rec: dict) -> list[dict]:
         return rec["history"]
     v = rec["verdict"]
     return [{"tag": v["tag"], "at": v["judgedAt"], "price": None}]
+
+
+def load_news(cfg, now: datetime) -> dict[str, news.Article]:
+    """국내 보도 사전(기사 id → Article). 시험은 이 함수를 바꿔 낀다."""
+    return dbnews.load(cfg, now)
 
 
 def run_research(cfg, *, quotes: Quotes | None = None, kind=None, session_runner=session.run,
@@ -281,7 +295,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind=None, session_runner
         logo = {m.code: _logo(public, kind, m, (prior.get(m.code) or {}).get("logo"), tried, today)
                 for m in risers}
         store.put(LOGO_TRIED_KEY, _json(tried))
-        texts = corpus.load(store)
+        texts = load_news(cfg, now)  # 국내 보도: 운영 DB(빅카인즈). 붙지 못하면 실행 실패
         corpus_path = corpus.build_index(texts, Path(tmp) / "corpus.sqlite")
 
         # 3. 판정 (모델) — 오늘 아직 판정 못 한 종목, 판정 뒤 회사가 새 공시를 낸 종목(태그 무관 — 허위였다가 정정 공시로 뒤집힐 수 있다.
@@ -323,7 +337,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind=None, session_runner
         arts = {m.code: [] if web.get(m.code) else _articles(texts, m.name) for m in risers}
         # 보도 발행 시각(미국 재조사 판단용): 웹은 원문 메타데이터(UTC), 빅카인즈는 한국 시각
         news_at = {w["id"]: w.get("publishedDate") for ws_ in web.values() for w in ws_} | \
-            {a.id: a.published.replace(" ", "T") + "+09:00" for a_ in arts.values() for a in a_ if len(a.published) >= 16}
+            {a.id: _kst_iso(a.published) for a_ in arts.values() for a in a_ if _kst_iso(a.published)}
         evidence = {m.code: {"filings": filed[m.code],
                              "news": sorted(w["id"] for w in web[m.code]) if web.get(m.code) else sorted(a.id for a in arts[m.code])}
                     for m in risers}

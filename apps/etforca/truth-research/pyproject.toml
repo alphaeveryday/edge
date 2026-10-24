@@ -5,6 +5,7 @@ description = "오늘 크게 오른 종목의 급등 이유를 공시·보도와
 requires-python = ">=3.12"
 dependencies = [
     "jsonschema>=4.23,<5",
+    "psycopg[binary]>=3.1", # 국내 보도를 운영 DB 에서 읽는다(dbnews)
     "edge-truth-agent", # 저장소·뉴스 말뭉치·웹 도구·작업 폴더·세션 이벤트 읽기를 그대로 쓴다 — 워크스페이스 멤버
 ]
 

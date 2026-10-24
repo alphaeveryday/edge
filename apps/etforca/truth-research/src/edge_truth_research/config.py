@@ -22,7 +22,7 @@ def _need(name: str) -> str:
 class Config:
     """한 번의 실행 설정."""
 
-    store: str                 # 비공개 저장소(truth-agent 와 같은 버킷): 뉴스 말뭉치를 읽고 급등주 상태를 쓴다
+    store: str                 # 비공개 저장소(truth-agent 와 같은 버킷): 급등주 상태를 쓴다
     publish: str               # 공개 데이터 게시 위치: s3://랜딩버킷/truth/data 또는 로컬 폴더
     deepseek_key: str
     exa_key: str | None        # 없으면 웹 도구를 끈다
@@ -36,6 +36,10 @@ class Config:
     premise_timeout: int = 300     # 전제 검증 세션(ACH 동점일 때 한 번 더)의 추가 예산: 시간(초)
     premise_tool_calls: int = 24   # ·도구 호출 수
     premise_web_calls: int = 6     # ·웹 검색·원문 가져오기 횟수
+    db_host: str | None = None     # 국내 보도를 읽는 운영 DB(dbnews). 실행(from_env)에는 필수다
+    db_user: str = "edge_analysis_v2_reader"
+    db_password: str | None = None
+    db_ca: str = "/app/rds-ca.pem"
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -56,4 +60,8 @@ class Config:
             premise_timeout=int(os.environ.get("TRUTH_PREMISE_TIMEOUT", "300")),
             premise_tool_calls=int(os.environ.get("TRUTH_PREMISE_TOOL_CALLS", "24")),
             premise_web_calls=int(os.environ.get("TRUTH_PREMISE_WEB_CALLS", "6")),
+            db_host=_need("TRUTH_DB_HOST"),
+            db_user=os.environ.get("TRUTH_DB_USER", "edge_analysis_v2_reader"),
+            db_password=_need("TRUTH_DB_PASSWORD"),
+            db_ca=os.environ.get("RDS_CA_PATH", "/app/rds-ca.pem"),
         )

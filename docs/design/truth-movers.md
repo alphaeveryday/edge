@@ -2,7 +2,7 @@
 
 etforca.com/truth/today. 오늘 급등한 국내·미국 주식마다 **왜 올랐는지**를 공시·보도와 대조해(경쟁가설 분석, ACH) 판정하고 공개한다. 목적은 투자자가 기관·회사의 과장이나 근거 없는 테마에 당하지 않게 하는 것이다.
 
-조사 에이전트 `apps/etforca/truth-research` 가 돈다. 기만 사건 검증 에이전트 `truth-agent`([truth-service.md](truth-service.md))와 같은 구조다(pi 하네스 + DeepSeek, 종목당 세션 하나, ECS Fargate 단발 태스크). 이미지·태스크·스케줄은 따로이고, 저장소 버킷·실행 키(DeepSeek·Exa)·뉴스 말뭉치·웹 도구는 truth-agent 것을 함께 쓴다. 화면은 truth-web `today.html`.
+조사 에이전트 `apps/etforca/truth-research` 가 돈다. 기만 사건 검증 에이전트 `truth-agent`([truth-service.md](truth-service.md))와 같은 구조다(pi 하네스 + DeepSeek, 종목당 세션 하나, ECS Fargate 단발 태스크). 이미지·태스크·스케줄은 따로이고, 저장소 버킷·실행 키(DeepSeek·Exa)·웹 도구는 truth-agent 것을 함께 쓴다. 화면은 truth-web `today.html`.
 
 ## 1. 판정 태그
 
@@ -38,7 +38,7 @@ etforca.com/truth/today. 오늘 급등한 국내·미국 주식마다 **왜 올�
 2. **재료 모으기 (코드):** 종목마다 다음을 모은다.
    - 장중 5분 시세와 현재가: Yahoo 차트(`<code>.KS|.KQ`, `interval=5m`). 그날 봉만 쓰고 라벨은 구간 끝 시각. 게시하는 가격·상승률은 이 현재가로 낸다(순위의 Naver 가격은 넥스트레이드 체결이 섞인다). 한국 종목은 약 20분 늦다
    - 최근 14일 공시·시장조치 목록과 원문: 한국거래소 KIND(키 없음, 종목코드로 조회. 시장감시위원회의 투자주의·경고도 함께 나온다)
-   - 관련 보도: 뉴스 레이크 말뭉치
+   - 관련 보도: 운영 DB `document`·`news_document` 의 최근 21일 빅카인즈 기사(1분 컨슈머가 장중 적재, ALPHA-1450). 실행마다 한 번 읽어 검색 색인을 만든다. 기사 id 는 `source_document_id`(예전 truth-agent 말뭉치와 같은 값). 계정은 분석 엔진의 읽기 전용 계정(연결 한도 50 중 여유분으로, 실행마다 몇 초 1~2개)이고, 붙지 못하면 실행이 실패한다
    - 회사 로고: KIND 회사 개요의 홈페이지에서 아이콘을 받아 랜딩 버킷 `truth/data/logos/<code>.<확장자>` 에 저장(PNG·JPG·ICO·WebP 만, SVG 는 스크립트를 담을 수 있어 받지 않는다)
 3. **조사 (모델, ACH):** 종목마다 세션 하나를 연다(동시 3개, 한 실행 5종목, 세션당 도구 40회·웹 10회·공시 원문 8회). 도구: `read_disclosure`·`view_news`·`search_news`·`web_search`·`web_fetch` 로 증거를 모으고, `set_hypotheses`·`add_evidence` 로 표를 채우고, `set_verdict`(코드가 태그 결정)·`finish`.
    - 그날 이미 판정한 종목은 판정 때 보지 못한 공시가 나오면 다시 연다(태그 무관). 급등주에 거의 매시 붙는 거래소 시장경보(투자주의·경고·위험)는 다시 열지 않는다. 매매정지·관리종목 지정은 다시 연다. 새 보도만으로는 보류였던 종목만 다시 연다 — 특징주 기사가 매시 붙어 확정 판정까지 열면 세션 예산을 다 쓴다.
