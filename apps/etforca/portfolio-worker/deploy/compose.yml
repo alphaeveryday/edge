@@ -17,7 +17,7 @@ services:
       retries: 30
     logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
   api:
-    build: ../
+    image: edge-portfolio:release
     restart: unless-stopped
     command: ["uvicorn", "edge_portfolio.api:app", "--host", "0.0.0.0", "--port", "8092"]
     environment:
@@ -39,10 +39,12 @@ services:
       db: {condition: service_healthy}
     logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
   admin:
-    build: ../
-    restart: unless-stopped
+    # On demand only: portfolio-admin.socket holds 127.0.0.1:18080 and starts this on the first tunnel connection.
+    profiles: [admin]
+    image: edge-portfolio:release
+    restart: on-failure  # a crash restarts it; the idle stop by systemd does not
     command: ["uvicorn", "edge_portfolio.admin_app:app", "--host", "0.0.0.0", "--port", "8094", "--no-access-log"]
-    ports: ["127.0.0.1:18080:8094"]
+    ports: ["127.0.0.1:18081:8094"]
     environment:
       PORTFOLIO_DATABASE_URL: ${PORTFOLIO_DATABASE_URL}
       AWS_EC2_METADATA_DISABLED: "true"
@@ -61,7 +63,7 @@ services:
       db: {condition: service_healthy}
     logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
   worker:
-    build: ../
+    image: edge-portfolio:release
     restart: unless-stopped
     stop_grace_period: 630s
     command: ["python", "-m", "edge_portfolio.worker"]
@@ -86,7 +88,7 @@ services:
       db: {condition: service_healthy}
     logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
   outlook:
-    build: ../
+    image: edge-portfolio:release
     restart: unless-stopped
     command: ["uvicorn", "edge_portfolio.outlook_gateway:app", "--host", "0.0.0.0", "--port", "8093"]
     environment:
@@ -101,7 +103,7 @@ services:
     logging: {driver: json-file, options: {max-size: 10m, max-file: "3"}}
   newsletter:
     profiles: [newsletter]
-    build: ../
+    image: edge-portfolio:release
     command: ["python", "-m", "edge_portfolio.newsletter_sender"]
     network_mode: host
     environment:

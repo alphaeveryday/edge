@@ -44,16 +44,30 @@ def test_release_builds_before_draining_and_keeps_dependencies_until_worker_stop
     private.mkdir()
     monkeypatch.setattr(release, 'admin_ui_directory', lambda: private)
     monkeypatch.setattr(release.subprocess, 'check_output', lambda *args, **kwargs: 'a' * 40)
+    built = []
+    def run(command, **kwargs):
+        built.append(command)
+        if isinstance(command, str):  # docker save | gzip writes the image file the release archive packs
+            Path(command.rsplit('> ', 1)[1]).write_bytes(b'image')
+    monkeypatch.setattr(release.subprocess, 'run', run)
     monkeypatch.setattr(release.time, 'sleep', lambda _: None)
     monkeypatch.setenv('GITHUB_ACTIONS', 'true')
     monkeypatch.setenv('GITHUB_REF', 'refs/heads/dev')
     monkeypatch.delenv('GITHUB_EVENT_PATH', raising=False)
     release.main()
+    # The 2 GB host ran out of memory building while serving: the image is built on the runner, the host only loads it
+    assert built[0][:2] == ['docker', 'build'] and 'PORTFOLIO_VERSION=' + 'a' * 40 in built[0]
+    assert not any(' build' in command for command in submitted)
+    load = next(i for i, command in enumerate(submitted) if command.startswith('docker load'))
+    stop = next(i for i, command in enumerate(submitted) if command.endswith(' stop --timeout 630 worker'))
+    assert load < stop, 'A failed image load must leave the running worker intact'
     compose = [command for command in submitted if command.startswith('docker compose')]
-    assert compose[0].endswith(' build'), 'Failed builds must leave the running worker intact'
-    assert compose[1].endswith(' stop --timeout 630 worker'), 'A ten-minute analysis must finish and save before replacement'
-    assert ' up -d --wait' in compose[2], 'Service replacement must wait until the current analysis is saved'
-    assert '--build' not in compose[2]
+    assert compose[0].endswith(' stop --timeout 630 worker'), 'A ten-minute analysis must finish and save before replacement'
+    assert ' up -d --wait' in compose[1] and '--profile admin' not in compose[1], 'The administrator must not start with the services'
+    # The administrator starts only through the on-demand port, so the smoke must run after that port is enabled
+    socket = submitted.index('systemctl daemon-reload')
+    assert submitted.index('systemctl enable --now portfolio-admin.socket') < next(i for i, c in enumerate(submitted) if 'admin_smoke.py' in c)
+    assert any(c.startswith('ln -sfn') for c in submitted[:socket]), 'The on-demand administrator starts from the new release'
     assert any('edge_portfolio.verification --version ' + 'a' * 40 + ' --register-only' in command for command in compose)
 
 

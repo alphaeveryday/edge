@@ -1,6 +1,5 @@
 """Application release only. Terraform owns all AWS infrastructure and routing."""
 import hashlib
-import io
 import json
 import os
 import subprocess
@@ -13,6 +12,9 @@ import boto3
 
 ROOT = Path(__file__).resolve().parents[1]
 REGION = 'ap-northeast-2'
+# One image for every service. Built on the GitHub runner: a 2 GB host building while serving ran out of memory.
+IMAGE = 'edge-portfolio:release'
+ADMIN_UNITS = 'portfolio-admin.socket portfolio-admin-proxy.service portfolio-admin.service'
 NEWSLETTER_PAUSE = '''newsletter_timer_was_active=0
 if systemctl is-active --quiet portfolio-newsletter.timer; then newsletter_timer_was_active=1; fi
 trap 'result=$?; if [ "$newsletter_timer_was_active" = 1 ]; then systemctl start portfolio-newsletter.timer || echo NEWSLETTER_TIMER_RESTORE_FAILED >&2; fi; exit "$result"' EXIT
@@ -44,19 +46,17 @@ def main():
     admin_ui = admin_ui_directory()
     version = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
     config = json.loads(ssm.get_parameter(Name='/edge/portfolio/deployment')['Parameter']['Value'])
+    subprocess.run(['docker', 'build', '--build-arg', f'PORTFOLIO_VERSION={version}', '-t', IMAGE, str(ROOT)], check=True)
     with tempfile.TemporaryDirectory() as temporary:
+        image = Path(temporary) / 'image.tar.gz'
+        subprocess.run(f'set -o pipefail; docker save {IMAGE} | gzip -1 > {image}', shell=True, check=True, executable='/bin/bash')
         archive = Path(temporary) / 'release.tar.gz'
         with tarfile.open(archive, 'w:gz') as tar:
-            for name in ('Dockerfile', 'pyproject.toml', 'uv.lock', 'src', 'deploy/compose.yml', 'deploy/Caddyfile', 'deploy/runtime_env.py', 'deploy/admin_smoke.py', 'deploy/portfolio-newsletter.service', 'deploy/portfolio-newsletter.timer'):
-                path = ROOT / name
-                for child in sorted(path.rglob('*')) if path.is_dir() else [path]:
-                    if child.is_file() and '__pycache__' not in child.parts:
-                        tar.add(child, arcname=child.relative_to(ROOT))
+            for name in ('deploy/compose.yml', 'deploy/Caddyfile', 'deploy/runtime_env.py', 'deploy/admin_smoke.py', 'deploy/portfolio-newsletter.service', 'deploy/portfolio-newsletter.timer',
+                         *(f'deploy/{unit}' for unit in ADMIN_UNITS.split())):
+                tar.add(ROOT / name, arcname=name)
             tar.add(admin_ui, arcname='admin-ui')
-            metadata = json.dumps({'version': version}).encode()
-            entry = tarfile.TarInfo('src/edge_portfolio/data/deployment.json')
-            entry.size = len(metadata)
-            tar.addfile(entry, io.BytesIO(metadata))
+            tar.add(image, arcname='image.tar.gz')
         digest = hashlib.sha256(archive.read_bytes()).hexdigest()
         key = f'releases/{digest}.tar.gz'
         s3.upload_file(str(archive), config['bucket'], key)
@@ -65,22 +65,35 @@ def main():
         f'mkdir -p {directory}', f'aws s3 cp s3://{config["bucket"]}/{key} {directory}/release.tar.gz --only-show-errors',
         f'echo "{digest}  {directory}/release.tar.gz" | sha256sum -c -',
         f'tar -xzf {directory}/release.tar.gz -C {directory}',
+        f'rm {directory}/release.tar.gz',  # it now carries the whole image; keeping one per release fills the disk
         f'curl -fsSL https://truststore.pki.rds.amazonaws.com/ap-northeast-2/ap-northeast-2-bundle.pem -o {directory}/deploy/rds-ca.pem',
         'umask 077',
         f'aws secretsmanager get-secret-value --region {REGION} --secret-id edge/portfolio/runtime --query SecretString --output text > /opt/edge-portfolio/runtime.json',
         f'aws secretsmanager get-secret-value --region {REGION} --secret-id edge/analysis-v2/api-reader --query SecretString --output text > /opt/edge-portfolio/reader.json',
         f'python3 {directory}/deploy/runtime_env.py', f'cd {directory}/deploy',
-        'docker compose --env-file /opt/edge-portfolio/runtime.env --profile newsletter build',
+        f'docker load -i {directory}/image.tar.gz', f'rm {directory}/image.tar.gz',
         NEWSLETTER_PAUSE,
         # Keep the old API, database and outlook service alive until the worker finishes.
         'docker compose --env-file /opt/edge-portfolio/runtime.env stop --timeout 630 worker',
         'docker compose --env-file /opt/edge-portfolio/runtime.env up -d --wait --wait-timeout 120',
         'docker compose --env-file /opt/edge-portfolio/runtime.env exec -T api python -c "import urllib.request; urllib.request.urlopen(\'http://127.0.0.1:8092/health\')"',
+        # The administrator runs only on demand: systemd holds port 18080 and starts the container on the first
+        # tunnel connection, then stops it after 30 idle minutes. Replace any admin left from the previous release.
+        f'systemctl stop {ADMIN_UNITS} 2>/dev/null || true',
+        'docker compose --env-file /opt/edge-portfolio/runtime.env --profile admin rm -sf admin',
+        f'ln -sfn {directory} /opt/edge-portfolio/current',
+        'test -x /usr/lib/systemd/systemd-socket-proxyd',
+        f'install -m 644 ' + ' '.join(f'{directory}/deploy/{unit}' for unit in ADMIN_UNITS.split()) + ' /etc/systemd/system/',
+        'systemctl daemon-reload', 'systemctl enable --now portfolio-admin.socket',
+        # The first connection starts the administrator, which may take up to its 120-second health wait
+        "timeout 150 sh -c 'until curl -fs -m 5 http://127.0.0.1:18080/health >/dev/null; do sleep 2; done'",
         f'python3 {directory}/deploy/admin_smoke.py',
         f'docker compose --env-file /opt/edge-portfolio/runtime.env exec -T api python -m edge_portfolio.verification --version {version} --register-only',
-        f'ln -sfn {directory} /opt/edge-portfolio/current',
         f'install -m 644 {directory}/deploy/portfolio-newsletter.service {directory}/deploy/portfolio-newsletter.timer /etc/systemd/system/',
-        'systemctl daemon-reload', 'systemctl enable --now portfolio-newsletter.timer', 'trap - EXIT']
+        'systemctl daemon-reload', 'systemctl enable --now portfolio-newsletter.timer',
+        # Old per-service build images (before the shared image) and the replaced release image only fill the disk.
+        'docker image rm edge-portfolio-api edge-portfolio-admin edge-portfolio-worker edge-portfolio-outlook edge-portfolio-newsletter 2>/dev/null || true',
+        'docker image prune -f', 'trap - EXIT']
     command = ssm.send_command(InstanceIds=[config['instance_id']], DocumentName='AWS-RunShellScript',
         Parameters={'commands': commands, 'executionTimeout': ['1800']})['Command']['CommandId']
     print(f'Release {digest}; SSM {command}', flush=True)
