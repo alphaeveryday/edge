@@ -150,3 +150,16 @@ def test_thread_event_carries_analyst_firm_text_for_the_news_key():
     event = event_assembly._thread_event(created, cls, "2026-07-15T09:00:00+09:00")
     assert event["analyst_firm"] == "대신증권"
     assert event["role_values"] == {"RATED_ENTITY": "inst_SAMSUNG"}
+
+
+def test_thread_event_picks_the_analyst_firm_the_batch_will_read():
+    """WHY: 같은 증권사(같은 entity)로 해소된 인자가 둘이면 저장은 첫 원문만 남긴다 — 1분 경로가
+    버려질 원문까지 후보로 쓰면 배치(저장된 행)와 다른 증권사 키를 골라 스레드가 갈린다."""
+    cls = {"event_type_code": "MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE", "predicate_code": "RAISE",
+           "lifecycle_stage": None, "anchor_role": None,
+           "arguments": [{"role_code": "ANALYST_FIRM", "entity_id": "actor_nh", "mention_text": "NH투자증권"},
+                         {"role_code": "ANALYST_FIRM", "entity_id": "actor_nh", "mention_text": "A NH"}]}
+    created = {"source_event_id": "evt_2", "entity_id": "inst_SAMSUNG",
+               "available_at": "2026-07-15T09:00:00+09:00"}
+    event = event_assembly._thread_event(created, cls, "2026-07-15T09:00:00+09:00")
+    assert event["analyst_firm"] == "NH투자증권"   # 저장되는 첫 원문 — 정규화 최소값("anh")이 아니다
