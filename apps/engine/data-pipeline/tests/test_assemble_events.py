@@ -2060,3 +2060,24 @@ def test_tagger_batch_reuses_tag_news_judgement_for_the_same_text():
         assemble_events.classify_with_tagger(tagger, [edited], view, entity_index, resolution_index,
                                              cached=cached)
     assert tagger.seen == [("삼성전자 수주 (정정)", "리드")]
+
+
+def test_unreadable_tag_news_cache_falls_back_to_inference(tmp_path, monkeypatch):
+    """WHY(ALPHA-1449): tag-news 판정 캐시는 보조 읽기다 — 못 읽으면 다시 추론하면 된다. 여기서 예외가
+    올라가면 그 날짜와 뒤 날짜 조립이 통째로 멈춘다. 대신 사유를 세어 로그로 드러낸다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1"))
+    _setup(monkeypatch, conn)
+
+    def broken(*_args):
+        raise OSError("s3 down")
+
+    monkeypatch.setattr(assemble_events, "current_results", broken)
+    tagger = _FakeTagger({"삼성전자 배당 결정": {"doc_class": "NO_EVENT_MARKET_COMMENTARY", "events": []}})
+
+    assert assemble_events.run(storage, "R1", db=_db(), tagger=tagger,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+    assert [t for t, _l in tagger.seen] == ["삼성전자 배당 결정"]
+    log = _log(storage)
+    assert log["tagger_cache_errors"] == 1 and log["tagger_reused"] == 0

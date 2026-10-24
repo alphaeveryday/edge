@@ -1687,6 +1687,7 @@ def run(
     news_read = in_universe_count = already_normalized = assembled_during_classify = 0
     classified = events_created = threaded = unknown_thread = 0
     tagger_reused = 0  # 로컬 태거 경로에서 tag-news 판정을 재사용한 기사 수(ALPHA-1449)
+    tagger_cache_errors = 0  # 그 판정 캐시를 못 읽어 재추론으로 진행한 날짜 수
     stage_rejected = arguments_unresolved = anchorless_events = concepts_minted = 0
     dart_matched = dart_ambiguous = 0
     # 게이트 드롭 사유(type_unmatched 등)·타입 분포(ALPHA-948) — 욱여넣기 패턴을 데이터로
@@ -1727,14 +1728,22 @@ def run(
                 date_gate_drops: dict[str, int] = {}
                 date_gate_types: dict[str, int] = {}
                 date_reused: list[str] = []
+                date_cache_errors = 0
                 if not todo:
                     classifications = {}
                 elif tagger is not None:
+                    try:
+                        cached = current_results(storage, "ko", date, tagger.version)
+                    except Exception:
+                        # 보조 캐시다 — 못 읽으면 다시 추론하면 된다. 여기서 죽으면 그 날짜와 뒤 날짜의
+                        # 조립이 통째로 멈춘다. 대신 사유를 남기고 세어 둔다(느려질 수 있음 — Rule 12).
+                        logger.warning("tag-news 판정 캐시 읽기 실패 — 재추론으로 진행: date=%s", date,
+                                       exc_info=True)
+                        cached, date_cache_errors = {}, 1
                     classifications = classify_with_tagger(
                         tagger, todo, view, entity_index, resolution_index,
                         gate_drops_out=date_gate_drops, gate_types_out=date_gate_types,
-                        cached=current_results(storage, "ko", date, tagger.version),
-                        reused_out=date_reused)
+                        cached=cached, reused_out=date_reused)
                 else:
                     classifications = classify_titles(complete_fn, todo, view, entity_index,
                                                       resolution_index=resolution_index,
@@ -1762,6 +1771,7 @@ def run(
             already_normalized += len(in_universe) - len(todo)
             classified += len(classifications)
             tagger_reused += len(date_reused)
+            tagger_cache_errors += date_cache_errors
             assembled_during_classify += len(raced)
             for reason, count in date_gate_drops.items():
                 gate_drops[reason] = gate_drops.get(reason, 0) + count
@@ -1840,6 +1850,7 @@ def run(
         # 분류를 누가 했나(ALPHA-1446) — 로컬 태거면 그 버전, LLM 2콜 체인이면 None(assembler_version 이 말한다).
         "tagger_version": tagger.version if tagger is not None else None,
         "tagger_reused": tagger_reused,
+        "tagger_cache_errors": tagger_cache_errors,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "from_date": from_date, "to_date": to_date, "languages": list(LANGUAGES),
         "news_read": news_read, "in_universe": in_universe_count,
