@@ -69,6 +69,7 @@ from ..ops.quality_diagnostics import (
     issue as quality_issue,
 )
 from ..tagging.extract import PROMPT_LANGUAGES, extract_assertions
+from .tag_news import current_results, input_fingerprint
 from ..tagging.ontology import default_predicate, identity_roles
 from .dart_values import match_dart_values
 
@@ -765,13 +766,20 @@ def classify_titles(complete_fn, rows: list[dict], view: ProcessRegistry,
 def classify_with_tagger(tagger, rows: list[dict], view: ProcessRegistry,
                          entity_index: dict[str, str], resolution_index: ResolutionIndex,
                          gate_drops_out: dict[str, int] | None = None,
-                         gate_types_out: dict[str, int] | None = None) -> dict[str, dict]:
+                         gate_types_out: dict[str, int] | None = None,
+                         cached: dict[str, dict] | None = None,
+                         reused_out: list | None = None) -> dict[str, dict]:
     """article_id → 검증된 추출 — 로컬 RoBERTa 태거로(ALPHA-1446). `classify_titles` 의 대체.
 
     기사마다 `extract_assertions(tagger=...)` 로 문서 분류·타입·인자를 뽑고, 1분 단건 조립과
     **같은** `to_classification` 으로 cls 형상을 만든다 — 두 writer 가 같은 변환을 지나야 같은
     기사에 같은 계보가 선다. 모델은 기사당 사건 1건만 낸다. primary 미해소는 적재하지 않고 사유로
     센다(LLM 게이트 드롭과 같은 규약). 태거 실패는 예외로 올린다(LLM 호출 실패와 같은 규약).
+
+    `cached`(ALPHA-1449)는 같은 런 앞 단계 tag-news 가 같은 태거로 내린 판정이다
+    (`tag_news.current_results`). 본문 지문이 같으면 다시 추론하지 않고 그 판정을 쓴다 — 조립 대상은
+    tag-news 대상의 부분집합이라, 없으면 런마다 같은 기사 수천 건을 두 번 추론해 뉴스 SFN 상한을
+    넘는다. 재사용한 기사 id 는 `reused_out` 에 담는다.
     """
     from ..minute.event_assembly import to_classification  # 그 모듈이 이 모듈을 읽는다(순환 회피)
 
@@ -787,9 +795,15 @@ def classify_with_tagger(tagger, rows: list[dict], view: ProcessRegistry,
             # 무너진다(tag-news·1분 소비자와 같은 제한). 건너뛰되 센다.
             _drop("unsupported_language")
             continue
-        result = extract_assertions(
-            {"article_id": row["article_id"], "title": row["title"], "lead_text": row.get("lead_text")},
-            tagger=tagger)
+        article = {"article_id": row["article_id"], "title": row["title"],
+                   "lead_text": row.get("lead_text"), "published_at": row.get("published_at")}
+        hit = (cached or {}).get(row["article_id"])
+        if hit is not None and hit["fingerprint"] == input_fingerprint(article):
+            result = hit["result"]
+            if reused_out is not None:
+                reused_out.append(row["article_id"])
+        else:
+            result = extract_assertions(article, tagger=tagger)
         if result["status"] != "ok":
             # 추론 실패는 판정이 아니라 '물어보지도 못했다'다 — 드롭으로 세고 넘어가면 런이
             # 성공으로 끝나 SFN 실패 경로가 안 돈다. LLM 경로(_complete_json 재시도 소진)처럼
@@ -1672,6 +1686,7 @@ def run(
     started_at = datetime.now(timezone.utc)
     news_read = in_universe_count = already_normalized = assembled_during_classify = 0
     classified = events_created = threaded = unknown_thread = 0
+    tagger_reused = 0  # 로컬 태거 경로에서 tag-news 판정을 재사용한 기사 수(ALPHA-1449)
     stage_rejected = arguments_unresolved = anchorless_events = concepts_minted = 0
     dart_matched = dart_ambiguous = 0
     # 게이트 드롭 사유(type_unmatched 등)·타입 분포(ALPHA-948) — 욱여넣기 패턴을 데이터로
@@ -1711,12 +1726,15 @@ def run(
                 todo = [n for n in in_universe if n["article_id"] not in already]
                 date_gate_drops: dict[str, int] = {}
                 date_gate_types: dict[str, int] = {}
+                date_reused: list[str] = []
                 if not todo:
                     classifications = {}
                 elif tagger is not None:
                     classifications = classify_with_tagger(
                         tagger, todo, view, entity_index, resolution_index,
-                        gate_drops_out=date_gate_drops, gate_types_out=date_gate_types)
+                        gate_drops_out=date_gate_drops, gate_types_out=date_gate_types,
+                        cached=current_results(storage, "ko", date, tagger.version),
+                        reused_out=date_reused)
                 else:
                     classifications = classify_titles(complete_fn, todo, view, entity_index,
                                                       resolution_index=resolution_index,
@@ -1743,6 +1761,7 @@ def run(
             in_universe_count += len(in_universe)
             already_normalized += len(in_universe) - len(todo)
             classified += len(classifications)
+            tagger_reused += len(date_reused)
             assembled_during_classify += len(raced)
             for reason, count in date_gate_drops.items():
                 gate_drops[reason] = gate_drops.get(reason, 0) + count
@@ -1820,6 +1839,7 @@ def run(
         "assembler_version": ASSEMBLER_VERSION,
         # 분류를 누가 했나(ALPHA-1446) — 로컬 태거면 그 버전, LLM 2콜 체인이면 None(assembler_version 이 말한다).
         "tagger_version": tagger.version if tagger is not None else None,
+        "tagger_reused": tagger_reused,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "from_date": from_date, "to_date": to_date, "languages": list(LANGUAGES),
         "news_read": news_read, "in_universe": in_universe_count,

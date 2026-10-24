@@ -942,3 +942,28 @@ def test_windowed_run_absorbs_in_window_mirror_without_canonical(tmp_path):
 
     assert storage.list_keys(mirror_key) == []
     assert [r["article_id"] for r in _read_feature(storage, "ko", "2026-07-02")] == ["a-장중만"]
+
+
+def test_current_results_returns_only_reusable_judgements_of_that_tagger(tmp_path):
+    """WHY(ALPHA-1449): assemble 이 재사용하는 판정은 같은 태거 버전이어야 하고(다른 모델의 판정을
+    로컬 모델 판정으로 쓰면 계보 출처가 거짓이 된다), llm_error 는 판정이 아니라 재사용하면 안 된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1"), _article("a2")])
+    tagger = _CountingTagger("tagging-roberta-test")
+    assert tag_news.run(storage, "R1", tagger=tagger) == 0
+
+    got = tag_news.current_results(storage, "ko", "2026-07-01", "tagging-roberta-test")
+    assert set(got) == {"a1", "a2"}
+    assert got["a1"]["fingerprint"] == tag_news.input_fingerprint(_article("a1"))
+    assert got["a1"]["result"]["assertions"][0]["event_type_code"] == "COMPANY.CONTRACT.SIGNING"
+    assert tag_news.current_results(storage, "ko", "2026-07-01", "tagging-v1") == {}
+
+
+    class _Broken(_CountingTagger):
+        def parse(self, title, lead):
+            raise RuntimeError("down")
+
+    other = LocalStorage(tmp_path / "lake2")
+    _write_canonical(other, "ko", "2026-07-01", [_article("a1")])
+    tag_news.run(other, "R1", tagger=_Broken("tagging-roberta-test"))
+    assert tag_news.current_results(other, "ko", "2026-07-01", "tagging-roberta-test") == {}

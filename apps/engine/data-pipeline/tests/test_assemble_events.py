@@ -2024,3 +2024,39 @@ def test_tagger_batch_uses_the_same_conversion_as_the_minute_lane():
             tagger, [{"article_id": "a4", "title": "실패", "lead_text": None, "tickers": [],
                       "language": "ko"}],
             view, entity_index, resolution_index)
+
+
+def test_tagger_batch_reuses_tag_news_judgement_for_the_same_text():
+    """WHY(ALPHA-1449): 조립 대상은 같은 런 tag-news 대상의 부분집합이다 — 같은 모델 판정을 다시
+    추론하면 런마다 수천 건을 두 번 돌려 뉴스 SFN 상한(40분)을 넘는다. 본문이 같으면 재사용하고,
+    정정으로 본문이 바뀌었으면(지문 불일치) 옛 판정을 쓰지 않고 다시 추론해야 한다."""
+    from edge_ontology import load_process_registry
+    from data_pipeline.entity_resolution import ResolutionIndex
+    from data_pipeline.steps.tag_news import input_fingerprint
+
+    view = load_process_registry()
+    entity_index = {"005930": "inst_SAMSUNG"}
+    resolution_index = ResolutionIndex(by_key={"삼성전자": "inst_SAMSUNG"}, by_ticker=entity_index,
+                                       alias_ticker_by_key={}, alias_keys=frozenset())
+    contract = {"event_type_code": "COMPANY.CONTRACT.SIGNING", "predicate_code": "SIGN",
+                "predicate_source": "model", "confidence": 0.9, "completeness": "partial",
+                "missing_required_roles": [],
+                "arguments": [{"role_code": "SUPPLIER", "text": "삼성전자", "entity_id": None}]}
+    row = {"article_id": "a1", "title": "삼성전자 수주", "lead_text": "리드", "language": "ko",
+           "published_at": "2026-07-15T09:00:00+09:00", "tickers": ["005930"]}
+    article = {k: row[k] for k in ("article_id", "title", "lead_text", "published_at")}
+    cached = {"a1": {"fingerprint": input_fingerprint(article),
+                     "result": {"status": "ok", "doc_class": "EVENT", "assertions": [contract],
+                                "reasons": [], "tagger_version": "tagging-roberta-test"}}}
+    tagger = _FakeTagger({})  # 부르면 KeyError — 재사용이면 안 불린다
+    reused: list = []
+
+    out = assemble_events.classify_with_tagger(tagger, [row], view, entity_index, resolution_index,
+                                               cached=cached, reused_out=reused)
+    assert list(out) == ["a1"] and reused == ["a1"] and tagger.seen == []
+
+    edited = dict(row, title="삼성전자 수주 (정정)")
+    with pytest.raises(RuntimeError, match="태거 실패"):   # 지문이 다르면 다시 추론한다(대역은 실패로 드러냄)
+        assemble_events.classify_with_tagger(tagger, [edited], view, entity_index, resolution_index,
+                                             cached=cached)
+    assert tagger.seen == [("삼성전자 수주 (정정)", "리드")]
