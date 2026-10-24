@@ -180,6 +180,11 @@ class _FakeCursor:
             self._rows = [(t, s) for t, s in conn.thread_current_stages.items() if t in params[0]]
         elif upper.startswith("SELECT THREAD_ID, COUNT"):
             self._rows = [(t, n) for t, n in conn.prior_thread_counts.items() if t in params[0]]
+        elif upper.startswith("SELECT MAX(SE.AVAILABLE_AT) FROM EVENT_THREAD_LINK"):
+            # 늦게 온 과거 보도의 직전 보도 시각(ALPHA-508) — news_report_times[thread_id] 중 at 미만 최댓값.
+            tid, at = params
+            earlier = [x for x in conn.news_report_times.get(tid, []) if x < at]
+            self._rows = [(max(earlier) if earlier else None,)]
         elif upper.startswith("SELECT EM.SOURCE_EVENT_ID"):
             self._rows = list(conn.dart_measures)
         elif upper.startswith("SELECT DD.ISSUER_ACTOR_ID"):
@@ -190,6 +195,9 @@ class _FakeCursor:
 
     def fetchall(self):
         return self._rows
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
 
     def __enter__(self):
         return self
@@ -223,6 +231,8 @@ class _FakeConn:
         self.dart_facts = list(dart_facts)
         # 기존 뉴스 스레드 구간 대역(ALPHA-508): (opened_at, last_state_at, thread_key, thread_id).
         self.news_segments = list(news_segments)
+        # 스레드별 기존 보도 시각 대역(ALPHA-508) — thread_id → [datetime, ...].
+        self.news_report_times = {}
 
     def cursor(self):
         cur = _FakeCursor(self)
@@ -914,6 +924,49 @@ def test_late_past_report_joins_its_own_segment_not_the_latest(monkeypatch):
     assert links == {"evt_mid": t1, "evt_early": t1}
     [header] = [r for r in _batch(conn, "event_thread") if r[0] == t1]
     assert str(header[4]).startswith("2026-06-01")      # 시작이 앞당겨진 건 7월 구간이다
+
+
+def test_late_report_inside_a_segment_uses_the_gap_to_its_previous_report(monkeypatch):
+    """WHY: 백필로 늦게 온 보도도 하루 공백 규칙으로 판정돼야 한다 — 구간의 마지막 보도보다 이르다고
+    재보도로 접으면, 그 후속 보도가 타임라인(재보도를 접는 소비자)에서 사라진다. 비교 대상은 같은
+    스레드에서 그 보도 바로 앞 보도다."""
+    ts = datetime.fromisoformat
+    key = _news_key("inst_SUP", "2026-01-01T09:00:00+09:00", _CONTRACT)
+    tid = _stable_id("thr", key)
+    conn = _FakeConn(news_segments=[(ts("2026-01-01T09:00:00+09:00"), ts("2026-01-10T09:00:00+09:00"),
+                                     key, tid)], prior_thread_counts={tid: 2})
+    conn.news_report_times = {tid: [ts("2026-01-01T09:00:00+09:00"), ts("2026-01-10T09:00:00+09:00")]}
+    rv = {"SUPPLIER": "inst_SUP"}
+    follow = _multi_role_event("evt_follow", rv, "2026-01-03T09:00:00+09:00")   # 직전 보도 +2일
+    same_day = _multi_role_event("evt_dup", rv, "2026-01-01T15:00:00+09:00")    # 직전 보도 +6시간
+    assemble_events.thread_events(conn, [follow, same_day])
+
+    links = {r[0]: r for r in _batch(conn, "event_thread_link")}
+    assert links["evt_follow"][1] == links["evt_dup"][1] == tid
+    assert (links["evt_follow"][3], links["evt_dup"][3]) == ("FOLLOW_UP_STAGE", "DUPLICATE_REBROADCAST")
+
+
+def test_mixed_timezone_reports_are_ordered_by_real_time(monkeypatch):
+    """WHY: 같은 스레드의 보도 순서는 실제 시각이다 — 문자열순이면 +09:00 과 +00:00 이 섞일 때 늦은
+    보도가 첫 보도가 되고, 헤더의 시작이 끝보다 늦어져(ck_event_thread_time) 적재가 롤백된다."""
+    conn = _FakeConn()
+    rv = {"SUPPLIER": "inst_SUP"}
+    first = _multi_role_event("evt_first", rv, "2026-07-01T09:00:00+09:00")    # 00:00Z
+    later = _multi_role_event("evt_later", rv, "2026-07-01T01:00:00+00:00")    # 01:00Z
+    assemble_events.thread_events(conn, [later, first])
+
+    links = {r[0]: r[3] for r in _batch(conn, "event_thread_link")}
+    assert links == {"evt_first": "FIRST_IN_THREAD", "evt_later": "DUPLICATE_REBROADCAST"}
+    [header] = _batch(conn, "event_thread")
+    assert datetime.fromisoformat(str(header[4])) <= datetime.fromisoformat(str(header[5]))
+
+
+def test_analyst_firm_choice_is_the_same_rule_in_both_writers():
+    """WHY: 증권사 인자가 여럿인 기사에서 1분 경로와 배치가 다른 증권사를 고르면, 먼저 처리한 writer
+    에 따라 같은 기사가 다른 스레드에 붙는다. 둘 다 정규화 값이 가장 앞선 원문을 쓴다."""
+    assert assemble_events.news_analyst_firm(["Z 증권", "a증권", None, " "]) == "a증권"
+    assert assemble_events.news_analyst_firm(["a증권", "Z 증권"]) == "a증권"
+    assert assemble_events.news_analyst_firm([None]) is None
 
 
 def test_news_company_comes_only_from_company_roles(monkeypatch):

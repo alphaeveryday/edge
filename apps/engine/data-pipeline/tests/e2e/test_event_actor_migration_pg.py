@@ -128,6 +128,8 @@ def test_new_event_continues_existing_history_after_real_database_migration(conn
         "source_event_id": "next", "event_type_code": "COMPANY.CONTRACT.SIGNING",
         "available_at": "2026-10-03T09:00:00Z",
         "role_values": {"SUPPLIER": "share", "CUSTOMER": "buyer", "CONTRACT_OBJECT": "concept"},
+        # identity 키·이전 보존은 공시 경로의 계약이다 — 뉴스는 ALPHA-508 에서 회사+시간 창 키다.
+        "source_class": "DISCLOSURE",
     }]) == 0
     assert conn.execute("SELECT count(*) FROM event_thread").fetchone() == (1,)
     assert conn.execute("SELECT thread_id,novelty_status FROM event_thread_link WHERE source_event_id='next'").fetchone() == (

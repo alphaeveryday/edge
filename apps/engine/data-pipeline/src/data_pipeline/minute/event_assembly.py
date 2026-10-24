@@ -36,6 +36,7 @@ from ..entity_resolution import load_resolution_index, resolve
 from ..steps.assemble_events import (
     _validate_extraction,
     load_entity_index,
+    news_analyst_firm,
     persist_normalization,
     thread_events,
 )
@@ -279,8 +280,8 @@ def _thread_event(created: dict, cls: dict, published_at: str) -> dict:
         role_lists.setdefault(cls["anchor_role"], []).append(str(primary_entity))
     # 증권사 원문 — 뉴스 스레드 키의 증권사 구분(ALPHA-508). 배치(fetch_unthreaded_events)도 같은
     # event_argument.mention_text 를 싣는다.
-    analyst_firm = next((a.get("mention_text") for a in cls["arguments"]
-                         if a["role_code"] == "ANALYST_FIRM" and a.get("mention_text")), None)
+    analyst_firm = news_analyst_firm(
+        [a.get("mention_text") for a in cls["arguments"] if a["role_code"] == "ANALYST_FIRM"])
     return {
         "source_event_id": created["source_event_id"],
         "event_type_code": cls["event_type_code"],
