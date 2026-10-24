@@ -173,24 +173,29 @@ def report_request(job_id: str, body: ReportRequest, request: Request):
     return {"status": "received", "delivery_status": "not_scheduled"}
 
 
-@app.post("/api/portfolio/analyses", status_code=202)
-def submit(body: AnalysisInput, request: Request, idempotency_key: UUID = Header()):
+def admit(body):
+    """제출 직전 검사와 정규화. 지난 분석 재검토(past_review)도 같은 판정을 쓴다. 거부는 ValueError(코드)다."""
     # Drafts and historical reports may be incomplete; new paid/trial jobs must be computable.
     if body.input_mode == 'names':
-        raise HTTPException(422, 'HOLDING_WEIGHTS_REQUIRED')
+        raise ValueError('HOLDING_WEIGHTS_REQUIRED')
     from .execution import parse_funding
     contribution = body.preferences.contribution.strip()
     if body.monthly_krw is not None:
         pass  # 8차 입력: 매달 넣을 돈을 숫자 칸으로 받는다. 글 선택지는 없어도 된다
     elif not contribution:
-        raise HTTPException(422, 'CONTRIBUTION_CHOICE_REQUIRED')
+        raise ValueError('CONTRIBUTION_CHOICE_REQUIRED')
     elif contribution.startswith('매달 꾸준히'):
         if not parse_funding(contribution):
-            raise HTTPException(422, 'MONTHLY_AMOUNT_REQUIRED')
+            raise ValueError('MONTHLY_AMOUNT_REQUIRED')
     elif contribution not in {'이미 다 매수한 상태에요', '목돈 한 번에', '아직 고민 중'} and not parse_funding(contribution):
-        raise HTTPException(422, 'CONTRIBUTION_CHOICE_REQUIRED')
+        raise ValueError('CONTRIBUTION_CHOICE_REQUIRED')
+    return canonicalize(body)
+
+
+@app.post("/api/portfolio/analyses", status_code=202)
+def submit(body: AnalysisInput, request: Request, idempotency_key: UUID = Header()):
     try:
-        body = canonicalize(body)
+        body = admit(body)
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
     try:

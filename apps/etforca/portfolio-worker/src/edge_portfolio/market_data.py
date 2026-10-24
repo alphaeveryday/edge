@@ -191,7 +191,11 @@ async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_
                 return original
         except (ValueError, TimeoutError) as error:
             primary_failure = price_failure(error)
-        record = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback'), timeout=provider_timeout)
+        try:
+            record = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback'), timeout=provider_timeout)
+        except (ValueError, TimeoutError) as error:
+            error.primary_failure = primary_failure  # 대체도 실패했을 때도 1차 공급자의 호출 제한이 보이게
+            raise
         record['primary_failure'] = primary_failure
         return record
 
