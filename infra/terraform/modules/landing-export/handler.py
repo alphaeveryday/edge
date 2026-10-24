@@ -124,13 +124,15 @@ def handler(event, context):
         s3.put_object(Bucket=bucket, Key=f'etf/{code}', Body=render_page(code, names.get(code, code), json.loads(body)).encode('utf-8'),
                       ContentType='text/html; charset=utf-8', CacheControl='no-cache')
 
-    # sitemap 은 수동 실행으로 좁힌 범위가 아니라 전체 목록으로 쓴다 — 좁히면 나머지 종목이 검색 엔진에서 빠진다
     all_codes = json.loads(os.environ['ETF_CODES'])
-    s3.put_object(Bucket=bucket, Key='etf/sitemap.xml', Body=sitemap(all_codes).encode('utf-8'),
-                  ContentType='application/xml', CacheControl='no-cache')
-
-    return export(event.get('etf_codes') or all_codes,
-                  event.get('date') or datetime.now(KST).date().isoformat(),
-                  fetch, put, pause=lambda: time.sleep(0.25),  # 조회 API 한도가 초당 5건이다
-                  # 조회 제한(30초)과 저장을 한 번 더 감당할 시간이 남았을 때만 다음 종목으로 간다
-                  out_of_time=lambda: context.get_remaining_time_in_millis() < 60_000)
+    try:
+        return export(event.get('etf_codes') or all_codes,
+                      event.get('date') or datetime.now(KST).date().isoformat(),
+                      fetch, put, pause=lambda: time.sleep(0.25),  # 조회 API 한도가 초당 5건이다
+                      # 조회 제한(30초)과 저장을 한 번 더 감당할 시간이 남았을 때만 다음 종목으로 간다
+                      out_of_time=lambda: context.get_remaining_time_in_millis() < 60_000)
+    finally:
+        # sitemap 은 내보내기 뒤에 쓴다 — 여기서 실패해도 전망 갱신은 이미 끝났고, 실패는 함수 오류로 알람이 된다.
+        # 수동 실행으로 좁힌 범위가 아니라 전체 목록으로 쓴다 — 좁히면 나머지 종목이 검색 엔진에서 빠진다.
+        s3.put_object(Bucket=bucket, Key='etf/sitemap.xml', Body=sitemap(all_codes).encode('utf-8'),
+                      ContentType='application/xml', CacheControl='no-cache')
