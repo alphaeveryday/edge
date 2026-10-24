@@ -1,4 +1,4 @@
-"""국내 종목의 사건 그래프 조회와 사건 메뉴 (ALPHA-1453).
+"""국내 종목의 사건 그래프 조회와 사건 그래프 스킬 (ALPHA-1453, ALPHA-1455).
 
 그래프 DB(PuppyGraph, infra/terraform/modules/ontology-graph)는 평일 05:30~16:00 KST 에 떠 있고, 뉴스·공시에서
 뽑은 사건(SourceEvent)·참여 회사·수치(EventMeasurement)·쓰레드를 읽는다. 사건은 기사마다 따로 뽑혀 같은 일이
@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 from functools import lru_cache
 import operator
 import os
+from pathlib import Path
 import threading
 
 COMPANY_EVENTS = """
@@ -37,6 +38,9 @@ ORDER BY d DESC LIMIT $limit
 FETCH_LIMIT = 5000
 DEADLINE = 30  # 초. 서버 쪽 시간 초과(25초)를 서버가 지키지 않아도 도구 프로세스는 여기서 돌아온다
 OPERATORS = {"gte": operator.ge, "lte": operator.le}
+UNITS = ("KRW", "USD", "PCT", "COUNT", "DAY", "YEARS", "MONTHS")  # 저장 단위(data-pipeline events/amounts.py). 단위 계열 이름이 아니다
+BASES = ("TOTAL", "ANNUAL", "QUARTERLY", "UNKNOWN")
+SKILL = Path(__file__).resolve().parent / "prompts" / "event-graph.md"
 
 
 def _number(v: Decimal) -> str:
@@ -55,15 +59,16 @@ def registry():
     return load_process_registry().types, event_type_labels_ko()
 
 
-def menu() -> str:
-    """사건 타입 메뉴: 코드 라벨 | 술어 | 역할(*필수) | 수치(단위계열). 세션 시스템 지시 끝에 붙인다."""
+def skill() -> str:
+    """사건 그래프 스킬: 저장 구조·수치가 차 있는 곳·탐색법(prompts/event-graph.md) + 온톨로지에서 만든 타입 목록.
+    그래프 세션의 시스템 지시 끝에 붙인다. 타입 목록은 대분류별 한 줄: 'COMPANY: CONTRACT.SIGNING 계약 체결 · …'."""
     types, labels = registry()
-    lines = []
-    for code, t in sorted(types.items()):
-        roles = [f"{r}*" for r in t.required_roles] + [r for r in t.optional_roles if r not in t.quantities]
-        quantities = [f"{n}({a.unit_family or '-'})" for n, a in t.quantities.items()]
-        lines.append(f"{code} {labels.get(code, '')} | {','.join(t.predicates)} | {','.join(roles)} | {','.join(quantities) or '-'}")
-    return "\n".join(lines)
+    groups: dict[str, list[str]] = {}
+    for code in sorted(types):
+        head, _, rest = code.partition(".")
+        groups.setdefault(head, []).append(f"{rest} {labels.get(code, '')}".strip())
+    index = "\n".join(f"- {head}: {' · '.join(items)}" for head, items in groups.items())
+    return SKILL.read_text(encoding="utf-8").rstrip() + "\n" + index
 
 
 def _run(statement: str, params: dict) -> list[dict]:
@@ -125,7 +130,8 @@ def company_events(code: str, today: date, days: int = 90, run=_run) -> dict:
 
 def similar_events(event_type: str, metric: str, op: str, value: str, unit: str, basis: str, today: date,
                    days: int = 180, exclude_code: str | None = None, run=_run) -> dict:
-    """다른 회사의 같은 타입 사건 중 수치 조건에 맞는 것. 단위·기준이 다르거나 값이 불확실한 사건은 '모름'으로 따로 센다.
+    """다른 회사의 같은 타입 사건 중 수치 조건에 맞는 것. 단위가 다르거나 값이 불확실한 사건은 '모름'으로 따로 센다.
+    basis 가 빈 값이면 기준을 가리지 않는다(저장값 대부분이 UNKNOWN 이라 기준을 맞추면 절반이 빠진다). 주면 같은 기준만 맞음.
     기사마다 따로 뽑힌 같은 일(같은 날짜·값·참여 회사)은 한 건으로 센다 — 보도 4건짜리 계약 3개를 '12건'으로 읽지 않게.
     exclude_code 종목의 발행 회사가 참여한 사건은 뺀다(조사 중인 그 일이 제 선례가 되지 않게)."""
     types, _ = registry()
@@ -135,6 +141,10 @@ def similar_events(event_type: str, metric: str, op: str, value: str, unit: str,
         raise ValueError(f"{event_type} 의 수치가 아닙니다: {metric} (가능: {', '.join(types[event_type].quantities) or '없음'})")
     if op not in OPERATORS:
         raise ValueError("op 는 gte·lte 중 하나입니다")
+    if unit not in UNITS:
+        raise ValueError(f"저장 단위가 아닙니다: {unit} (가능: {'·'.join(UNITS)})")
+    if basis and basis not in BASES:
+        raise ValueError(f"기준이 아닙니다: {basis} (가능: {'·'.join(BASES)}, 생략하면 기준 무관)")
     try:
         threshold = Decimal(str(value))
     except InvalidOperation:
@@ -154,7 +164,7 @@ def similar_events(event_type: str, metric: str, op: str, value: str, unit: str,
             continue
         who = tuple(sorted(r.get("who") or []))
         happening = (r.get("d"), who)
-        if r.get("unit") != unit or r.get("basis") != basis or r.get("value") is None \
+        if r.get("unit") != unit or (basis and r.get("basis") != basis) or r.get("value") is None \
                 or r.get("vsrc") == "UNRESOLVED" or r.get("parse") not in (None, "ok"):
             unknown.add(happening)
             continue
@@ -165,7 +175,7 @@ def similar_events(event_type: str, metric: str, op: str, value: str, unit: str,
             continue
         if v.is_finite() and OPERATORS[op](v, threshold):
             m = matched.setdefault((*happening, v.normalize()), {"date": r.get("d"), "what": _what(r.get("title")), "value": _number(v),
-                                                                  "unit": unit, "basis": basis, "who": list(who)[:3], "events": set()})
+                                                                  "unit": unit, "basis": r.get("basis") or "UNKNOWN", "who": list(who)[:3], "events": set()})
             m["events"].add(r["id"])  # 행은 (사건, 측정) 쌍 — 보도 수는 사건 수로 센다
             m["what"] = max(m["what"], _what(r.get("title")), key=len)
     unknown -= {k[:2] for k in matched}
