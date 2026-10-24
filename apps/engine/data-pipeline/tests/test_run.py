@@ -644,10 +644,12 @@ def _spy_tag_news(monkeypatch):
 
     captured = {}
 
-    def fake_run(storage, run_id, *, complete_fn, input_run_id, from_date, to_date,
+    def fake_run(storage, run_id, *, complete_fn, tagger, input_run_id, from_date, to_date,
                  limit, concurrency):
         captured["window"] = (from_date, to_date)
         captured["input_run_id"] = input_run_id
+        # 기본 TAGGER_BACKEND(llm)에선 로컬 태거 없이 LLM 경로 그대로여야 한다(ALPHA-1446).
+        captured["backend"] = ("llm" if complete_fn is not None and tagger is None else "other")
         return 0
 
     monkeypatch.setattr(run_mod.tag_news, "run", fake_run)
@@ -660,6 +662,7 @@ def test_tag_news_forwards_normalize_manifest_scope(monkeypatch):
     assert main(["tag-news", "--run-id", "R", "--input-run-id", "N1"]) == 0
     assert captured["input_run_id"] == "N1"
     assert captured["window"] == (None, None)
+    assert captured["backend"] == "llm"
 
 
 def test_tag_news_requires_explicit_scope(monkeypatch):
@@ -929,9 +932,10 @@ def _spy_assemble(monkeypatch):
 
     captured = {}
 
-    def fake_run(storage, run_id, *, db, complete_fn, from_date, to_date, window_days,
+    def fake_run(storage, run_id, *, db, complete_fn, tagger, from_date, to_date, window_days,
                  concurrency):
         captured["window"] = (from_date, to_date, window_days)
+        captured["backend"] = ("llm" if complete_fn is not None and tagger is None else "other")
         return 0
 
     monkeypatch.setattr(run_mod.assemble_events, "run", fake_run)
@@ -946,6 +950,7 @@ def test_assemble_window_days_reaches_step(monkeypatch):
     run_mod, captured = _spy_assemble(monkeypatch)
     assert main(["assemble-events", "--run-id", "R", "--window-days", "1"]) == 0
     assert captured["window"] == (None, None, 1)
+    assert captured["backend"] == "llm"
 
 
 def test_assemble_explicit_window_beats_window_days(monkeypatch):
