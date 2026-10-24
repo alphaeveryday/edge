@@ -38,4 +38,9 @@ export const useAnalyticsOn = create<{ on: boolean; setOn: (on: boolean) => void
     setAdsCollection(on);
   },
 }));
-client?.ready().then(() => useAnalyticsOn.setState({ on: !client.optedOut }));
+// 이전 버전에서 꺼 둔 설정을 광고 SDK 에도 적용
+client?.ready().then(() => {
+  const on = !client.optedOut;
+  useAnalyticsOn.setState({ on });
+  if (!on) setAdsCollection(on);
+});
