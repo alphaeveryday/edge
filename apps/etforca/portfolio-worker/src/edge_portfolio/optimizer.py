@@ -232,6 +232,7 @@ class Optimizer:
                 if remaining <= 0:
                     raise TimeoutError
                 async with asyncio.timeout(remaining):
+                    await self.market.use_saved(needed)  # Counted in the budget like any price wait.
                     for baseline in (True, False):
                         await asyncio.gather(*(fetch(key, needed[key]) for key in ordered if (key in priority) == baseline), return_exceptions=True)
             except TimeoutError:

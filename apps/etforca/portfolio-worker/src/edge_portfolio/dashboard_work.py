@@ -262,6 +262,47 @@ async def records_for(ids, day, *, valuation_since=None, include_fx=True, collec
     return records, failures
 
 
+def analysis_archive(key, payload, as_of):
+    """A preloaded full archive cut like a new fetch for `as_of`, or None when a fetch could do better."""
+    from .market_data import decode_prices, expected_sessions, positive_price, price_status
+    record = decode_prices(json.dumps(payload))
+    if (record.get('history_complete') is not True or record.get('return_basis') == 'price'
+            or record.get('provider', '').startswith('FinanceDataReader:NAVER:')
+            or record.get('price_recovery', {}).get('status') in ('unavailable', 'partial', 'rejected')):
+        return None
+    frame = record['frame'].loc[record['frame'].index < pd.Timestamp(as_of)]
+    closes = frame.index[frame['Close'].map(positive_price)]
+    sessions = expected_sessions(key, as_of - timedelta(days=14), as_of - timedelta(days=1))
+    # Missing the latest finished session means a new fetch could still add it.
+    if closes.empty or not len(sessions) or closes[-1] < sessions[-1]:
+        return None
+    record = {**record, 'frame': frame}
+    # The same check that admits a new primary fetch: valid Adj Close and Close, not stale.
+    return None if price_status(record, as_of) else record
+
+
+def saved_prices(keys, as_of):
+    """Analysis reads preloaded archives first; only the rest wait for the single provider slot."""
+    if not keys:
+        return {}
+    try:
+        with store.connect() as db:
+            rows = db.execute('SELECT instrument,payload FROM portfolio_dashboard_prices WHERE instrument=ANY(%s)', (list(keys),)).fetchall()
+    except Exception as error:
+        log.warning('saved prices unavailable code=%s; fetching from providers', type(error).__name__)
+        return {}
+    records = {}
+    for row in rows:
+        try:
+            record = analysis_archive(row['instrument'], row['payload'], as_of)
+        except Exception as error:
+            log.warning('saved price=%s unusable code=%s', row['instrument'], type(error).__name__)
+            record = None
+        if record:
+            records[row['instrument']] = record
+    return records
+
+
 def last_close(record):
     from .market_data import positive_price
     prices = record['frame']['Close']
