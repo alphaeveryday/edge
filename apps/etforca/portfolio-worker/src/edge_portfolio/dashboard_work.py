@@ -269,7 +269,8 @@ def analysis_archive(key, payload, as_of, *, collected=False):
     what that fetch returned (incomplete only so the collector retries Yahoo) and price_status alone decides."""
     from .market_data import decode_prices, expected_sessions, positive_price, price_status
     record = decode_prices(json.dumps(payload))
-    # The fallback provider's whole series is stored as incomplete only so the collector retries Yahoo.
+    # The fallback provider always returns its whole series (load_fallback_prices reads from 1970); it is stored
+    # as incomplete only so the collector retries Yahoo.
     if not collected and record.get('history_complete') is not True and not record.get('provider', '').startswith('FinanceDataReader:'):
         raise ValueError('PRICE_HISTORY_INCOMPLETE')
     frame = record['frame'].loc[record['frame'].index < pd.Timestamp(as_of)]

@@ -660,6 +660,7 @@ async def test_analysis_waits_only_for_what_the_store_lacks_and_reports_the_coll
         rejected.update({key: 'PRICE_HISTORY_INCOMPLETE' for key in keys if key not in stored})
         return {key: stored[key] for key in keys if key in stored}
     def request(keys):
+        assert reads[-1][0] == keys, 'A missing instrument is requested before the next one is read'
         requested.extend(keys)
         stored['KR:B'] = record()  # The collector will publish B.
         return 'requested'
@@ -732,6 +733,12 @@ async def test_urgent_request_is_served_at_any_hour_beside_customer_work_with_th
     with store.connect() as db:
         assert db.execute("SELECT 1 FROM portfolio_dashboard_prices WHERE instrument='KR:069500'").fetchone()
     assert not await preload.collect_one(now=night, urgent=True), 'A served request is not fetched again'
+    later = preload.request_prices(['KR:069500'])
+    assert preload.finished_requests(['KR:069500'], requested) == {'KR:069500': None}, \
+        'Another analysis requesting the same instrument does not hide the answer already given'
+    assert preload.finished_requests(['KR:069500'], later) == {}
+    with store.connect() as db:
+        db.execute("UPDATE portfolio_market_preload SET urgent_at=NULL WHERE instrument='KR:069500'")
     async def fail(*args, **kwargs):
         raise ValueError('PRICE_STALE')
     monkeypatch.setattr(market_data, 'fetch_prices', fail)
