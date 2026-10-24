@@ -67,7 +67,7 @@ from ..ops.quality_diagnostics import (
     build as build_quality_diagnostics,
     issue as quality_issue,
 )
-from ..tagging.extract import extract_assertions
+from ..tagging.extract import PROMPT_LANGUAGES, extract_assertions
 from ..tagging.ontology import default_predicate, identity_roles
 from .dart_values import match_dart_values
 
@@ -781,6 +781,11 @@ def classify_with_tagger(tagger, rows: list[dict], view: ProcessRegistry,
     ticker_by_entity = {v: k for k, v in entity_index.items()}
     out: dict[str, dict] = {}
     for row in rows:
+        if row.get("language") not in PROMPT_LANGUAGES:
+            # 모델이 한국어 기사로만 학습됐다 — 다른 언어에 씌우면 판정은 나오고 품질만 조용히
+            # 무너진다(tag-news·1분 소비자와 같은 제한). 건너뛰되 센다.
+            _drop("unsupported_language")
+            continue
         result = extract_assertions(
             {"article_id": row["article_id"], "title": row["title"], "lead_text": row.get("lead_text")},
             tagger=tagger)
@@ -792,6 +797,10 @@ def classify_with_tagger(tagger, rows: list[dict], view: ProcessRegistry,
                 f"태거 실패: article_id={row['article_id']} status={result['status']} "
                 f"{result.get('reasons')}")
         if not result["assertions"]:
+            if result["doc_class"] == "EVENT":
+                # 사건이라 판정했는데 검증을 통과한 사건이 없다(NO_EVENT 타입·허용 밖 타입) —
+                # 비이벤트와 섞으면 그 탈락이 안 보인다.
+                _drop("event_without_valid_assertion")
             continue  # 사건 없는 기사(시세·분석·홍보) — 조립 대상이 아니다
         assertion = result["assertions"][0]
         if gate_types_out is not None:
@@ -1627,6 +1636,8 @@ def run(
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "ops_attempt_id": os.environ.get("OPS_LEDGER_ATTEMPT_ID"),
         "assembler_version": ASSEMBLER_VERSION,
+        # 분류를 누가 했나(ALPHA-1446) — 로컬 태거면 그 버전, LLM 2콜 체인이면 None(assembler_version 이 말한다).
+        "tagger_version": tagger.version if tagger is not None else None,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "from_date": from_date, "to_date": to_date, "languages": list(LANGUAGES),
         "news_read": news_read, "in_universe": in_universe_count,

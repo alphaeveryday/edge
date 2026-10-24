@@ -44,9 +44,12 @@ def _download(storage) -> str:
     keys = storage.list_keys(MODEL_PREFIX)
     if not keys:
         raise RuntimeError(f"모델 묶음이 없다: {MODEL_PREFIX} — 업로드 후 기동해야 한다")
-    root = Path(tempfile.mkdtemp(prefix="tagger-"))
+    root = Path(tempfile.mkdtemp(prefix="tagger-")).resolve()
     for key in keys:
-        path = root / key[len(MODEL_PREFIX):]
+        path = (root / key[len(MODEL_PREFIX):]).resolve()
+        if not path.is_relative_to(root):
+            # 키에 `..` 가 섞이면 묶음 밖 파일을 덮어쓴다 — 받지 않는다.
+            raise RuntimeError(f"모델 묶음 밖을 가리키는 키: {key}")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(storage.get_bytes(key))
     logger.info("모델 묶음 %d개 파일 내려받음: %s → %s", len(keys), MODEL_PREFIX, root)

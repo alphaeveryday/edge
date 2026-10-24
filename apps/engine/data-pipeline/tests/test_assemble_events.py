@@ -1749,7 +1749,7 @@ class _FakeTagger:
 def test_tagger_batch_uses_the_same_conversion_as_the_minute_lane():
     """WHY(ALPHA-1446): 배치와 1분 단건 조립이 같은 기사에 다른 계보를 세우면 안 된다 — 배치의
     로컬 태거 경로는 단건 경로의 `to_classification` 을 그대로 지나야 한다. 사건 없는 기사는
-    조립 대상이 아니고, primary 미해소는 적재하지 않되 사유로 센다."""
+    조립 대상이 아니고, 사건 판정인데 못 실은 것·한국어가 아닌 기사는 적재하지 않되 사유로 센다."""
     from edge_ontology import load_process_registry
     from data_pipeline.entity_resolution import ResolutionIndex
     from data_pipeline.minute.event_assembly import to_classification
@@ -1768,9 +1768,12 @@ def test_tagger_batch_uses_the_same_conversion_as_the_minute_lane():
         "삼성전자 수주": {"doc_class": "EVENT", "events": [contract]},
         "시황": {"doc_class": "NO_EVENT_MARKET_COMMENTARY", "events": []},
         "미해소": {"doc_class": "EVENT", "events": [unresolved]},
+        "타입없음": {"doc_class": "EVENT", "events": [{**contract, "event_type_code": "NO.SUCH.TYPE"}]},
     })
-    rows = [{"article_id": a, "title": t, "lead_text": "리드", "tickers": ["005930"]}
-            for a, t in (("a1", "삼성전자 수주"), ("a2", "시황"), ("a3", "미해소"))]
+    rows = [{"article_id": a, "title": t, "lead_text": "리드", "tickers": ["005930"], "language": "ko"}
+            for a, t in (("a1", "삼성전자 수주"), ("a2", "시황"), ("a3", "미해소"), ("a5", "타입없음"))]
+    rows.append({"article_id": "a6", "title": "Samsung wins order", "lead_text": None,
+                 "tickers": ["005930"], "language": "en"})
     drops, types = {}, {}
 
     out = assemble_events.classify_with_tagger(tagger, rows, view, entity_index, resolution_index,
@@ -1784,12 +1787,17 @@ def test_tagger_batch_uses_the_same_conversion_as_the_minute_lane():
         minute_assertion, article_id="a1", view=view, entity_index=entity_index,
         ticker_by_entity={"inst_SAMSUNG": "005930"}, res_index=resolution_index)
     assert out["a1"]["entity_id"] == "inst_SAMSUNG"
-    assert drops == {"primary_unresolved": 1}
+    # 비이벤트(a2)는 조용히 빠지지만, 사건이라 판정하고도 못 실은 것(a3·a5)과 한국어가 아닌
+    # 기사(a6)는 사유로 남아야 한다 — 비이벤트와 섞이면 탈락이 안 보인다.
+    assert drops == {"primary_unresolved": 1, "event_without_valid_assertion": 1,
+                     "unsupported_language": 1}
+    assert ("Samsung wins order", None) not in tagger.seen
     assert types == {"COMPANY.CONTRACT.SIGNING": 2}
 
     # 태거 실패는 드롭이 아니라 런 실패다 — 드롭으로 세면 런이 성공으로 끝나 SFN 실패 경로가
     # 안 돌고, 기본 창(당일)을 지난 기사는 다시 시도되지 않는다(LLM 호출 실패와 같은 규약).
     with pytest.raises(RuntimeError, match="태거 실패"):
         assemble_events.classify_with_tagger(
-            tagger, [{"article_id": "a4", "title": "실패", "lead_text": None, "tickers": []}],
+            tagger, [{"article_id": "a4", "title": "실패", "lead_text": None, "tickers": [],
+                      "language": "ko"}],
             view, entity_index, resolution_index)

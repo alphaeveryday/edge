@@ -33,3 +33,16 @@ def test_download_keeps_the_bundle_layout(tmp_path):
     root = backend._download(storage)
     assert (tmp_path / root / "meta.json").read_bytes() == b"{}"
     assert (tmp_path / root / "qa" / "weights.pt").read_bytes() == b"w"
+
+
+def test_download_refuses_keys_that_escape_the_bundle(tmp_path):
+    # WHY: 키에 `..` 가 섞이면 묶음 밖(컨테이너의 다른 파일)을 덮어쓴다 — 받지 않고 기동을 멈춘다.
+    class _Storage:
+        def list_keys(self, prefix):
+            return [prefix + "../escape.txt"]
+
+        def get_bytes(self, key):
+            return b"x"
+
+    with pytest.raises(RuntimeError, match="묶음 밖"):
+        backend._download(_Storage())
