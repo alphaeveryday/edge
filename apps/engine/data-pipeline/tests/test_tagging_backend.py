@@ -1,0 +1,35 @@
+"""태거 선택 테스트 (ALPHA-1446).
+
+의도: TAGGER_BACKEND 가 LLM 경로를 기본으로 지키고(배포만으로 동작이 바뀌지 않는다), roberta 일 때
+모델 묶음이 없으면 기동을 거부해야 한다 — 조용히 LLM 으로 떨어지거나 빈 태거로 돌면 어느 모델이
+판정했는지가 거짓이 된다. RobertaTagger 자체(torch)는 여기서 읽지 않는다.
+"""
+
+import pytest
+
+from data_pipeline.lake import LocalStorage
+from data_pipeline.tagging import backend
+
+
+def test_llm_backend_keeps_the_complete_fn_path(monkeypatch):
+    # WHY: 기본값이 llm 이라 모델 업로드·태스크 크기 조정 전에 배포돼도 기존 경로 그대로다.
+    monkeypatch.setattr(backend, "TAGGER_BACKEND", "llm")
+    assert backend.load_tagger(storage=None) is None
+
+
+def test_roberta_backend_refuses_to_start_without_the_bundle(monkeypatch, tmp_path):
+    # WHY: 묶음 없이 기동하면 job 마다 실패해 재시도 예산만 태운다 — 기동 시점에 크게 죽어야 한다.
+    monkeypatch.setattr(backend, "TAGGER_BACKEND", "roberta")
+    monkeypatch.delenv("TAGGER_MODEL_DIR", raising=False)
+    with pytest.raises(RuntimeError, match="모델 묶음이 없다"):
+        backend.load_tagger(LocalStorage(root=str(tmp_path)))
+
+
+def test_download_keeps_the_bundle_layout(tmp_path):
+    # WHY: RobertaTagger 는 meta.json·classifier/·qa/·tokenizer/ 상대 경로로 읽는다.
+    storage = LocalStorage(root=str(tmp_path / "lake"))
+    storage.put_bytes(backend.MODEL_PREFIX + "meta.json", b"{}")
+    storage.put_bytes(backend.MODEL_PREFIX + "qa/weights.pt", b"w")
+    root = backend._download(storage)
+    assert (tmp_path / root / "meta.json").read_bytes() == b"{}"
+    assert (tmp_path / root / "qa" / "weights.pt").read_bytes() == b"w"

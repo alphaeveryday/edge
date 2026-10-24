@@ -123,6 +123,7 @@ from .steps import (
 )
 from .sources import dart_fundamental, macro_series
 from .sources.kis_inav import DEFAULT_INTERVAL_SEC
+from .tagging.backend import load_tagger
 from .tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_complete_fn
 from .ops import entry as ops_entry
 from .quality.disclosure import split_failures
@@ -1235,19 +1236,23 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # LLM 설정은 tag-news 와 같은 관례(LLM_* env), DB 는 적재 스텝 공통. 창 미지정 =
     # **오늘(KST) 하루**(분류 비용이 기사 수 비례 — 전체 스캔 기본이 아니다).
     if args.step == "assemble-events":
-        api_key = os.environ.get("LLM_API_KEY", "")
-        if not api_key:
-            # 조용히 0건 조립하고 성공으로 끝나면 이벤트 부재가 안 보인다(Rule 12).
-            raise SystemExit("LLM_API_KEY 가 없다 — assemble-events 는 분류 LLM 호출이 필수다")
-        complete_fn = openai_compatible_complete_fn(
-            api_key=api_key,
-            base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
-            model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
-        )
+        # TAGGER_BACKEND=roberta 면 기사마다 로컬 모델로 분류·추출한다(ALPHA-1446).
+        tagger = load_tagger(storage)
+        complete_fn = None
+        if tagger is None:
+            api_key = os.environ.get("LLM_API_KEY", "")
+            if not api_key:
+                # 조용히 0건 조립하고 성공으로 끝나면 이벤트 부재가 안 보인다(Rule 12).
+                raise SystemExit("LLM_API_KEY 가 없다 — assemble-events 는 분류 LLM 호출이 필수다")
+            complete_fn = openai_compatible_complete_fn(
+                api_key=api_key,
+                base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
+                model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
+            )
         # 분류 LLM 병렬도도 tag-news 와 같은 LLM_CONCURRENCY env(미지정=기본, 상한은 스텝이 클램프).
         concurrency = int(os.environ.get("LLM_CONCURRENCY", assemble_events.DEFAULT_CLASSIFY_CONCURRENCY))
         return assemble_events.run(
-            storage, run_id, db=db_config_from_env(settings.db), complete_fn=complete_fn,
+            storage, run_id, db=db_config_from_env(settings.db), complete_fn=complete_fn, tagger=tagger,
             from_date=args.from_date, to_date=args.to_date,
             window_days=args.window_days, concurrency=concurrency,
         )
@@ -1313,18 +1318,22 @@ def _dispatch(args, settings, storage, run_id) -> int:
         # LLM 설정은 **여기서** env 로 읽는다. llm.py 는 인자만 받고 env 를 모른다 —
         # DATA_PIPELINE_* 는 수집 설정(load_settings) 네임스페이스인데 LLM 은 수집 소스가
         # 아니라 거기 안 든다. 관례는 analysis-engine analyze_daily.py 와 같은 LLM_* 키다.
-        api_key = os.environ.get("LLM_API_KEY", "")
-        if not api_key:
-            # 조용히 0건 태깅하고 성공으로 끝나면 커버리지 저하가 안 보인다(Rule 12).
-            raise SystemExit("LLM_API_KEY 가 없다 — tag-news 는 LLM 호출이 필수다")
-        complete_fn = openai_compatible_complete_fn(
-            api_key=api_key,
-            base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
-            model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
-        )
+        # TAGGER_BACKEND=roberta 면 로컬 모델로 태깅한다(ALPHA-1446) — LLM 키가 필요 없다.
+        tagger = load_tagger(storage)
+        complete_fn = None
+        if tagger is None:
+            api_key = os.environ.get("LLM_API_KEY", "")
+            if not api_key:
+                # 조용히 0건 태깅하고 성공으로 끝나면 커버리지 저하가 안 보인다(Rule 12).
+                raise SystemExit("LLM_API_KEY 가 없다 — tag-news 는 LLM 호출이 필수다")
+            complete_fn = openai_compatible_complete_fn(
+                api_key=api_key,
+                base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
+                model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
+            )
         # LLM 호출 병렬도도 LLM_* env 관례로 받는다(미지정=기본, 상한은 tag_news 가 클램프).
         concurrency = int(os.environ.get("LLM_CONCURRENCY", tag_news.DEFAULT_TAG_CONCURRENCY))
-        return tag_news.run(storage, run_id, complete_fn=complete_fn,
+        return tag_news.run(storage, run_id, complete_fn=complete_fn, tagger=tagger,
                             input_run_id=args.input_run_id,
                             from_date=args.from_date, to_date=args.to_date, limit=args.limit,
                             concurrency=concurrency)

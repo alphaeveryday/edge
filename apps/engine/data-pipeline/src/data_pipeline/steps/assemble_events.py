@@ -67,6 +67,7 @@ from ..ops.quality_diagnostics import (
     build as build_quality_diagnostics,
     issue as quality_issue,
 )
+from ..tagging.extract import extract_assertions
 from ..tagging.ontology import default_predicate, identity_roles
 from .dart_values import match_dart_values
 
@@ -247,6 +248,8 @@ def read_daily_news(storage: Storage, published_date: str) -> list[dict]:
                 rows.append({
                     "article_id": article_id,
                     "title": title,
+                    # 로컬 태거(ALPHA-1446)는 제목+리드를 본다 — LLM 2콜 체인은 제목만 쓴다.
+                    "lead_text": rec.get("lead_text"),
                     "published_at": rec.get("published_at"),
                     "publisher": rec.get("publisher"),
                     "source_vendor": rec.get("source_vendor") or "bigkinds",
@@ -756,6 +759,48 @@ def classify_titles(complete_fn, rows: list[dict], view: ProcessRegistry,
         logger.warning("추출 콜 누락 %d건(다음 런 재시도): %s",
                        len(missing), sorted(missing)[:10])
     return results
+
+
+def classify_with_tagger(tagger, rows: list[dict], view: ProcessRegistry,
+                         entity_index: dict[str, str], resolution_index: ResolutionIndex,
+                         gate_drops_out: dict[str, int] | None = None,
+                         gate_types_out: dict[str, int] | None = None) -> dict[str, dict]:
+    """article_id → 검증된 추출 — 로컬 RoBERTa 태거로(ALPHA-1446). `classify_titles` 의 대체.
+
+    기사마다 `extract_assertions(tagger=...)` 로 문서 분류·타입·인자를 뽑고, 1분 단건 조립과
+    **같은** `to_classification` 으로 cls 형상을 만든다 — 두 writer 가 같은 변환을 지나야 같은
+    기사에 같은 계보가 선다. 모델은 기사당 사건 1건만 낸다. 태거 실패·primary 미해소는 적재하지
+    않고 사유로 센다(자국이 안 남아 다음 런에 재시도된다 — LLM 게이트 드롭과 같은 규약).
+    """
+    from ..minute.event_assembly import to_classification  # 그 모듈이 이 모듈을 읽는다(순환 회피)
+
+    def _drop(reason: str) -> None:
+        if gate_drops_out is not None:
+            gate_drops_out[reason] = gate_drops_out.get(reason, 0) + 1
+
+    ticker_by_entity = {v: k for k, v in entity_index.items()}
+    out: dict[str, dict] = {}
+    for row in rows:
+        result = extract_assertions(
+            {"article_id": row["article_id"], "title": row["title"], "lead_text": row.get("lead_text")},
+            tagger=tagger)
+        if result["status"] != "ok":
+            _drop("tagger_error")
+            continue
+        if not result["assertions"]:
+            continue  # 사건 없는 기사(시세·분석·홍보) — 조립 대상이 아니다
+        assertion = result["assertions"][0]
+        if gate_types_out is not None:
+            etype = assertion["event_type_code"]
+            gate_types_out[etype] = gate_types_out.get(etype, 0) + 1
+        cls = to_classification(assertion, article_id=row["article_id"], view=view,
+                                entity_index=entity_index, ticker_by_entity=ticker_by_entity,
+                                res_index=resolution_index)
+        if cls is None:
+            _drop("primary_unresolved")
+            continue
+        out[row["article_id"]] = cls
+    return out
 
 
 def load_entity_index(conn) -> dict[str, str]:
@@ -1406,7 +1451,8 @@ def run(
     run_id: str,
     *,
     db: DbConfig,
-    complete_fn,
+    complete_fn=None,
+    tagger=None,
     from_date: str | None = None,
     to_date: str | None = None,
     window_days: int | None = None,
@@ -1470,12 +1516,18 @@ def run(
                 todo = [n for n in in_universe if n["article_id"] not in already]
                 date_gate_drops: dict[str, int] = {}
                 date_gate_types: dict[str, int] = {}
-                classifications = (classify_titles(complete_fn, todo, view, entity_index,
-                                                   resolution_index=resolution_index,
-                                                   concurrency=concurrency,
-                                                   gate_drops_out=date_gate_drops,
-                                                   gate_types_out=date_gate_types)
-                                   if todo else {})
+                if not todo:
+                    classifications = {}
+                elif tagger is not None:
+                    classifications = classify_with_tagger(
+                        tagger, todo, view, entity_index, resolution_index,
+                        gate_drops_out=date_gate_drops, gate_types_out=date_gate_types)
+                else:
+                    classifications = classify_titles(complete_fn, todo, view, entity_index,
+                                                      resolution_index=resolution_index,
+                                                      concurrency=concurrency,
+                                                      gate_drops_out=date_gate_drops,
+                                                      gate_types_out=date_gate_types)
                 # 적재 직전 자국 재확인(ALPHA-730) — 분류(LLM, 수 분) 창에서 1분 단건
                 # 조립이 먼저 조립한 기사는 뺀다. doc 락은 이 날짜 커밋까지 유지된다.
                 raced = recheck_assembled(conn, todo, classifications)

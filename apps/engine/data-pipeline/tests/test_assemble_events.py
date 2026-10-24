@@ -1730,3 +1730,59 @@ def test_institution_fallback_cannot_override_instrument_match_or_ambiguity(cand
     assert participant["entity_id"] == expected
     if candidate is None:
         assert participant["resolution_reason"] == "instrument_ambiguous"
+
+
+class _FakeTagger:
+    """RobertaTagger 대역 — article 제목별 고정 결과를 낸다."""
+
+    version = "tagging-roberta-test"
+
+    def __init__(self, by_title):
+        self.by_title, self.seen = by_title, []
+
+    def parse(self, title, lead):
+        """제목에 묶인 결과를 낸다(없으면 KeyError — 태거 실패 흉내)."""
+        self.seen.append((title, lead))
+        return self.by_title[title]
+
+
+def test_tagger_batch_uses_the_same_conversion_as_the_minute_lane():
+    """WHY(ALPHA-1446): 배치와 1분 단건 조립이 같은 기사에 다른 계보를 세우면 안 된다 — 배치의
+    로컬 태거 경로는 단건 경로의 `to_classification` 을 그대로 지나야 한다. 사건 없는 기사는
+    조립 대상이 아니고, 태거 실패·primary 미해소는 적재하지 않되 사유로 센다(다음 런 재시도)."""
+    from edge_ontology import load_process_registry
+    from data_pipeline.entity_resolution import ResolutionIndex
+    from data_pipeline.minute.event_assembly import to_classification
+    from data_pipeline.tagging.extract import extract_assertions
+
+    view = load_process_registry()
+    entity_index = {"005930": "inst_SAMSUNG"}
+    resolution_index = ResolutionIndex(by_key={"삼성전자": "inst_SAMSUNG"}, by_ticker=entity_index,
+                                       alias_ticker_by_key={}, alias_keys=frozenset())
+    contract = {"event_type_code": "COMPANY.CONTRACT.SIGNING", "predicate_code": None,
+                "arguments": [{"role_code": "SUPPLIER", "text": "삼성전자"},
+                              {"role_code": "CONTRACT_OBJECT", "text": "메모리"}],
+                "confidence": 0.9}
+    unresolved = {**contract, "arguments": [{"role_code": "SUPPLIER", "text": "없는회사"}]}
+    tagger = _FakeTagger({
+        "삼성전자 수주": {"doc_class": "EVENT", "events": [contract]},
+        "시황": {"doc_class": "NO_EVENT_MARKET_COMMENTARY", "events": []},
+        "미해소": {"doc_class": "EVENT", "events": [unresolved]},
+    })
+    rows = [{"article_id": a, "title": t, "lead_text": "리드", "tickers": ["005930"]}
+            for a, t in (("a1", "삼성전자 수주"), ("a2", "시황"), ("a3", "미해소"), ("a4", "실패"))]
+    drops, types = {}, {}
+
+    out = assemble_events.classify_with_tagger(tagger, rows, view, entity_index, resolution_index,
+                                               gate_drops_out=drops, gate_types_out=types)
+
+    assert list(out) == ["a1"]
+    assert ("삼성전자 수주", "리드") in tagger.seen
+    [minute_assertion] = extract_assertions(
+        {"article_id": "a1", "title": "삼성전자 수주", "lead_text": "리드"}, tagger=tagger)["assertions"]
+    assert out["a1"] == to_classification(
+        minute_assertion, article_id="a1", view=view, entity_index=entity_index,
+        ticker_by_entity={"inst_SAMSUNG": "005930"}, res_index=resolution_index)
+    assert out["a1"]["entity_id"] == "inst_SAMSUNG"
+    assert drops == {"primary_unresolved": 1, "tagger_error": 1}
+    assert types == {"COMPANY.CONTRACT.SIGNING": 2}

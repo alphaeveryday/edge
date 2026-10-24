@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 from data_pipeline.minute import event_assembly
-from data_pipeline.minute.event_assembly import NewsEventAssembler
 
 _CONTRACT = "COMPANY.CONTRACT.SIGNING"
 
@@ -23,16 +22,10 @@ def _fake_resolve(index, text):
     return (entity, "matched" if entity else "unmatched")
 
 
-def _assembler() -> NewsEventAssembler:
-    from data_pipeline.config import DbConfig
-    return NewsEventAssembler(db=DbConfig(host="x", port=5432, name="x", user="x",
-                                          password="x", sslmode="disable"))
-
-
 def _cls(monkeypatch, assertion: dict) -> dict | None:
     monkeypatch.setattr(event_assembly, "resolve", _fake_resolve)
     view = event_assembly._process_registry()
-    return _assembler()._to_classification(
+    return event_assembly.to_classification(
         assertion, article_id="a1", view=view, entity_index=_ENTITY_INDEX,
         ticker_by_entity={v: k for k, v in _ENTITY_INDEX.items()},
         res_index=object(),
@@ -119,7 +112,7 @@ def test_institution_partner_resolves_without_enabling_realtime_instrument_alias
         alias_ticker_by_key={"현대자동차": "005380"},
         alias_keys=frozenset({"현대자동차"}),
     )
-    cls = _assembler()._to_classification(
+    cls = event_assembly.to_classification(
         {
             "event_type_code": "COMPANY.ALLIANCE.PARTNERSHIP",
             "predicate_code": "FORM",

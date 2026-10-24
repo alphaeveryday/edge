@@ -127,7 +127,7 @@ class NewsEventAssembler:
             seen_events: set[str] = set()
             new_events: list[dict] = []
             for assertion in assertions:
-                cls = self._to_classification(
+                cls = to_classification(
                     assertion, article_id=article_id, view=view,
                     entity_index=entity_index, ticker_by_entity=ticker_by_entity,
                     res_index=res_index,
@@ -163,93 +163,97 @@ class NewsEventAssembler:
                         unresolved_primary, source_code, article_id)
         return {"assembled": assembled, "unresolved_primary": unresolved_primary}
 
-    def _to_classification(
-        self, assertion: dict, *, article_id: str, view, entity_index: dict[str, str],
-        ticker_by_entity: dict[str, str], res_index,
-    ) -> dict | None:
-        """추출 assertion 1건 → assemble 의 분류(cls) 형상. 불가면 None.
 
-        `_validate_extraction` 의 raw item 계약(ticker 축·measures 분리)으로 되접는다 —
-        slot·entity_kind·authority/concept 해소·수량 파싱·completeness 를 전부 그쪽
-        코드로 재사용하기 위해서다(두 벌이 되면 writer 끼리 갈린다).
-        """
-        event_type = str(assertion.get("event_type_code") or "")
-        tv = view.types.get(event_type)
-        if tv is None:
-            return None
-        raw_arguments = assertion.get("arguments")
-        arguments = []
-        resolved_tickers: set[str] = set()
-        ticker_by_role: dict[str, str] = {}
-        for raw in (raw_arguments if isinstance(raw_arguments, list) else ()):
-            if not isinstance(raw, dict):
-                continue
-            mention = raw.get("text")
-            if not isinstance(mention, str) or not mention.strip():
-                continue
-            entity_id, _reason = resolve(res_index, mention)
-            ticker = ticker_by_entity.get(entity_id) if entity_id else None
-            role = str(raw.get("role_code") or "")
-            if ticker:
-                resolved_tickers.add(ticker)
-                ticker_by_role.setdefault(role, ticker)
-            arguments.append({
-                "role": role,
-                "mention": mention,
-                "ticker": ticker or "",
-                "group": None,
-            })
-        # primary 는 **역할 우선순위**로 정한다 — LLM 인자 순서는 보장이 없어 '첫 해소
-        # instrument' 규칙이면 INVESTOR 가 ISSUER 를 제치고 사건 주체로 영구 고정될 수
-        # 있다(멱등 게이트가 재조립을 막는다). primary_roles → required_roles → 남은
-        # 해소분 순 — 배치 게이트의 primary(모델 분류)가 없는 단건 경로의 결정적 대체다.
-        primary_ticker = next(
-            (ticker_by_role[role]
-             for role in (*tv.primary_roles, *tv.required_roles)
-             if role in ticker_by_role),
-            None,
-        )
-        if primary_ticker is None and ticker_by_role:
-            # 우선 역할이 전부 미해소인 꼬리 — role 코드 사전순으로 결정론화(인자
-            # 순서 의존이면 같은 assertion 이 다른 evt id 로 영구 고정될 수 있다).
-            primary_ticker = ticker_by_role[min(ticker_by_role)]
-        if primary_ticker is None:
-            return None
-        # 수량 역할은 arguments 에 섞여 온다(태깅 허용역할 = required ∪ optional) —
-        # _validate_extraction 은 measures 를 별도 키로 기대하므로 여기서 가른다.
-        measures = [
-            {"role": a["role"], "surface": a["mention"], "basis": None, "group": None}
-            for a in arguments if a["role"] in tv.quantity_roles
-        ]
-        participant_args = [a for a in arguments if a["role"] not in tv.quantity_roles]
-        confidence = assertion.get("confidence")
-        try:
-            confidence = float(confidence)
-        except (TypeError, ValueError):
-            confidence = None
-        if confidence is not None and not 0.0 <= confidence <= 1.0:
-            confidence = None
-        gate_cls = {
-            "article_id": article_id,
-            "event_type_code": event_type,
-            "primary_ticker": primary_ticker,
-            "entity_id": entity_index[primary_ticker],
-            "role_code": tv.required_roles[0] if tv.required_roles else "ISSUER",
-            # 게이트와 같은 규약(assemble `_validate_gate`) — 다중 primary 타입은
-            # 어느 역할인지 코드가 모르므로 조작하지 않는다.
-            "anchor_role": tv.primary_roles[0] if len(tv.primary_roles) == 1 else None,
-            "confidence": confidence,
-        }
-        item = {
-            "id": article_id,
-            "predicate": assertion.get("predicate_code"),
-            "stage": None,  # 태깅은 stage 를 묻지 않는다 — NULL(모듈 독스트링)
-            "confidence": None,  # H/M/L 문자열 축 — 태깅 float 와 축이 달라 싣지 않는다
-            "arguments": participant_args,
-            "measures": measures,
-        }
-        return _validate_extraction(item, view, gate_cls, entity_index, resolved_tickers,
-                                    res_index, allow_aliases=False)
+def to_classification(
+    assertion: dict, *, article_id: str, view, entity_index: dict[str, str],
+    ticker_by_entity: dict[str, str], res_index,
+) -> dict | None:
+    """추출 assertion 1건 → assemble 의 분류(cls) 형상. 불가면 None.
+
+    1분 단건 조립과 배치 RoBERTa 분류(`assemble_events.classify_with_tagger`)가 같이 쓴다 —
+    두 writer 가 같은 변환을 지나야 같은 기사에 같은 계보가 선다.
+
+    `_validate_extraction` 의 raw item 계약(ticker 축·measures 분리)으로 되접는다 —
+    slot·entity_kind·authority/concept 해소·수량 파싱·completeness 를 전부 그쪽
+    코드로 재사용하기 위해서다(두 벌이 되면 writer 끼리 갈린다).
+    """
+    event_type = str(assertion.get("event_type_code") or "")
+    tv = view.types.get(event_type)
+    if tv is None:
+        return None
+    raw_arguments = assertion.get("arguments")
+    arguments = []
+    resolved_tickers: set[str] = set()
+    ticker_by_role: dict[str, str] = {}
+    for raw in (raw_arguments if isinstance(raw_arguments, list) else ()):
+        if not isinstance(raw, dict):
+            continue
+        mention = raw.get("text")
+        if not isinstance(mention, str) or not mention.strip():
+            continue
+        entity_id, _reason = resolve(res_index, mention)
+        ticker = ticker_by_entity.get(entity_id) if entity_id else None
+        role = str(raw.get("role_code") or "")
+        if ticker:
+            resolved_tickers.add(ticker)
+            ticker_by_role.setdefault(role, ticker)
+        arguments.append({
+            "role": role,
+            "mention": mention,
+            "ticker": ticker or "",
+            "group": None,
+        })
+    # primary 는 **역할 우선순위**로 정한다 — LLM 인자 순서는 보장이 없어 '첫 해소
+    # instrument' 규칙이면 INVESTOR 가 ISSUER 를 제치고 사건 주체로 영구 고정될 수
+    # 있다(멱등 게이트가 재조립을 막는다). primary_roles → required_roles → 남은
+    # 해소분 순 — 배치 게이트의 primary(모델 분류)가 없는 단건 경로의 결정적 대체다.
+    primary_ticker = next(
+        (ticker_by_role[role]
+         for role in (*tv.primary_roles, *tv.required_roles)
+         if role in ticker_by_role),
+        None,
+    )
+    if primary_ticker is None and ticker_by_role:
+        # 우선 역할이 전부 미해소인 꼬리 — role 코드 사전순으로 결정론화(인자
+        # 순서 의존이면 같은 assertion 이 다른 evt id 로 영구 고정될 수 있다).
+        primary_ticker = ticker_by_role[min(ticker_by_role)]
+    if primary_ticker is None:
+        return None
+    # 수량 역할은 arguments 에 섞여 온다(태깅 허용역할 = required ∪ optional) —
+    # _validate_extraction 은 measures 를 별도 키로 기대하므로 여기서 가른다.
+    measures = [
+        {"role": a["role"], "surface": a["mention"], "basis": None, "group": None}
+        for a in arguments if a["role"] in tv.quantity_roles
+    ]
+    participant_args = [a for a in arguments if a["role"] not in tv.quantity_roles]
+    confidence = assertion.get("confidence")
+    try:
+        confidence = float(confidence)
+    except (TypeError, ValueError):
+        confidence = None
+    if confidence is not None and not 0.0 <= confidence <= 1.0:
+        confidence = None
+    gate_cls = {
+        "article_id": article_id,
+        "event_type_code": event_type,
+        "primary_ticker": primary_ticker,
+        "entity_id": entity_index[primary_ticker],
+        "role_code": tv.required_roles[0] if tv.required_roles else "ISSUER",
+        # 게이트와 같은 규약(assemble `_validate_gate`) — 다중 primary 타입은
+        # 어느 역할인지 코드가 모르므로 조작하지 않는다.
+        "anchor_role": tv.primary_roles[0] if len(tv.primary_roles) == 1 else None,
+        "confidence": confidence,
+    }
+    item = {
+        "id": article_id,
+        "predicate": assertion.get("predicate_code"),
+        "stage": None,  # 태깅은 stage 를 묻지 않는다 — NULL(모듈 독스트링)
+        "confidence": None,  # H/M/L 문자열 축 — 태깅 float 와 축이 달라 싣지 않는다
+        "arguments": participant_args,
+        "measures": measures,
+    }
+    return _validate_extraction(item, view, gate_cls, entity_index, resolved_tickers,
+                                res_index, allow_aliases=False)
 
 
 def _thread_event(created: dict, cls: dict, published_at: str) -> dict:

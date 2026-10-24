@@ -515,7 +515,8 @@ def run(
     storage: Storage,
     run_id: str,
     *,
-    complete_fn,
+    complete_fn=None,
+    tagger=None,
     input_run_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
@@ -673,7 +674,8 @@ def run(
                 workers = min(concurrency, len(to_tag))
                 with ThreadPoolExecutor(max_workers=workers) as pool:
                     results = list(pool.map(
-                        lambda item: extract_assertions(item[1], complete_fn=complete_fn), to_tag))
+                        lambda item: extract_assertions(item[1], complete_fn=complete_fn,
+                                                   tagger=tagger), to_tag))
             else:
                 results = []
 
