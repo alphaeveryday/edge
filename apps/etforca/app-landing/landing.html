@@ -1827,7 +1827,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     } catch { kids = null; toggle = null; /* 깨졌거나 모양이 다른 파일은 없는 파일처럼 다룬다 — 뼈대 화면을 남기지 않는다 */ }
     if (seq !== cardSeq) return;
     card.replaceChildren(...(kids || [top, el('p', 'find__meta', '오늘 전망을 준비하고 있어요. 앱에서는 바로 볼 수 있어요.')]));
-    if (toggle) { liveOpen = () => toggle(true); if (open) toggle(true); }
+    if (toggle) { liveOpen = () => { clearTimeout(missT); toggle(true); }; if (open) toggle(true); } // 검색 칸이 걸어 둔 '없는 종목' 안내가 펼친 리포트를 덮지 않게
     refresh();
   };
   if (live.offsetParent) {
