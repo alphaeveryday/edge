@@ -250,7 +250,8 @@ locals {
   # 거래일 PDF 를 주므로 그 날짜로 라벨해야 한다. Planner 와 **같은** 휴장일 집합을 받아야
   # "Planner 는 비거래일로 건너뛴 날을 수집은 거래일로 라벨"하는 모순이 안 생긴다.
   # 뉴스 태거 선택(ALPHA-1449) — 태거를 쓰는 배치(tag-news=deepseek 세트, assemble-events=events 세트)에 싣는다.
-  tagger_env = { TAGGER_BACKEND = var.tagger_backend }
+  # llm(기본)이면 아무것도 싣지 않는다 — 코드 기본값이 llm 이라, 되돌리면 env·revision 이 이 기능 이전과 같다.
+  tagger_env = var.tagger_backend == "roberta" ? { TAGGER_BACKEND = "roberta" } : {}
   # roberta 면 태깅 배치만 키운다(나머지는 task_cpu·task_memory 그대로). Fargate 실측(2026-10-24, 기사당):
   # 8 vCPU 0.23초 · 4 vCPU 1.18초 · 1 vCPU(스레드 1) 2.2초, 기동 20~28초, 피크 메모리 2.0~2.2GB.
   # tag-news: 00:10 런 신규 400~800건 → 8 vCPU 로 약 3분(뉴스 SFN 상한 40분, 런 동안만 과금).
