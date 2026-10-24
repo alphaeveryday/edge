@@ -46,10 +46,13 @@ DIVIDEND_INSTRUCTION = (
     'read_portfolio_history의 dividends[].trailing_yield_pct만 분배율로 쓴다. '
     '같은 역할의 배당 ETF가 여럿이면 분배율이 높은 쪽을 먼저 조합에 넣고, 배당 ETF 비중을 50%보다 높인 안도 함께 제출해 견준다. '
     '후보를 견줄 때는 이 고객에게 한해 income_yield_pct를 초과수익률·오버퍼폼 기간 비율과 함께 본다. 분배율이 더 높은 후보를 기본으로 두고, 분배율이 낮은 후보를 고르면 그 이유를 적는다. '
-    '분배율만 보고 고르지 않는 상품: 커버드콜·프리미엄 인컴 ETF처럼 분배금이 높아도 같은 기간 총수익률(단독 조합의 excess_pp)이 낮아 원금이 줄어드는 상품, 레버리지·인버스 상품. '
+    '레버리지·인버스 상품은 분배율이 높아도 고르지 않는다. 커버드콜·프리미엄 인컴처럼 분배율이 유난히 높은 ETF는 분배금이 원금에서 나갈 수 있다. '
+    '그런 ETF를 크게 담으려면 read_portfolio_history로 그 ETF 100% 구성을 한 번 읽어(최종 추천 확인에 쓸 조회는 남긴다) return_1y_pct(분배금 재투자 총수익률)를 본다. '
+    '이 값이 분배율보다 낮으면 분배금을 빼고 가격이 내린 것이므로 분배율만 보고 비중을 높이지 않는다. 확인하지 못했으면 그 ETF 비중을 높이지 않는다. '
     '칩끼리 부딪치면 기존 순서를 따른다. 팔지 않기가 먼저이고, 레버리지 빼기·국내 상장 ETF만을 지킨 범위 안에서만 분배율을 견준다. '
     '분배율 숫자는 도구가 준 값이 있을 때만 쓴다. 값이 null이거나 income_failures에 있으면 숫자 없이 분배율을 확인하지 못했다고 적는다. '
-    '웹에서 찾은 선행·연환산 분배율로 이 숫자를 대신하지 않는다.')
+    '웹에서 찾은 선행·연환산 분배율로 이 숫자를 대신하지 않는다. '
+    '후속 질문에서 배당 받기를 풀어 보는 계산(relaxed_constraints에 dividend)이면 이 지시를 따르지 않는다.')
 TOOLS = [
     {"type": "function", "function": {"name": "search_etfs", "description": "ETF 등록 ID를 이름·티커로 찾는다. 정확 일치 우선, 공백·하이픈 차이를 허용한다. 결과가 8개면 offset을 8씩 늘려 다음 후보를 읽는다. 상품 근거 조회와 별개다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "offset": {"type": "integer", "minimum": 0, "maximum": 200}}, "required": ["query"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "search_sources", "description": "Exa에서 ETF 공식 자료와 반대 근거 검색. 개인정보를 검색어에 넣지 않는다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "objective": {"type": "string"}}, "required": ["query", "objective"], "additionalProperties": False}}},
