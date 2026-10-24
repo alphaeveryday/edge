@@ -181,7 +181,7 @@ locals {
     # 같은 수명으로 둔다. 장외 redrive 메시지는 retention(7일) 안에서 다음 세션이 집는다.
     news-consumer-realtime = {
       command = ["news-consumer"]
-      environment = merge(local.env, local.db_env, {
+      environment = merge(local.env, local.db_env, local.minute_tagger_env, {
         DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL = aws_sqs_queue.minute["news-extraction-realtime"].url
       })
       secrets = {
@@ -191,7 +191,7 @@ locals {
     }
     news-consumer-backfill = {
       command = ["news-consumer"]
-      environment = merge(local.env, local.db_env, {
+      environment = merge(local.env, local.db_env, local.minute_tagger_env, {
         DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL = aws_sqs_queue.minute["news-extraction-backfill"].url
       })
       secrets = {
@@ -202,8 +202,9 @@ locals {
     # 뉴스 1분 생산자(ALPHA-707/717) — BigKinds 는 키가 없어 시크릿은 DB 뿐이다.
     # 엔드포인트·카테고리는 코드 기본값([bigkinds_news] sources.toml)이 정본.
     news-worker = {
-      command     = ["news-worker"]
-      environment = merge(local.env, local.db_env, {})
+      command = ["news-worker"]
+      # TAGGER_BACKEND — job 이 선언하는 tagger_version 이 consumer 실행 버전과 같아야 한다(ALPHA-1449).
+      environment = merge(local.env, local.db_env, local.tagger_env)
       secrets = {
         DATA_PIPELINE_DB__PASSWORD = "${var.db_password_secret_arn}:password::"
       }
@@ -296,6 +297,18 @@ locals {
   # - price-worker: 처리량 저하 원인이 미확정(ALPHA-1153)이라 사양을 함께 바꾸지 않는다.
   # - disclosure-worker: 14일 실측 CPU 최대(1분 평균) 0.8 vCPU — 0.5 vCPU 로는 모자란다.
   minute_batch_sized_services = ["price-worker", "disclosure-worker"]
+
+  # 로컬 태거(tagger_backend=roberta)를 올리는 소비자 — 기동 피크 약 2GB·기사당 수 초라 상주 사양(0.5 vCPU·
+  # 1GB)으로는 못 뜬다. 1 vCPU·3GB(ADR-0064). llm 이면 상주 사양 그대로다.
+  minute_tagger_sized_services = var.tagger_backend == "roberta" ? ["news-consumer-realtime", "news-consumer-backfill"] : []
+  # 1 vCPU 소비자의 추론 스레드는 1(Fargate 실측: 스레드 2개면 기사당 4.1초, 1개면 2.2초 — 시간당 약 1,600건으로
+  # 9시 피크 약 1,000건을 따라간다). 근거는 tasks.tf batch_tagger_env 주석.
+  minute_tagger_env = merge(local.tagger_env, var.tagger_backend == "roberta" ? { TAGGER_THREADS = "1" } : {})
+
+  # 세션이 올리고 내리지 않는 소비자(ALPHA-1449). backfill 큐에는 생산자가 없고 수동 redrive 만 싣는다
+  # (news-worker 기본 destination=realtime) — 7월 이후 메시지 0건인데 매 세션 8.5시간 떠 있었다.
+  # 재처리할 때 운영자가 desired 를 1 로 올리고, 끝나면 0 으로 내린다.
+  session_unmanaged_services = ["news-consumer-backfill"]
 }
 
 resource "aws_ecs_task_definition" "minute" {
@@ -304,10 +317,12 @@ resource "aws_ecs_task_definition" "minute" {
   family                   = "${var.name}-${each.key}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = contains(local.minute_batch_sized_services, each.key) ? var.task_cpu : var.minute_service_cpu
-  memory                   = contains(local.minute_batch_sized_services, each.key) ? var.task_memory : var.minute_service_memory
-  execution_role_arn       = aws_iam_role.execution.arn
-  task_role_arn            = aws_iam_role.task.arn
+  cpu = (contains(local.minute_batch_sized_services, each.key) ? var.task_cpu
+  : contains(local.minute_tagger_sized_services, each.key) ? 1024 : var.minute_service_cpu)
+  memory = (contains(local.minute_batch_sized_services, each.key) ? var.task_memory
+  : contains(local.minute_tagger_sized_services, each.key) ? 3072 : var.minute_service_memory)
+  execution_role_arn = aws_iam_role.execution.arn
+  task_role_arn      = aws_iam_role.task.arn
 
   runtime_platform {
     operating_system_family = "LINUX"
@@ -502,7 +517,7 @@ resource "aws_ecs_task_definition" "minute_session" {
       # ⚠️ 세션 결속 생산자(local.session_bound_workers — news-worker·disclosure-worker·inav-worker)는 공용
       # 목록에서 뺀다 — 자기 세션 계획이 **성공한 날만** 올린다(실패 날 올리면 세션 부재
       # 기동 거부로 하루 종일 재기동 루프 — 비용·알람 소음). 각자 아래 자기 목록으로 간다.
-      # 뉴스 소비자 2종은 공용에 남는다: 빈 큐 폴링은 무해하고 backfill 소비는 세션 무관.
+      # 뉴스 realtime 소비자는 공용에 남는다. backfill 소비자는 세션이 다루지 않는다(session_unmanaged_services).
       # ⚠️ 공시도 같은 이유로 공용 목록에서 뺀다(ALPHA-875) — 제외 목록을 로컬 하나로
       # 둔다: 서비스를 늘리며 여기 한쪽만 빠뜨리면 그 Worker 가 세션 없는 날도 떠서
       # 기동 거부 루프를 돈다(뺀 축과 올리는 축이 갈리면 안 된다).
@@ -514,7 +529,7 @@ resource "aws_ecs_task_definition" "minute_session" {
       # 부착 PR 소관이고, 그때는 새 이미지가 이미 오래 떠 있다.
       MINUTE_SESSION_SERVICES = join(",", concat(
         [for key, service in aws_ecs_service.minute : service.name
-        if !contains(local.session_bound_workers, key)],
+        if !contains(local.session_bound_workers, key) && !contains(local.session_unmanaged_services, key)],
         [aws_ecs_service.analysis_consumer.name],
       ))
       # analysis-consumer(ALPHA-719)를 공용 스케일에서 **빼는 근거**(ALPHA-910 이 세운 축,
