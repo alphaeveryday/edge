@@ -96,7 +96,7 @@ SamsungFire&MarineInsurance	000810	krx
 안국화재	000810	model:former_name
 안국화재해상보험	000810	model:former_name
 HwacheonMachineTool	000850	krx
-KANGNAM JEVIS	000860	krx
+KANGNAM JEVISCO	000860	krx
 건설화학	000860	model:former_name
 건설화학공업	000860	model:former_name
 Hanwha	000880	krx
@@ -182,7 +182,7 @@ DI DONGIL	001530	krx
 AHN-GOOK PHARMACEUTICAL	001540	krx
 Chobi	001550	krx
 조선비료공업	001550	model:former_name
-CHEILGRINDINGWHEELIND	001560	krx
+CHEILGRINDINGWHEELIND.CO.	001560	krx
 제일연마공업	001560	krx
 Kumyang	001570	krx
 금양화학공업	001570	model:former_name
@@ -195,7 +195,7 @@ CHONGKUNDANG HOLDINGS	001630	krx
 Daesang	001680	krx
 동아화성공업	001680	model:former_name
 ShinyoungSecurities	001720	krx
-SKNetworks	001740	krx
+SKNetworksCo.	001740	krx
 SK글로벌	001740	model:former_name
 선경직물	001740	model:former_name
 HanyangSecurities	001750	krx
@@ -286,7 +286,7 @@ KUMHOE&C	002990	krx
 금호산업	002990	model:former_name
 BukwangPharmaceutical	003000	krx
 부광약품공업	003000	model:former_name
-Haein	003010	krx
+HaeinCorporation	003010	krx
 혜인상사	003010	model:former_name
 SeAH Steel Holdings	003030	krx
 부산철관공업	003030	model:former_name
@@ -295,7 +295,7 @@ Aprogen Biologics	003060	krx
 슈넬생명과학	003060	model:former_name
 에이프로젠제약	003060	model:former_name
 한국슈넬제약	003060	model:former_name
-KolonGlobal	003070	krx
+KolonGlobalCorporation	003070	krx
 코오롱건설	003070	model:former_name
 SBSUNGBO	003080	krx
 성보화학	003080	model:former_name
@@ -383,6 +383,7 @@ LOTTE Fine Chemical	004000	krx
 HYUNDAI STEEL	004020	krx
 INI스틸	004020	model:former_name
 인천제철	004020	model:former_name
+SGCORPORATION	004060	krx
 SG위카스	004060	model:former_name
 세계물산	004060	model:former_name
 Shinhung	004080	krx
@@ -462,7 +463,7 @@ T'way Holdings	004870	krx
 성원피혁	004870	model:former_name
 트라이콤	004870	model:former_name
 포켓게임즈	004870	model:former_name
-DONGILINDUSTRIES	004890	krx
+DONGILINDUSTRIESCO.	004890	krx
 ChokwangPaint	004910	krx
 조광페인트공업	004910	model:former_name
 CITECH	004920	krx
@@ -495,7 +496,7 @@ Monami	005360	krx
 광신화학공업	005360	model:former_name
 HyundaiMotor	005380	krx
 현대자동차	005380	ALPHA-1067
-COSMOCHEMICAL	005420	krx
+COSMOCHEMICALCO	005420	krx
 한국티타늄	005420	model:former_name
 한국티타늄공업	005420	model:former_name
 KAS	005430	model:short_form
@@ -537,6 +538,7 @@ DB손보	005830	model:short_form
 동부화재	005830	model:former_name
 동부화재해상보험	005830	model:former_name
 한국자동차보험	005830	model:former_name
+SLCORPORATION	005850	krx
 삼립산업	005850	model:former_name
 HANIL FEED	005860	krx
 한일사료공업	005860	model:former_name
@@ -598,7 +600,7 @@ DongKoo Bio & Pharma	006620	krx
 동구제약	006620	model:former_name
 KOREA PETRO CHEMICAL IND	006650	krx
 대한유화공업	006650	model:former_name
-SamsungClimateControl	006660	krx
+SamsungClimateControlCo.	006660	krx
 삼성라디에터공업	006660	model:former_name
 Seobu T&D	006730	krx
 서부티엔디	006730	krx
@@ -611,13 +613,13 @@ MIRAE ASSET SECURITIES	006800	krx
 AK Holdings	006840	krx
 삼경화성	006840	model:former_name
 SINGSONGHOLDINGS	006880	krx
-TAEKYUNGCHEMICAL	006890	krx
+TAEKYUNGCHEMICALCO.	006890	krx
 태경화학	006890	model:former_name
 BNK 3 SPECIAL PURPOSE ACQUISITION COMPANY	0068Y0	krx
 비엔케이3호스팩	0068Y0	model:short_form
 비엔케이제3호기업인수목적	0068Y0	krx
 BOSUNG POWER TECHNOLOGY	006910	krx
-Mohenz	006920	krx
+Mohenz.	006920	krx
 WOOSUNG	006980	krx
 GS Retail	007070	krx
 LG유통	007070	model:former_name
@@ -644,7 +646,7 @@ PUREUN SAVINGS BANK	007330	krx
 푸른상호저축은행	007330	model:former_name
 DN AUTOMOTIVE	007340	krx
 DTR오토모티브	007340	model:former_name
-JIN YANG PHARMACETICAL	007370	krx
+JIN YANG PHARMACETICAL.	007370	krx
 NATURECELL	007390	krx
 알앤엘삼미	007390	model:former_name
 Aprogen	007460	krx
@@ -668,7 +670,7 @@ SONO SQUARE	007720	krx
 대명엔터프라이즈	007720	model:former_name
 대명코퍼레이션	007720	model:former_name
 신안화섬	007720	model:former_name
-HANIL CHEMICAL IND	007770	krx
+HANIL CHEMICAL IND.	007770	krx
 한일화학공업	007770	krx
 KoreaCircuit	007810	krx
 한국써키트	007810	model:former_name
@@ -688,7 +690,7 @@ WonpungMulsan	008290	krx
 Kanaph Therapeutics	0082N0	krx
 NamsunAluminium	008350	krx
 남선경금속공업	008350	model:former_name
-Wonpoong	008370	krx
+WonpoongCorporation	008370	krx
 원풍화학공업	008370	model:former_name
 MoonbaeSteel	008420	krx
 BOOSTER	008470	krx
@@ -715,6 +717,7 @@ KyunginElectronics	009140	krx
 SamsungElectroMechanics	009150	krx
 삼성산요파츠	009150	model:former_name
 삼성전기공업	009150	model:former_name
+SIMPACInc	009160	krx
 심팩	009160	model:other
 쌍용정공	009160	model:former_name
 Hansol Logistics	009180	krx
@@ -727,7 +730,7 @@ MOORIM PAPER	009200	krx
 HANSSEM	009240	krx
 Shinwon	009270	krx
 KwangdongPharmaceutical	009290	krx
-Sam-A Pharm	009300	krx
+Sam-A Pharm.	009300	krx
 삼아약품	009300	model:former_name
 Charm Engineering	009310	krx
 참앤씨	009310	model:former_name
@@ -765,7 +768,7 @@ Mirae Asset Vision Special Purpose Acquisition 9 Company	0096D0	krx
 IREM	009730	krx
 동신에스엔티	009730	model:former_name
 코센	009730	model:former_name
-SAM JUNG PULP CO	009770	krx
+SAM JUNG PULP CO,.LTD.	009770	krx
 Mirae Asset Vision Special Purpose Acquisition 10 Company	0097F0	krx
 미래에셋비전10호스팩	0097F0	model:short_form
 미래에셋비전기업인수목적10호	0097F0	krx
@@ -801,7 +804,7 @@ LG산전	010120	model:former_name
 LS산전	010120	model:former_name
 LS일렉트릭	010120	ALPHA-1067
 금성산전	010120	model:former_name
-KoreaZ	010130	krx
+KoreaZinc	010130	krx
 SamsungHeavyIndustries	010140	krx
 삼성重	010140	model:short_form
 삼성중	010140	model:short_form
@@ -828,6 +831,7 @@ Hwashin	010690	krx
 Pyung Hwa Holdings	010770	krx
 IS DONGSEO	010780	krx
 FIRSTEC	010820	krx
+S-OilCorporation	010950	krx
 쌍용정유	010950	model:former_name
 에스오일	010950	model:other
 에쓰오일	010950	model:other
@@ -844,7 +848,7 @@ HYUNGJI Innovation and Creative Company Limited	011080	krx
 우성I&C	011080	model:former_name
 우성어패럴	011080	model:former_name
 Enex	011090	krx
-CJSEAFOOD	011150	krx
+CJSEAFOODCORPORATION	011150	krx
 삼호F&G	011150	model:former_name
 LOTTE CHEMICAL	011170	krx
 호남석유화학	011170	model:former_name
@@ -861,14 +865,14 @@ WOOSUNG MATERIALS	011300	krx
 성안머티리얼스	011300	model:former_name
 UNICK	011320	krx
 유니크전기	011320	model:former_name
-UNI CHEM	011330	krx
+UNI CHEM.CO.	011330	krx
 신진피혁공업	011330	model:former_name
 Seohan	011370	krx
 대구주택공사	011370	model:former_name
 BusanIndustrial	011390	krx
 GALAXIA SM	011420	krx
 아이비월드와이드	011420	model:former_name
-HANNONGCHEMICALS	011500	krx
+HANNONGCHEMICALSINC.	011500	krx
 SEBO MANUFACTURING ENGINEERING	011560	krx
 SAMSUNG SPECIAL PURPOSE ACQUISITION 13 COMPANY	0115H0	krx
 삼성13호스팩	0115H0	model:other
@@ -958,7 +962,7 @@ CAMUS ENGINEERING & CONSTRUCTION	013700	krx
 CBI	013720	model:former_name
 CHEONGBO	013720	krx
 청보산업	013720	model:former_name
-Spe	013810	krx
+Speco	013810	krx
 GMB Korea	013870	krx
 한국GMB공업	013870	model:former_name
 ZINUS	013890	krx
@@ -997,11 +1001,11 @@ UNID	014830	krx
 SungmoonElectronics	014910	krx
 성문콘덴서	014910	model:former_name
 ORIENTAL PRECISION & ENGINEERING	014940	krx
-SAMIK PHARM	014950	krx
+SAMIK PHARM.	014950	krx
 Samryoong	014970	krx
 In the F	014990	krx
 나산실업	014990	model:former_name
-e-STAR	015020	krx
+e-STARCO	015020	krx
 DaechangForging	015230	krx
 AUTOMOBILE&PCB	015260	krx
 극동도시가스	015360	model:former_name
@@ -1063,7 +1067,7 @@ Cas	016920	krx
 ShinwonConstruction	017000	krx
 KWANG MYUNG ELECTRIC	017040	krx
 MyungMoon Pharm	017180	krx
-Interm	017250	krx
+IntermCorporation	017250	krx
 인켈전기	017250	model:former_name
 WooshinSystems	017370	krx
 SeoulCityGas	017390	krx
@@ -1088,6 +1092,7 @@ DS Dansuk	017860	krx
 KoreaAlcoholIndustrial	017890	krx
 한국알콜산업	017890	krx
 AUK	017900	krx
+E1Corporation	017940	krx
 LG칼텍스가스	017940	model:former_name
 호유에너지	017940	model:former_name
 HankukCarbon	017960	krx
@@ -1135,7 +1140,7 @@ DAEKYO	019680	krx
 SEOYON TOPMETAL	019770	krx
 탑금속	019770	model:former_name
 ENERTORK	019990	krx
-Handsome	020000	krx
+HandsomeCorporation	020000	krx
 KidariStudio	020120	krx
 LOTTE ENERGY MATERIALS	020150	krx
 일진머티리얼즈	020150	model:former_name
@@ -1176,7 +1181,7 @@ TKG AIKANG	022220	krx
 SAMWONSTEEL	023000	krx
 MHETHANOL	023150	krx
 무학주정	023150	model:former_name
-T. K	023160	krx
+T. K.	023160	krx
 태광벤드공업	023160	model:former_name
 Korea Engineering Consultants	023350	krx
 한국종합기술개발공사	023350	model:former_name
@@ -1184,7 +1189,7 @@ EUGENE	023410	krx
 J Steel Company Holdings	023440	krx
 제일제강	023440	model:former_name
 제일제강공업	023440	model:former_name
-DONGNAMCHEMICALCO	023450	krx
+DONGNAMCHEMICALCO,.LTD.	023450	krx
 동남합성공업	023450	model:former_name
 LOTTE SHOPPING	023530	krx
 DaouTechnology	023590	krx
@@ -1211,6 +1216,7 @@ SC ENGINEERING	023960	krx
 세원중공업	023960	model:former_name
 HeunguOil	024060	krx
 위스컴	024070	model:other
+DCMCorp.	024090	krx
 IBK기업은행	024110	ALPHA-1067
 INDUSTRIALBANKOFKOREA	024110	krx
 중소기업은행	024110	ALPHA-1067
@@ -1221,6 +1227,7 @@ KOLMAR HOLDINGS	024720	krx
 HanilForgingIndustrial	024740	krx
 한일단조공업	024740	krx
 YOOSUNG T&S	024800	krx
+SewonCorporation	024830	krx
 KBI METAL	024840	krx
 갑을메탈	024840	model:former_name
 엠비성산	024840	model:former_name
@@ -1247,9 +1254,9 @@ KET	025540	model:short_form
 KoreaElectricTerminal	025540	krx
 한국단자공업	025540	krx
 HANKUK STEEL WIRE	025550	krx
-Mirae	025560	krx
+MiraeCorporation	025560	krx
 CHA AI Healthkare	025620	krx
-HansolHomeDe	025750	krx
+HansolHomeDeco	025750	krx
 한솔포렘	025750	model:former_name
 KICC	025770	model:short_form
 KoreaInformation&Communication	025770	krx
@@ -1322,6 +1329,7 @@ NICE Information Service	030190	krx
 나이스평가정보	030190	krx
 한국신용평가정보	030190	model:former_name
 한신평정보	030190	model:short_form
+KTCorporation	030200	krx
 한국전기통신공사	030200	model:former_name
 한국통신	030200	model:former_name
 Daol Investment & Securities	030210	krx
@@ -1333,7 +1341,7 @@ Dragonfly GF	030350	krx
 HANCOM	030520	krx
 한컴	030520	krx
 WONIK HOLDINGS	030530	krx
-KYOBOSECURITIES	030610	krx
+KYOBOSECURITIESCO.	030610	krx
 대한증권	030610	model:former_name
 DongwonFisheries	030720	krx
 Yangjisa	030960	krx
@@ -1383,7 +1391,7 @@ MGEN SOLUTIONS	032790	krx
 엠젠휴먼틱	032790	model:former_name
 Fantagio	032800	krx
 디지탈아리아	032800	model:former_name
-Woori Technology, In	032820	krx
+Woori Technology, Incorporation	032820	krx
 Samsung Life Insurance	032830	krx
 동방생명	032830	model:former_name
 동방생명보험	032830	model:former_name
@@ -1409,7 +1417,7 @@ INSUNG INFORMATION	033230	krx
 JahwaElectronics	033240	krx
 CHASYS	033250	krx
 삼립정공	033250	model:former_name
-Korea United Pharm	033270	krx
+Korea United Pharm.	033270	krx
 한국유나이티드제약	033270	krx
 LOGEN	033290	krx
 필코전자	033290	model:former_name
@@ -1524,9 +1532,9 @@ ContentreeJoongAng	036420	krx
 아이에스플러스코프	036420	model:former_name
 제이콘텐트리	036420	model:former_name
 KOGAS	036460	model:short_form
-KoreaGas	036460	krx
+KoreaGasCorporation	036460	krx
 가스공사	036460	model:short_form
-Daesung Microbiological Labs	036480	krx
+Daesung Microbiological Labs.	036480	krx
 대성미생물연구소	036480	krx
 S&T홀딩스	036530	model:former_name
 SNT Holdings	036530	krx
@@ -1538,7 +1546,7 @@ KZ Precision	036560	krx
 영풍정밀	036560	model:former_name
 케이젯정밀	036560	krx
 엔씨소프트	036570	model:former_name
-FARMS	036580	krx
+FARMSCO	036580	krx
 대상팜스코	036580	model:former_name
 GAMSUNG	036620	krx
 데브그루	036620	model:former_name
@@ -1605,7 +1613,7 @@ Sangsangin	038540	krx
 텍셀네트컴	038540	model:former_name
 WIZ CORP	038620	krx
 위즈정보기술	038620	model:former_name
-S NET SYSTEMS	038680	krx
+S NET SYSTEMS.Inc	038680	krx
 에스넷시스템	038680	krx
 EcoSimplex	038870	krx
 서희아이앤티	038870	model:former_name
@@ -1693,12 +1701,12 @@ RingNet	042500	krx
 RaonSecure	042510	krx
 테라움	042510	model:former_name
 HANS BIOMED	042520	krx
-SERONICS	042600	krx
+SERONICS.	042600	krx
 DSME	042660	model:former_name
 Hanwha Ocean	042660	krx
 대우조선	042660	model:former_name
 대우조선해양	042660	model:former_name
-HANMISemiconductor	042700	krx
+HANMISemiconductorCO.	042700	krx
 Sangji Construction	042940	krx
 케이엔씨글로벌	042940	model:former_name
 큐브앤컴퍼니	043090	model:former_name
@@ -1710,7 +1718,7 @@ HLB파워	043220	model:former_name
 TS Nexgen	043220	krx
 SUNGHO ELECTRONICS	043260	krx
 ESSEN TECH	043340	krx
-Digital Graphics In	043360	krx
+Digital Graphics Incorporation	043360	krx
 일리정공	043360	model:former_name
 평화정공	043370	model:former_name
 WELKEEPS HITECH	043590	krx
@@ -1799,7 +1807,7 @@ HYUNDAI BIOSCIENCE	048410	krx
 현대바이오사이언스	048410	krx
 현대아이비티	048410	model:former_name
 현대이미지퀘스트	048410	model:former_name
-YURA TECH	048430	krx
+YURA TECH.	048430	krx
 DAE DONG STEEL	048470	krx
 iNtRON Biotechnology	048530	krx
 인트론바이오테크놀로지	048530	krx
@@ -1832,7 +1840,7 @@ WOOJIN PLAIMM	049800	krx
 SEUNG IL	049830	krx
 승일제관	049830	model:former_name
 meerecompany Incorporated	049950	krx
-CELL BIOTECH CO	049960	krx
+CELL BIOTECH CO .	049960	krx
 BK Holdings	050090	krx
 한국전자재료	050090	model:former_name
 휘닉스소재	050090	model:former_name
@@ -1864,7 +1872,7 @@ CJ푸드시스템	051500	model:former_name
 KEPCO Plant Service & Engineering	051600	krx
 한국전력기공	051600	model:former_name
 한전기공	051600	model:former_name
-ChinYangChemical	051630	krx
+ChinYangChemicalCorporation	051630	krx
 CUROHOLDINGS	051780	krx
 케이디피	051780	model:former_name
 LG H&H	051900	krx
@@ -1936,7 +1944,7 @@ AHNLAB	053800	krx
 안철수연구소	053800	model:former_name
 안철수컴퓨터바이러스연구소	053800	model:former_name
 HS바이오팜	053950	model:former_name
-KYUNG NAM PHARM	053950	krx
+KYUNG NAM PHARM.CO.	053950	krx
 OSANGJAIEL	053980	krx
 자이엘정보기술	053980	model:former_name
 KOREA COMPUTER	054040	krx
@@ -1947,7 +1955,7 @@ SAMJIN LND COMPANY LIMITED	054090	krx
 MEDICOX	054180	krx
 오라바이오틱스	054180	model:former_name
 Elentec	054210	krx
-VitzroSys	054220	krx
+VitzroSys.	054220	krx
 광명제어	054220	model:former_name
 Panstar Enterprise	054300	krx
 Korea Plasma Technology U	054410	krx
@@ -2007,12 +2015,12 @@ CMG Pharmaceutical	058820	krx
 케이티스	058860	model:other
 한국인포서비스	058860	model:former_name
 EMRO., Incorporated	058970	krx
-Mi	059090	krx
+MiCo	059090	krx
 i-Components	059100	krx
 AJINEXTEK	059120	krx
 아진전자산업	059120	model:former_name
 나라소프트	059180	model:former_name
-META BIOMED	059210	krx
+META BIOMED.CO.	059210	krx
 Haisung Aero-Robotics	059270	krx
 해성굿쓰리	059270	model:former_name
 해성티피씨	059270	model:former_name
@@ -2040,7 +2048,7 @@ Dreamus Company	060570	krx
 CTC BIO	060590	krx
 세축상사	060590	model:former_name
 KH VATEC	060720	krx
-YoungLimWon SoftLab	060850	krx
+YoungLimWon SoftLab.	060850	krx
 영림원	060850	model:short_form
 Agent AI	060900	krx
 DGP	060900	model:former_name
@@ -2051,7 +2059,7 @@ HL Holdings	060980	krx
 한라홀딩스	060980	model:former_name
 RFTECH	061040	krx
 Sena Technologies	061090	krx
-HWAIL PHARM	061250	krx
+HWAIL PHARM.	061250	krx
 LB SEMICON	061970	krx
 마이크로스케일	061970	model:former_name
 SANIL ELECTRIC	062040	krx
@@ -2059,7 +2067,7 @@ KOREA ADVANCED MATERIALS	062970	krx
 피피아이	062970	model:former_name
 Com2uS Holdings	063080	krx
 게임빌	063080	model:former_name
-CKDBio	063160	krx
+CKDBioCorporation	063160	krx
 Seoul Auction Co. Ltd..	063170	krx
 SM Life Design Group	063440	krx
 에스엠라이프디자인그룹	063440	krx
@@ -2110,7 +2118,7 @@ WISE iTech	065370	krx
 SI RESOURCES	065420	krx
 ELUON	065440	krx
 이씨텔레콤	065440	model:former_name
-VICTEK	065450	krx
+VICTEK.	065450	krx
 Orient Precision Industries	065500	krx
 Huvitz	065510	krx
 Wiable	065530	krx
@@ -2208,10 +2216,10 @@ LIGHTRON FIBER-OPTIC DEVICES	069540	krx
 DAEWOONGPHARMACEUTICAL	069620	krx
 HANSAEMK	069640	krx
 엠케이트렌드	069640	model:former_name
-DSRWIRE	069730	krx
+DSRWIRECORP	069730	krx
 Exion Group	069920	krx
 아이에스이커머스	069920	model:former_name
-HYUNDAIDEPARTMENTSTORE	069960	krx
+HYUNDAIDEPARTMENTSTORECO.	069960	krx
 QuantumRail	070300	krx
 솔라시아	070300	model:former_name
 퀀텀레일	070300	krx
@@ -2252,7 +2260,7 @@ DUOBACK	073190	krx
 듀오백코리아	073190	model:former_name
 디비케이	073190	model:former_name
 해정산업	073190	model:former_name
-KUMHOTIRECO	073240	krx
+KUMHOTIRECO.	073240	krx
 LIG Accuver	073490	krx
 이노와이어리스	073490	model:former_name
 FRTEK	073540	krx
@@ -2270,7 +2278,7 @@ WONIK QnC	074600	krx
 ENPLUS	074610	krx
 이엔쓰리	074610	model:former_name
 PLANTYNET	075130	krx
-SaeronAutomotive	075180	krx
+SaeronAutomotiveCorporation	075180	krx
 SEJIN HEAVY INDUSTRIES	075580	krx
 DONGKUK REFRACTORIES & STEEL	075970	krx
 WELCRON HANTEC	076080	krx
@@ -2279,7 +2287,7 @@ GA INNODUS	076340	krx
 Haesung Optics	076610	krx
 DUK SAN HI METAL	077360	krx
 Uniquest	077500	krx
-STXEngine	077970	krx
+STXEngineCo.	077970	krx
 TELCOWARE	078000	krx
 LS SECURITIES	078020	krx
 이베스트증권	078020	model:short_form
@@ -2370,14 +2378,14 @@ WOOREE BIO	082850	krx
 우리이티아이	082850	model:former_name
 VITZROCELL	082920	krx
 테크라프	082920	model:former_name
-LOT Vacuum	083310	krx
+LOT Vacuum.	083310	krx
 GREEN CHEMICAL	083420	krx
 KPX그린케미칼	083420	model:former_name
 Global Standard Technology	083450	krx
 글로벌스탠다드테크놀로지	083450	krx
 EMnI	083470	krx
 이엠네트웍스	083470	model:former_name
-FNS TECH	083500	krx
+FNS TECH.	083500	krx
 케이엠디에스피	083550	model:former_name
 INCON	083640	krx
 윈포넷	083640	model:former_name
@@ -2394,7 +2402,7 @@ Soosung Webtoon	084180	krx
 수성이노베이션	084180	model:former_name
 Eugene Technology	084370	krx
 UBION	084440	krx
-LabGenomics	084650	krx
+LabGenomics.	084650	krx
 DONGYANG EXPRESS	084670	krx
 동양고속운수	084670	model:former_name
 C&우방랜드	084680	model:former_name
@@ -2429,7 +2437,7 @@ DongKook Pharmaceutical	086450	krx
 ECOPRO	086520	krx
 코리아제오륨	086520	model:former_name
 SUNJIN BEAUTY SCIENCE	086710	krx
-HanaFinancialGroup	086790	krx
+HanaFinancialGroupInc.	086790	krx
 Bio Solution	086820	krx
 엠씨티티	086820	model:former_name
 엠씨티티바이오	086820	model:former_name
@@ -2443,13 +2451,13 @@ SHOWBOX	086980	krx
 미디어플렉스	086980	model:former_name
 Peptron	087010	krx
 MOBILE APPLIANCE	087260	krx
-Pixelplus	087600	krx
+Pixelplus.	087600	krx
 DONG A ELTEK	088130	krx
 E KOCREF CR-REIT	088260	krx
 이리츠코크렙기업구조조정부동산투자회사	088260	krx
 SAWNICS	088280	krx
 EWON COMFORTECH	088290	krx
-URACLE	088340	krx
+URACLE.	088340	krx
 아이엠넷피아	088340	model:former_name
 HANWHA LIFE INSURANCE	088350	krx
 대한생명	088350	model:former_name
@@ -2457,7 +2465,7 @@ HANWHA LIFE INSURANCE	088350	krx
 한화생명보험	088350	krx
 INNOX	088390	krx
 새한마이크로텍	088390	model:former_name
-JINDO	088790	krx
+JINDO.CO.	088790	krx
 진도에프앤	088790	model:former_name
 Ace Technologies	088800	krx
 에이스안테나	088800	model:former_name
@@ -2511,7 +2519,7 @@ Hyulim ROBOT	090710	krx
 디에스티로봇	090710	model:former_name
 HYUNDAI EZWEL	090850	krx
 이지웰페어	090850	model:former_name
-EM-Tech	091120	krx
+EM-Tech.	091120	krx
 S&K POLYTEC	091340	krx
 에스엔케이폴리텍	091340	krx
 HanWool Materials Science	091440	krx
@@ -2548,7 +2556,7 @@ PUNGKANG	093380	krx
 MAKUS	093520	krx
 Korea Robot Manufacturing	093640	krx
 다믈멀티미디어	093640	model:former_name
-SEOWONINTECH	093920	krx
+SEOWONINTECH.CO.	093920	krx
 DONGWOON ANATECH	094170	krx
 HYOSUNG ITX	094280	krx
 텔레서비스	094280	model:former_name
@@ -2707,7 +2715,7 @@ FINE TECHNIX	106240	krx
 Miwon Holdings	107590	krx
 Sebitchem	107600	krx
 동양케미스트리	107600	model:former_name
-HanJungNCS	107640	krx
+HanJungNCS.Co.	107640	krx
 TOPTEC COMPANY,LIMITED	108230	krx
 LX Semicon	108320	krx
 실리콘웍스	108320	model:former_name
@@ -2799,7 +2807,7 @@ GOLFZON HOLDINGS	121440	krx
 골프존뉴딘홀딩스	121440	model:former_name
 Advanced Nano Products	121600	krx
 Vidente	121800	krx
-KOYJ	121850	krx
+KOYJ.CO.	121850	krx
 SD system	121890	krx
 GENORAY	122310	krx
 SAMKEE	122350	krx
@@ -2849,7 +2857,7 @@ Hyundai Futurenet	126560	krx
 BGFecomaterials	126600	krx
 코프라	126600	model:former_name
 HWASHIN PRECISION	126640	krx
-HyVISION SYSTEM	126700	krx
+HyVISION SYSTEM.INC	126700	krx
 Soosan Industries	126720	krx
 KORCHIP	126730	krx
 JNK Global	126880	krx
@@ -2894,7 +2902,7 @@ DOOSAN TESNA	131970	krx
 테스나	131970	model:former_name
 MegaMD	133750	krx
 FINEBESTEEL	133820	krx
-e-future	134060	krx
+e-future.Co.	134060	krx
 Miwon Chemicals	134380	krx
 Topco Media	134580	krx
 Sidiz	134790	krx
@@ -2983,7 +2991,7 @@ Nable	153460	krx
 네이블커뮤니케이션즈	153460	model:full_name
 WOOREE E&L Haroutine	153490	krx
 우리이앤엘	153490	model:former_name
-Optipharm	153710	krx
+Optipharm.	153710	krx
 Justek	153890	krx
 ASIA SEED	154030	krx
 농업회사법인 아시아종묘	154030	krx
@@ -3041,7 +3049,7 @@ AbClon	174900	krx
 AGOS	175140	krx
 인포마크	175140	model:former_name
 휴먼테크놀로지	175140	model:former_name
-Icure Pharmaceutical In	175250	krx
+Icure Pharmaceutical Incorporation	175250	krx
 JB Financial Group	175330	krx
 JB금융	175330	model:short_form
 KONASOL	176590	krx
@@ -3049,7 +3057,7 @@ KONASOL	176590	krx
 DuChemBio	176750	krx
 Vessel	177350	krx
 PAVONINE	177830	krx
-3ALogics	177900	krx
+3ALogics.	177900	krx
 SEOJIN SYSTEM	178320	krx
 DAEDONG KOREA GINSENG	178600	krx
 ILWOUL GML	178780	krx
@@ -3075,7 +3083,7 @@ NKGenBiotechKorea	182400	krx
 에이티젠	182400	model:former_name
 엔케이맥스	182400	model:former_name
 ASIACEMENT	183190	krx
-KoMi	183300	krx
+KoMiCo	183300	krx
 ENZYCHEM LIFESCIENCES	183490	krx
 엔지켐	183490	model:former_name
 SGA Solutions	184230	krx
@@ -3091,7 +3099,7 @@ HLB Genex	187420	krx
 PenetriumBio	187660	krx
 에이디엠코리아	187660	model:former_name
 현대ADM	187660	model:former_name
-NANO	187790	krx
+NANO.	187790	krx
 유진기업인수목적1호	187790	model:former_name
 유진스팩1호	187790	model:former_name
 DEVICE	187870	krx
@@ -3109,7 +3117,7 @@ HYUNGKUK F&B	189980	krx
 Namuga	190510	krx
 KOREA ASSET INVESTMENT SECURITIES	190650	krx
 코리아RB증권	190650	model:former_name
-RYUK-IL C&S	191410	krx
+RYUK-IL C&S.	191410	krx
 육일씨엔에스	191410	model:other
 Tego Science	191420	krx
 BLUETOP	191600	krx
@@ -3165,7 +3173,7 @@ CHEIL ELECTRIC	199820	krx
 제일전기공업	199820	model:former_name
 KolmarBNH	200130	krx
 선바이오텍	200130	model:former_name
-TELCON RF PHARMACEUTICAL	200230	krx
+TELCON RF PHARMACEUTICAL.	200230	krx
 텔콘	200230	model:former_name
 Artist Studio	200350	krx
 APACT	200470	krx
@@ -3380,6 +3388,7 @@ A ONE CUBETECH	234070	krx
 에이원알폼	234070	model:former_name
 JW LIFESCIENCE	234080	krx
 중외생명과학	234080	model:former_name
+Sewon	234100	krx
 STraffic	234300	krx
 Hecto Financial	234340	krx
 세틀뱅크	234340	model:former_name
@@ -3401,7 +3410,7 @@ Aligned Genetics	238120	krx
 로고스바이오	238120	model:former_name
 로고스바이오시스템스	238120	model:former_name
 얼라인드제네틱스	238120	krx
-BIFIDO	238200	krx
+BIFIDO.	238200	krx
 HIMS	238490	krx
 Solumix	238500	krx
 NanoSolution	238540	krx
@@ -3419,7 +3428,7 @@ HWASEUNG ENTERPRISE	241590	krx
 UNITEKNO	241690	krx
 COSMECCA KOREA	241710	krx
 코스메카	241710	model:short_form
-MECARO	241770	krx
+MECARO.CO.	241770	krx
 메카로닉스	241770	model:former_name
 오션브릿지	241790	model:former_name
 ASTORY	241840	krx
@@ -3541,7 +3550,7 @@ HD Construction Equipment	267270	krx
 HD현대건설기계	267270	model:former_name
 현대건설기계	267270	model:former_name
 KYUNGDONG CITY GAS	267290	krx
-Naintech	267320	krx
+Naintech.	267320	krx
 교보7호기업인수목적	267320	model:former_name
 교보7호스팩	267320	model:former_name
 BARREL	267790	krx
@@ -3624,7 +3633,7 @@ TWIM	290090	krx
 DH AUTOLEAD	290120	krx
 대유에이피	290120	model:former_name
 Hunesion	290270	krx
-Shindo Eng. Lab	290520	krx
+Shindo Eng. Lab.	290520	krx
 DK Tech	290550	krx
 Parataxis Ethereum	290560	krx
 L&C BIO	290650	krx
@@ -3691,8 +3700,7 @@ VAIV company	301300	krx
 INNOMETRY	302430	krx
 SK BIOSCIENCE	302440	krx
 REMED	302550	krx
-T	302920	krx
-TCO	302920	model:short_form
+TCO	302920	krx
 Zinitix	303030	krx
 대신밸런스5호스팩	303030	model:former_name
 대신밸런스제5호기업인수목적	303030	model:former_name
@@ -3726,7 +3734,7 @@ CTR Mobility	308170	krx
 센트랄모텍	308170	model:former_name
 Cellbion	308430	krx
 IT-CHEM	309710	krx
-JOYWORKS&	309930	krx
+JOYWORKS&Co	309930	krx
 삼성머스트스팩3호	309930	model:former_name
 오하임아이엔티	309930	model:former_name
 오하임앤컴퍼니	309930	model:former_name
@@ -3804,7 +3812,7 @@ Lunit	328130	krx
 Saltware	328380	krx
 HD HYUNDAI HEAVY INDUSTRIES	329180	krx
 현대중공업	329180	model:former_name
-Withus Pharmaceutical	330350	krx
+Withus Pharmaceutical.	330350	krx
 LOTTE REIT	330590	krx
 롯데위탁관리부동산투자회사	330590	model:full_name
 Stonebridge Ventures	330730	krx
@@ -3819,7 +3827,7 @@ Autocrypt	331740	krx
 Celemics	331920	krx
 OceansBio	332190	krx
 NOUSBO	332290	krx
-IDP Corp	332370	krx
+IDP Corp.	332370	krx
 Pentastone Electronics	332570	krx
 와이팜	332570	model:former_name
 Innotena	333050	krx
@@ -3898,7 +3906,7 @@ HYBE	352820	krx
 빅히트엔터테인먼트	352820	model:former_name
 Obigo	352910	krx
 텔레카코리아	352910	model:former_name
-ENBIO	352940	krx
+ENBIOCO.	352940	krx
 인바이오믹스	352940	model:former_name
 Hurum	353190	krx
 DaeduckElectronics	353200	krx
@@ -4013,7 +4021,7 @@ K Car	381970	krx
 에이치씨에이에스	381970	model:former_name
 Oncocross	382150	krx
 G.I.Tech	382480	krx
-GnBS e	382800	krx
+GnBS eco	382800	krx
 지앤비에스엔지니어링	382800	model:former_name
 Onejoon	382840	krx
 Bumhan Fuel Cell	382900	krx
@@ -4024,7 +4032,7 @@ Finemedix	387570	krx
 REMEDI	387690	krx
 G2Power	388050	krx
 GFC Life Science	388610	krx
-Yuilrobotics	388720	krx
+Yuilrobotics.	388720	krx
 LiComm	388790	krx
 Pharos iBio	388870	krx
 Zaram Technology	389020	krx
@@ -4048,14 +4056,14 @@ SK REIT	395400	krx
 SK위탁관리부동산투자회사	395400	model:full_name
 NEXTCHIP	396270	krx
 SeA Mechanics	396300	krx
-WOT	396470	krx
+WOT.CO.	396470	krx
 Mirae Asset Global REIT	396690	krx
 AprilBio	397030	krx
 ADforus	397810	krx
 SGHEALTHCARE	398120	krx
 GAONCHIPS	399720	krx
 NHALLONEREIT	400760	krx
-KONAN TECHNOLOGY IN	402030	krx
+KONAN TECHNOLOGY INCORPORATION	402030	krx
 SKSQUARE	402340	krx
 CALTH	402420	krx
 Green Resource	402490	krx
@@ -4095,7 +4103,7 @@ LS Materials	417200	krx
 KORAMCO THE ONE REIT	417310	krx
 JI-Tech	417500	krx
 TRUEN	417790	krx
-Justem	417840	krx
+Justem.Co.	417840	krx
 OBZEN	417860	krx
 Model Solution	417970	krx
 SecuLetter	418250	krx
@@ -4121,7 +4129,7 @@ MICRO2NANO	424980	krx
 Sigetronics	429270	krx
 Hanssak	430690	krx
 한싹시스템	430690	model:former_name
-K3I	431190	krx
+K3I.	431190	krx
 KB STAR REIT	432320	krx
 KB스타위탁관리부동산투자회사	432320	model:full_name
 YLAB	432430	krx
@@ -4171,7 +4179,7 @@ HASS	450330	krx
 Inswave	450520	krx
 인스웨이브시스템즈	450520	model:former_name
 ASTERASYS	450950	krx
-BBIA	451250	krx
+BBIA.CO.	451250	krx
 CONTEC	451760	krx
 Hanwha REIT	451800	krx
 한화위탁관리부동산투자회사	451800	model:full_name

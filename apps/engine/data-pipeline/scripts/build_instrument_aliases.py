@@ -42,7 +42,8 @@ alias\tticker\tsource
 
 
 # 영문 사명 끝의 법인 표기(`SeA Mechanics Co., LTD.` → `SeA Mechanics`).
-_EN_LEGAL_TAIL = re.compile(r"[\s,.]*(co\.?,?\s*ltd\.?|corp(oration)?\.?|inc\.?|ltd\.?|co\.?)$", re.IGNORECASE)
+# 꼬리 앞에 공백·쉼표가 있어야 뗀다 — 없으면 사명의 일부다(`KISCO` 의 `CO`, `KOREA ZINC` 의 `INC`).
+_EN_LEGAL_TAIL = re.compile(r"[\s,]+(co\.?,?\s*ltd\.?|corp(oration)?\.?|inc\.?|ltd\.?|co\.?)$", re.IGNORECASE)
 
 
 def krx_names(row: dict) -> list[str]:
