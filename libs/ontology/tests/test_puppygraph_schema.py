@@ -75,7 +75,7 @@ def test_mapped_public_tables_and_columns_exist_in_the_flyway_migrations():
             missing.append(f'{label}: table {source["table"]}')
         for field in source['mappedField']:
             column = field['sourceFieldName']
-            if re.search(rf'DROP COLUMN (IF EXISTS )?{column}\b', table, re.I) or not re.search(rf'^\s*(ADD COLUMN (IF NOT EXISTS )?)?{column}\s', table, re.I | re.M):
+            if re.search(rf'(DROP COLUMN (IF EXISTS )?|RENAME COLUMN ){column}\b', table, re.I) or not re.search(rf'^\s*(ADD COLUMN (IF NOT EXISTS )?)?{column}\s', table, re.I | re.M):
                 missing.append(f'{label}: {source["table"]}.{column}')
     assert missing == []
 
@@ -153,7 +153,7 @@ def test_start_up_loader_gives_up_loudly_after_the_deadline(capsys):
     assert 'graph_schema_failed' in capsys.readouterr().out
 
 
-def test_start_up_loader_reports_a_malformed_answer_as_a_failure_line(capsys):
+def test_start_up_loader_reports_missing_database_credentials_as_a_failure_line(capsys):
     import io
     loader = _loader()
     assert loader.main({**_env(), 'GRAPH_CREDENTIALS': '{}'}, post=_post([io.BytesIO(b'[]')], []), sleep=lambda s: None) == 1
