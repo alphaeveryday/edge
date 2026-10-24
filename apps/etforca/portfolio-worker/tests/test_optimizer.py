@@ -783,3 +783,32 @@ def test_funded_candidates_that_would_buy_more_of_a_held_stock_are_dropped_befor
     assert held(60) == 'fail'
 
 
+
+
+async def test_dividend_chip_shows_trailing_yields_so_the_model_can_favor_higher_payers():
+    # '배당 받기'를 고른 고객에게 모델이 분배율 높은 ETF에 무게를 두려면, 목적(income)을 따로 적지 않아도
+    # ETF별 분배율과 후보별 비중 가중 분배율이 보여야 한다. 칩이 없으면 붙이지 않는다
+    from edge_portfolio.decision import Decision
+    request, market, _ = batch()
+    market.catalog = {'KR:A': {'ticker': 'A', 'market': 'KR', 'kind': 'etf', 'name': '고배당 A'},
+                      'KR:B': {'ticker': 'B', 'market': 'KR', 'kind': 'etf', 'name': '배당성장 B'}}
+    def loader(symbol, _):
+        data = record(start=100, finish=100)
+        data['frame']['Dividends'] = 0.0
+        data['frame'].iloc[60, data['frame'].columns.get_loc('Dividends')] = 6.0 if symbol == 'A.KS' else 2.0
+        return data
+    market.loader = loader
+    groups = [['KR:A'], ['KR:B'], ['KR:A', 'KR:B']]
+    optimizer = Optimizer(market, request)
+    optimizer.decision = Decision(constraints=[{'kind': 'dividend', 'source': '배당 받기'}])
+    result = await optimizer.tool({'combinations': groups})
+    assert result['income_yields_pct'] == {'KR:A': 6, 'KR:B': 2}  # 최근 12개월 분배금 ÷ 최근 종가 100
+    assert result['candidates']
+    for row in result['candidates']:
+        expected = sum(a['weight_pct'] / 100 * result['income_yields_pct'][a['instrument_id']] for a in row['allocations'])
+        assert row['income_yield_pct'] == pytest.approx(expected)
+    optimizer = Optimizer(market, request)
+    optimizer.decision = Decision()
+    result = await optimizer.tool({'combinations': groups})
+    assert result['income_yields_pct'] == {}
+    assert all(row['income_yield_pct'] is None for row in result['candidates'])
