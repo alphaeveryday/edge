@@ -55,12 +55,14 @@ print(jobs.stdout if jobs.returncode == 0 else json.dumps({'jobs':'unavailable'}
 # 출력은 REVIEW 한 줄(집계·job id)뿐이고 stderr(로그·추적)는 호스트 밖으로 내보내지 않는다.
 REVIEW_TIMEOUT_SECONDS = 3300
 REVIEW_SCRIPT = r'''
-import json,subprocess
+import json,os,subprocess
 compose = ['docker','compose','--env-file','/opt/edge-portfolio/runtime.env','-f','/opt/edge-portfolio/current/deploy/compose.yml']
 available = next(int(line.split()[1]) for line in open('/proc/meminfo') if line.startswith('MemAvailable:')) // 1024
 def review():
-    name = 'portfolio-past-review'
-    subprocess.run(['docker','rm','-f',name],capture_output=True)
+    # 한 번에 하나만. 이름이 실행마다 달라 다른 실행의 컨테이너를 지우지 않는다
+    if subprocess.run(['docker','ps','-q','--filter','name=portfolio-past-review'],capture_output=True,text=True).stdout.strip():
+        return 'REVIEW '+json.dumps({'review':'skipped','reason':'ALREADY_RUNNING'})
+    name = f'portfolio-past-review-{os.getpid()}'
     try:
         run = subprocess.run(compose+['run','--rm','--no-deps','-T','--name',name,'worker','python','-m','edge_portfolio.past_review',str(days),str(samples)],
                              capture_output=True,text=True,timeout=deadline)

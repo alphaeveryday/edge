@@ -90,6 +90,8 @@ def baseline_ids(request, as_of):
     if not market.current:
         return None, 'CURRENT_WEIGHTS_REQUIRED'
     ids = set(market.current) - {'CASH:KRW'}
+    if not ids:
+        return None, 'CASH_ONLY'  # 받을 지금 보유 가격이 없다. 후보 가격은 분석이 고른 뒤에 받는다
     if ids - market.catalog.keys():
         return None, 'CURRENT_INSTRUMENT_UNAVAILABLE'
     if any(market.catalog[key]['market'] == 'US' for key in ids):
@@ -265,7 +267,9 @@ async def review(rows, *, as_of, llm_samples=0, key=None, budget=PRICE_BUDGET_SE
                    'failures': dict(Counter(failure or 'OK' for failure, _ in outcomes.values()).most_common()),
                    'seconds': quantiles([seconds for _, seconds in outcomes.values()])},
     }
-    if llm_samples:
+    if llm_samples and 'PRICE_PROVIDER_RATE_LIMIT' in summary['prices']['failures']:
+        summary['llm'] = 'skipped_rate_limited'  # 실제 분석도 같은 공급자를 쓴다. 고객 분석 몫을 남긴다
+    elif llm_samples:
         summary['llm'] = await llm_replays(checked[:min(llm_samples, MAX_LLM_SAMPLES)], key)
     summary['examples'] = dict(report.examples)
     return summary
@@ -277,6 +281,13 @@ async def llm_replays(samples, key):
     from .worker import failure_codes
     results = []
     for row, request in samples:
+        waited = 0
+        while waited < LLM_TIMEOUT_SECONDS and busy():
+            await asyncio.sleep(BUSY_WAIT_SECONDS)
+            waited += BUSY_WAIT_SECONDS
+        if waited >= LLM_TIMEOUT_SECONDS:
+            results.append({'job': row['id'], 'status': 'skipped_busy'})  # 고객 분석이 길게 이어지면 그 몫을 뺏지 않는다
+            continue
         started = time.monotonic()
         try:
             async with asyncio.timeout(LLM_TIMEOUT_SECONDS):
@@ -317,7 +328,7 @@ def load(days):
         # 시험 방문자의 분석은 빼고 고객 분석만 본다. result 는 지난 추천 배분만 읽는다
         return db.execute(f"""SELECT id, input, jsonb_build_object('recommendation', jsonb_build_object('allocations',
             result->'recommendation'->'allocations')) AS result FROM portfolio_jobs
-            WHERE kind='analysis' AND owner NOT IN ({TEST_OWNERS}) {window} ORDER BY created_at DESC""",
+            WHERE kind='analysis' AND test_label IS NULL AND owner NOT IN ({TEST_OWNERS}) {window} ORDER BY created_at DESC""",
             (days,) if days else ()).fetchall()
 
 

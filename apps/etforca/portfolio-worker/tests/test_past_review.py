@@ -1,6 +1,7 @@
 """지난 분석 재검토: 새 코드의 실패 지점을 단계별로 세되, 고객 입력은 출력으로 나가지 않고 DB 에는 쓰지 않는다.
 모든 입력은 직접 만든 가짜 자료다."""
 from datetime import date, timedelta
+from unittest.mock import AsyncMock
 
 import pandas as pd
 import pytest
@@ -58,17 +59,19 @@ async def test_each_stage_names_the_failure_point_and_never_prints_customer_inpu
         {'id': job(3), 'input': payload([{**KR, 'instrument_id': 'KR:999999'}], preferences={'note': '비밀'}), 'result': None},
         {'id': job(4), 'input': payload([KR], horizon=''), 'result': None},
         {'id': job(5), 'input': payload([KR, US], question='', constraints=[{'kind': 'no_sell'}]), 'result': None},
+        {'id': job(6), 'input': payload([CASH], question=''), 'result': None},
     ]
     summary = await past_review.review(rows, as_of=AS_OF, pause=0)
     stages = summary['stages']
-    assert summary['distinct_inputs'] == 4, 'A re-saved draft is the same customer scenario and is reviewed once'
-    assert stages['contract_persisted'] == {'OK': 3, 'horizon:literal_error': 1}
+    assert summary['distinct_inputs'] == 5, 'A re-saved draft is the same customer scenario and is reviewed once'
+    assert stages['contract_persisted'] == {'OK': 4, 'horizon:literal_error': 1}
     assert stages['contract_resubmit']['CONTRIBUTION_CHOICE_REQUIRED'] == 1, 'The submit gate (api.admit) must be the same judgment'
-    assert stages['conditions'] == {'TEXT_WITHOUT_CHIPS': 2, 'HAS_CHIPS': 1}
-    assert stages['catalog'] == {'OK': 2, 'MISSING_ETF': 1}
+    assert stages['conditions'] == {'TEXT_WITHOUT_CHIPS': 3, 'HAS_CHIPS': 1}
+    assert stages['catalog'] == {'OK': 3, 'MISSING_ETF': 1}
     assert stages['execution_past_recommendation'] == {'infeasible': 1, 'infeasible:ACCOUNT_TRANSFER_NOT_ALLOWED:ISA': 1}
-    assert stages['execution_current'] == {'ready': 3}, 'Keeping today\'s holdings must always be executable'
-    assert stages['price_analysis'] == {'OK': 1, 'CURRENT_INSTRUMENT_UNAVAILABLE': 1, 'BASELINE_PRICE_UNAVAILABLE': 1}
+    assert stages['execution_current'] == {'ready': 4}, 'Keeping today\'s holdings must always be executable'
+    assert stages['price_analysis'] == {'OK': 1, 'CURRENT_INSTRUMENT_UNAVAILABLE': 1, 'BASELINE_PRICE_UNAVAILABLE': 1,
+                                        'CASH_ONLY': 1}, 'Cash has no baseline price to fail'
     assert sorted(prices) == ['069500.KS', 'KRW=X', 'VOO'], 'Each instrument is fetched once for every analysis that holds it'
     assert summary['prices']['failures'] == {'OK': 2, 'PRICE_STALE': 1}
     assert summary['examples']['catalog/MISSING_ETF'] == [job(3)]
@@ -143,7 +146,7 @@ def test_review_only_reads_and_every_connection_is_read_only(monkeypatch, capsys
     past_review.main(['90', '0'])
     queries = [query for db in connections for query in db.queries]
     assert all(query.lstrip().startswith('SELECT') for query in queries)
-    assert "owner NOT IN" in queries[0], 'Test visitors are not customers'
+    assert "owner NOT IN" in queries[0] and 'test_label IS NULL' in queries[0], 'Test visitors and test-labelled jobs are not customers'
     output = capsys.readouterr().out
     assert output.startswith('REVIEW ') and output.count('\n') == 1
     assert not [word for word in PRIVATE if word in output]
@@ -164,3 +167,23 @@ async def test_llm_samples_report_status_codes_and_time_only(monkeypatch):
     assert results[0]['optimization'] == 'available' and results[0]['candidates'] == 2
     assert results[1]['codes'] == ['ValueError']
     assert not [word for word in PRIVATE if word in str(results)]
+
+
+async def test_llm_samples_yield_to_live_customers_and_to_provider_rate_limits(monkeypatch, prices):
+    calls = []
+    async def run_analysis(request, key, on_stage):
+        calls.append(key)
+        return {}
+    monkeypatch.setattr('edge_portfolio.agent.run_analysis', run_analysis)
+    monkeypatch.setattr(past_review, 'BUSY_WAIT_SECONDS', past_review.LLM_TIMEOUT_SECONDS)
+    monkeypatch.setattr(past_review, 'busy', lambda: True)
+    monkeypatch.setattr(past_review.asyncio, 'sleep', AsyncMock())
+    from edge_portfolio.contracts import AnalysisInput
+    results = await past_review.llm_replays([({'id': job(1)}, AnalysisInput.model_validate(payload([KR])))], 'k')
+    assert results == [{'job': job(1), 'status': 'skipped_busy'}] and calls == []
+    monkeypatch.setattr(past_review, 'busy', lambda: False)
+    async def limited(symbol, as_of, **options):
+        raise ValueError('PRICE_PROVIDER_RATE_LIMIT')
+    monkeypatch.setattr('edge_portfolio.market_data.fetch_prices', limited)
+    summary = await past_review.review([{'id': job(1), 'input': payload([KR]), 'result': None}], as_of=AS_OF, llm_samples=1, pause=0)
+    assert summary['llm'] == 'skipped_rate_limited' and calls == []

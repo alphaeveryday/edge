@@ -63,17 +63,20 @@ def test_replay_reads_only_failed_analysis_without_mutation_or_private_output(di
     assert report['status'] == ('not_found' if not exists else 'failed' if fail else 'succeeded')
 
 
-@pytest.mark.parametrize('memory,stdout,expected', [
-    (4096, 'PRIVATE log line 1234567\nREVIEW {"rows": 3}\n', {'rows': 3}),
-    (4096, 'PRIVATE traceback only\n', {'review': 'unavailable', 'returncode': 1}),
-    (300, '', {'review': 'skipped', 'reason': 'LOW_HOST_MEMORY', 'available_mb': 300}),
+@pytest.mark.parametrize('memory,running,stdout,expected', [
+    (4096, '', 'PRIVATE log line 1234567\nREVIEW {"rows": 3}\n', {'rows': 3}),
+    (4096, '', 'PRIVATE traceback only\n', {'review': 'unavailable', 'returncode': 1}),
+    (4096, 'abc123\n', '', {'review': 'skipped', 'reason': 'ALREADY_RUNNING'}),
+    (300, '', '', {'review': 'skipped', 'reason': 'LOW_HOST_MEMORY', 'available_mb': 300}),
 ])
-def test_past_review_runs_in_a_disposable_container_and_prints_only_its_summary(diagnostics, monkeypatch, capsys, memory, stdout, expected):
+def test_past_review_runs_in_a_disposable_container_and_prints_only_its_summary(diagnostics, monkeypatch, capsys, memory, running, stdout, expected):
     import io
     import subprocess
     calls = []
     def run(command, **options):
-        calls.append((command, options))
+        calls.append(command)
+        if command[:2] == ['docker', 'ps']:
+            return SimpleNamespace(stdout=running, stderr='', returncode=0)
         return SimpleNamespace(stdout=stdout, stderr='PRIVATE stderr', returncode=1 if 'REVIEW' not in stdout else 0)
     monkeypatch.setattr(subprocess, 'run', run)
     script = diagnostics.review_script(90, 2)
@@ -81,14 +84,17 @@ def test_past_review_runs_in_a_disposable_container_and_prints_only_its_summary(
     output = capsys.readouterr().out
     assert 'PRIVATE' not in output
     assert json.loads(output.removeprefix('REVIEW ')) == expected
-    review = [command for command, _ in calls if 'edge_portfolio.past_review' in command]
-    if memory < 600:
-        assert review == [], 'A busy host skips the review instead of risking the live worker'
+    review = [command for command in calls if 'edge_portfolio.past_review' in command]
+    if memory < 600 or running:
+        assert review == [], 'A busy host or a review already in progress is never doubled up'
+        assert not [command for command in calls if 'rm' in command], "Another run's container is never removed"
         return
     # 분석 중인 worker 컨테이너(exec)가 아니라 제 메모리 상한을 가진 1회용 컨테이너(run --rm)에서 돈다
-    assert review[0][review[0].index('run'):review[0].index('worker')] == ['run', '--rm', '--no-deps', '-T', '--name', 'portfolio-past-review']
-    assert review[0][-2:] == ['90', '2']
-    assert calls[-1][0] == ['docker', 'rm', '-f', 'portfolio-past-review'], 'The container is removed even after a timeout'
+    command = review[0]
+    name = command[command.index('--name') + 1]
+    assert command[command.index('run'):command.index('worker')] == ['run', '--rm', '--no-deps', '-T', '--name', name]
+    assert name.startswith('portfolio-past-review-') and command[-2:] == ['90', '2']
+    assert calls[-1] == ['docker', 'rm', '-f', name], "Only this run's container is removed, even after a timeout"
 
 
 def test_review_options_are_bounded_and_existing_modes_are_unchanged(diagnostics):
