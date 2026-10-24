@@ -98,7 +98,7 @@ def _notify_failure(context):
     run = context["dag_run"]
     SnsHook().publish_to_target(
         target_arn=ALARM_TOPIC,
-        subject=f"[{LANE}] FAILED — airflow {run.run_id}",
+        subject=f"[{LANE}] FAILED — airflow {run.run_id}"[:99],      # SNS 제목은 100자 미만 — 전체 run_id 는 본문에 있다
         message=f"dag={run.dag_id} run={run.run_id} reason={context.get('reason')}",
     )
 

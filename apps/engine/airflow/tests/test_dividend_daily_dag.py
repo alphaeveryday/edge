@@ -142,3 +142,8 @@ def test_failed_run_publishes_to_the_alarm_topic(module, monkeypatch):
     assert sent == [{"target_arn": "arn:aws:sns:ap-northeast-2:0:alarm",
                      "subject": "[dividend-daily] FAILED — airflow scheduled__2026-10-20T18:00:00+00:00",
                      "message": "dag=edge_dividend_daily run=scheduled__2026-10-20T18:00:00+00:00 reason=task_failure"}]
+    # 긴 수동 run_id 라도 SNS 제목 상한(100자 미만)에 걸려 통보가 통째로 거부되면 안 된다 — 본문에 전체 id 가 남는다.
+    sent.clear()
+    long_run = SimpleNamespace(run_id="manual__" + "a" * 120, dag_id="edge_dividend_daily")
+    module._notify_failure({"dag_run": long_run, "reason": "task_failure"})
+    assert len(sent[0]["subject"]) < 100 and long_run.run_id in sent[0]["message"]
