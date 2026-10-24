@@ -7,7 +7,7 @@ import { useConfirmation } from './design-system/confirmation';
 import { bulkHoldings, fromPercents, toPercents } from './bulkHoldings';
 import { cashInstrument, matchInstruments } from './InstrumentSearch';
 import { PlanInput, planGuidance, taxPayload, usableAccounts, horizonLabel, monthlyOff } from './PlanInput';
-import { Avatar, Glyph, Quota, man, manInput } from './flow';
+import { Avatar, Glyph, Quota, man, manInput, won as wonText } from './flow';
 import type { TaxProfile } from './accountEligibility';
 import type { Saved } from './workbook';
 import { pendingKey } from './preview';
@@ -103,7 +103,9 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
     element.focus({ preventScroll: true });
     revealing.current = false;
     const view = window.visualViewport, viewBottom = view ? view.offsetTop + view.height : innerHeight;
-    const box = element.getBoundingClientRect(), limit = Math.min(bar.current?.getBoundingClientRect().top ?? viewBottom, viewBottom) - 8;
+    // 넓은 화면에서는 버튼 패널이 옆 열에 있어 칸을 가리지 않는다 — 가로로 겹칠 때만 그 위를 한계로 본다.
+    const box = element.getBoundingClientRect(), cta = bar.current?.getBoundingClientRect();
+    const limit = Math.min(cta && cta.left < box.right && cta.right > box.left ? cta.top : viewBottom, viewBottom) - 8;
     if (box.bottom > limit) window.scrollBy(0, box.bottom - limit);
     else if (box.top < 8) window.scrollBy(0, box.top - 8);
   }
@@ -241,6 +243,9 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
   // 비중이 100%를 넘으면 넘친 몫을 빨갛게 보인다(넘은 뒤의 종목은 막대에 들어갈 자리가 없다).
   const segments = weights.map((w, i) => { const room = Math.max(0, Math.min(w, 100 - filled)); const over = filled + w > 100.005; filled += w; return { i, width: room, over }; }).filter(s => s.width > 0);
   const groups = [...new Set(holdings.map(h => h.account))];
+  const barSegments = segments.map(s => <span key={s.i} style={{ flexGrow: s.width, background: s.over ? 'var(--color-danger)' : chartPalette[s.i % chartPalette.length] }} />);
+  const planText = [how === '매달 꾸준히' ? `매달 ${Number(contribution).toLocaleString('ko-KR', { maximumFractionDigits: 4 })}만 원` : monthlyOff.includes(how) ? '매달 넣지 않음' : '', horizonLabel[horizon], `계좌 ${usableAccounts(selected, held, tax).length}개`].filter(Boolean);
+  const chipText = chips.map(c => c.kind === 'max_positions' ? `종목 ${c.value ?? 'n'}개 이하` : chipLabels.find(([kind]) => kind === c.kind)?.[1] ?? c.kind);
   const pct = (w: number) => `${Math.round(w)}%`;
   const pickRow = (item: Instrument, note?: string) => <li className="fl-pick" key={item.id}><Avatar holding={{ ...item, instrument_id: item.id }} />
     <span className="fl-pick__text"><b>{item.name}{item.kind === 'stock' && <span className="fl-badge">주식</span>}</b><small>{note ?? itemLabel(item)}</small></span><Button className="fl-add" aria-label={item.name + ' 담기'} onClick={() => pick(item)}><Glyph name="plus" size={16} />담기</Button></li>;
@@ -277,7 +282,7 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
             <strong className="fl-basket__total" data-over={mode === 'percent' && percentHundredths > 10000}>{mode === 'percent' ? <><em>{percentSum}</em>%</> : amountSum >= 1e4 ? <><em>{man(amountSum)}</em> 원</> : <><em>{amountSum.toLocaleString('ko-KR')}</em>원</>}</strong></div>
             <div className="fl-mode" role="group" aria-label="숫자 적는 방법">{(['amount', 'percent'] as const).map(m => <Button key={m} aria-pressed={mode === m} onClick={() => changeMode(m)}>{m === 'amount' ? '금액' : '비중'}</Button>)}</div></div>
           {mode === 'percent' && <p className="fl-badge" data-tone={percentHundredths === 10000 ? 'success' : 'danger'} role="status">{percentHundredths === 10000 ? <><Glyph name="check" size={14} />합계 100%</> : percentHundredths > 10000 ? <><Glyph name="alert" size={14} />100%를 {((percentHundredths - 10000) / 100).toLocaleString('ko-KR')}%p 넘었어요</> : `${((10000 - percentHundredths) / 100).toLocaleString('ko-KR')}% 남았어요`}</p>}
-          <div className="fl-allocation" role="img" aria-label={'비중 막대: ' + holdings.map((h, i) => `${h.name} ${pct(weights[i])}`).join(', ')}>{segments.map(s => <span key={s.i} style={{ flexGrow: s.width, background: s.over ? 'var(--color-danger)' : chartPalette[s.i % chartPalette.length] }} />)}</div>
+          <div className="fl-allocation" role="img" aria-label={'비중 막대: ' + holdings.map((h, i) => `${h.name} ${pct(weights[i])}`).join(', ')}>{barSegments}</div>
           <ul className="fl-legend" aria-hidden="true">{segments.slice(0, 6).map(s => <li key={s.i}><i style={{ background: s.over ? 'var(--color-danger)' : chartPalette[s.i % chartPalette.length] }} />{s.over ? '넘침' : holdings[s.i].name} <b>{pct(s.over ? s.width : weights[s.i])}</b></li>)}{segments.length > 6 && <li>외 {segments.length - 6}개</li>}</ul>
           {groups.map(account => <div className="fl-group" key={account}><div className="fl-group__head"><span className="fl-badge">{account}</span><Button className="fl-textlink" aria-label={account + ' 계좌 바꾸기'} onClick={() => openSheet({ from: account })}>계좌 바꾸기</Button></div>
             <ul className="fl-holds">{holdings.map((h, i) => {
@@ -352,7 +357,16 @@ export function InputForm({ onSubmit, busy, initialInput, start, onExit }: { onS
       </>}
     </dialog>
     <div ref={bar} className="fl-cta">
-      {step === 1 && !plan && <p className="fl-summary">{[how === '매달 꾸준히' ? `매달 ${Number(contribution).toLocaleString('ko-KR', { maximumFractionDigits: 4 })}만 원` : monthlyOff.includes(how) ? '매달 넣지 않음' : '', horizonLabel[horizon], `계좌 ${usableAccounts(selected, held, tax).length}개`].filter(Boolean).map(s => <span key={s} className="fl-badge">{s}</span>)}</p>}
+      {/* 입력 요약: 넓은 화면(flow.css)에서만 보인다 — 좁은 화면은 단계마다 한 화면이라 따로 두지 않는다. */}
+      <section className="fl-recap" aria-labelledby="recap-title"><h2 className="fl-card__title" id="recap-title">입력 요약</h2>
+        <dl>
+          <div data-current={step === 0}><dt>{steps[0]}</dt><dd>{holdings.length ? <><b>종목 {holdings.length}개{mode === 'percent' ? totalOk && ` · ${wonText(Number(total) * 1e4)}` : ` · ${wonText(amountSum)}`}</b>
+            <div className="fl-allocation" aria-hidden="true">{barSegments}</div><small>{groups.join(' · ')}</small></> : <small>{fresh ? '처음 시작해요' : '아직 담지 않았어요'}</small>}</dd></div>
+          <div data-current={step === 1}><dt>{steps[1]}</dt><dd>{plan ? <small>아직 정하지 않았어요</small> : <p className="fl-recap__tags">{planText.map(s => <span key={s} className="fl-badge">{s}</span>)}</p>}</dd></div>
+          <div data-current={step === 2}><dt>{steps[2]}</dt><dd>{question.trim() ? <q>{question.trim()}</q> : <small>아직 적지 않았어요</small>}
+            {!!chipText.length && <p className="fl-recap__tags">{chipText.map(s => <span key={s} className="fl-badge">{s}</span>)}</p>}</dd></div>
+        </dl></section>
+      {step === 1 && !plan && <p className="fl-summary">{planText.map(s => <span key={s} className="fl-badge">{s}</span>)}</p>}
       {step === 2 && <Quota> · 보통 5분쯤 걸려요</Quota>}
       <Button variant="primary" className="fl-go" loading={busy || saving} aria-describedby={guidance ? 'step-guidance' : undefined} disabled={!valid || busy || saving} onClick={() => void advance()}>{busy ? '분석 접수 중…' : saving ? '저장 중…' : step === 2 ? '분석 시작하기' : '다음'}</Button>
       <p className="fl-cta__hint" id="step-guidance" aria-live="polite" hidden={!guidance}>{guidance}</p>

@@ -52,7 +52,7 @@ export function Start({ draft, onBegin, onFresh, onImport, onOpen }: { draft: In
     return <div className="fl" data-surface="plain">
       <Brand><a className="fl-textlink" href={dashboardHref}>내 포트폴리오 <Glyph name="right" size={16} /></a></Brand>
       <div className="fl-hero"><h1>다시 오셨네요.<br />그동안 바뀐 게 있나요?</h1></div>
-      <section className="fl-card" data-tone="soft" aria-label="지난 분석">
+      <section className="fl-card fl-aside" data-tone="soft" aria-label="지난 분석">
         <div className="fl-card__head"><span className="fl-sublabel">지난 분석{day && ` · ${day.getMonth() + 1}월 ${day.getDate()}일`}</span><Button className="fl-textlink" onClick={() => onOpen(latest)}>다시 보기 <Glyph name="right" size={16} /></Button></div>
         <Headline text={headline} mark={judged} />
         {!!changes.length && <ul className="fl-changes">{changes.map(c => <ChangeRow key={c.instrument_id} change={c} />)}</ul>}
@@ -68,7 +68,7 @@ export function Start({ draft, onBegin, onFresh, onImport, onOpen }: { draft: In
   return <div className="fl" data-surface="plain">
     <Brand><span className="fl-pill">무료 · 가입 없이</span></Brand>
     <div className="fl-hero"><h1>내 포트폴리오,<br />이대로 가도 될까요?</h1><p>갖고 있는 종목과 금액을 넣으면 점수, 바꿀 것, 이번 달 넣을 곳까지 알려 드려요.</p></div>
-    <section className="fl-card" data-tone="soft" aria-labelledby="example-title">
+    <section className="fl-card fl-aside" data-tone="soft" aria-labelledby="example-title">
       <div className="fl-card__head"><h2 className="fl-sublabel" id="example-title">이런 결과를 받아요</h2><ExampleReport /></div>
       <div className="fl-example"><p className="fl-quote">“이 구성으로 계속 들고 가도 돼요?”</p><Headline text="하나만 바꾸면 돼요" />
         <p className="fl-gain">지난 3년이었다면 <b>287만 원</b> 더 벌었어요</p>

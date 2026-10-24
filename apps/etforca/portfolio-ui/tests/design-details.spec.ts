@@ -70,7 +70,8 @@ test('adding and editing a holding have distinct titles and a saved result', asy
   await expect(page.getByRole('heading', { name: '보유 자산 수정' })).toBeVisible();
 });
 
-// 하단 행동은 화면에 붙어 있되(sticky), 맨 아래까지 내리면 입력 내용을 덮지 않는다(모바일·PC 같다).
+// 행동 버튼은 화면에 붙어 있되(sticky), 맨 아래까지 내려도 입력 내용을 덮지 않는다.
+// 모바일은 아래 고정 막대라 폼 끝이 막대 위에서 끝나야 하고, PC 는 옆 열(입력 요약 패널)이라 폼과 가로로 겹치지 않아야 한다.
 test('the action stays reachable and never covers the end of the form', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
   await addCash(page);
@@ -80,7 +81,9 @@ test('the action stays reachable and never covers the end of the form', async ({
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
   const form = await page.locator('.fl-step').boundingBox();
   const bar = await page.locator('.fl-cta').boundingBox();
-  expect(form!.y + form!.height).toBeLessThanOrEqual(bar!.y + 1);
+  const beside = bar!.x >= form!.x + form!.width - 1;
+  if (!beside) expect(form!.y + form!.height).toBeLessThanOrEqual(bar!.y + 1);
+  expect(beside).toBe((page.viewportSize()?.width ?? 0) >= 1080);
 });
 
 test('a wide performance chart stays readable and pointer selection tracks the same data after resizing', async ({ page }) => {

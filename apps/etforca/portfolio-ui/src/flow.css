@@ -287,3 +287,54 @@ body:has(.fl[data-surface=plain]) { background: var(--color-surface); }
 @media (min-width: 768px) {
   .fl-cta { margin-inline: 0; border-radius: var(--radius-card) var(--radius-card) 0 0; }
 }
+
+/* 넓은 화면. 경계는 화면이 아니라 앱이 놓인 자리의 폭으로 잰다 — 대시보드 안(AI 포폴 분석 탭)에서는 그 자리만큼만 넓어진다.
+   688px·1048px = 화면 720px·1080px 에서 body 좌우 여백(16px씩)을 뺀 폭. 그보다 좁으면 390px 시안 그대로다.
+   태블릿(688~): 한 줄을 넓히고 카드 여백을 키운다. PC(1048~): 입력·시작은 두 줄, 기다림·막힘은 가운데 넓은 카드. */
+:has(> .app) { container: app / inline-size; }
+.fl-recap { display: none; }
+@container app (min-width: 688px) {
+  .app:has(> .fl) { max-width: 680px; }
+  .app:has(> .fl[data-surface=plain]) { max-width: 720px; }
+  .fl-card { padding: 24px 28px; }
+}
+@container app (min-width: 1048px) {
+  /* 기다림·막힘: 아래 고정 버튼 대신 내용 바로 아래에 버튼을 둔다. */
+  .fl[data-surface=plain] { min-height: 0; padding-bottom: 48px; }
+  .fl[data-surface=plain] .fl-cta { position: static; margin: 8px 0 0; padding: 0; background: none; border-radius: 0; }
+  .fl[data-surface=plain]:not(:has(> .fl-aside)) > .fl-cta { width: min(100%, 420px); align-self: center; }
+  .fl-state { padding-top: 48px; }
+
+  /* 시작(S1·S2): 왼쪽 제목·단계·버튼, 오른쪽 예시(또는 지난 분석) 카드. 글 순서는 좁은 화면과 같다. */
+  .app:has(> .fl > .fl-aside) { max-width: 1080px; }
+  .fl:has(> .fl-aside) { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); grid-template-rows: repeat(5, auto) 1fr; column-gap: 48px; row-gap: 16px; align-content: start; }
+  .fl:has(> .fl-aside) > * { grid-column: 1; }
+  .fl:has(> .fl-aside) > .fl-brand { grid-column: 1 / -1; }
+  .fl:has(> .fl-aside) > .fl-aside { grid-column: 2; grid-row: 2 / span 5; align-self: start; margin-top: 24px; }
+  .fl:has(> .fl-aside) .fl-hero { padding-top: 24px; }
+  .fl:has(> .fl-aside) .fl-hero h1 { font-size: 2.25rem; }
+
+  /* 입력(I): 위에 단계, 왼쪽 단계 내용, 오른쪽 따라오는 입력 요약과 다음 버튼(좁은 화면의 아래 고정 버튼이 이 패널로 들어간다). */
+  .app:has(> .fl[data-surface=canvas]) { max-width: 1080px; }
+  .fl[data-surface=canvas] { display: grid; grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: auto 1fr; column-gap: 32px; align-items: start; }
+  .fl[data-surface=canvas] > .fl-top { grid-column: 1 / -1; }
+  .fl[data-surface=canvas] > .fl-step { grid-column: 1; }
+  .fl[data-surface=canvas] > .fl-cta { grid-column: 2; grid-row: 2; position: sticky; top: 76px; margin: 0; padding: 20px; gap: 12px; border-radius: var(--radius-card); background: var(--color-surface); }
+  .fl[data-surface=canvas] > .fl-cta > .fl-summary { display: none; }
+  .fl-recap { display: flex; flex-direction: column; gap: 4px; }
+  .fl-recap dl { margin: 0; display: flex; flex-direction: column; }
+  .fl-recap dl > div { padding: 12px 0; border-bottom: 1px solid var(--color-border); display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .fl-recap dt { font-size: .8125rem; font-weight: 600; color: var(--color-text-muted); }
+  .fl-recap [data-current=true] dt { color: var(--color-primary); }
+  .fl-recap dd { margin: 0; display: flex; flex-direction: column; gap: 8px; font-size: .9375rem; line-height: 1.5; overflow-wrap: anywhere; }
+  .fl-recap dd > small { color: var(--color-text-muted); }
+  .fl-recap .fl-allocation { height: 8px; }
+  .fl-recap__tags { margin: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+  .fl-recap q { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+}
+/* 아래에서 올라오는 시트는 넓은 화면에서 가운데 대화 상자로. 대화 상자는 화면 맨 위 층에 뜨므로 화면 폭으로 잰다. 포커스 가두기·Esc 닫기는 <dialog> 그대로다. */
+@media (min-width: 720px) {
+  .fl-sheet { margin: auto; border-radius: 24px; padding: 24px; }
+  .fl-sheet__grab, .app-download-grabber { display: none; }
+  .app-download-sheet { inset: 0; margin: auto; width: min(100% - 32px, 720px); height: fit-content; border-radius: var(--radius-card); }
+}
