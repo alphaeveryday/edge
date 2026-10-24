@@ -264,3 +264,44 @@
   .r8-card { padding: 28px 28px; }
   .r8-type-sheet { max-height: calc(100dvh - 48px); }
 }
+
+/* 넓은 화면(앱 자리 폭으로 잰다 — 경계와 컨테이너는 flow.css 의 'app' 컨테이너). 좁은 화면은 위 390px 시안 그대로다.
+   숫자 칸 묶음(.r8-side)은 좁은 화면에서는 없는 것처럼 보여 한 줄 순서가 그대로 이어진다. */
+.r8-side { display: contents; }
+.r8 .chat-screen__intro { margin-inline: auto; } /* 위 .r8 p 여백 초기화가 대화 화면의 가운데 맞춤까지 지우지 않게 */
+@container app (min-width: 688px) {
+  .app:has(> .r8) { max-width: 680px; }
+  .app:has(> .r8-failed) { max-width: 720px; }
+  .r8-card { padding: 28px; }
+  .r8-partial { padding: 4px 28px; }
+  .r8-actions { padding: 12px 28px; }
+}
+/* PC: 답 칸은 한 장으로(왼쪽 점수·등급, 오른쪽 물어보신 것·판정·답), 그 아래 왼쪽 넓은 열에 최종 추천 → 오르카의 분석 → 더 물어보기,
+   오른쪽 열에 앞으로 넣을 돈 → 지난 기간 → 앞으로 내 돈. 유형 카드 줄·설문은 맨 아래 전체 폭.
+   글 순서(=키보드 순서)는 좁은 화면과 같다: 답 → 최종 추천 → 오른쪽 숫자 칸 → 분석 → 더 물어보기 → 유형 카드 → 설문.
+   오른쪽 열은 화면보다 길어 따라오게(sticky) 두면 아래 칸이 끝까지 가려지므로 붙이지 않는다. */
+@container app (min-width: 1048px) {
+  .app:has(> .r8) { max-width: 1200px; }
+  .app:has(> .r8-failed) { max-width: 720px; }
+  .app:has(> .r8) > .secondary { align-self: center; width: min(100%, 420px); }
+  .r8-state-actions { align-self: center; width: min(100%, 420px); }
+  /* 빈 줄이 생겨도 틈이 겹치지 않게 줄 간격 대신 칸 위 여백을 쓴다. 마지막 1fr 줄이 오른쪽 열이 더 길 때 남는 높이를 받는다. */
+  .r8:has(> .r8-side:not(:empty)) { display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); grid-template-rows: auto auto auto auto 1fr; column-gap: 20px; row-gap: 0; align-items: start; }
+  .r8:has(> .r8-side:not(:empty)) > * { grid-column: 1 / -1; margin-top: 20px; }
+  .r8:has(> .r8-side:not(:empty)) > :first-child { margin-top: 0; }
+  .r8:has(> .r8-side:not(:empty)) > :is(.r8-final, .r8-analysis, .r8-ask) { grid-column: 1; }
+  .r8:has(> .r8-side:not(:empty)) > .r8-side { grid-column: 2; grid-row: 2 / span 4; display: flex; flex-direction: column; gap: 20px; }
+  /* 추천이 없어 오른쪽 칸이 비면 한 줄로 가운데 둔다. */
+  .app:has(> .r8 > .r8-side:empty) { max-width: 760px; }
+
+  .r8-hero { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); grid-template-areas: 'meta meta' 'score answer' 'grades answer'; column-gap: 40px; row-gap: 16px; padding: 32px 40px; }
+  .r8-hero > .r8-meta { grid-area: meta; text-align: left; }
+  .r8-hero > :is(.r8-score, .r8-hero-orca) { grid-area: score; align-self: end; }
+  .r8-hero > .r8-grades { grid-area: grades; align-self: start; }
+  .r8-hero > .r8-hero-orca { grid-row: score / grades; align-self: center; }
+  .r8-hero-answer { grid-area: answer; align-self: center; text-align: left; padding: 0 0 0 40px; border-top: 0; border-left: 1px solid var(--color-border); }
+  .r8-quote { align-items: flex-start; align-self: flex-start; }
+
+  .r8-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+  .r8-survey-actions { width: min(100%, 420px); align-self: flex-end; }
+}

@@ -74,7 +74,11 @@ test('keyboard focus stays distinct and the final CTA grows with enlarged text',
     return text.top >= button.top && text.bottom <= button.bottom && text.left >= button.left && text.right <= button.right;
   })).toBe(true);
   await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-  expect(await page.evaluate(() => document.querySelector('.fl-step')!.getBoundingClientRect().bottom <= document.querySelector('.fl-cta')!.getBoundingClientRect().top + 1)).toBe(true);
+  // 모바일은 아래 고정 막대가 폼 끝을 덮지 않아야 하고, PC 는 버튼 패널이 옆 열이라 폼과 가로로 겹치지 않아야 한다.
+  expect(await page.evaluate(() => {
+    const form = document.querySelector('.fl-step')!.getBoundingClientRect(), bar = document.querySelector('.fl-cta')!.getBoundingClientRect();
+    return bar.left >= form.right - 1 || form.bottom <= bar.top + 1;
+  })).toBe(true);
 });
 
 test('destructive confirmation can cancel without losing assets and confirms only the chosen deletion', async ({ page }) => {

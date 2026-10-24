@@ -61,7 +61,8 @@ async function open(page: Page, result: unknown, input: unknown = { question: '�
   await page.goto('/portfolio/');
   await expect(page.locator('.r8-hero')).toBeVisible();
 }
-const sections = (page: Page) => page.locator('.r8 > [data-analytics-section]').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-analytics-section')));
+// 숫자 칸(앞으로 넣을 돈·지난 기간·앞으로 내 돈)은 넓은 화면의 오른쪽 열 묶음(.r8-side) 안에 있다. 글 순서는 그대로다.
+const sections = (page: Page) => page.locator('.r8 > [data-analytics-section], .r8 > .r8-side > [data-analytics-section]').evaluateAll(nodes => nodes.map(n => n.getAttribute('data-analytics-section')));
 
 test('every customer gets the same seven cells in the same order, then the survey', async ({ page }) => {
   await open(page, base());
@@ -75,6 +76,22 @@ test('every customer gets the same seven cells in the same order, then the surve
   await expect(page.locator('.r8')).not.toContainText('NaN');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.screenshot({ path: `test-results/result-v8-${test.info().project.name}.png`, fullPage: true });
+});
+
+// PC 는 최종 추천 옆에 숫자 칸을 세워 한눈에 견주게 하고, 모바일은 한 줄 그대로다. 어느 쪽이든 글(키보드) 순서는 위 일곱 칸 순서다.
+test('wide screens set the number cells beside the recommendation while phones keep one column', async ({ page }) => {
+  await open(page, base());
+  const final = (await page.locator('[data-analytics-section=final]').boundingBox())!;
+  const monthly = (await page.locator('[data-analytics-section=monthly]').boundingBox())!;
+  const analysis = (await page.locator('[data-analytics-section=analysis]').boundingBox())!;
+  if ((page.viewportSize()?.width ?? 0) >= 1080) {
+    expect(monthly.x).toBeGreaterThan(final.x + final.width);
+    expect(Math.abs(monthly.y - final.y)).toBeLessThan(2);
+    expect(analysis.x).toBe(final.x); // 분석은 왼쪽 넓은 열에서 최종 추천 아래
+  } else {
+    expect(monthly.x).toBe(final.x);
+    expect(monthly.y).toBeGreaterThan(final.y + final.height);
+  }
 });
 
 test('an old report without verdict fields still answers, recommends and compares in money', async ({ page }) => {

@@ -461,9 +461,12 @@ export function ResultView({ report, jobId, input, active = true }: { report: Re
       </div>
     </section>
     <FinalCard report={report} rows={rows} color={color} input={input} />
-    <MonthlyCard report={report} rows={rows} color={color} monthly={monthly} onAlert={() => { trackResult('app_alert_clicked', { analysis_id: jobId }); setAppOpen(true); }} />
-    {plan && <PastCard past={past} unavailable={plan.historical_performance ? '' : sentence(plan.unavailable_reason || '')} />}
-    {report.scenarios ? <ScenarioCard scenarios={report.scenarios} /> : plan && <FutureCard principal={currentTotal ?? finalTotal} monthly={monthly ?? 0} past={past} />}
+    {/* 숫자 칸 묶음: 좁은 화면에서는 묶음이 없는 것처럼(display: contents) 한 줄로, 넓은 화면에서는 오른쪽 열이 된다(result.css). 순서는 그대로다. */}
+    <div className="r8-side">
+      <MonthlyCard report={report} rows={rows} color={color} monthly={monthly} onAlert={() => { trackResult('app_alert_clicked', { analysis_id: jobId }); setAppOpen(true); }} />
+      {plan && <PastCard past={past} unavailable={plan.historical_performance ? '' : sentence(plan.unavailable_reason || '')} />}
+      {report.scenarios ? <ScenarioCard scenarios={report.scenarios} /> : plan && <FutureCard principal={currentTotal ?? finalTotal} monthly={monthly ?? 0} past={past} />}
+    </div>
     <AnalysisCard report={report} kind={kind} analysisId={jobId} />
     <AskCard jobId={jobId} questions={questions} />
     {type && <section className="r8-card r8-actions" aria-label="결과 뒤에 할 일">
