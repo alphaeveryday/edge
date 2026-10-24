@@ -648,10 +648,12 @@ def _spy_tag_news(monkeypatch):
                  limit, concurrency):
         captured["window"] = (from_date, to_date)
         captured["input_run_id"] = input_run_id
-        # 기본 TAGGER_BACKEND(llm)에선 로컬 태거 없이 LLM 경로 그대로여야 한다(ALPHA-1446).
+        # 태거가 없으면(TAGGER_BACKEND=llm) run.py 가 LLM 경로를 배선해야 한다(ALPHA-1446).
         captured["backend"] = ("llm" if complete_fn is not None and tagger is None else "other")
         return 0
 
+    # 바깥 env(TAGGER_BACKEND)와 무관하게 '태거 없음'으로 고정한다 — 모델 로딩을 타지 않는다.
+    monkeypatch.setattr(run_mod, "load_tagger", lambda storage: None)
     monkeypatch.setattr(run_mod.tag_news, "run", fake_run)
     return run_mod, captured
 
@@ -938,6 +940,7 @@ def _spy_assemble(monkeypatch):
         captured["backend"] = ("llm" if complete_fn is not None and tagger is None else "other")
         return 0
 
+    monkeypatch.setattr(run_mod, "load_tagger", lambda storage: None)  # 바깥 env 와 무관하게 '태거 없음'
     monkeypatch.setattr(run_mod.assemble_events, "run", fake_run)
     monkeypatch.setattr(run_mod, "db_config_from_env", lambda base: base)
     return run_mod, captured
