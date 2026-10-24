@@ -30,7 +30,7 @@ def command(cfg, prompt: str) -> list[str]:
 
 
 def _env(cfg, ws: Workspace, corpus_path: Path) -> dict:
-    env = {k: v for k, v in os.environ.items() if k not in ("DEEPSEEK_RESIST_NEWS_API_KEY",)}
+    env = {k: v for k, v in os.environ.items() if k not in ("DEEPSEEK_RESIST_NEWS_API_KEY", "TRUTH_DB_PASSWORD")}
     env.update({
         "DEEPSEEK_API_KEY": cfg.deepseek_key,  # pi 의 DeepSeek 제공자가 읽는 이름. 이 프로세스에만 넘긴다
         "PI_CODING_AGENT_DIR": str(ws.root / ".pi"), "PI_OFFLINE": "1", "PI_TELEMETRY": "0",

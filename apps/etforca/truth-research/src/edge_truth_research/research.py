@@ -26,7 +26,7 @@ from edge_truth_agent.tools import _web_id
 from edge_truth_agent.store import open_store
 from edge_truth_agent.workspace import Workspace
 
-from . import logos, session
+from . import dbnews, logos, session
 from .kind import Kind, is_market_warning
 from .markets import KR, US, Market, of_exchange
 from .quotes import Chart, Mover, Quotes
@@ -221,6 +221,11 @@ def _marks(rec: dict) -> list[dict]:
     return [{"tag": v["tag"], "at": v["judgedAt"], "price": None}]
 
 
+def load_news(cfg, now: datetime) -> dict[str, news.Article]:
+    """국내 보도 사전(기사 id → Article). 시험은 이 함수를 바꿔 낀다."""
+    return dbnews.load(cfg, now)
+
+
 def run_research(cfg, *, quotes: Quotes | None = None, kind=None, session_runner=session.run,
                  now: datetime | None = None, only_new: bool = False, market: Market = KR, web_news=None) -> dict:
     """한 번 실행하고 보고를 돌려준다. 장이 열리지 않은 날(그날 분봉 없음)에는 게시하지 않는다.
@@ -281,7 +286,7 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind=None, session_runner
         logo = {m.code: _logo(public, kind, m, (prior.get(m.code) or {}).get("logo"), tried, today)
                 for m in risers}
         store.put(LOGO_TRIED_KEY, _json(tried))
-        texts = corpus.load(store)
+        texts = load_news(cfg, now)  # 국내 보도: 운영 DB(빅카인즈). 붙지 못하면 실행 실패
         corpus_path = corpus.build_index(texts, Path(tmp) / "corpus.sqlite")
 
         # 3. 판정 (모델) — 오늘 아직 판정 못 한 종목, 판정 뒤 회사가 새 공시를 낸 종목(태그 무관 — 허위였다가 정정 공시로 뒤집힐 수 있다.
