@@ -34,9 +34,12 @@ def test_skill_metric_table_names_only_real_type_metric_pairs_in_stored_units():
     types, _ = graph.registry()
     rows = re.findall(r"^\| ([A-Z_.]+) \| ([A-Z_]+) \| ([A-Z]+) \|", graph.skill(), re.M)
     assert len(rows) >= 20
+    family = {"KRW": "CURRENCY", "USD": "CURRENCY", "PCT": "PERCENT", "COUNT": "COUNT",
+              "DAY": "DURATION_DAYS", "YEARS": "DURATION_DAYS", "MONTHS": "DURATION_DAYS"}
+    assert set(family) == set(graph.UNITS)
     for event_type, metric, unit in rows:
         assert event_type in types and metric in types[event_type].quantities, (event_type, metric)
-        assert unit in graph.UNITS, unit
+        assert family[unit] == types[event_type].quantities[metric].unit_family, (event_type, metric, unit)  # 금액에 PCT 같은 줄 방지
     assert "PERCENT" not in graph.skill().split("## 4.")[1]  # 표·탐색법에는 저장 단위만
 
 
@@ -96,7 +99,7 @@ def test_similar_events_without_basis_matches_unknown_basis_and_shows_it():
 
 
 @pytest.mark.parametrize("args, message", [
-    (("COMPANY.NOPE", "CONTRACT_VALUE", "gte", "1"), "메뉴에 없는"),
+    (("COMPANY.NOPE", "CONTRACT_VALUE", "gte", "1"), "온톨로지에 없는"),
     (("COMPANY.CONTRACT.SIGNING", "DEAL_VALUE", "gte", "1"), "수치가 아닙니다"),
     (("COMPANY.CONTRACT.SIGNING", "CONTRACT_VALUE", "gt", "1"), "gte·lte"),
     (("COMPANY.CONTRACT.SIGNING", "CONTRACT_VALUE", "gte", "nan"), "유한한"),
@@ -125,7 +128,7 @@ def test_graph_down_is_a_tool_error_the_session_can_read(tmp_path, monkeypatch):
     ws = _ws(tmp_path)
     with pytest.raises(tools.ToolError, match="GRAPH_URI"):
         tools.company_events(ws, {})
-    with pytest.raises(tools.ToolError, match="메뉴에 없는"):
+    with pytest.raises(tools.ToolError, match="온톨로지에 없는"):
         tools.find_events(ws, {"event_type": "X", "metric": "Y", "op": "gte", "value": "1", "unit": "KRW", "basis": "TOTAL"})
 
 

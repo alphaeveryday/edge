@@ -38,7 +38,7 @@ ORDER BY d DESC LIMIT $limit
 FETCH_LIMIT = 5000
 DEADLINE = 30  # 초. 서버 쪽 시간 초과(25초)를 서버가 지키지 않아도 도구 프로세스는 여기서 돌아온다
 OPERATORS = {"gte": operator.ge, "lte": operator.le}
-UNITS = ("KRW", "USD", "PCT", "COUNT", "DAY", "YEARS", "MONTHS")  # 저장 단위(data-pipeline events/amounts.py). 단위 계열 이름이 아니다
+UNITS = ("KRW", "USD", "PCT", "COUNT", "DAY", "YEARS", "MONTHS")  # 운영 그래프에 저장된 단위 전부(2026-10-24 실측). 단위 계열 이름이 아니다
 BASES = ("TOTAL", "ANNUAL", "QUARTERLY", "UNKNOWN")
 SKILL = Path(__file__).resolve().parent / "prompts" / "event-graph.md"
 
@@ -136,7 +136,7 @@ def similar_events(event_type: str, metric: str, op: str, value: str, unit: str,
     exclude_code 종목의 발행 회사가 참여한 사건은 뺀다(조사 중인 그 일이 제 선례가 되지 않게)."""
     types, _ = registry()
     if event_type not in types:
-        raise ValueError(f"메뉴에 없는 사건 타입입니다: {event_type}")
+        raise ValueError(f"온톨로지에 없는 사건 타입입니다: {event_type}")
     if metric not in types[event_type].quantities:
         raise ValueError(f"{event_type} 의 수치가 아닙니다: {metric} (가능: {', '.join(types[event_type].quantities) or '없음'})")
     if op not in OPERATORS:
