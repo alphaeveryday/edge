@@ -37,17 +37,21 @@ def test_company_events_folds_differently_worded_reports_of_the_same_happening_a
             {"type": "COMPANY.ALLIANCE.PARTNERSHIP", "pred": "FORM", "d": "2026-10-05", "role": "PARTNER", "stage": "SIGNED",
              "title": _title("COMPANY.ALLIANCE.PARTNERSHIP", "앤로보틱스 [PARTNER]; 비블리오테카 [PARTNER_2]", "2026-10-05"), "article": None}]
     seen = []
-    events = graph.company_events("138360", TODAY, 90, run=lambda q, p: seen.append(p) or rows)
-    assert seen[0] == {"code": "138360", "since": "2026-07-28"}
+    result = graph.company_events("138360", TODAY, 90, run=lambda q, p: seen.append(p) or rows)
+    events = result["events"]
+    assert seen[0] == {"code": "138360", "since": "2026-07-28", "limit": graph.COMPANY_LIMIT}
+    assert not result["truncated"] and result["oldest"] == "2026-10-05"
     assert [(e["type"], e["reports"]) for e in events] == [("COMPANY.CONTRACT.SIGNING", 2), ("COMPANY.ALLIANCE.PARTNERSHIP", 1)]
     assert events[0]["articles"] == ["a" * 64, "b" * 64]
     assert events[0]["what"] == max((r["title"].split(" / ")[1] for r in rows[:2]), key=len)  # 가장 긴(자세한) 서술을 남긴다
     assert events[1]["stage"] == "SIGNED" and events[1]["articles"] == []
 
 
-def _measure(eid, value, unit="KRW", basis="TOTAL", vsrc="PARSED", parse="ok", d="2026-10-20"):
-    return {"id": eid, "d": d, "title": _title("COMPANY.CONTRACT.SIGNING", f"{eid} [SUPPLIER]; 공사 [CONTRACT_OBJECT]", d),
-            "value": value, "unit": unit, "basis": basis, "vsrc": vsrc, "parse": parse, "who": [f"{eid}:SUPPLIER"]}
+def _measure(eid, value, unit="KRW", basis="TOTAL", vsrc="PARSED", parse="ok", d="2026-10-20", company=None):
+    company = company or eid
+    return {"id": eid, "d": d, "title": _title("COMPANY.CONTRACT.SIGNING", f"{company} [SUPPLIER]; 공사 [CONTRACT_OBJECT]", d),
+            "value": value, "unit": unit, "basis": basis, "vsrc": vsrc, "parse": parse, "who": [f"{company}:SUPPLIER"],
+            "ids": [f"actor_{company}"]}
 
 
 def test_similar_events_compares_decimals_and_counts_other_units_as_unknown_not_as_misses():
@@ -57,11 +61,15 @@ def test_similar_events_compares_decimals_and_counts_other_units_as_unknown_not_
             _measure("e4", "82000000", unit="USD"),               # 단위가 다름 → 모름
             _measure("e5", None),                                 # 값 없음 → 모름
             _measure("e6", "200000000000", vsrc="UNRESOLVED"),    # 불확실 → 모름
-            _measure("e1", "930900000000.0")]                     # 같은 사건의 다른 측정 → 한 건
+            _measure("e1", "930900000000.0"),                     # 같은 사건의 다른 측정 → 한 건
+            _measure("e7", "930900000000", company="e1"),          # 같은 계약을 다룬 다른 기사의 사건 → 한 건(보도 2)
+            _measure("e8", "300000000000", company="mine")]        # 조사 중인 회사의 사건 → 선례에서 뺀다
+    def run(q, p):
+        return [{"issuer": "actor_mine"}] if q == graph.ISSUER else rows
     found = graph.similar_events("COMPANY.CONTRACT.SIGNING", "CONTRACT_VALUE", "gte", "100000000000", "KRW", "TOTAL",
-                                 TODAY, 180, run=lambda q, p: rows)
-    assert [m["value"] for m in found["matched"]] == ["930,900,000,000"]
-    assert found["unknown"] == 4 and found["scanned"] == 7 and not found["truncated"]
+                                 TODAY, 180, exclude_code="138360", run=run)
+    assert [(m["value"], m["reports"]) for m in found["matched"]] == [("930,900,000,000", 3)]
+    assert found["unknown"] == 4 and found["scanned"] == 9 and not found["truncated"]
 
 
 @pytest.mark.parametrize("args, message", [
@@ -110,3 +118,57 @@ def test_us_sessions_get_no_graph_tools(tmp_path, cfg):
     system = (kr.root / ".pi" / "system.md").read_text(encoding="utf-8")
     assert "## 사건 메뉴" in system and "COMPANY.CONTRACT.SIGNING" in system
     assert session._env(with_graph, us, tmp_path / "c.sqlite")["TRUTH_GRAPH"] == "0"
+
+
+def test_a_hung_graph_query_returns_as_a_tool_error_within_the_deadline(monkeypatch):
+    # WHY: 서버가 시간 초과를 지키지 않으면 도구 프로세스가 세션 시간(420초)까지 묶여 판정을 통째로 잃는다
+    import sys
+    import threading
+    import time
+    import types
+    release = threading.Event()
+
+    class Driver:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *e):
+            return False
+
+        def session(self, **kw):
+            return self
+
+        def run(self, *a):
+            release.wait(10)
+            return []
+
+    fake = types.SimpleNamespace(GraphDatabase=types.SimpleNamespace(driver=lambda *a, **k: Driver()), Query=lambda s, timeout: s)
+    monkeypatch.setitem(sys.modules, "neo4j", fake)
+    monkeypatch.setenv("GRAPH_URI", "bolt://graph:7687")
+    monkeypatch.setattr(graph, "DEADLINE", 0.2)
+    started = time.monotonic()
+    with pytest.raises(graph.GraphError, match="답이 없습니다"):
+        graph._run("MATCH (n) RETURN n", {})
+    assert time.monotonic() - started < 2
+    release.set()
+
+
+def test_menu_failure_runs_the_session_without_graph_tools(tmp_path, cfg, monkeypatch):
+    from dataclasses import replace
+    calls = {}
+
+    class Proc:
+        returncode, pid = 0, 1
+
+        def communicate(self, timeout):
+            return b"", b""
+
+    def popen(cmd, cwd, env, **kw):
+        calls.update(cmd=cmd, env=env)
+        return Proc()
+    monkeypatch.setattr(session.subprocess, "Popen", popen)
+    monkeypatch.setattr(session, "_read_events", lambda *a, **k: None)
+    monkeypatch.setattr(graph, "menu", lambda: (_ for _ in ()).throw(ImportError("edge_ontology")))
+    session.run(replace(cfg, graph_uri="bolt://graph:7687"), _ws(tmp_path), code="138360", prompt="p", corpus_path=tmp_path / "c")
+    assert "company_events" not in calls["cmd"][calls["cmd"].index("--tools") + 1]
+    assert calls["env"]["TRUTH_GRAPH"] == "0"

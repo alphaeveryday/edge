@@ -53,7 +53,7 @@ variable "loader_image" {
   description = "업로더 이미지(파이썬 표준 라이브러리만 쓴다). 다이제스트로 고정한다."
 }
 variable "query_client_security_group_ids" {
-  type        = list(string)
-  default     = []
-  description = "7687(조회)만 들어올 수 있는 보안 그룹. 스키마 관리 포트(8081)는 열지 않는다."
+  type        = map(string)
+  default     = {}
+  description = "7687(조회)만 들어올 수 있는 보안 그룹(이름 → ID). 키를 고정해 ID 가 plan 때 모르는 값이어도 for_each 가 선다. 스키마 관리 포트(8081)는 열지 않는다."
 }

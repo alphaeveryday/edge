@@ -25,7 +25,7 @@ module "ontology_graph" {
   # 바스천을 없앨 때는 이 목록에서 먼저 빼고 apply 한다(규칙이 남아 있으면 보안 그룹 삭제가 막힌다).
   client_security_group_ids = ["sg-0d7392109fd270848"]
   # 국내 급등주 조사의 그래프 도구(ALPHA-1453) — 조회만
-  query_client_security_group_ids = [module.truth_research.security_group_id]
+  query_client_security_group_ids = { truth_research = module.truth_research.security_group_id }
 }
 
 resource "aws_vpc_security_group_ingress_rule" "rds_from_ontology_graph" {

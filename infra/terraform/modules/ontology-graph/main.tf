@@ -66,7 +66,7 @@ resource "aws_vpc_security_group_egress_rule" "all" {
 
 # 7687 = Bolt(그래프 조회), 8081 = 스키마 업로드·관리 화면. 조회만 하는 클라이언트는 7687 만 연다.
 resource "aws_vpc_security_group_ingress_rule" "query_clients" {
-  for_each                     = toset(var.query_client_security_group_ids)
+  for_each                     = var.query_client_security_group_ids
   security_group_id            = aws_security_group.this.id
   referenced_security_group_id = each.value
   ip_protocol                  = "tcp"

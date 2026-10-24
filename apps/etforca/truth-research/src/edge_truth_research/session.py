@@ -45,7 +45,7 @@ def _system(ws: Workspace) -> Path:
     return path
 
 
-def _env(cfg, ws: Workspace, corpus_path: Path) -> dict:
+def _env(cfg, ws: Workspace, corpus_path: Path, graph: bool | None = None) -> dict:
     env = {k: v for k, v in os.environ.items() if k not in ("DEEPSEEK_RESIST_NEWS_API_KEY", "TRUTH_DB_PASSWORD")}
     env.update({
         "DEEPSEEK_API_KEY": cfg.deepseek_key,  # pi 의 DeepSeek 제공자가 읽는 이름. 이 프로세스에만 넘긴다
@@ -53,7 +53,7 @@ def _env(cfg, ws: Workspace, corpus_path: Path) -> dict:
         "TRUTH_SESSION_DIR": str(ws.root), "TRUTH_PYTHON": cfg.python, "TRUTH_MAX_TOOL_CALLS": str(cfg.max_tool_calls),
         "TRUTH_CORPUS": str(corpus_path), "TRUTH_WEB_CALL_LIMIT": str(cfg.web_calls),
     })
-    env["TRUTH_GRAPH"] = "1" if _graph(cfg, ws) else "0"  # pi 확장이 그래프 도구를 등록할지
+    env["TRUTH_GRAPH"] = "1" if (_graph(cfg, ws) if graph is None else graph) else "0"  # pi 확장이 그래프 도구를 등록할지(--tools 와 같은 판단)
     if cfg.exa_key:
         env["EXA_API_KEY"] = cfg.exa_key
     else:
@@ -65,9 +65,16 @@ def run(cfg, ws: Workspace, *, code: str, prompt: str, corpus_path: Path) -> Ses
     """세션을 실행하고 결과를 돌려준다. 시간 초과·비정상 종료는 error 에 적는다(실행 전체를 멈추지 않는다)."""
     result = SessionResult(case_id=code, done=False)
     (ws.root / ".pi").mkdir(exist_ok=True)
-    graph = _graph(cfg, ws)
-    cmd = command(cfg, prompt, graph=graph, system=_system(ws) if graph else None)
-    proc = subprocess.Popen(cmd, cwd=ws.root, env=_env(cfg, ws, corpus_path),
+    graph, system = _graph(cfg, ws), None
+    if graph:
+        try:
+            system = _system(ws)
+        except Exception as error:  # noqa: BLE001 - 메뉴를 못 만들면 그래프 도구 없이 조사한다(세션을 잃지 않는다)
+            graph = False
+            log.warning(json.dumps({"event": "graph_menu_failed", "code": code, "reason": f"{type(error).__name__}: {str(error)[:200]}"},
+                                   ensure_ascii=False))
+    cmd = command(cfg, prompt, graph=graph, system=system)
+    proc = subprocess.Popen(cmd, cwd=ws.root, env=_env(cfg, ws, corpus_path, graph),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=os.name == "posix")
     try:
         stdout, stderr = proc.communicate(timeout=cfg.session_timeout)

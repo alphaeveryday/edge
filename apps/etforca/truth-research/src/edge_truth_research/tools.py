@@ -378,13 +378,16 @@ def company_events(ws: Workspace, args: dict) -> str:
     if not 1 <= days <= 365:
         raise ToolError("days 는 1~365 입니다")
     try:
-        events = graph.company_events(_mover(ws).get("code", ""), _today(ws), days)
+        result = graph.company_events(_mover(ws).get("code", ""), _today(ws), days)
     except graph.GraphError as error:
         raise ToolError(str(error)) from None
+    events = result["events"]
     if not events:
         return f"최근 {days}일 이 회사가 참여한 사건이 그래프에 없습니다(뉴스·공시에서 뽑힌 사건만 있다 — 없다고 일이 없었다는 뜻은 아니다)."
     types, labels = graph.registry()
     lines = [f"최근 {days}일 사건 {len(events)}건(같은 일은 묶음, 최신순). 근거로 쓰려면 기사·공시를 직접 읽는다:"]
+    if result["truncated"]:
+        lines[0] += f" — 보도가 많아 {result['oldest']} 이후만 봤다(그보다 옛 사건이 없다는 뜻이 아니다. days 를 줄여 다시 볼 수 있다)"
     for e in events[:20]:
         arts = ", ".join(f"news-{a[:16]}" for a in e["articles"]) or "기사 id 없음"
         stage = f" | 단계 {e['stage']}" if e["stage"] else ""
@@ -405,17 +408,17 @@ def find_events(ws: Workspace, args: dict) -> str:
     try:
         found = graph.similar_events(str(args.get("event_type", "")), str(args.get("metric", "")), str(args.get("op", "")),
                                      str(args.get("value", "")), str(args.get("unit", "")), str(args.get("basis", "")),
-                                     _today(ws), days)
+                                     _today(ws), days, exclude_code=_mover(ws).get("code"))
     except ValueError as error:
         raise ToolError(str(error)) from None
     except graph.GraphError as error:
         raise ToolError(str(error)) from None
     head = (f"최근 {found['days']}일 {args.get('event_type')} 중 {args.get('metric')} {args.get('op')} {args.get('value')} "
             f"{args.get('unit')}({args.get('basis')}): 맞음 {len(found['matched'])}건, 모름 {found['unknown']}건"
-            "(단위·기준이 다르거나 값이 불확실 — 안 맞는다는 뜻이 아니다)")
+            "(같은 일의 여러 보도는 한 건, 이 회사 사건은 뺐다. 모름은 단위·기준이 다르거나 값이 불확실 — 안 맞는다는 뜻이 아니다)")
     if found["truncated"]:
         head += f". 후보가 많아 최신 {found['scanned']}행만 봤다 — days 를 줄이면 빠짐이 없다"
-    lines = [head] + [f"- {m['date']} | {', '.join(m['who']) or '회사 미상'} | {m['value']} {m['unit']} {m['basis']} | {m['what'][:140]}"
+    lines = [head] + [f"- {m['date']} | {', '.join(m['who']) or '회사 미상'} | {m['value']} {m['unit']} {m['basis']} | {m['what'][:140]} | 보도 {m['reports']}건"
                       for m in found["matched"][:15]]
     if len(found["matched"]) > 15:
         lines.append(f"(그 밖 {len(found['matched']) - 15}건 생략)")
