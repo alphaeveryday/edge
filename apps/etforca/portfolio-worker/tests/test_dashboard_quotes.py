@@ -18,7 +18,9 @@ async def test_continuous_customer_refreshes_leave_bounded_preload_turns(monkeyp
         if len(events) >= 8:
             stopping.set()
         return True  # There is always another customer quote due.
-    async def background(*args, **kwargs):
+    async def background(*args, urgent=False, **kwargs):
+        if urgent:
+            return False  # No analysis is waiting.
         events.append('preload')
         if events.count('preload') == 2:
             stopping.set()
@@ -30,6 +32,28 @@ async def test_continuous_customer_refreshes_leave_bounded_preload_turns(monkeyp
     await quotes.collection_loop(stopping)
     assert events == ['customer'] * 3 + ['preload'] + ['customer'] * 3 + ['preload']
     assert seeds == ['seed'], 'Catalogue seeding must not run once per customer quote'
+
+
+async def test_an_analysis_waiting_for_prices_is_served_before_customer_quotes(monkeypatch):
+    # The analysis reads only the store, so its missing instruments must not wait behind the
+    # dashboard queue or the minute between preload turns.
+    from edge_portfolio import market_preload as preload
+    stopping = asyncio.Event()
+    events, waiting = [], ['KR:A', 'KR:B']
+    async def background(*args, urgent=False, **kwargs):
+        if urgent and waiting:
+            events.append('urgent:' + waiting.pop(0))
+            return True
+        return False
+    async def customer(*args, **kwargs):
+        events.append('customer')
+        stopping.set()
+        return True
+    monkeypatch.setattr(quotes, 'collect_once', customer)
+    monkeypatch.setattr(preload, 'collect_one', background)
+    monkeypatch.setattr(preload, 'seed', lambda: None)
+    await quotes.collection_loop(stopping)
+    assert events == ['urgent:KR:A', 'urgent:KR:B', 'customer']
 
 
 async def test_customer_releases_warm_preload_slot_before_fetching(isolated_db, monkeypatch):
