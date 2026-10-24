@@ -91,12 +91,13 @@ def seed():
 
 
 def request_prices(keys):
-    """Ask the collector for these instruments first, in this order. Returns the request time."""
+    """Ask the collector for these instruments first, in this order. Returns the request time.
+    urgent_at keeps the latest request, so one made while a fetch runs survives that fetch and is fetched again."""
     with store.connect() as db:
         requested = db.execute('SELECT now() AS at').fetchone()['at']
         for key in keys:
             db.execute('''INSERT INTO portfolio_market_preload(instrument,urgent_at) VALUES (%s,clock_timestamp())
-                ON CONFLICT(instrument) DO UPDATE SET urgent_at=coalesce(portfolio_market_preload.urgent_at,excluded.urgent_at)''', (key,))
+                ON CONFLICT(instrument) DO UPDATE SET urgent_at=greatest(portfolio_market_preload.urgent_at,excluded.urgent_at)''', (key,))
     return requested
 
 

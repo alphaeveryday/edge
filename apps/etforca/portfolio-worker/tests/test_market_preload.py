@@ -747,3 +747,20 @@ async def test_urgent_request_is_served_at_any_hour_beside_customer_work_with_th
     requested = preload.request_prices(['KR:360750'])
     assert await preload.collect_one(now=night, urgent=True)
     assert preload.finished_requests({'KR:360750': requested}) == {'KR:360750': 'PRICE_STALE'}
+
+
+async def test_a_request_made_during_a_fetch_is_fetched_again(isolated_db, monkeypatch):
+    # The running fetch started before the second analysis asked, so it cannot answer that analysis.
+    first = preload.request_prices(['KR:069500'])
+    joined = []
+    async def load(symbol, end, **kwargs):
+        if not joined:
+            joined.append(preload.request_prices(['KR:069500']))
+        return {**record(), 'history_complete': True}
+    monkeypatch.setattr(work, 'price_end', lambda *args: date(2026, 10, 17))
+    monkeypatch.setattr(market_data, 'fetch_prices', load)
+    assert await preload.collect_one(now=NOW, urgent=True)
+    assert preload.finished_requests({'KR:069500': first}) == {'KR:069500': None}
+    assert preload.finished_requests({'KR:069500': joined[0]}) == {}
+    assert await preload.collect_one(now=NOW, urgent=True), 'The request made during the fetch is still queued'
+    assert preload.finished_requests({'KR:069500': joined[0]}) == {'KR:069500': None}
