@@ -3,7 +3,7 @@ import { preview } from './preview';
 import { ensureVisitorSession } from './api';
 
 // 8차 입력은 세 단계(input_holdings·input_plan·input_ask)다. 그 앞의 시작 화면(start)과 한도 화면(limit)도 따로 센다.
-export type Screen = 'start' | 'input_holdings' | 'input_plan' | 'input_ask' | 'limit' | 'lost' | 'loading' | 'queued' | 'running' | 'result' | 'failed' | 'dashboard_overview' | 'dashboard_dividends' | 'dashboard_returns' | 'dashboard_backtest';
+export type Screen = 'start' | 'input_holdings' | 'input_plan' | 'input_ask' | 'limit' | 'lost' | 'loading' | 'queued' | 'running' | 'result' | 'failed' | 'dashboard_overview' | 'dashboard_dividends' | 'dashboard_returns';
 // 8차 결과 측정 이벤트(계획 '측정' 절). 어느 칸을 읽었는지는 data-analytics-section 으로 따로 남는다.
 export type ResultEvent = 'result_shown' | 'survey_shown' | 'survey_answered' | 'evidence_opened' | 'ask_suggested_clicked' | 'recommendation_saved'
   | 'app_alert_clicked' | 'store_link_clicked' | 'type_card_shared' | 'result_mail_requested' | 'result_link_copied';
@@ -28,7 +28,7 @@ export function setAnalyticsEnabled(enabled: boolean) {
   } else if (enabled) initialize();
   window.dispatchEvent(new Event('orca-analytics-change'));
 }
-export function trackAction(action: 'holding_add_opened' | 'holding_edit_opened' | 'holdings_saved' | 'holdings_save_failed' | 'backtest_requested' | 'backtest_completed' | 'backtest_failed' | 'newsletter_requested' | 'instrument_search_empty' | 'input_search_opened' | 'input_holding_added' | 'bulk_entry_opened' | 'bulk_entry_added' | 'bulk_entry_failed' | 'recommend_started' | 'example_report_opened' | 'followup_asked' | 'followup_chat_opened') {
+export function trackAction(action: 'holding_add_opened' | 'holding_edit_opened' | 'holdings_saved' | 'holdings_save_failed' | 'newsletter_requested' | 'instrument_search_empty' | 'input_search_opened' | 'input_holding_added' | 'bulk_entry_opened' | 'bulk_entry_added' | 'bulk_entry_failed' | 'recommend_started' | 'example_report_opened' | 'followup_asked' | 'followup_chat_opened') {
   const send = () => { try { posthog.capture('portfolio_action', { action }); } catch { /* Optional analytics. */ } };
   if (initialize()) return send();
   if (preview || !analyticsEnabled() || !servedHere()) return;

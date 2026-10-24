@@ -1,7 +1,6 @@
 from datetime import date, datetime
 import pandas as pd
 import pytest
-from pydantic import ValidationError
 from edge_portfolio import dashboard, dashboard_work as work, dashboard_quotes as quotes, store
 from test_store import isolated_db  # noqa: F401
 
@@ -167,27 +166,6 @@ def test_missing_quantity_or_fx_does_not_claim_zero_forecast():
     assert result['dividend_missing'] == ['a']
 
 
-@pytest.mark.parametrize('weight', [True, float('nan'), float('inf'), -1., 0., 101.])
-def test_backtest_rejects_invalid_weights(weight):
-    with pytest.raises(ValidationError):
-        work.Backtest(allocations=[{'instrument_id': 'KR:069500', 'weight_pct': weight}])
-
-
-def test_backtest_excludes_unavailable_fund_and_reports_changed_combination():
-    body = {'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 50.}, {'instrument_id': 'US:VOO', 'weight_pct': 50.}]}
-    result = work.run_backtest(body, {'KR:069500': record()}, date(2026, 10, 18), ['US:VOO'])
-    assert result['excluded'] == ['US:VOO']
-    assert result['return_pct'] == 10
-    assert result['history']['points'][0]['recommended'] == 1000000
-
-
-def test_total_return_uses_adjusted_prices_and_requested_period():
-    r = record((100., 100.))
-    r['frame']['Adj Close'] = [98., 100.]
-    result = work.run_backtest({'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 100.}], 'start': '2026-10-15', 'end': '2026-10-16'}, {'KR:069500': r}, date(2026, 10, 18), [])
-    assert result['return_pct'] == 2.04, 'A cash distribution must not disappear from the backtest'
-
-
 async def test_daily_worker_records_without_browser_and_keeps_history_on_edit(isolated_db, monkeypatch):
     monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
     async def prices(*args, **kwargs):
@@ -216,19 +194,6 @@ async def test_edit_during_price_collection_cannot_publish_stale_holdings(isolat
     assert dashboard.read('owner')['workbook']['assets'] == []
 
 
-async def test_backtest_is_private_idempotent_and_completed_by_worker(isolated_db, monkeypatch):
-    monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
-    body = work.Backtest(allocations=[{'instrument_id': 'KR:069500', 'weight_pct': 100.}])
-    job = work.submit('owner', body)
-    assert work.submit('owner', body) == job
-    assert work.read_backtest('other', job['id']) is None
-    async def prices(*args, **kwargs):
-        return {'KR:069500': record()}, []
-    monkeypatch.setattr(work, 'records_for', prices)
-    assert await work.work_once()
-    assert work.read_backtest('owner', job['id'])['result']['return_pct'] == 10
-
-
 async def test_price_failure_keeps_previous_daily_records(isolated_db, monkeypatch):
     async def prices(*args, **kwargs):
         return {}, ['KR:069500']
@@ -248,14 +213,6 @@ def test_a_temporary_outage_cannot_reset_amount_tracking_or_split_baselines():
     assert recovered['assets'][0]['value'] == 1210
 
 
-def test_selected_start_date_applies_weights_before_not_after_price_drift():
-    a, b = record(), record()
-    a['frame'] = pd.DataFrame({'Close': [100., 200., 300.], 'Adj Close': [100., 200., 300.]}, index=pd.to_datetime(['2026-10-14', '2026-10-15', '2026-10-16']))
-    b['frame'] = pd.DataFrame({'Close': [100., 100., 100.], 'Adj Close': [100., 100., 100.]}, index=a['frame'].index)
-    result = work.run_backtest({'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 50.}, {'instrument_id': 'KR:360750', 'weight_pct': 50.}], 'start': '2026-10-15'}, {'KR:069500': a, 'KR:360750': b}, date(2026, 10, 18), [])
-    assert result['return_pct'] == 25, 'A 50/50 allocation must start 50/50 on the requested date'
-
-
 def test_short_zero_dividend_series_is_unknown_not_a_zero_annual_forecast():
     assert work.forecast(asset(), record(dividends=(0., 0.)), 10, 1, date(2026, 10, 18)) is None
 
@@ -269,21 +226,6 @@ def test_replacing_holdings_archives_manual_history_with_original_names(isolated
     assert archived['months'][0]['value'] == 1000
     assert 'KODEX 200' in archived['assets'][0]['name']
     assert work.tracking('other')['archives'] == []
-
-
-async def test_due_valuation_runs_even_when_backtests_are_queued(isolated_db, monkeypatch):
-    dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
-    job = work.submit('backtester', work.Backtest(allocations=[{'instrument_id': 'KR:069500', 'weight_pct': 100.}]))
-    async def prices(*args, **kwargs):
-        return {'KR:069500': record()}, []
-    monkeypatch.setattr(work, 'records_for', prices)
-    monkeypatch.setattr(quotes, 'cached', lambda *args: {'KR:069500': record()})
-    monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
-    assert await work.work_once()
-    assert work.tracking('owner')['days']
-    assert work.read_backtest('backtester', job['id'])['state'] == 'queued'
-    assert await work.work_once()
-    assert work.read_backtest('backtester', job['id'])['state'] == 'succeeded'
 
 
 async def test_collection_deadline_keeps_completed_prices(isolated_db, monkeypatch):
@@ -366,22 +308,6 @@ async def test_interrupted_optional_repair_keeps_valid_raw_prices_only(isolated_
     assert failures == ([] if currency == 'KRW' else ['KR:069500'])
 
 
-def test_backtest_excludes_an_unusable_return_series_without_losing_the_healthy_fund():
-    bad = record()
-    bad['frame']['Adj Close'] = float('nan')
-    body = {'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 50.}, {'instrument_id': 'KR:360750', 'weight_pct': 50.}]}
-    result = work.run_backtest(body, {'KR:069500': record(), 'KR:360750': bad}, date(2026, 10, 18), [])
-    assert result['excluded'] == ['KR:360750']
-    assert result['return_pct'] == 10
-
-
-def test_cash_only_backtest_respects_the_requested_historical_period():
-    result = work.run_backtest({'allocations': [{'instrument_id': 'CASH:KRW', 'weight_pct': 100.}], 'start': '2020-01-01', 'end': '2021-01-01'}, {}, date(2026, 10, 18), [])
-    assert result['history']['start_date'] == '2020-01-01'
-    assert result['history']['end_date'] == '2021-01-01'
-    assert result['return_pct'] == 0
-
-
 def test_quantity_entered_on_split_day_is_not_split_again_when_prices_catch_up():
     a = {**asset(), 'quantity': 20., 'average': 40., 'quantity_as_of': '2026-10-16', 'average_as_of': '2026-10-16'}
     old = record()
@@ -414,8 +340,6 @@ def test_adjusted_only_fallback_is_for_returns_not_current_asset_values():
     result = work.valuation({'assets': [asset()]}, {'KR:069500': r}, None, date(2026, 10, 18))
     assert result['missing'] == ['a']
     assert result['assets'] == []
-    backtest = work.run_backtest({'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 100.}]}, {'KR:069500': r}, date(2026, 10, 18), [])
-    assert backtest['return_pct'] == 10
 
 
 def test_legacy_currency_mismatch_requires_relinking_without_reinterpreting_cost():
@@ -534,9 +458,6 @@ async def test_adjusted_fallback_keeps_captured_actual_prices_actions_and_source
     result = work.valuation({'assets': [asset()]}, records, None, date(2026, 10, 18))
     assert result['assets'][0]['value'] == 1100
     assert records['KR:069500']['frame']['Dividends'].iloc[-1] == 2
-    backtest = work.run_backtest({'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 100.}]}, records, date(2026, 10, 18), [])
-    assert backtest['return_pct'] == 20
-    assert backtest['history']['source_url'] == 'https://example.com/returns'
 
 
 async def test_incomplete_cached_returns_are_retried_without_losing_actual_closes(isolated_db, monkeypatch):
@@ -557,44 +478,6 @@ async def test_incomplete_cached_returns_are_retried_without_losing_actual_close
     assert calls == ['069500.KS']
     assert failures == []
     assert records['KR:069500']['frame']['Adj Close'].notna().all()
-
-
-def test_holiday_start_keeps_the_first_trading_days_return():
-    r = record()
-    r['frame'] = pd.DataFrame({'Close': [100., 110., 110.], 'Adj Close': [100., 110., 110.]}, index=pd.to_datetime(['2026-10-16', '2026-10-19', '2026-10-20']))
-    result = work.run_backtest({'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 100.}], 'start': '2026-10-17'}, {'KR:069500': r}, date(2026, 10, 21), [])
-    assert result['return_pct'] == 10
-    assert result['history']['start_date'] == '2026-10-17'
-
-
-def test_cash_only_weekend_has_valid_zero_return_and_requested_boundaries():
-    result = work.run_backtest({'allocations': [{'instrument_id': 'CASH:KRW', 'weight_pct': 100.}], 'start': '2026-10-17', 'end': '2026-10-18'}, {}, date(2026, 10, 20), [])
-    assert result['return_pct'] == 0
-    assert [p['date'] for p in result['history']['points']] == ['2026-10-17', '2026-10-18']
-
-
-def test_stock_weekend_uses_fridays_close_at_both_requested_boundaries():
-    result = work.run_backtest({'allocations': [{'instrument_id': 'KR:069500', 'weight_pct': 100.}], 'start': '2026-10-17', 'end': '2026-10-18'}, {'KR:069500': record()}, date(2026, 10, 21), [])
-    assert result['return_pct'] == 0
-    assert [p['date'] for p in result['history']['points']] == ['2026-10-17', '2026-10-18']
-
-
-async def test_historical_backtest_uses_requested_endpoint_for_collection_and_freshness(isolated_db, monkeypatch):
-    body = work.Backtest(allocations=[{'instrument_id': 'KR:069500', 'weight_pct': 100.}], start='2021-10-14', end='2021-10-15')
-    job = work.submit('owner', body)
-    r = record()
-    r['frame'].index = pd.to_datetime(['2021-10-14', '2021-10-15'])
-    days = []
-    async def prices(ids, day, **kwargs):
-        days.append(day)
-        return {'KR:069500': r}, []
-    monkeypatch.setattr(work, 'records_for', prices)
-    monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
-    await work.work_once()
-    assert days == [date(2021, 10, 16)]
-    completed = work.read_backtest('owner', job['id'])
-    assert completed['state'] == 'succeeded'
-    assert completed['result']['return_pct'] == 10
 
 
 def test_annual_distribution_this_month_is_preserved_in_the_next_twelve_months():
@@ -797,14 +680,12 @@ async def test_each_instrument_repairs_only_its_own_holding_basis(isolated_db, m
     assert calls == [{'KR:069500': date(2024, 1, 1), 'US:QLD': date(2026, 10, 18), 'FX': date(2026, 10, 18)}]
 
 
-def test_backtests_and_analyses_share_existing_global_admission_limit(isolated_db):
-    body = work.Backtest(allocations=[{'instrument_id': 'KR:069500', 'weight_pct': 100.}])
+def test_analyses_keep_the_global_admission_limit_without_backtests(isolated_db):
+    # 백테스트를 없앴으니 대기열 한도는 분석 작업만 센다 — 사라진 표를 세다 막히면 분석 접수가 멈춘다.
     for i in range(20):
-        work.submit(f'owner-{i}', body)
-    with pytest.raises(ValueError, match='QUEUE_FULL'):
-        work.submit('extra', body)
+        store.submit(f'owner-{i}', f'key-{i}', {'holdings': []})
     with pytest.raises(ValueError, match='QUEUE_FULL'):
         store.submit('analysis-owner', 'analysis-key', {'holdings': []})
     with store.connect() as db:
-        db.execute("UPDATE portfolio_backtests SET state='failed'")
-    assert work.submit('extra', body)['id']
+        db.execute("UPDATE portfolio_jobs SET state='failed'")
+    assert store.submit('analysis-owner', 'analysis-key', {'holdings': []})['id']

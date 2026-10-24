@@ -141,8 +141,7 @@ async def test_dashboard_collection_cannot_delay_already_queued_customer_analyse
     async def newsletter(stopping):
         events.append('newsletter')
         return False
-    async def dashboard(stopping, *, kind=None):
-        if kind == 'backtest': return False
+    async def dashboard(stopping):
         events.append('dashboard')
         assert await asyncio.to_thread(analysis_finished.wait, 2)
         stopping.set()
@@ -172,8 +171,7 @@ async def test_saved_holdings_refresh_while_an_analysis_is_still_running(monkeyp
         finally:
             stopping.set()
         return True
-    async def dashboard(stopping, *, kind=None):
-        if kind == 'backtest': return False
+    async def dashboard(stopping):
         refreshed.set()
         return True
     monkeypatch.setattr(worker, 'work_once', analysis)
@@ -199,8 +197,7 @@ async def test_shutdown_drains_both_analysis_and_valuation_without_claiming_more
         handlers[signal.SIGTERM](signal.SIGTERM, None)
         completed.append('analysis')
         return True
-    async def dashboard(stopping, *, kind=None):
-        if kind == 'backtest': return False
+    async def dashboard(stopping):
         assert not stopping.is_set()
         started.set()
         assert await asyncio.to_thread(stopping.wait, 2)
@@ -228,8 +225,7 @@ async def test_dashboard_claim_failure_never_cancels_analysis_and_retries(monkey
         assert await asyncio.to_thread(refreshed.wait, 10)
         stopping.set()
         return True
-    async def dashboard(stopping, *, kind=None):
-        if kind == 'backtest': return False
+    async def dashboard(stopping):
         nonlocal calls
         calls += 1
         if calls == 1:
@@ -254,8 +250,7 @@ async def test_synchronous_dashboard_database_wait_does_not_block_analysis(monke
     monkeypatch.setattr(worker.store, 'initialize', lambda: None)
     monkeypatch.setattr(worker.signal, 'signal', lambda *args: None)
     started, finished = Event(), Event()
-    async def dashboard(stopping, *, kind=None):
-        if kind == 'backtest': return False
+    async def dashboard(stopping):
         started.set()
         time.sleep(.3)  # A synchronous psycopg row-lock wait.
         finished.set()

@@ -85,18 +85,6 @@ test('a failed workbook read does not block the independent saved analysis', asy
   await expect(page.locator('#result')).toContainText('내 분석 결과');
 });
 
-test('catalog failure can be retried from the backtest without opening a holding editor', async ({ page }) => {
-  await setup(page, { version: 1, workbook });
-  await page.route('**/api/portfolio/workbook/catalog', r => r.fulfill({ status: 503, json: {} }));
-  await page.goto('/portfolio/?view=dashboard');
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await expect(page.getByRole('button', { name: '목록 다시 불러오기' })).toBeVisible();
-  await page.unroute('**/api/portfolio/workbook/catalog');
-  await page.getByRole('button', { name: '목록 다시 불러오기' }).click();
-  await page.getByRole('combobox', { name: /백테스트에 담은 종목/ }).fill('069500');
-  await expect(page.getByRole('option', { name: /KODEX 200/ })).toBeVisible();
-});
-
 test('dashboard read has a motion state and remains usable after a failed retry', async ({ page }) => {
   await setup(page);
   let release!: () => void;
@@ -123,7 +111,7 @@ test('another tab updating holdings offers reload instead of endless quote prepa
   await expect(page.getByRole('button', { name: '최신 보유 목록 불러오기' })).toBeVisible();
 });
 
-for (const tab of ['AI 포폴 분석', '배당 달력', '수익 기록', '백테스트']) test(`refresh preserves the selected screen: ${tab}`, async ({ page }) => {
+for (const tab of ['AI 포폴 분석', '배당 달력', '수익 기록']) test(`refresh preserves the selected screen: ${tab}`, async ({ page }) => {
   await setup(page, { version: 1, workbook });
   await page.goto('/portfolio/?view=dashboard');
   await page.getByRole('button', { name: tab, exact: true }).click();

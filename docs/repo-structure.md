@@ -32,7 +32,7 @@ edge/
 │       ├── app-ui/           # Node   · ETF Orca 모바일 앱 (Expo, pnpm 워크스페이스 밖)
 │       ├── app-landing/      # 정적   · ETF Orca 랜딩페이지 (etforca.com, HTML 한 장 — 빌드 도구 없음)
 │       ├── portfolio-ui/     # Node   · 포트폴리오 분석·보유 관리 대시보드·화면 테스트 (React 19)
-│       ├── portfolio-worker/ # Python · 포트폴리오 API·워커·뉴스레터·대시보드 시세/기록/백테스트 (독립 워크스페이스, 전용 PostgreSQL)
+│       ├── portfolio-worker/ # Python · 포트폴리오 API·워커·뉴스레터·대시보드 시세/기록 (독립 워크스페이스, 전용 PostgreSQL)
 │       ├── truth-web/        # 정적   · 투자정보 기만 검증 화면 (etforca.com/truth/, 빌드 도구 없음)
 │       ├── truth-agent/      # Python · 기만 검증 사건 계약 검사·공개 데이터 생성·매시 갱신 에이전트(pi 하네스)
 │       └── truth-research/   # Python · 오늘 오른 종목 조사 에이전트(ACH, truth-agent 와 같은 구조)
