@@ -7,6 +7,8 @@
 
 import json
 
+import pytest
+
 from data_pipeline.lake import (
     LocalStorage,
     canonical_run_manifest_key,
@@ -353,6 +355,16 @@ def test_injected_tagger_version_decides_retagging(tmp_path):
     assert tag_news.run(storage, "R3", tagger=roberta) == 0
     assert roberta.calls == 1  # 자기 판정은 건너뛴다
     assert _read_feature(storage, "ko", "2026-07-01")[0]["tagger_version"] == "tagging-roberta-test"
+
+
+def test_run_without_any_tagger_refuses_to_start(tmp_path):
+    """WHY(ALPHA-1446): LLM·로컬 태거가 둘 다 없으면 모든 기사가 llm_error 로 저장되고 런은 성공으로
+    끝난다(기존 판정을 오류 행으로 덮을 수도 있다) — 아무것도 쓰기 전에 막아야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    with pytest.raises(ValueError, match="하나가 필요하다"):
+        tag_news.run(storage, "R1")
+    assert _read_feature(storage, "ko", "2026-07-01") == []
 
 
 def test_english_articles_are_not_tagged(tmp_path):

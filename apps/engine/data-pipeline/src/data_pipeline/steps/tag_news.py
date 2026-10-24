@@ -534,6 +534,9 @@ def run(
     concurrency 는 LLM 호출 병렬도다(파티션 안에서 기사별 extract 를 동시 실행). 카운터·격리·
     merged 병합은 결과 취합 뒤 메인스레드에서 순차로 해 경합을 없앤다 — 순차 실행과 결과 동일.
     """
+    if complete_fn is None and tagger is None:
+        # 둘 다 없으면 모든 기사가 llm_error 로 저장되고 런은 성공으로 끝난다 — 시작 전에 막는다.
+        raise ValueError("complete_fn(LLM) 또는 tagger(로컬 모델) 중 하나가 필요하다")
     concurrency = max(1, min(concurrency, MAX_TAG_CONCURRENCY))
     now = datetime.now(timezone.utc)
     tagged_at = now.isoformat()

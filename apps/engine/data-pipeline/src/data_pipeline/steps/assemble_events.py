@@ -1487,6 +1487,9 @@ def run(
     00:03 자정 crossing 때 실측된 그 모양이, 사고가 아니라 매일이 된다). 멱등(document-exists
     skip)이라 겹침 비용은 스캔뿐이다.
     """
+    if complete_fn is None and tagger is None:
+        # 둘 다 없으면 분류가 날짜마다 실패한다 — 시작 전에 사유를 분명히 해서 막는다.
+        raise ValueError("complete_fn(LLM) 또는 tagger(로컬 모델) 중 하나가 필요하다")
     started_at = datetime.now(timezone.utc)
     news_read = in_universe_count = already_normalized = assembled_during_classify = 0
     classified = events_created = threaded = unknown_thread = 0
