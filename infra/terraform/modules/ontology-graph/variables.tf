@@ -38,7 +38,7 @@ variable "off_schedule" {
 }
 variable "credentials_parameter_arn" {
   type        = string
-  description = "SecureString SSM 매개변수 ARN. 값은 JSON {username, password, db_username, db_password}. Terraform 밖에서 만든다."
+  description = "SecureString SSM 매개변수 ARN. 값은 JSON이고 업로더는 db_username·db_password(그래프의 DB 읽기 계정)만 쓴다. Terraform 밖에서 만든다."
 }
 variable "schema_json" {
   type        = string

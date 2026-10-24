@@ -55,6 +55,13 @@ def test_every_edge_joins_two_mapped_node_labels():
     assert [e['label'] for e in mapping['edge'] if not {e['fromNodeLabel'], e['toNodeLabel']} <= nodes] == []
 
 
+def _table_sql(sql, table):
+    """Only the statements that define or change this table: its CREATE TABLE block and ALTER TABLE lines."""
+    parts = re.findall(rf'CREATE TABLE (?:public\.)?{table}\s*\((.*?)\n\);', sql, re.I | re.S)
+    parts += re.findall(rf'ALTER TABLE (?:public\.)?{table}\b(.*?);', sql, re.I | re.S)
+    return '\n'.join(parts)
+
+
 def test_mapped_public_tables_and_columns_exist_in_the_flyway_migrations():
     # A few edges read a source table directly. Its shape is owned by libs/schema (Flyway).
     migrations = Path(__file__).parents[2] / 'schema' / 'migrations-cloud'
@@ -63,11 +70,13 @@ def test_mapped_public_tables_and_columns_exist_in_the_flyway_migrations():
     assert public, 'no direct table reads left: drop this test'
     missing = []
     for label, source in public:
-        table = source['table']
-        if not re.search(rf'CREATE TABLE (public\.)?{table}\b', sql, re.I):
-            missing.append(f'{label}: table {table}')
-        missing += [f'{label}: {table}.{f["sourceFieldName"]}' for f in source['mappedField']
-                    if not re.search(rf'\b{f["sourceFieldName"]}\b', sql)]
+        table = _table_sql(sql, source['table'])
+        if not table:
+            missing.append(f'{label}: table {source["table"]}')
+        for field in source['mappedField']:
+            column = field['sourceFieldName']
+            if re.search(rf'DROP COLUMN (IF EXISTS )?{column}\b', table, re.I) or not re.search(rf'^\s*(ADD COLUMN (IF NOT EXISTS )?)?{column}\s', table, re.I | re.M):
+                missing.append(f'{label}: {source["table"]}.{column}')
     assert missing == []
 
 
@@ -80,44 +89,72 @@ def _loader():
     return module
 
 
-def test_start_up_loader_waits_for_the_server_then_uploads_this_mapping_without_logging_secrets(capsys):
-    # WHY: PuppyGraph starts with an empty schema every time; the loader is the only thing that restores it.
-    # It must keep trying while the server is still starting, send this mapping plus the connection, and
-    # never print a password even when the server echoes the request back in an error.
-    import base64, gzip, io, urllib.error
-    loader = _loader()
-    env = {'GRAPH_SCHEMA_GZ': base64.b64encode(gzip.compress(ROOT.joinpath('puppygraph-schema.json').read_bytes())).decode(),
-           'GRAPH_CREDENTIALS': json.dumps({'username': 'u', 'password': 'admin-secret', 'db_username': 'ro', 'db_password': 'db-secret'}),
-           'DB_HOST': 'db.internal'}
-    sent, answers = [], [urllib.error.URLError('refused'),
-                         urllib.error.HTTPError(loader.URL, 500, 'x', {}, io.BytesIO(b'{"error":"No healthy leader","echo":"db-secret"}')),
-                         io.BytesIO(b'{"ok": true, "message": "Schema uploaded successfully"}')]
+def _env(schema=None):
+    import base64, gzip
+    raw = schema if schema is not None else ROOT.joinpath('puppygraph-schema.json').read_bytes()
+    return {'GRAPH_SCHEMA_GZ': base64.b64encode(gzip.compress(raw)).decode(),
+            'PUPPYGRAPH_USERNAME': 'ontology', 'PUPPYGRAPH_PASSWORD': 'admin-secret',
+            'GRAPH_CREDENTIALS': json.dumps({'username': 'ignored', 'password': 'ignored', 'db_username': 'ro', 'db_password': 'db-secret'}),
+            'DB_HOST': 'db.internal'}
 
+
+def _post(answers, sent):
     def post(request, timeout):
-        sent.append(json.loads(request.data))
+        sent.append(request)
         answer = answers.pop(0)
         if isinstance(answer, Exception):
             raise answer
         return answer
-
-    assert loader.main(env, post=post, sleep=lambda s: None) == 0
-    assert len(sent) == 3
-    assert {n['label'] for n in sent[-1]['node']} == {n['label'] for n in _mapping()['node']}
-    assert sent[-1]['catalog'][0]['jdbc'] == {'username': 'ro', 'password': 'db-secret',
-                                              'jdbcUri': 'jdbc:postgresql://db.internal:5432/edge?sslmode=require'}
-    out = capsys.readouterr().out
-    assert 'graph_schema_uploaded' in out and 'db-secret' not in out and 'admin-secret' not in out
+    return post
 
 
-def test_start_up_loader_gives_up_loudly(capsys):
+def test_start_up_loader_waits_for_the_server_then_uploads_this_mapping_without_logging_secrets(capsys):
+    # WHY: PuppyGraph starts with an empty schema every time; the loader is the only thing that restores it.
+    # It must keep trying while the server is still starting, send this mapping plus the connection with the
+    # server's own admin login, and never print a secret even when the server echoes the request back.
+    import base64, io, urllib.error
     loader = _loader()
-    import base64, gzip, urllib.error
-    env = {'GRAPH_SCHEMA_GZ': base64.b64encode(gzip.compress(b'{"node":[],"edge":[]}')).decode(),
-           'GRAPH_CREDENTIALS': json.dumps({'username': 'u', 'password': 'p', 'db_username': 'r', 'db_password': 'd'}),
-           'DB_HOST': 'h'}
+    token = base64.b64encode(b'ontology:admin-secret').decode()
+    sent = []
+    answers = [urllib.error.URLError('refused'),
+               urllib.error.HTTPError(loader.URL, 500, 'x', {}, io.BytesIO(f'{{"error":"No healthy leader","echo":"db-secret {token}"}}'.encode())),
+               io.BytesIO(b'{"ok": true, "message": "Schema uploaded successfully"}')]
+    assert loader.main(_env(), post=_post(answers, sent), sleep=lambda s: None) == 0
+    assert len(sent) == 3
+    body = json.loads(sent[-1].data)
+    assert {n['label'] for n in body['node']} == {n['label'] for n in _mapping()['node']}
+    assert body['catalog'][0]['jdbc'] == {'username': 'ro', 'password': 'db-secret',
+                                          'jdbcUri': 'jdbc:postgresql://db.internal:5432/edge?sslmode=require'}
+    assert sent[-1].get_header('Authorization') == f'Basic {token}'
+    out = capsys.readouterr().out
+    assert 'graph_schema_uploaded' in out
+    assert not any(secret in out for secret in ('db-secret', 'admin-secret', token))
 
-    def post(request, timeout):
-        raise urllib.error.URLError('refused')
 
-    assert loader.main(env, post=post, sleep=lambda s: None) == 1
+def test_start_up_loader_stops_at_once_on_a_rejected_schema_or_login(capsys):
+    # A 4xx answer cannot heal by waiting; retrying would only hide it for the whole deadline.
+    import io, urllib.error
+    loader = _loader()
+    sent = []
+    answers = [urllib.error.HTTPError(loader.URL, 401, 'x', {}, io.BytesIO(b'unauthorized'))]
+    assert loader.main(_env(), post=_post(answers, sent), sleep=lambda s: None) == 1
+    assert len(sent) == 1
+    assert 'graph_schema_failed' in capsys.readouterr().out
+
+
+def test_start_up_loader_gives_up_loudly_after_the_deadline(capsys):
+    import urllib.error
+    loader = _loader()
+    ticks = iter(range(0, 10_000, 100))
+    sent = []
+    answers = [urllib.error.URLError('refused')] * 50
+    assert loader.main(_env(b'{"node":[],"edge":[]}'), post=_post(answers, sent), sleep=lambda s: None, clock=lambda: next(ticks)) == 1
+    assert len(sent) == loader.DEADLINE // 100
+    assert 'graph_schema_failed' in capsys.readouterr().out
+
+
+def test_start_up_loader_reports_a_malformed_answer_as_a_failure_line(capsys):
+    import io
+    loader = _loader()
+    assert loader.main({**_env(), 'GRAPH_CREDENTIALS': '{}'}, post=_post([io.BytesIO(b'[]')], []), sleep=lambda s: None) == 1
     assert 'graph_schema_failed' in capsys.readouterr().out

@@ -129,8 +129,13 @@ resource "aws_ecs_task_definition" "this" {
     environment = [
       { name = "GRAPH_SCHEMA_GZ", value = base64gzip(jsonencode(jsondecode(var.schema_json))) },
       { name = "DB_HOST", value = var.db_host },
+      { name = "PUPPYGRAPH_USERNAME", value = var.username },
     ]
-    secrets          = [{ name = "GRAPH_CREDENTIALS", valueFrom = var.credentials_parameter_arn }]
+    # 관리자 비밀번호는 서버와 같은 매개변수에서 읽는다. DB 계정만 credentials 매개변수에서 쓴다.
+    secrets = [
+      { name = "PUPPYGRAPH_PASSWORD", valueFrom = var.password_parameter_arn },
+      { name = "GRAPH_CREDENTIALS", valueFrom = var.credentials_parameter_arn },
+    ]
     logConfiguration = local.logs
   }])
 }
