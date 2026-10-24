@@ -1,0 +1,6 @@
+# 이미지에는 dags·config·deploy/entrypoint.sh 만 들어간다(Dockerfile COPY). 로컬 실험·테스트·검증 shim 은 제외.
+*
+!dags/
+!config/
+!deploy/entrypoint.sh
+**/__pycache__

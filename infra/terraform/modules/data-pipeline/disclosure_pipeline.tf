@@ -28,6 +28,11 @@ locals {
   # `load_documents.py` 는 canonical **뉴스**를 읽어 `document_type='NEWS'` 만 넣고 docstring 이
   # "공시는 범위 밖(별건)"이라 명시한다. 공시 문서가 `document` 에 들어가는 경로는
   # `load_disclosure.py` 안의 `INSERT … 'DISCLOSURE'` 다 — 즉 LoadDisclosure 하나면 닫힌다.
+  # 배치 레인이 공시를 소유하는가 — 슬롯 대조(ops_ledger.tf)와 워터마크 창(tasks.tf)이 이것에서 파생된다.
+  # 실행 주체가 Airflow 여도(disclosure_orchestrator = "AIRFLOW", SFN 스케줄은 꺼짐) 소유는 그대로라 둘 다 유지한다
+  # — 슬롯을 Airflow 가 안 돌리면 PLANNER_MISSING 이 열려야 하고, 수집 창은 같은 dart 태스크 정의를 쓴다.
+  disclosure_batch_owned = var.disclosure_schedule_state == "ENABLED" || var.disclosure_orchestrator == "AIRFLOW"
+
   disclosure_raw_jobs       = [for j in local.raw_ingest_jobs : j if j.state == "CollectDartDisclosure"]
   disclosure_normalize_jobs = [for j in local.normalize_jobs : j if contains(["NormalizeDisclosure", "NormalizeDisclosureSegment"], j.state)]
 
@@ -234,8 +239,10 @@ resource "aws_cloudwatch_metric_alarm" "disclosure_execution_timed_out" {
 resource "aws_scheduler_schedule" "disclosure" {
   for_each = var.disclosure_schedule_expressions
 
-  name                         = "${var.name}-disclosure-${each.key}"
-  state                        = var.disclosure_schedule_state
+  name = "${var.name}-disclosure-${each.key}"
+  # 실행 주체가 Airflow 면 SFN 을 띄우는 이 스케줄은 꺼진다(ALPHA-1407) — 두 주체가 같은 슬롯을 동시에
+  # 계획하지 않게 한 변수로 함께 바꾼다. 전환·롤백 절차는 apps/engine/airflow/README.md.
+  state                        = var.disclosure_orchestrator == "AIRFLOW" ? "DISABLED" : var.disclosure_schedule_state
   schedule_expression          = each.value
   schedule_expression_timezone = var.schedule_timezone
 

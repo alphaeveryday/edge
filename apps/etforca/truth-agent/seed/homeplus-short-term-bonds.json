@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "id": "homeplus-short-term-bonds",
+  "subject": "홈플러스 단기채 판매",
+  "instruments": [
+    { "code": "001720", "name": "신영증권" },
+    { "code": "086790", "name": "하나금융지주" }
+  ],
+  "aliases": ["홈플러스", "신영증권", "하나증권", "MBK"],
+  "topics": ["전단채", "단기채", "전자단기사채", "ABSTB", "유동화", "투자자 피해"],
+  "speaker": "주관·판매 증권사 (신영증권·하나증권)",
+  "audience": "홈플러스 연계 단기채를 산 개인 투자자",
+  "title": "홈플러스 회생 두 달 전 단기채 판매",
+  "headline": [
+    "신영증권 내부자료는 회생 두 달 전 홈플러스 유동성이 양호하다고 평가했는데, 그 근거인 대출에는 1년 안에 2,500억원을 갚는 특약이 있었다고 보도됐습니다.",
+    "하나증권 상품설명서에는 외부 신용보강기관 예시도가 실렸지만, 예탁원 기록상 그 상품은 홈플러스 자체 신용보강이었다는 대조 보도가 있습니다."
+  ],
+  "status": "pending",
+  "behaviors": [
+    {
+      "type": "concealed",
+      "verdict": "insufficient",
+      "basis": "조기상환 특약이 투자자 설명에서 빠졌다는 단서는 있습니다. 증권사가 판매 전에 그 의무를 알았는지는 확인되지 않아 ‘알고도 숨김’ 판정은 유보합니다.",
+      "sourceIds": ["news-hankyung-202503193957r", "news-sedaily-20250313"]
+    }
+  ],
+  "contrast": {
+    "before": {
+      "label": "신영증권 내부 평가 (보도)",
+      "text": "1.3조원 리파이낸싱 등을 근거로 홈플러스 유동성이 개선됐다고 평가했습니다.",
+      "sourceId": "news-hankyung-202503193957r"
+    },
+    "after": {
+      "label": "대출 특약 (보도)",
+      "text": "최종만기는 3년이지만 실행 후 1년 안에 2,500억원을 조기상환해야 하는 특약이 있었습니다.",
+      "sourceId": "news-sedaily-20250313"
+    }
+  },
+  "levels": { "behavior": "suspected", "intent": "insufficient", "harm": "suspected", "legal": "suspected" },
+  "legalStatus": "판매사 제재 보완·재논의 보도(2026-10-12), 4개 증권사가 경영진 등을 고소(2025-04-01). 제재·배상 최종액은 미확인",
+  "ach": {
+    "best": "H1",
+    "strongestCounter": "‘3년’과 ‘1년’은 동시에 참일 수 있습니다. 신영은 제공받은 자료에 단기 의무가 나타나지 않았다고 항변했고, 하나는 일반 구조 예시이며 손실위험을 충분히 안내했다고 반박했습니다.",
+    "decisiveEvidence": "대출 특약을 포함한 원계약과 자료 수신 기록, 실제 고객 설명서·판매 녹취, 제재 의결서"
+  },
+  "beneficiary": "주관·판매 증권사와 홈플러스·MBK의 이익과 책임 범위는 확인되지 않았습니다. 패션플랫폼은 관련 채권 19.7억원을 전액 충당했다고 공시했습니다.",
+  "impact": 70,
+  "impactReason": "개인 판매상품 손실과 신영증권·하나금융지주 등 상장 금융사의 배상·충당 위험으로 연결됩니다.",
+  "cover": "https://i.ytimg.com/vi/qduTrP0XshQ/hqdefault.jpg",
+  "video": {"youtube": "qduTrP0XshQ", "title": "홈플러스 믿고 투자했는데‥원금도 못 받아 (2025.03.12/뉴스투데이/MBC)"},
+  "body": [
+    { "h": "만기 숫자보다 설명에서 빠진 의무가 쟁점입니다" },
+    {
+      "p": "한국경제는 회생 약 두 달 전 신영증권 내부자료가 1.3조원 리파이낸싱 등을 근거로 유동성 개선을 평가했다고 보도했습니다. 서울경제는 해당 대출의 최종만기는 3년이지만 실행 후 1년 안에 2,500억원을 조기상환하는 특약이 있었다고 보도했습니다. 3년과 1년은 동시에 참일 수 있으므로 만기 숫자만으로 거짓을 적발했다고 할 수 없습니다. 제공자료에서 중간상환 의무가 빠졌는지, 신영이 다른 경로로 알았는지가 쟁점입니다.",
+      "sourceIds": ["news-hankyung-202503193957r", "news-sedaily-20250313"]
+    },
+    {
+      "p": "블로터는 2025년 2월 25일 발행분 하나증권 상품설명서에 외부 신용보강기관 예시도가 있고, 예탁원 기록상 해당 상품은 홈플러스 자체 신용보강이라고 대조했습니다. 설명서 전체와 판매 녹취는 확보하지 못해 실제 보증 확약이나 불완전판매를 확정하지 않습니다.",
+      "sourceIds": ["news-bloter-20260730"]
+    },
+    { "h": "확인한 순서" },
+    {
+      "list": [
+        "2025-03-04 회생신청·개시, 신용등급 D.",
+        "2025-04-01 신영·하나·현대차·유진이 경영진 등을 고소했습니다. 고소는 책임 확정이 아닙니다.",
+        "2026-07-29 신영은 제공받은 자료에 단기 의무가 나타나지 않았다는 취지로 항변했습니다.",
+        "2026-10-12 판매사 제재가 보완·재논의된다는 보도가 나왔습니다."
+      ]
+    }
+  ],
+  "rebuttal": [
+    {
+      "label": "신영증권 (2026-07)",
+      "text": "제공받은 자료에 단기 상환 의무가 제대로 나타나지 않았다는 취지로 항변했습니다.",
+      "sourceId": "news-bloter-20260729"
+    },
+    {
+      "label": "하나증권 (2026-07)",
+      "text": "일반 구조를 설명하는 예시이며 손실위험을 충분히 안내했다고 반박했습니다.",
+      "sourceId": "news-bloter-20260730"
+    }
+  ],
+  "sources": [
+    { "id": "news-hankyung-202503193957r", "kind": "news", "publisher": "한국경제", "title": "[단독]홈플러스 기업회생 두달 전 “유동성 양호” 평가한 신영증권", "url": "https://www.hankyung.com/article/202503193957r", "publishedAt": "2025-03-19", "accessedAt": "2026-10-20" },
+    { "id": "news-sedaily-20250313", "kind": "news", "publisher": "서울경제", "title": "[단독]메리츠, 홈플러스에 1년내 2500억 조기상환 특약 걸었다", "url": "https://v.daum.net/v/xHLH3u1mCX", "publishedAt": "2025-03-13", "accessedAt": "2026-10-20" },
+    { "id": "news-bloter-20260729", "kind": "news", "publisher": "블로터", "title": "홈플러스 단기채 주관 구조와 신영증권 항변", "url": "https://news.nate.com/view/20260729n15927", "publishedAt": "2026-07-29", "accessedAt": "2026-10-20" },
+    { "id": "news-bloter-20260730", "kind": "news", "publisher": "블로터", "title": "하나증권 상품설명서의 외부 신용보강 예시도", "url": "https://news.nate.com/view/20260730n16535", "publishedAt": "2026-07-30", "accessedAt": "2026-10-20" },
+    { "id": "news-thebell-20250401", "kind": "news", "publisher": "더벨", "title": "증권사 4곳, 홈플러스 경영진 고소", "url": "https://www.thebell.co.kr/front/newsview.asp?code=0202&key=202504011554410720106541", "publishedAt": "2025-04-01", "accessedAt": "2026-10-20" },
+    { "id": "news-sbsbiz-20000339424", "kind": "news", "publisher": "SBS Biz", "title": "홈플러스 판매사 제재 보완·재논의", "url": "https://biz.sbs.co.kr/amp/article/20000339424", "publishedAt": "2026-10-12", "accessedAt": "2026-10-20" },
+    { "id": "disclosure-dart-20260814002502", "kind": "disclosure", "publisher": "DART", "title": "패션플랫폼 반기보고서 (관련 채권 전액 충당)", "url": "https://dart.fss.or.kr/report/viewer.do?rcpNo=20260814002502&dcmNo=11533569&eleId=56&offset=1412273&length=12299&dtd=dart4.xsd", "publishedAt": "2026-08-14", "accessedAt": "2026-10-20" }
+  ],
+  "related": [],
+  "flaggedAt": "2026-10-20",
+  "updatedAt": "2026-10-20T00:00:00+09:00",
+  "origin": "seed",
+  "locked": false
+}

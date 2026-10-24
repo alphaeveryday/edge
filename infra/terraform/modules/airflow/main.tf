@@ -1,6 +1,6 @@
 # Airflow 실행 환경 — ECS on EC2(일반 ASG + Capacity Provider. ECS Managed Instances 아님).
 #
-# 구성(ALPHA-1119, README `src/apps/cloud/airflow` "실행 환경"):
+# 구성(ALPHA-1119, README `apps/engine/airflow` "실행 환경"):
 # - 전용 클러스터 하나 + EC2 1대(ASG 1~2). 업무 클러스터(worker)는 건드리지 않는다 — 그 클러스터의
 #   capacity provider 목록은 aws_ecs_cluster_capacity_providers 가 **통째로** 소유해서, EC2 CP 를 더하면
 #   기존 리소스를 고치게 된다. 클러스터는 무료라 분리해도 비용이 같다.
@@ -309,6 +309,12 @@ resource "aws_iam_role_policy" "task" {
         Condition = { ArnEquals = { "ecs:cluster" = var.batch_cluster_arn } }
       },
       {
+        Sid      = "ReadBlockingBatchExecutions"
+        Effect   = "Allow"
+        Action   = ["states:ListExecutions"]
+        Resource = var.blocking_batch_state_machine_arns
+      },
+      {
         Sid      = "DescribeTaskDefinitions"
         Effect   = "Allow"
         Action   = ["ecs:DescribeTaskDefinition"]
@@ -413,12 +419,15 @@ locals {
     EDGE_AIRFLOW_DB_NAME                    = var.db_name
     EDGE_AIRFLOW_DB_USER                    = var.db_user
     # EdgeStep(dags/edge_batch.py) 배포 환경값.
-    EDGE_ECS_CLUSTER         = var.batch_cluster_arn
-    EDGE_ECS_TASKDEF_PREFIX  = var.batch_task_definition_prefix
-    EDGE_ECS_SUBNETS         = join(",", var.subnet_ids)
-    EDGE_ECS_SECURITY_GROUPS = var.batch_security_group_id
-    EDGE_ECS_LOG_GROUP       = var.batch_log_group_name
-    EDGE_ALARM_TOPIC_ARN     = var.alarm_topic_arn
+    EDGE_ECS_CLUSTER                     = var.batch_cluster_arn
+    EDGE_ECS_TASKDEF_PREFIX              = var.batch_task_definition_prefix
+    EDGE_ECS_SUBNETS                     = join(",", var.subnet_ids)
+    EDGE_ECS_SECURITY_GROUPS             = var.batch_security_group_id
+    EDGE_ECS_LOG_GROUP                   = var.batch_log_group_name
+    EDGE_ALARM_TOPIC_ARN                 = var.alarm_topic_arn
+    EDGE_LANE_ARGS                       = jsonencode(var.lane_command_args)
+    EDGE_DIVIDEND_BLOCKING_SFN_ARNS      = jsonencode(var.blocking_batch_state_machine_arns)
+    EDGE_DIVIDEND_BLOCKING_TASK_FAMILIES = jsonencode(var.blocking_batch_task_families)
     }, [for sg in aws_security_group.verify : {
       # 격리 검증 DAG(edge_investor_intraday_verify) — 이 값이 없으면 그 DAG 는 등록되지 않는다.
       EDGE_VERIFY_CLUSTER         = aws_ecs_cluster.this.arn

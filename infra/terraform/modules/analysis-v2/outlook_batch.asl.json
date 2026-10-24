@@ -176,6 +176,7 @@
               "Input": {
                 "analysis_id.$": "$.analysis_id",
                 "kind": "outlook",
+                "execution_mode": "batch",
                 "etf_code.$": "$.etf_code",
                 "analysis_at.$": "$.analysis_at"
               }

@@ -27,7 +27,7 @@ PORT=18090 node demo/mock-broker/server.js
 ```
 app.js (MTS 3화면 — 홈·검색·종목상세)
   → broker-api.js   데이터 호출 계층 — 상태 해석·폴백 처리
-    → publication-api (src/apps/onprem/publication-api)   설명 조회 직접 호출   (/api/v1/explanations/{ticker} — 엣지(CloudFront/passthrough) 경유 동일 오리진)
+    → publication-api (apps/edgesignal/publication-api)   설명 조회 직접 호출   (/api/v1/explanations/{ticker} — 엣지(CloudFront/passthrough) 경유 동일 오리진)
     → mock-broker (demo/mock-broker/server.js)   증권사 자체 데이터 전제 표면
       → 토스증권 공식 Open API (openapi.tossinvest.com)   실시간 시세·일봉 소스 — 시세 7초 캐시   (/api/broker/quotes · /api/broker/chart)
 ```
@@ -64,7 +64,7 @@ app.js (MTS 3화면 — 홈·검색·종목상세)
 
 ## 데모 조작
 
-응답 데이터는 cloud 시드(`src/libs/schema/seed-local-cloud`)의 전달 레코드가 동기화 경로
+응답 데이터는 cloud 시드(`libs/schema/seed-local-cloud`)의 전달 레코드가 동기화 경로
 (sync-agent→intake→screening-worker)를 관통해 만든 온프렘 게시분이다
 (200 게시분: 091160 = 2026-07-16 수령 디자인 리포트, 069500 = 2026-07-15. 지원 종목
 판별은 온프렘 종목 마스터 etf_instrument — 로컬은 seed-local-onprem 시드가 38종을 공급한다).

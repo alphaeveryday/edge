@@ -29,13 +29,13 @@ on:
     branches: [dev, main]
     # 스키마/Gradle/파이프라인 워크플로가 바뀐 PR에서만 실행한다. (required check 도입 시 걷어낼 것 — 위 설명 참고)
     paths:
-      - "src/libs/schema/**"
-      - "src/gradle/**"
-      - "src/gradlew"
-      - "src/gradlew.bat"
-      - "src/settings.gradle"
-      - "src/build.gradle"
-      - "src/gradle.properties"
+      - "libs/schema/**"
+      - "gradle/**"
+      - "gradlew"
+      - "gradlew.bat"
+      - "settings.gradle"
+      - "build.gradle"
+      - "gradle.properties"
       - ".github/workflows/schema-validate.yml"
       - ".github/workflows/schema-migrate.yml"
 
@@ -86,7 +86,7 @@ jobs:
           head="${HEAD_SHA}"
 
           # 세트 2개(cloud·onprem — ADR-0016)를 각각 검사한다. 버전 단조성은 세트별 독립.
-          for migdir in "src/libs/schema/migrations-cloud" "src/libs/schema/migrations-onprem"; do
+          for migdir in "libs/schema/migrations-cloud" "libs/schema/migrations-onprem"; do
             echo "── 세트 검사: ${migdir}"
 
             base_max="$(git ls-tree -r --name-only "${base}" -- "${migdir}/" \
@@ -110,7 +110,7 @@ jobs:
             #      이유: 적용된 파일의 전방 리네임까지 초록이 되어 PR-시점 보호가 사라진다 —
             #      allowlist 선언은 diff 에 드러나 "정말 미적용인가"를 리뷰가 판단하게 한다.
             #      그래도 적용 파일이 올라가면 배포 flywayMigrate 가 fail-loud 로 최종 방어.
-            allowlist="src/libs/schema/rename-recovery.allowlist"
+            allowlist="libs/schema/rename-recovery.allowlist"
             renames="$(git diff --name-status --diff-filter=R "${base}...${head}" -- "${migdir}/")"
             if [ -n "${renames}" ]; then
               bad_renames="$(echo "${renames}" | while IFS="$(printf '\t')" read -r st old new; do
@@ -208,33 +208,33 @@ jobs:
 
       # SQL을 실제 Postgres에 적용한다. 마이그레이션이 깨졌으면 여기서 실패한다.
       - name: Flyway migrate (ephemeral Postgres)
-        working-directory: src
+        working-directory: .
         run: ./gradlew :libs:schema:flywayMigrate --info
 
       # 적용본과 마이그레이션 파일의 정합성(체크섬·순서·네이밍)을 검증한다.
       - name: Flyway validate
-        working-directory: src
+        working-directory: .
         run: ./gradlew :libs:schema:flywayValidate --info
 
       - name: Minute artifact history constraints (real PostgreSQL)
         run: >
           docker exec -i edge-ci-pg psql -X -v ON_ERROR_STOP=1 -U edge -d edge
-          < src/libs/schema/tests/minute_window_artifact_commit.sql
+          < libs/schema/tests/minute_window_artifact_commit.sql
 
       - name: V1 and v2 delivery references (real PostgreSQL)
         run: >
           docker exec -i edge-ci-pg psql -X -v ON_ERROR_STOP=1 -U edge -d edge
-          < src/libs/schema/tests/v2_tenant_delivery.sql
+          < libs/schema/tests/v2_tenant_delivery.sql
 
       - name: Analysis v2 event reader permissions (real PostgreSQL)
         run: >
           docker exec -i edge-ci-pg psql -X -v ON_ERROR_STOP=1 -U edge -d edge
-          < src/libs/schema/tests/analysis_v2_event_reader.sql
+          < libs/schema/tests/analysis_v2_event_reader.sql
 
       - name: Analysis v2 writer permissions (real PostgreSQL)
         run: >
           docker exec -i edge-ci-pg psql -X -v ON_ERROR_STOP=1 -U edge -d edge
-          < src/libs/schema/tests/analysis_v2_writer.sql
+          < libs/schema/tests/analysis_v2_writer.sql
 
       # ── 온프렘 세트(migrations-onprem/) — 별도 ephemeral DB에 독립 적용·검증 ──
       - name: Create onprem database
@@ -243,7 +243,7 @@ jobs:
       # 주의: Flyway Gradle 플러그인은 환경변수(FLYWAY_*)가 Gradle property 보다 우선한다.
       # job 레벨 FLYWAY_URL(=edge)이 -Pflyway.url 을 덮으므로 step 레벨 env 로 재정의한다.
       - name: Flyway migrate (onprem set)
-        working-directory: src
+        working-directory: .
         env:
           FLYWAY_URL: jdbc:postgresql://localhost:${{ env.PGPORT }}/edge_onprem
         run: >
@@ -251,7 +251,7 @@ jobs:
           -Pflyway.locations=filesystem:$(pwd)/libs/schema/migrations-onprem
 
       - name: Flyway validate (onprem set)
-        working-directory: src
+        working-directory: .
         env:
           FLYWAY_URL: jdbc:postgresql://localhost:${{ env.PGPORT }}/edge_onprem
         run: >
@@ -276,18 +276,18 @@ jobs:
           # 산출물 리다이렉트가 EACCES 로 죽는다. 그건 조용히 통과하지 않는다(스크립트의
           # set -e → docker 비0 → 이 스텝 빨강). 즉 이 chmod 는 무증상 통과를 막는 가드가
           # 아니라 **스텝이 돌게 하는 전제**다 — 무증상 통과를 막는 것은 아래 대조 방식이다.
-          chmod -R a+w src/libs/schema/generated
+          chmod -R a+w libs/schema/generated
           docker run --rm -v "$PWD:/repo" -w /repo --user postgres postgres:18 \
-            bash src/libs/schema/scripts/generate-erd.sh
+            bash libs/schema/scripts/generate-erd.sh
           # 대조는 `git diff` 가 아니라 `git status --porcelain` 으로 한다 — diff 는 **추적되지
           # 않는** 경로를 못 본다. 산출물이 인덱스에서 빠진 채(세트 정리·머지 사고) 스크립트가
           # 계속 내면 그 파일은 untracked 로 재생성돼 diff 가 비고, 계약 산출물이 사라진 PR 이
           # 초록으로 통과한다. 세트가 늘어 새 dbml 이 생기는 날도 같은 구멍이다.
-          drift="$(git status --porcelain -- src/libs/schema/generated/)"
+          drift="$(git status --porcelain -- libs/schema/generated/)"
           if [ -n "$drift" ]; then
-            echo "::error::generated/*.dbml 이 마이그레이션과 어긋납니다. 재생성해 같은 커밋에 담으세요(implementation.md 체크리스트). 로컬에 pg18 이 없으면: chmod -R a+w src/libs/schema/generated && docker run --rm -v \"\$PWD:/repo\" -w /repo --user postgres postgres:18 bash src/libs/schema/scripts/generate-erd.sh"
+            echo "::error::generated/*.dbml 이 마이그레이션과 어긋납니다. 재생성해 같은 커밋에 담으세요(implementation.md 체크리스트). 로컬에 pg18 이 없으면: chmod -R a+w libs/schema/generated && docker run --rm -v \"\$PWD:/repo\" -w /repo --user postgres postgres:18 bash libs/schema/scripts/generate-erd.sh"
             echo "$drift"
-            git diff -- src/libs/schema/generated/
+            git diff -- libs/schema/generated/
             exit 1
           fi
           echo "OK — 파생 ERD 가 마이그레이션과 일치."

@@ -7,4 +7,4 @@
 # event-bundle-schema.md 가 이 마이그레이션을 계약 본문으로 참조하므로, 문서만 걸어두면
 # 스키마를 직접 바꿔 계약을 우회할 수 있다 (ADR-0026 — 스키마 변경은 반드시 양자 합의).
 # implementation.md §4 체크리스트의 "libs/schema 는 양쪽 리뷰를 받는다" 도 여기서 강제된다.
-/src/libs/schema/ @jingi723 @choyoungseo20
+/libs/schema/ @jingi723 @choyoungseo20

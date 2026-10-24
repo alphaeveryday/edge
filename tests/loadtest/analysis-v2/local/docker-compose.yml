@@ -31,7 +31,7 @@ services:
       FLYWAY_USER: v2_local
       FLYWAY_PASSWORD: local_only
     volumes:
-      - ${EDGE_REPO}/src/libs/schema/migrations-cloud:/flyway/sql:ro
+      - ${EDGE_REPO}/libs/schema/migrations-cloud:/flyway/sql:ro
   # load900.py --net 의 자식 프로세스 이미지. 호스트(macOS)에서 돌리면 Docker Desktop 포트 중계가 연결 폭주에
   # 먼저 무너져, DB 와 같은 네트워크(-p v2load900 이면 v2load900_default)의 컨테이너로 띄운다.
   generator:

@@ -7,6 +7,16 @@ variable "region" {
   type = string
 }
 
+variable "blocking_batch_state_machine_arns" {
+  description = "State machines that must be idle before dividend collection"
+  type        = list(string)
+}
+
+variable "blocking_batch_task_families" {
+  description = "All batch families checked for overlap, independent of Airflow launch permissions"
+  type        = list(string)
+}
+
 variable "vpc_id" {
   type = string
 }
@@ -109,8 +119,13 @@ variable "batch_cluster_arn" {
 }
 
 variable "batch_task_definition_families" {
-  description = "Airflow 가 띄울 수 있는 업무 태스크 정의 family(장중 수급: kis·bigkinds·rds·ops)"
+  description = "Airflow 가 띄울 수 있는 업무 태스크 정의 family(레인 DAG 들이 쓰는 것 — envs/dev 주석)"
   type        = list(string)
+}
+
+variable "lane_command_args" {
+  description = "DAG 명령 인자 중 terraform 값(data-pipeline 출력 airflow_lane_args) — env EDGE_LANE_ARGS(JSON)"
+  type        = map(string)
 }
 
 variable "batch_task_definition_prefix" {
@@ -155,7 +170,7 @@ variable "verify_enabled" {
 }
 
 variable "verify_image" {
-  description = "검증 태스크 이미지 — 배포된 data-pipeline 이미지 + 검증 shim(src/apps/cloud/airflow/verify)"
+  description = "검증 태스크 이미지 — 배포된 data-pipeline 이미지 + 검증 shim(apps/engine/airflow/verify)"
   type        = string
   default     = ""
 }

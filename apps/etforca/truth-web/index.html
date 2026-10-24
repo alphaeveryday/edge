@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>투자정보 기만 검증 · ETF ORCA</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="style.css">
+<script src="intro.js"></script>
+<script src="analytics.js"></script>
+<style>
+/* 홈은 아래로 스크롤: 첫 화면은 그대로, 그 아래 전체 순위 */
+html{scroll-behavior:smooth}
+body{overflow-y:auto}
+.window{height:auto}
+.grid{flex:none;height:clamp(680px,calc(100vh - 130px),900px);display:grid;grid-template-columns:330px 1fr;grid-template-rows:1.45fr 1fr;gap:16px}
+.grid>*{min-width:0}
+.ico{width:24px;height:24px;flex:none}
+
+/* ── 왼쪽: 내비 패널 + 라이브러리 패널 (스포티파이 좌측) ── */
+.side{grid-row:1/3;display:flex;flex-direction:column;gap:12px;min-height:0}
+.nav{border-radius:var(--r-lg);padding:10px 8px}
+.nav a{display:flex;align-items:center;gap:16px;padding:10px 12px;border-radius:10px;font-size:15px;font-weight:700;color:var(--muted);transition:color .2s}
+.nav a:hover,.nav a.on{color:var(--text)}
+
+.lib{flex:1;min-height:0;border-radius:var(--r-lg);padding:18px 12px 0;display:flex;flex-direction:column}
+.lib-h{display:flex;align-items:center;gap:12px;padding:0 6px;font-size:15px;font-weight:700;color:var(--muted)}
+.stat{padding:16px 6px 16px}
+.stat small{font-size:12px;color:var(--muted)}
+.big{display:flex;align-items:baseline;gap:4px;margin-top:4px}
+.big b{font-size:52px;line-height:1;font-weight:800;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.big span{font-size:18px;font-weight:700}
+.rate{margin-left:auto;align-self:center;padding:7px 13px;border-radius:999px;background:var(--red-soft);color:var(--red-text);font-size:14px;font-weight:700}
+.rate.none{background:none;padding:0;color:var(--faint);font-size:12.5px;font-weight:500}
+.legend{display:flex;gap:14px;margin-top:12px;font-size:12px;color:var(--muted)}
+.legend b{color:var(--text);font-variant-numeric:tabular-nums}
+.key{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:6px}
+.key.hit{background:var(--red)}
+.key.miss{background:#6e6e76}
+
+/* 연도별 밝혀진 거짓 (적중·빗나감 누적 막대) — 막대를 누르면 아래 전체 목록으로 */
+.chart-box{padding:4px 6px 14px;border-bottom:1px solid var(--line)}
+.bars{display:flex;align-items:flex-end;justify-content:space-around;height:96px;border-bottom:1px solid rgba(255,255,255,.14)}
+.col{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:2px;width:44px;height:100%;border-radius:6px}
+.col:hover{background:rgba(255,255,255,.05)}
+.col .n{font-size:12px;font-weight:600;margin-bottom:4px;font-variant-numeric:tabular-nums}
+.seg{width:24px}
+.seg.hit{background:var(--red)}
+.seg.miss{background:#6e6e76}
+.col .seg:first-of-type{border-radius:4px 4px 0 0}
+.col[data-tip]:hover::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 6px);white-space:nowrap;font-size:11px;padding:6px 9px;border-radius:8px;background:#26262b;border:1px solid var(--line);color:var(--text);z-index:3}
+.years{display:flex;justify-content:space-around;padding-top:6px}
+.years span{width:44px;text-align:center;font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums}
+
+/* 라이브러리 행: 사진 · 제목 · "결과 · 주체 · 날짜" — 검색 결과도 같은 행을 쓴다 */
+.list{flex:1;overflow-y:auto;min-height:0;padding:10px 0;scrollbar-width:none}
+.list::-webkit-scrollbar{display:none}
+.row{display:flex;align-items:center;gap:12px;padding:7px 6px;border-radius:8px}
+.row:hover{background:rgba(255,255,255,.07)}
+.row .ph-img{flex:none;width:48px;height:48px;border-radius:6px}
+.row div:last-child{min-width:0}
+.row b{display:block;font-size:14px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.row small{display:block;font-size:12.5px;color:var(--faint);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.row small{padding:4px 3px 3px;margin-top:2px}
+.row small .sticker{margin-right:4px;font-size:10.5px;padding:2px 8px}
+.row.miss b{color:var(--muted)}
+
+/* ── 히어로: 판단 중 1위 ── */
+.hero{position:relative;display:block;border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--line)}
+.hero>.ph-img{position:absolute;inset:0}
+.hero>.ph-img img{transition:transform .8s}
+.hero:hover>.ph-img img{transform:scale(1.03)}
+.hero::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(0,0,0,.88),rgba(0,0,0,.55) 55%,rgba(0,0,0,.2))}
+.hero-body{position:absolute;z-index:1;inset:0;padding:26px 30px;display:flex;flex-direction:column;justify-content:space-between}
+.hero-body>span{align-self:flex-start;padding:8px 14px;font-size:12px;font-weight:600}
+.hero-main{max-width:640px}
+.subject{font-size:14px;font-weight:700;color:var(--red-text);margin-bottom:10px}
+.hero h1{font-size:clamp(24px,2.8vw,40px);line-height:1.2;letter-spacing:-.025em;font-weight:800}
+.hero-sub{margin-top:12px;font-size:15px;line-height:1.55;color:rgba(245,245,247,.82);max-width:560px}
+.val{display:flex;align-items:baseline;gap:10px;margin-top:22px}
+.val small{font-size:13px;color:var(--muted)}
+.val b{font-size:26px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.hero .vbar{margin-top:10px;max-width:420px;height:8px}
+.hero .btn{margin-top:22px}
+
+/* 판단 중 2위 이하 */
+.more{display:flex;flex-direction:column;min-height:0}
+.more .ph h3{font-size:17px}
+.cards{flex:1;min-height:0;display:flex;gap:14px;overflow-x:auto;scrollbar-width:none}
+.cards::-webkit-scrollbar{display:none}
+.card{position:relative;flex:0 0 calc((100% - 42px)/4);min-width:210px;border-radius:var(--r-lg);border:1px solid var(--line);transition:transform .25s}
+.card:hover{transform:translateY(-3px)}
+.card::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.2),rgba(0,0,0,.85) 65%)}
+.rank{position:absolute;z-index:1;top:12px;left:16px;font-size:34px;font-weight:800;letter-spacing:-.04em;color:rgba(255,255,255,.4)}
+.card .meta{position:absolute;z-index:1;inset:auto 16px 16px}
+.card .subject{font-size:12px;margin-bottom:6px}
+.card h4{font-size:15px;font-weight:600;line-height:1.35;margin-bottom:14px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.cval{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;font-size:11px;color:var(--faint)}
+.cval b{font-size:15px;color:var(--text);font-variant-numeric:tabular-nums}
+
+/* ── 검색 (스포티파이 검색) ── */
+.search{grid-column:2;grid-row:1/3;display:none;flex-direction:column;min-height:0;border-radius:var(--r-lg);padding:22px 24px 0}
+body.searching .hero,body.searching .more,body.searching .below{display:none}
+body.searching .search{display:flex}
+.sbox{position:relative;max-width:520px}
+.sbox .ico{position:absolute;left:16px;top:50%;transform:translateY(-50%);color:var(--muted)}
+.sbox input{width:100%;height:50px;border-radius:999px;padding:0 48px 0 52px;font:inherit;font-size:15px;color:var(--text);
+  background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);outline:none;transition:border-color .2s,background .2s}
+.sbox input:hover{background:rgba(255,255,255,.11)}
+.sbox input:focus{border-color:rgba(255,255,255,.7);background:rgba(255,255,255,.1)}
+.sbox input::placeholder{color:var(--faint)}
+.sbox input::-webkit-search-cancel-button{display:none}
+.sbox button{position:absolute;right:10px;top:50%;transform:translateY(-50%);width:32px;height:32px;border-radius:50%;border:0;background:none;color:var(--muted);font-size:18px;cursor:pointer;display:none}
+.sbox.has button{display:block}
+.chips{display:flex;gap:8px;margin-top:16px;min-height:34px}
+.chips button{font:inherit;font-size:13px;font-weight:500;color:var(--text);padding:7px 14px;border-radius:999px;border:0;background:rgba(255,255,255,.08);cursor:pointer}
+.chips button:hover{background:rgba(255,255,255,.14)}
+.chips button.on{background:#fff;color:#000}
+.sres{flex:1;min-height:0;overflow-y:auto;padding:18px 0 24px;scrollbar-width:none}
+.sres::-webkit-scrollbar{display:none}
+.sres h2{font-size:22px;letter-spacing:-.01em;margin-bottom:16px}
+
+/* 둘러보기 타일: 유형별 */
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:16px}
+.tile{position:relative;height:120px;border-radius:12px;overflow:hidden;padding:16px;font-size:19px;font-weight:700;cursor:pointer;border:0;color:#fff;text-align:left;font-family:inherit}
+.tile small{display:block;font-size:12px;font-weight:500;opacity:.75;margin-top:4px}
+.tile:disabled{opacity:.4;cursor:default}
+.tile .ph-img{position:absolute;right:-14px;bottom:-8px;width:84px;height:84px;border-radius:6px;transform:rotate(25deg);box-shadow:0 4px 16px rgba(0,0,0,.45)}
+
+/* 결과: 상위 결과 + 사건 목록 */
+.results{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.35fr);gap:24px}
+.topcard{position:relative;display:block;padding:20px;border-radius:12px;background:rgba(255,255,255,.05);transition:background .25s}
+.topcard:hover{background:rgba(255,255,255,.1)}
+.topcard .ph-img{width:96px;height:96px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.topcard h3{font-size:24px;line-height:1.3;letter-spacing:-.02em;margin:18px 0 12px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.topcard .meta{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+.topcard .pill{padding:4px 10px;font-size:12px;font-weight:700;background:rgba(0,0,0,.4)}
+.play{position:absolute;right:20px;bottom:20px;width:48px;height:48px;border-radius:50%;display:grid;place-items:center;background:var(--red);color:#000;
+  box-shadow:0 8px 20px rgba(0,0,0,.5);opacity:0;transform:translateY(8px);transition:opacity .25s,transform .25s}
+.play svg{width:18px;height:18px}
+.topcard:hover .play{opacity:1;transform:none}
+.none{color:var(--muted);font-size:15px;padding:40px 0;text-align:center}
+.none b{display:block;font-size:20px;color:var(--text);margin-bottom:8px}
+
+
+@media (max-width:900px){
+  .grid{display:flex;flex-direction:column;height:auto}
+  .side{display:contents}
+  .nav{order:-4;display:flex;padding:6px}
+  .nav a{flex:1;justify-content:center;padding:8px}
+  .hero{order:-2;height:460px}
+  .more{order:-1}
+  .search{order:-3;min-height:70vh}
+  .list{max-height:380px}
+  .cards{flex:none;height:230px}
+  .card{flex-basis:72%}
+  .results{grid-template-columns:1fr}
+  .tiles{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  .tile{height:92px;font-size:16px;padding:14px}
+  .tile .ph-img{width:54px;height:54px;right:-8px;bottom:-6px}
+}
+</style>
+</head>
+<body>
+<div class="bg ph-img" id="bg"></div>
+
+<main class="window">
+  <div class="grid">
+    <aside class="side">
+      <nav class="nav glass">
+        <a href="#" id="navHome">
+          <svg class="ico" viewBox="0 0 24 24" fill="currentColor"><path d="M12.5 3.25a1 1 0 0 0-1 0L3.5 7.9a1 1 0 0 0-.5.87V20a1 1 0 0 0 1 1h5.5v-6.5h5V21H20a1 1 0 0 0 1-1V8.77a1 1 0 0 0-.5-.87l-8-4.65z"/></svg>홈</a>
+        <a href="#search" id="navSearch">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>검색</a>
+      </nav>
+
+      <section class="lib glass">
+        <div class="lib-h">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 3v18M9 3v18M14 4l6 16.5"/></svg>밝혀진 거짓
+        </div>
+        <div class="stat">
+          <div class="big"><b id="hitN">–</b><span>건</span><span class="rate" id="rate"></span></div>
+          <div class="legend" id="legend"></div>
+        </div>
+        <div class="chart-box">
+          <div class="ph"><h3>연도별</h3><a href="list?kind=resolved">전체 보기 →</a></div>
+          <div class="bars" id="bars" role="img"></div>
+          <div class="years" id="years"></div>
+        </div>
+        <div class="list" id="past"></div>
+      </section>
+    </aside>
+
+    <a class="hero" id="hero"></a>
+
+    <section class="more">
+      <div class="ph"><h3>지금 판단 중</h3><a href="list?kind=pending">전체 순위 →</a></div>
+      <div class="cards" id="cards"></div>
+    </section>
+
+    <section class="search glass" id="searchView">
+      <div class="sbox" id="sbox">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.5 15.5 5 5"/></svg>
+        <input id="q" type="search" placeholder="기업·종목·유형으로 찾기" autocomplete="off" aria-label="전체 사건 검색">
+        <button id="clear" aria-label="지우기">✕</button>
+      </div>
+      <div class="chips" id="chips"></div>
+      <div class="sres" id="sres"></div>
+    </section>
+  </div>
+
+  <div class="below">
+    <section class="chart" id="rank">
+      <div class="ph"><h3>판단 중 전체 순위</h3><small>파급력 순</small></div>
+      <div class="top3" id="chart"></div>
+      <div class="see-all" id="rankMore"></div>
+    </section>
+
+    <section class="chart" id="resolved">
+      <div class="ph"><h3>밝혀진 거짓</h3><small>확인일 순</small></div>
+      <div id="resolvedList"></div>
+      <div class="see-all" id="resolvedMore"></div>
+    </section>
+  </div>
+  <p class="cookie-note">방문 통계를 위해 본 페이지·클릭, 기기·브라우저 정보, 접속 IP를 PostHog(미국)로 보냅니다. 쿠키는 허용한 경우에만 쓰고 1년간 유지합니다. 허용하지 않으면 쿠키 없이 그날의 방문 수만 셉니다. <button type="button" data-consent hidden>쿠키 사용 다시 고르기</button> · <a href="privacy">개인정보 처리방침</a></p>
+</main>
+
+<script src="common.js"></script>
+<script>
+let CASES = [];
+const HOME_LIMIT = 10;  // 홈 아래 목록은 상위 10건만, 나머지는 list.html
+const short = d => d.slice(2).replaceAll('-', '/');            // 2025-11-02 → 25/11/02
+const seeAll = (total, href) =>
+  `<small>전체 ${total}건 중 ${Math.min(total, HOME_LIMIT)}건</small><a class="pill glass" href="${href}">자세히 보기 →</a>`;
+
+// 행 하나: 사진 · 공개용 첫 문장 · "결과 · 주체 · 날짜". 왼쪽 목록과 검색 결과가 같이 쓴다.
+const row = c => `
+  <a class="row${c.status === 'refuted' ? ' miss' : ''}" href="${issueHref(c)}" title="${esc(c.headline[0])}">
+    <div class="ph-img">${img(c.cover)}</div>
+    <div><b>${esc(titleOf(c))}</b><small>${sticker(c)} ${esc(c.subject)} · ${short(c.resolvedAt || c.flaggedAt)}</small></div>
+  </a>`;
+
+/* ── 성적 · 그래프 ── */
+function renderStat(){
+  const s = scoreOf(CASES);
+  $('hitN').textContent = s.confirmed;
+  $('rate').textContent = rateText(s);
+  $('rate').classList.toggle('none', s.rate === null);
+  $('rate').title = '이 서비스가 확인일보다 먼저 기록한 사건 중 행위가 확인된 비율';
+  $('legend').innerHTML = `<span><i class="key hit"></i>밝혀짐 <b>${s.confirmed}</b></span><span><i class="key miss"></i>해소 <b>${s.refuted}</b></span><span>판단 중 <b>${pendingOf(CASES).length}</b></span>`;
+}
+
+// 확인 연도별 누적 막대. 첫 확인 연도부터 올해까지 빈 해도 0으로 보여준다.
+function renderBars(done){
+  document.querySelector('.chart-box').hidden = new Set(done.map(yearOf)).size < 2;
+  if (!done.length) {
+    $('bars').innerHTML = '<p class="empty">아직 판정이 난 사건이 없습니다.</p>';
+    $('years').innerHTML = '';
+    return;
+  }
+  const thisYear = new Date().getFullYear();
+  const first = Math.min(thisYear, ...done.map(yearOf));
+  const YEARS = Array.from({length: thisYear - first + 1}, (_, i) => first + i);
+  const count = (y, s) => done.filter(c => yearOf(c) === y && c.status === s).length;
+  const max = Math.max(1, ...YEARS.map(y => count(y, 'confirmed') + count(y, 'refuted')));
+  const px = n => n / max * 70;
+  $('bars').setAttribute('aria-label', YEARS.map(y => `${y}년 밝혀짐 ${count(y, 'confirmed')}건, 해소 ${count(y, 'refuted')}건`).join('. '));
+  $('bars').innerHTML = YEARS.map(y => {
+    const h = count(y, 'confirmed'), m = count(y, 'refuted');
+    return `<a class="col" href="list?kind=resolved&year=${y}" data-tip="${y} · 밝혀짐 ${h} · 해소 ${m} — 눌러서 목록 보기">
+      <span class="n">${h + m}</span>
+      ${m ? `<i class="seg miss" style="height:${px(m)}px"></i>` : ''}
+      ${h ? `<i class="seg hit" style="height:${px(h)}px"></i>` : ''}
+    </a>`;
+  }).join('');
+  $('years').innerHTML = YEARS.map(y => `<span>${y}</span>`).join('');
+}
+
+/* ── 홈 ── */
+function renderHome(){
+  const done = resolvedOf(CASES), pending = pendingOf(CASES);
+  renderStat();
+  renderBars(done);
+  $('past').innerHTML = done.length ? done.map(row).join('') : '<p class="empty">밝혀진 사건이 생기면 여기에 쌓입니다.</p>';
+
+  // 아래 목록: 상위 10건 + 자세히 보기
+  $('rank').hidden = pending.length <= ABOVE_PENDING;
+  $('resolved').hidden = done.length <= ABOVE_RESOLVED;
+  document.querySelector('.below').hidden = $('rank').hidden && $('resolved').hidden;
+  $('chart').innerHTML = PENDING_HEAD + pending.slice(0, HOME_LIMIT).map(pendingRow).join('');
+  $('rankMore').innerHTML = pending.length > HOME_LIMIT ? seeAll(pending.length, 'list?kind=pending') : '';
+  $('resolvedList').innerHTML = RESOLVED_HEAD + done.slice(0, HOME_LIMIT).map(resolvedRow).join('');
+  $('resolvedMore').innerHTML = done.length > HOME_LIMIT ? seeAll(done.length, 'list?kind=resolved') : '';
+
+  const [top, ...rest] = pending;
+  if (top) {
+    $('bg').innerHTML = img(top.cover);
+    $('hero').href = issueHref(top);
+    $('hero').innerHTML = `
+      <div class="ph-img">${img(top.cover)}</div>
+      <div class="hero-body">
+        <span class="pill glass">판단 중 · 파급력 1위</span>
+        <div class="hero-main">
+          ${top.title ? '' : `<div class="subject">${esc(top.subject)}</div>`}
+          <h1>${esc(titleOf(top))}</h1>
+          ${top.title ? `<p class="hero-sub">${esc(top.headline[0])}</p>` : ''}
+          <div class="val"><small>파급력 가치</small><b>${won(top.impact)}</b></div>
+          ${vbar(top.impact)}
+          <span class="btn pill">자세히 보기 ${ARROW}</span>
+        </div>
+      </div>`;
+  } else {
+    $('hero').removeAttribute('href');
+    $('hero').innerHTML = '<div class="hero-body"><span class="pill glass">지금 판단 중인 사건이 없습니다</span></div>';
+  }
+
+  $('cards').innerHTML = rest.map((c, i) => `
+    <a class="card ph-img" href="${issueHref(c)}">${img(c.cover)}
+      <span class="rank">${String(i + 2).padStart(2, '0')}</span>
+      <div class="meta">
+        ${c.title ? '' : `<div class="subject">${esc(c.subject)}</div>`}
+        <h4>${esc(titleOf(c))}</h4>
+        <div class="cval"><span>파급력 가치</span><b>${won(c.impact)}</b></div>
+        ${vbar(c.impact)}
+      </div>
+    </a>`).join('');
+}
+
+/* ── 검색 (스포티파이 흐름) ──
+   빈 검색창: 유형별 둘러보기 타일 → 입력하면: 결과 필터 칩 + 상위 결과 카드 + 사건 목록 */
+const TILE_COLORS = ['#8d1f2c', '#1e3264', '#4a3a78', '#0d6b5f', '#7a4a12', '#5b2a52'];
+const FILTERS = [['all', '전체'], ['pending', '판단 중'], ['confirmed', '밝혀짐'], ['refuted', '해소']];
+let filter = 'all';
+
+// 주체·종목·별칭 일치 > 공개 문장 일치 > 유형 일치. 같은 점수면 파급력 순.
+function score(c, q){
+  const has = s => (s || '').toLowerCase().includes(q);
+  if (has(c.subject) || (c.instruments || []).some(i => has(i.name) || has(i.code)) || (c.aliases || []).some(has)) return 3;
+  if (c.headline.some(has)) return 2;
+  if (has(typeNames(c))) return 1;
+  return 0;
+}
+
+function renderSearch(){
+  const q = $('q').value.trim().toLowerCase();
+  $('sbox').classList.toggle('has', !!q);
+  history.replaceState(null, '', '#search' + (q ? '/' + encodeURIComponent($('q').value.trim()) : ''));
+
+  if (!q) {
+    $('chips').innerHTML = '';
+    $('sres').innerHTML = `<h2>유형별 둘러보기</h2><div class="tiles">${Object.entries(TYPES).map(([code, name], i) => {
+      const of = CASES.filter(c => (c.types || []).includes(code)), pic = of.find(c => c.cover)?.cover;
+      return `<button class="tile" style="background:${TILE_COLORS[i % TILE_COLORS.length]}" data-q="${esc(name)}"${of.length ? '' : ' disabled'}>
+        ${esc(name)}<small>${of.length}건</small>${pic ? `<div class="ph-img">${img(pic)}</div>` : ''}</button>`;
+    }).join('')}</div>`;
+    return;
+  }
+
+  $('chips').innerHTML = FILTERS.map(([k, label]) =>
+    `<button class="${k === filter ? 'on' : ''}" data-filter="${k}">${label}</button>`).join('');
+
+  const hits = CASES.map(c => [score(c, q), c]).filter(([s, c]) => s && (filter === 'all' || c.status === filter))
+    .sort((a, b) => b[0] - a[0] || b[1].impact - a[1].impact).map(([, c]) => c);
+
+  if (!hits.length) {
+    $('sres').innerHTML = `<div class="none"><b>‘${esc($('q').value.trim())}’에 대한 결과가 없습니다</b>철자를 확인하거나 기업·종목 이름, 유형으로 검색해 보세요.</div>`;
+    return;
+  }
+  const [top] = hits;
+  $('sres').innerHTML = `
+    <div class="results">
+      <div>
+        <h2>상위 결과</h2>
+        <a class="topcard" href="${issueHref(top)}">
+          <div class="ph-img">${img(top.cover)}</div>
+          <h3>${esc(titleOf(top))}</h3>
+          <div class="meta">${sticker(top)}${esc(top.subject)} · ${esc(typeNames(top))}</div>
+          <span class="play">${ARROW}</span>
+        </a>
+      </div>
+      <div><h2>사건 ${hits.length}건</h2>${hits.map(row).join('')}</div>
+    </div>`;
+}
+
+function searchFor(text){ $('q').value = text; filter = 'all'; renderSearch(); $('q').focus(); }
+
+$('q').addEventListener('input', renderSearch);
+$('q').addEventListener('keydown', e => { if (e.key === 'Escape') searchFor(''); });
+$('clear').addEventListener('click', () => searchFor(''));
+// 타일·칩은 다시 그려지므로 위임으로 받는다 (인라인 핸들러에 데이터를 넣지 않는다)
+$('sres').addEventListener('click', e => { const t = e.target.closest('[data-q]'); if (t) searchFor(t.dataset.q); });
+$('chips').addEventListener('click', e => { const b = e.target.closest('[data-filter]'); if (b) { filter = b.dataset.filter; renderSearch(); } });
+
+/* ── 화면 전환: #search 또는 #search/검색어 면 검색, 아니면 홈 ── */
+function route(){
+  const searching = location.hash.startsWith('#search');
+  if (searching) { try { $('q').value = decodeURIComponent(location.hash.slice(8)); } catch { $('q').value = ''; } }
+  document.body.classList.toggle('searching', searching);
+  $('navSearch').classList.toggle('on', searching);
+  $('navHome').classList.toggle('on', !searching);
+  if (searching) { renderSearch(); $('q').focus(); }
+  else if (location.hash.length > 1) document.getElementById(location.hash.slice(1))?.scrollIntoView();
+}
+window.addEventListener('hashchange', route);
+
+loadIndex().then(index => { CASES = index.cases; renderHome(); route(); })
+  .catch(() => { $('hero').innerHTML = '<div class="hero-body"><span class="pill glass">사건 목록을 불러오지 못했습니다. 잠시 뒤 다시 열어 주세요.</span></div>'; });
+</script>
+</body>
+</html>

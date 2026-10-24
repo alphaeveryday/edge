@@ -1,0 +1,26 @@
+package com.edge.app.application.vote;
+
+import com.edge.app.application.vote.provided.VoteModifier;
+import com.edge.app.domain.vote.VoteChoice;
+import lombok.RequiredArgsConstructor;
+import org.springframework.stereotype.Service;
+
+// 트랜잭션 밖의 순서 조율
+// DB 커밋과 커넥션 반납 이후의 Redis 반영
+@Service
+@RequiredArgsConstructor
+public class VoteFacade implements VoteModifier {
+    private final VoteService voteService;
+
+    @Override
+    public void vote(String etfCode, Long memberId, VoteChoice choice) {
+        voteService.vote(etfCode, memberId, choice);
+        voteService.updateCount(etfCode, memberId, choice);
+    }
+
+    @Override
+    public void withdraw(String etfCode, Long memberId) {
+        voteService.withdraw(etfCode, memberId);
+        voteService.removeFromCount(etfCode, memberId);
+    }
+}

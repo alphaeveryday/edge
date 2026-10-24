@@ -1,6 +1,6 @@
 # 클라우드 저장 기록 화면
 
-통합 대시보드에서 분석 ID를 선택하면 개발 DB에 실제 저장된 분석 행과 툴 기록을 다시 읽어 보여준다. 실행 중인 분석도 조회할 수 있다. 실행 설정과 출력 계약 검사, 시스템 프롬프트 관리도 같은 대시보드에서 제공한다. 실행 방법과 테스트 환경은 [패키지 안내](../../src/apps/cloud/analysis-engine-v2/README.md)를 참고한다.
+통합 대시보드에서 분석 ID를 선택하면 개발 DB에 실제 저장된 분석 행과 툴 기록을 다시 읽어 보여준다. 실행 중인 분석도 조회할 수 있다. 실행 설정과 출력 계약 검사, 시스템 프롬프트 관리도 같은 대시보드에서 제공한다. 실행 방법과 테스트 환경은 [패키지 안내](../../apps/engine/analysis-engine-v2/README.md)를 참고한다.
 
 - 실행: `python -m edge_analysis_v2.dashboard.server --rds-ca <인증서 경로>`.
 - 준비: `edge-v2-writer` 프로필, `EdgeV2-RdsWriterTunnel` SSM 연결(15433), 패키지 `cloud` 의존성.

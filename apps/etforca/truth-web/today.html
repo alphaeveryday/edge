@@ -1,0 +1,553 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>오늘의 급등주</title>
+<meta name="description" content="오늘 크게 오른 국내·미국 종목마다 오른 이유가 사실인지 공시·보도와 대조합니다. 가격은 장중 매분 갱신합니다.">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="style.css">
+<script src="intro.js"></script>
+<script src="analytics.js"></script>
+<style>
+/* list.html 처럼 창 높이를 풀고 페이지가 스크롤한다 */
+body{overflow-y:auto}
+.window{height:auto;min-height:calc(100vh - 100px)}
+:root{--up:#ff453a;--down:#4c8dff;--warn:#ff6a2b;--warn-text:#ffa77f;--ok:#30d158;--ok-text:#6fe08f}
+::selection{background:rgba(255,255,255,.22)}
+:focus-visible{outline:2px solid #fff;outline-offset:2px}
+
+/* 머리: 서비스 표지 | 실시간 상태 */
+.dhead{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:2px 4px 0 6px;min-width:0}
+.brand{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:700;letter-spacing:-.02em;white-space:nowrap;border-radius:10px}
+.brand svg{flex:none;width:32px;height:32px}
+.live{min-width:0;overflow:hidden;padding:9px 16px;font-size:13px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
+.live b{color:var(--text);font-weight:600}
+.live small{font-size:12px;color:var(--faint)}
+.dot{position:relative;flex:none;width:8px;height:8px;border-radius:50%;background:rgba(245,245,247,.4)}
+.live.on .dot{background:var(--ok)}
+.live.on .dot::after{content:"";position:absolute;inset:0;border-radius:50%;background:var(--ok);animation:ping 2s cubic-bezier(0,0,.2,1) infinite}
+.live.late .dot{background:var(--warn)}
+@keyframes ping{from{transform:scale(1);opacity:.65}to{transform:scale(2.8);opacity:0}}
+
+/* 첫 화면: 왼쪽 제목 · 오른쪽 오늘의 1위 두 장 */
+.hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,620px);gap:28px;align-items:end;padding:22px 8px 22px}
+.lhead h1{font-size:clamp(28px,3.6vw,44px);line-height:1.15;letter-spacing:-.03em;text-wrap:balance;font-variant-numeric:tabular-nums}
+.lhead p{margin-top:12px;font-size:14px;line-height:1.6;color:var(--muted);max-width:52ch}
+.spots{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.spot{display:flex;flex-direction:column;gap:12px;min-width:0;padding:16px 18px 18px;border-radius:var(--r-lg);
+  font:inherit;color:inherit;text-align:left;cursor:pointer;transition:background .2s,border-color .2s,transform .2s cubic-bezier(.2,.8,.2,1)}
+.spot:hover{background:rgba(255,255,255,.085);transform:translateY(-1px)}
+.spot.s-false{border-color:rgba(255,106,43,.34)}
+.spot.s-promising{border-color:rgba(52,199,89,.3)}
+.spot .sh{display:flex;align-items:center;justify-content:space-between;gap:8px}
+.spot .sh .pct{font-size:18px}
+.spot .who b{font-size:15px}
+.spot .who .logo-c{width:32px;height:32px;font-size:14px}
+.spot .who>span:last-child{min-width:0;flex:1}
+.spot .t{font-size:14px;line-height:1.45;font-weight:600;letter-spacing:-.01em;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.spot.none{cursor:default;justify-content:center;min-height:150px;font-size:13px;color:var(--faint)}
+.spot.none:hover{background:var(--glass);transform:none}
+
+/* 날짜 · 판정 고르기 — list.html .filters 와 같은 모양 */
+.bar{display:flex;flex-direction:column;gap:10px;padding:0 6px 8px}
+.row{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;padding:2px}
+.row::-webkit-scrollbar{display:none}
+#tags{flex-wrap:wrap;overflow:visible}  /* 판정은 넷뿐이라 줄을 바꾼다. 날짜만 옆으로 넘긴다 */
+.row button{flex:none;font:inherit;font-size:13px;font-weight:500;color:var(--text);padding:7px 14px;border-radius:999px;border:0;
+  background:rgba(255,255,255,.08);cursor:pointer;font-variant-numeric:tabular-nums}
+.row button:hover{background:rgba(255,255,255,.14)}
+.row button[aria-pressed=true]{background:#fff;color:#000;font-weight:600}
+.row button b{font-weight:inherit;opacity:.6;margin-left:4px}
+.row button:disabled{opacity:.4;cursor:default}
+.hint{min-height:20px;padding:4px 8px 14px;font-size:13px;color:var(--faint)}
+
+.movers{display:flex;flex-direction:column;gap:12px;padding:0 6px}
+.mv{display:grid;grid-template-columns:minmax(0,340px) minmax(0,1fr);gap:32px;padding:24px;border-radius:var(--r-lg);scroll-margin-top:16px;transition:border-color .3s}
+.mv:focus:not(:focus-visible){outline:none}
+.mv.lit{border-color:rgba(255,255,255,.34)}
+
+/* 가격이 바뀌면 잠깐 물든다(상승 빨강 · 하락 파랑) — 매분 갱신이 실제로 들어왔다는 신호 */
+.tick{animation:tick 1.6s cubic-bezier(.16,1,.3,1)}
+.t-up{--tk:rgba(255,69,58,.34)}.t-down{--tk:rgba(76,141,255,.34)}
+@keyframes tick{from{background:var(--tk)}to{background:transparent}}
+
+/* 왼쪽: 종목 · 장중 그래프 */
+.who{display:flex;align-items:center;gap:12px}
+.logo-c{position:relative;flex:none;width:40px;height:40px;border-radius:50%;overflow:hidden;display:grid;place-items:center;
+  font-size:16px;font-weight:700;color:#fff}
+.logo-c img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;padding:5px;background:#fff}
+.who>div{min-width:0;flex:1}
+.who b{display:block;font-size:17px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who small{font-size:12.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.pct{flex:none;font-size:22px;font-weight:800;letter-spacing:-.02em;font-variant-numeric:tabular-nums;border-radius:6px;padding:0 4px;margin-right:-4px}
+.up{color:var(--up)}.down{color:var(--down)}
+.spark{margin-top:18px}
+.plot{position:relative}
+.plot svg{display:block;width:100%;height:96px;overflow:visible}
+/* 판정 시점: 그때 가격에 점. 그래프가 가로로 늘어나도 원이 찌그러지지 않게 SVG 밖 HTML 로 얹는다 */
+.mk{position:absolute;width:11px;height:11px;margin:-5.5px 0 0 -5.5px;border-radius:50%;box-shadow:0 0 0 2px var(--bg)}
+.m-false{background:var(--warn)}.m-promising{background:var(--ok)}.m-pending{background:#c7c7cc}
+.marks{display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:8px;font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums}
+.marks span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
+.marks i{width:8px;height:8px;border-radius:50%}
+.ax{display:flex;justify-content:space-between;gap:8px;font-size:11px;color:var(--faint);margin-top:6px;font-variant-numeric:tabular-nums}
+.nochart{height:96px;display:grid;place-items:center;font-size:12.5px;color:var(--faint);border:1px dashed var(--line);border-radius:12px}
+.px{margin-top:12px;font-size:12.5px;color:var(--muted);font-variant-numeric:tabular-nums}
+.px b{color:var(--text);font-weight:600;border-radius:4px;padding:0 2px}
+
+/* 오른쪽: 판정 · 사건 */
+.verdict{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;padding:4px 10px;border-radius:999px;white-space:nowrap}
+.v-false{background:var(--warn);color:#1a0800}
+.v-promising{background:rgba(52,199,89,.16);color:var(--ok-text)}
+.v-pending{background:rgba(255,255,255,.1);color:var(--muted)}
+.verdict small{font-size:12px;font-weight:600;opacity:.8}
+/* 순위: 판정 안에서 확신도가 높은 순서 */
+.verdict .rk{font-variant-numeric:tabular-nums;padding-right:7px;margin-right:1px;border-right:1px solid color-mix(in srgb,currentColor 30%,transparent)}
+.meta{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;font-size:12.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.mv h2{font-size:20px;line-height:1.4;letter-spacing:-.02em;margin-top:14px;text-wrap:balance}
+.finding{margin-top:8px;font-size:14.5px;line-height:1.65;color:rgba(245,245,247,.86);max-width:68ch}
+
+details{margin-top:16px;border-top:1px solid var(--line)}
+summary{list-style:none;display:inline-flex;align-items:center;gap:6px;margin-top:12px;font-size:13px;font-weight:600;color:var(--muted);cursor:pointer;border-radius:6px}
+summary::-webkit-details-marker{display:none}
+summary:hover{color:var(--text)}
+summary svg{width:12px;height:12px;transition:transform .2s cubic-bezier(.2,.8,.2,1)}
+details[open] summary svg{transform:rotate(90deg)}
+.more{display:grid;grid-template-columns:minmax(0,1fr);gap:14px;padding-top:12px;max-width:68ch}
+.more h3{font-size:12px;font-weight:600;color:var(--faint)}
+.more p,.more li{font-size:14px;line-height:1.65;color:rgba(245,245,247,.82)}
+.more p{margin-top:4px}
+.more ul{margin-top:4px;padding-left:18px}
+.srcs{display:flex;flex-direction:column;gap:2px;margin-top:4px}
+.srcs a{display:flex;align-items:baseline;gap:8px;padding:5px 0;font-size:13.5px;color:var(--muted);min-width:0}
+.srcs a:hover{color:var(--text)}
+.srcs a em{flex:none;font-style:normal;font-size:12px;color:var(--faint);width:28px}
+.srcs a span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.srcs time{flex:none;font-size:12px;color:var(--faint);font-variant-numeric:tabular-nums}
+.srcs svg{flex:none;width:11px;height:11px;align-self:center}
+.impact b{color:var(--warn-text);font-variant-numeric:tabular-nums}
+
+@media (max-width:1080px){
+  .hero{grid-template-columns:minmax(0,1fr);align-items:start;gap:18px}
+}
+@media (max-width:900px){
+  .mv{grid-template-columns:minmax(0,1fr);gap:20px;padding:18px 16px}
+  .movers,.bar{padding-left:0;padding-right:0}
+  .mv h2{font-size:18px}
+  .hero{padding-left:4px;padding-right:4px}
+}
+@media (max-width:560px){
+  .spots{grid-template-columns:minmax(0,1fr)}
+  .live small,.live .pt{display:none}
+  .live{padding:8px 14px}
+}
+/* 새 소식 팝업: 화면을 막지 않고 오른쪽 아래에 뜬다. 여러 건이면 옆으로 넘긴다 */
+.pop{position:fixed;z-index:800;right:24px;bottom:24px;width:min(380px,calc(100vw - 32px));border-radius:var(--r-lg);
+  background:rgba(30,30,34,.94);border:1px solid rgba(255,255,255,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.08),0 24px 60px rgba(0,0,0,.55);
+  backdrop-filter:blur(30px) saturate(160%);-webkit-backdrop-filter:blur(30px) saturate(160%);animation:pop-in .32s cubic-bezier(.16,1,.3,1)}
+@keyframes pop-in{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+.pop-h{display:flex;align-items:center;gap:4px;padding:12px 10px 0 18px}
+.pop-h b{font-size:13.5px;font-weight:700}
+.pop-n{margin-left:6px;font-size:12.5px;color:var(--faint);font-variant-numeric:tabular-nums}
+.pop-h .sp{flex:1}
+.pop-h button{display:grid;place-items:center;width:30px;height:30px;border:0;border-radius:50%;background:none;color:var(--muted);cursor:pointer}
+.pop-h button:hover:not(:disabled){background:rgba(255,255,255,.1);color:var(--text)}
+.pop-h button:disabled{opacity:.3;cursor:default}
+.pop-h svg{width:14px;height:14px}
+.disclaim{font-size:12.5px;color:var(--muted);padding-bottom:0}
+.disclaim+.cookie-note{padding-top:6px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.pop-track{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;scrollbar-width:none;overscroll-behavior-x:contain}
+.pop-track::-webkit-scrollbar{display:none}
+.pop-s{flex:0 0 100%;scroll-snap-align:start;display:flex;flex-direction:column;gap:10px;padding:12px 18px 18px;min-width:0}
+.pop-k{align-self:flex-start;font-size:12px;font-weight:600;padding:3px 9px;border-radius:999px;background:rgba(255,255,255,.1);color:var(--text)}
+.pop-k.k-changed{background:rgba(255,106,43,.18);color:var(--warn-text)}
+.pop-s .who b{font-size:15px}
+.pop-s .who .logo-c{width:32px;height:32px;font-size:14px}
+.pop-s .who .pct{font-size:18px}
+.pop-v{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12.5px;color:var(--faint)}
+.pop-v .was{text-decoration:line-through;opacity:.7}
+.pop-t{font-size:14px;line-height:1.45;font-weight:600;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.pop-go{align-self:flex-start;display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;font-weight:600;padding:8px 14px;
+  border-radius:999px;border:0;background:#fff;color:#000;cursor:pointer}
+.pop-go svg{width:12px;height:12px}
+@media (max-width:560px){.pop{left:12px;right:12px;bottom:12px;width:auto}}
+@media (prefers-reduced-motion:reduce){summary svg,.spot,.mv{transition:none}.live.on .dot::after,.tick,.pop{animation:none}}
+</style>
+</head>
+<body>
+<main class="window">
+  <header class="dhead">
+    <a class="brand" href="today" aria-label="오늘의 급등주 처음으로">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="#ff453a"/>
+        <path d="M7.5 21.5 13 15.5l4 3.5 7.5-8.5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M19.5 10.5h5v5" fill="none" stroke="#fff" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>오늘의 급등주</span>
+    </a>
+    <div class="live pill glass" id="status"><span class="dot"></span>불러오는 중</div>
+  </header>
+  <section class="hero">
+    <div class="lhead">
+      <h1 id="headline">오늘 크게 오른 종목</h1>
+      <p id="lede">전일 종가보다 10% 넘게 오르고 거래대금이 30억원 이상인 종목의 상승 원인을 분석합니다.</p>
+    </div>
+    <div class="spots" id="spots" role="group" aria-label="판정별 1위"></div>
+  </section>
+  <nav class="bar" aria-label="보기 고르기">
+    <div class="row" id="markets" role="group" aria-label="시장"></div>
+    <div class="row" id="dates" role="group" aria-label="날짜"></div>
+    <div class="row" id="tags" role="group" aria-label="판정"></div>
+  </nav>
+  <p class="hint" id="hint" aria-live="polite"></p>
+  <section class="movers" id="movers"><div class="empty">급등주 해석을 불러오는 중입니다.</div></section>
+  <p class="cookie-note disclaim">AI 판단이며 투자 권유가 아닙니다.</p>
+  <p class="cookie-note">방문 통계를 위해 본 페이지·클릭, 기기·브라우저 정보, 접속 IP를 PostHog(미국)로 보냅니다. 쿠키는 허용한 경우에만 쓰고 1년간 유지합니다. 허용하지 않으면 쿠키 없이 그날의 방문 수만 셉니다. <button type="button" data-consent hidden>쿠키 사용 다시 고르기</button> · <a href="privacy">개인정보 처리방침</a></p>
+</main>
+<!-- 팝업은 .window 밖에 둔다 — .window 의 backdrop-filter 가 고정 위치의 기준이 되어 화면 밖으로 밀린다 -->
+<aside class="pop" id="pop" aria-label="새 소식" hidden>
+  <div class="pop-h"><b>새 소식</b><span class="pop-n" id="popn" aria-live="polite"></span><span class="sp"></span>
+    <button type="button" id="popprev" aria-label="이전 소식"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m15 6-6 6 6 6"/></svg></button>
+    <button type="button" id="popnext" aria-label="다음 소식"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg></button>
+    <button type="button" id="popclose" aria-label="닫기"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+  </div>
+  <div class="pop-track" id="poptrack"></div>
+  <p class="sr" id="popsr" aria-live="polite"></p>
+</aside>
+
+<script src="common.js"></script>
+<script>
+// 데이터: 조사 에이전트(truth-research)가 장중 매시 판정을 게시하고 가격은 매분 고친다 — data/movers/<날짜>.json, 날짜 목록 data/movers/dates.json (docs/design/truth-movers.md §4)
+// 미국은 data/movers/us/ 아래 같은 모양이다. 날짜·시각은 그 시장 현지 시각(뉴욕)이다(§6)
+const MARKETS = {
+  kr: {label: '국내', base: 'data/movers/', tz: 'Asia/Seoul', open: 9 * 60, close: 16 * 60, note: '약 20분 지연',
+    intro: '전일 종가보다 10% 넘게 오르고 거래대금이 30억원 이상인 종목의 상승 원인을 분석합니다.',
+    money: v => `${Math.round(v).toLocaleString('ko-KR')}원`, value: v => `${Math.round(v).toLocaleString('ko-KR')}억원`},
+  // 가격은 16:00 마감가에서 멈춘다 — 마감 30분 뒤(국내와 같은 간격)부터 '장 마감'으로 보여 '갱신 지연'으로 오인하지 않게
+  us: {label: '미국', base: 'data/movers/us/', tz: 'America/New_York', open: 9 * 60 + 30, close: 16 * 60 + 30, note: '뉴욕 시각',
+    intro: '전일 종가보다 10% 넘게 오르고 거래대금이 200만 달러 이상인 미국 종목(1달러 미만 제외)의 상승 원인을 분석합니다. 시각은 뉴욕 기준입니다.',
+    money: v => `$${v.toLocaleString('en-US', {minimumFractionDigits: 2, maximumFractionDigits: 2})}`,
+    // 거래대금은 백만 달러 단위로 온다
+    value: v => v >= 100 ? `${(v / 100).toFixed(1)}억 달러` : `${Math.round(v * 100).toLocaleString('ko-KR')}만 달러`},
+};
+const MK = () => MARKETS[state.market];
+const TAGS = {false: '허위매물', promising: '유망주', pending: '판단 보류'};
+const TAG_HINT = {
+  all: '되돌림 예상 폭이 큰 순서입니다. 허위매물이 위로 옵니다.',
+  false: '오른 이유로 꼽힌 주장이 원문과 어긋나거나, 회사 근거 없이 테마·풍문으로 올랐습니다.',
+  promising: '오른 이유가 된 사건이 공시나 여러 보도로 확인됩니다.',
+  pending: '자료로는 어느 쪽인지 가리지 못했습니다.',
+};
+const EVENT_KINDS = {disclosure: '공시', earnings: '실적', contract: '계약', policy: '정책', news: '보도', rumor: '풍문'};
+const SOURCE_KINDS = {official: '공식', disclosure: '공시', news: '보도', web: '웹', video: '영상'};
+const LOGO_RE = /^data\/logos\/([0-9A-Z]{6}|us\/[A-Z][A-Z0-9]{0,5}(\.[A-Z])?)\.(png|jpg|ico|webp)$/;  // 스키마와 같은 규칙만 src 로 쓴다
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const CHEVRON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>';
+const todayKst = () => new Intl.DateTimeFormat('en-CA', {timeZone: MK().tz}).format(new Date());  // 보고 있는 시장의 오늘
+const hhmm = s => (/T(\d{2}:\d{2})/.exec(s || '') || [])[1] || '';
+const md = d => `${+d.slice(5, 7)}월 ${+d.slice(8, 10)}일`;
+// 출처 날짜: 올해면 '10월 22일', 아니면 연도까지. 게시일이 없는 페이지(종목 정보 페이지 등)는 판정하며 본 날을 '확인'으로 적는다
+const pubDate = v => {
+  const d = (v || '').slice(0, 10), day = state.doc?.date || '';
+  if (!DATE_RE.test(d)) return DATE_RE.test(day) ? `<time datetime="${day}" title="게시일이 없는 페이지라 확인한 날을 적었습니다">${md(day)} 확인</time>` : '';
+  return `<time datetime="${d}">${d.slice(0, 4) === day.slice(0, 4) ? md(d) : `${d.slice(0, 4)}년 ${md(d)}`}</time>`;
+};
+const dayLabel = d => `${+d.slice(5, 7)}.${+d.slice(8, 10)} ${'일월화수목금토'[new Date(d + 'T00:00:00Z').getUTCDay()]}`;  // 날짜만 보므로 UTC 로 요일을 센다
+const signed = (v, n = 2) => `${v > 0 ? '+' : ''}${v.toFixed(n)}%`;
+const krw = v => MK().money(v);  // 국내 원 · 미국 달러. common.js 의 won 은 억 단위라 따로 둔다
+const hue = code => (Math.imul([...code].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7), 0x9E3779B1) >>> 0) % 360;  // 끝자리만 달라도 색이 갈린다
+
+// 로고가 없거나 못 불러오면 이름 첫 글자 배지가 드러난다(종목코드로 색을 고정)
+const logo = it => `<span class="logo-c" style="background:hsl(${hue(it.code)} 42% 36%)" aria-hidden="true">${esc([...it.name][0])}${
+  LOGO_RE.test(it.logo || '') ? `<img src="${esc(it.logo)}" alt="" loading="lazy" onerror="this.remove()">` : ''}</span>`;
+
+// 판정 이력: 판정 시각과 그때 본 가격. 가격이 없으면(이력 전 판정) 그 시각까지의 마지막 시세로 찍는다.
+// 이력이 없는 지난 기록은 마지막 판정 하나를 쓴다
+const HM = /^\d{2}:\d{2}$/;
+function marksOf(it, s){
+  const raw = Array.isArray(it.marks) ? it.marks : it.judgedAt ? [{at: hhmm(it.judgedAt), tag: it.tag, price: null}] : [];
+  return raw.filter(m => m && HM.test(m.at) && isTag(m.tag)).map(m => {
+    const price = Number.isFinite(m.price) && m.price > 0 ? m.price : (s.findLast(p => p[0] <= m.at) || s[0] || [])[1];
+    return Number.isFinite(price) ? {at: m.at, tag: m.tag, price} : null;
+  }).filter(Boolean);
+}
+
+// 장중 5분 시세 + 전일 종가 점선 + 판정 시점의 점. 가로는 시각(분), 세로는 가격. 상승 빨강 · 하락 파랑
+function chart(it){
+  const s = (it.series || []).filter(p => Array.isArray(p) && HM.test(p[0]) && Number.isFinite(p[1]));
+  if (s.length < 2) return '<div class="nochart">장중 시세가 아직 없습니다</div>';
+  const W = 300, H = 96, min = t => +t.slice(0, 2) * 60 + +t.slice(3);
+  const mk = marksOf(it, s), ts = [...s.map(p => min(p[0])), ...mk.map(m => min(m.at))];  // 시세(약 20분 지연)보다 늦은 판정도 담는다
+  const t0 = Math.min(...ts), t1 = Math.max(t0 + 1, ...ts), hm = t => `${String(t / 60 | 0).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`;
+  const ps = [...s.map(p => p[1]), ...mk.map(m => m.price)], lo = Math.min(it.prevClose, ...ps), hi = Math.max(it.prevClose, ...ps), pad = (hi - lo) * .08 || 1;
+  const x = t => ((min(t) - t0) / (t1 - t0) * W).toFixed(1), y = v => ((hi + pad - v) / (hi - lo + 2 * pad) * H).toFixed(1);
+  const line = s.map((p, i) => `${i ? 'L' : 'M'}${x(p[0])},${y(p[1])}`).join('');
+  const col = it.changePct >= 0 ? 'var(--up)' : 'var(--down)', base = y(it.prevClose);
+  const label = m => `${m.at} ${TAGS[m.tag]} 판정 · ${krw(m.price)}`;
+  const dots = mk.map(m => `<span class="mk m-${m.tag}" style="left:${x(m.at) / W * 100}%;top:${y(m.price)}px" title="${esc(label(m))}"></span>`).join('');
+  return `<div class="plot">
+    <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="${esc(it.name)} 장중 시세, ${s[0][0]}부터 ${s.at(-1)[0]}까지. 점선은 전일 종가${mk.length ? `. 판정 시점 ${mk.map(label).join(', ')}` : ''}">
+      <path d="${line}L${x(s.at(-1)[0])},${H}L${x(s[0][0])},${H}Z" fill="${col}" fill-opacity=".1"/>
+      <line x1="0" x2="${W}" y1="${base}" y2="${base}" stroke="rgba(255,255,255,.4)" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
+      <path d="${line}" fill="none" stroke="${col}" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+    </svg>${dots}</div>
+    <div class="ax"><span>${hm(t0)}</span><span>점선 전일 종가</span><span>${hm(t1)}</span></div>
+    ${mk.length ? `<div class="marks" aria-hidden="true">${mk.map(m => `<span><i class="m-${m.tag}"></i>${esc(label(m))}</span>`).join('')}</div>` : ''}`;
+}
+
+const isTag = t => Object.hasOwn(TAGS, t);
+const tagOf = it => isTag(it.tag) ? it.tag : 'pending';
+// 판정별 순위: 확신도가 높은 순, 같으면 상승률 순
+const byRank = (a, b) => b.confidence - a.confidence || b.changePct - a.changePct;
+const ranksOf = items => {
+  const r = {};
+  for (const t of Object.keys(TAGS)) items.filter(i => tagOf(i) === t).sort(byRank).forEach((it, n) => { r[it.code] = n + 1; });
+  return r;
+};
+const kstNow = () => new Intl.DateTimeFormat('en-GB', {timeZone: MK().tz, hour: '2-digit', minute: '2-digit', hour12: false}).format(new Date());
+const mins = t => +t.slice(0, 2) * 60 + +t.slice(3, 5);
+
+// 가격이 바뀐 종목만 잠깐 물들인다. 같은 날짜 안에서만 비교한다
+const lastPx = new Map();
+let lastDate = null;
+const tick = it => {
+  const was = lastPx.get(it.code);
+  return was == null || was === it.price ? '' : ` tick ${it.price > was ? 't-up' : 't-down'}`;
+};
+const conf = it => tagOf(it) === 'pending' ? '' : `확신도 ${Math.round(it.confidence * 100)}%`;
+const pill = (it, rank) => `<span class="verdict v-${tagOf(it)}" role="img" aria-label="${TAGS[tagOf(it)]} ${rank}위${conf(it) && `, ${conf(it)}`}">
+    <span class="rk">${rank}위</span><span>${TAGS[tagOf(it)]}${conf(it) && ` <small>${conf(it)}</small>`}</span></span>`;
+
+// 오늘의 1위(허위매물 · 유망주) — 누르면 그 종목 카드로 간다
+const spot = (tag, it) => it ? `
+  <button type="button" class="spot glass s-${tag}" id="spot-${tag}" data-code="${esc(it.code)}">
+    <span class="sh">${pill(it, 1)}<span class="pct ${it.changePct >= 0 ? 'up' : 'down'}${tick(it)}">${signed(it.changePct)}</span></span>
+    <span class="who">${logo(it)}<span><b>${esc(it.name)}</b><small>${esc(it.code)} · ${esc(it.market)}</small></span></span>
+    <span class="t">${esc(it.event?.title)}</span>
+  </button>`
+  : `<div class="spot glass none">${esc(md(state.doc.date))}에는 ${TAGS[tag]}로 판정한 종목이 없습니다.</div>`;
+
+// 실시간 표시: 오늘 · 평일 · 가격 갱신이 도는 시간(국내 9~16시 · 미국 뉴욕 9:30~17시)에만 '실시간'. 가격이 45분 넘게 멈춰 있으면 '갱신 지연'
+function liveState(d){
+  const wd = new Date(d.date + 'T00:00:00Z').getUTCDay(), now = mins(kstNow());
+  if (d.date !== todayKst()) return {cls: '', label: '지난 기록'};
+  if (wd === 0 || wd === 6 || now < MK().open || now >= MK().close) return {cls: '', label: '장 마감'};
+  const at = d.pricedAt || d.generatedAt || '';
+  return !at.startsWith(d.date) || now - mins(hhmm(at)) > 45 ? {cls: 'late', label: '갱신 지연'} : {cls: 'on', label: '실시간'};
+}
+
+// 새 소식: 지난번 본 목록(이 기기에 날짜별로 기억)과 비교해 새 급등주 · 분석 완료 · 판정 변경을 알린다.
+// 처음 여는 날에는 알리지 않는다(전부 새것이라). 최신 날짜를 볼 때만 센다.
+const SNAP_KR = 'movers-seen:';  // 시장마다 따로 기억한다(미국 'movers-seen-us:' 는 이 접두어로 시작하지 않아 서로 지우지 않는다)
+let SNAP = SNAP_KR;
+const KINDS = {changed: '판정 변경', judged: '분석 완료', new: '새 급등주'};
+let snap = {date: null, map: null};
+const readSnap = date => { try { return JSON.parse(localStorage.getItem(SNAP + date)); } catch { return null; } };
+const writeSnap = (date, map) => {
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith(SNAP) && k !== SNAP + date) localStorage.removeItem(k);
+    localStorage.setItem(SNAP + date, JSON.stringify(map));
+  } catch { /* 저장을 못 하면 이번 창에서만 기억한다 */ }
+};
+function newsOf(d, items){
+  const prev = snap.date === d.date ? snap.map : readSnap(d.date);
+  const cur = Object.fromEntries(items.map(i => [i.code, {t: tagOf(i), j: !!i.judgedAt}]));
+  const out = [];
+  if (prev) for (const it of items) {
+    const p = prev[it.code];
+    if (!p) out.push({kind: 'new', it});
+    else if (!p.j && it.judgedAt) out.push({kind: 'judged', it});
+    else if (p.j && it.judgedAt && p.t !== tagOf(it)) out.push({kind: 'changed', it, from: p.t});
+  }
+  snap = {date: d.date, map: {...prev, ...cur}};  // 목록에서 잠깐 빠졌다 돌아온 종목을 새것으로 세지 않게 합친다
+  writeSnap(d.date, snap.map);
+  const order = {changed: 0, judged: 1, new: 2};
+  return out.sort((a, b) => order[a.kind] - order[b.kind]);
+}
+const slide = (n, rank) => {
+  const it = n.it, judged = !!it.judgedAt;
+  return `<article class="pop-s">
+    <span class="pop-k k-${n.kind}">${KINDS[n.kind]}</span>
+    <div class="who">${logo(it)}<div><b>${esc(it.name)}</b><small>${esc(it.code)} · ${esc(it.market)}</small></div>
+      <span class="pct ${it.changePct >= 0 ? 'up' : 'down'}">${signed(it.changePct)}</span></div>
+    <div class="pop-v">${n.kind === 'changed' ? `<span class="verdict v-${n.from} was">${TAGS[n.from]}</span>→` : ''}${judged ? pill(it, rank[it.code]) : '<span class="verdict v-pending">분석 중</span>'}</div>
+    <p class="pop-t">${judged ? esc(it.event?.title) : '오른 이유를 공시·보도와 대조하고 있습니다.'}</p>
+    <button type="button" class="pop-go" data-code="${esc(it.code)}">종목 보기 ${CHEVRON}</button>
+  </article>`;
+};
+const popAt = () => { const t = $('poptrack'); return Math.round(t.scrollLeft / Math.max(1, t.clientWidth)); };
+function popCount(){
+  const n = $('poptrack').children.length, i = Math.min(popAt(), n - 1);
+  $('popn').textContent = `${i + 1} / ${n}`;
+  $('popprev').disabled = i <= 0; $('popnext').disabled = i >= n - 1;
+}
+function showNews(news, rank){
+  if (!news.length) return;
+  const open = !$('pop').hidden;
+  $('poptrack').insertAdjacentHTML(open ? 'beforeend' : 'afterbegin', news.map(n => slide(n, rank)).join(''));
+  if (!open) { $('pop').hidden = false; $('poptrack').scrollLeft = 0; }
+  popCount();
+  $('popsr').textContent = `새 소식 ${news.length}건: ${news.map(n => `${n.it.name} ${KINDS[n.kind]}`).join(', ')}`;
+}
+const closeNews = () => { $('pop').hidden = true; $('poptrack').innerHTML = ''; };
+
+// 종목 카드로 옮겨 잠깐 표시한다. 지금 목록에 없으면 '전체'로 돌린다
+function goTo(code){
+  if (!document.getElementById(`m-${code}`)) { state.tag = 'all'; saveUrl(); render(); }
+  const el = document.getElementById(`m-${code}`);
+  if (!el) return;
+  el.scrollIntoView({behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start'});
+  el.focus({preventScroll: true});
+  el.classList.add('lit'); setTimeout(() => el.classList.remove('lit'), 1600);
+}
+
+const card = (it, rank) => {
+  const tag = tagOf(it);
+  const kind = EVENT_KINDS[it.event?.kind], judged = hhmm(it.judgedAt);
+  const more = [
+    it.claim && `<div><h3>내세운 주장</h3><p>${esc(it.claim)}</p></div>`,
+    it.reasons?.length && `<div><h3>판단 근거</h3><ul>${it.reasons.slice(0, 3).map(r => `<li>${esc(r)}</li>`).join('')}</ul></div>`,
+    it.sources?.length && `<div><h3>출처 ${it.sources.length}</h3><div class="srcs">${it.sources.map(s => `<a ${ext(s.url)} title="${esc(s.title)}">
+      <em>${esc(SOURCE_KINDS[s.kind] || s.kind)}</em><span>${esc(s.publisher)} · ${esc(s.title)}</span>${pubDate(s.publishedAt)}${ARROW}</a>`).join('')}</div></div>`,
+    tag === 'false' && it.impact > 0 && `<p class="impact">되돌림 예상 폭 <b>약 ${it.impact.toFixed(1)}%</b>. 상승률에 확신도를 곱한 근사값으로, 순서를 정할 때만 씁니다.</p>`,
+  ].filter(Boolean);
+  return `
+  <article class="mv glass" id="m-${esc(it.code)}" tabindex="-1">
+    <div>
+      <div class="who">${logo(it)}
+        <div><b>${esc(it.name)}</b><small>${esc(it.code)} · ${esc(it.market)}</small></div>
+        <span class="pct ${it.changePct >= 0 ? 'up' : 'down'}${tick(it)}">${signed(it.changePct)}</span>
+      </div>
+      <div class="spark">${chart(it)}</div>
+      <p class="px">주가 <b class="${tick(it).trim()}">${krw(it.price)}</b> · 전일 ${krw(it.prevClose)} · 거래대금 ${MK().value(it.tradeValue)}</p>
+    </div>
+    <div>
+      <div class="meta">${pill(it, rank)}
+        ${[kind, judged && `판정 ${judged}`].filter(Boolean).map(esc).join(' · ')}</div>
+      <h2>${esc(it.event?.title)}</h2>
+      <p class="finding">${esc(it.finding)}</p>
+      ${more.length ? `<details data-code="${esc(it.code)}"${openCodes.has(it.code) ? ' open' : ''}><summary>근거 보기 ${CHEVRON}</summary><div class="more">${more.join('')}</div></details>` : ''}
+    </div>
+  </article>`;
+};
+
+// 보기 상태는 주소에 둔다(?market=&date=&tag=) — 공유·뒤로 가기가 같은 화면을 연다
+const params = new URLSearchParams(location.search);
+const state = {market: params.get('market') === 'us' ? 'us' : 'kr', date: DATE_RE.test(params.get('date') || '') ? params.get('date') : null,
+  tag: isTag(params.get('tag')) ? params.get('tag') : 'all', dates: [], latest: null, doc: null};
+SNAP = state.market === 'us' ? 'movers-seen-us:' : SNAP_KR;
+const openCodes = new Set();  // 다시 그려도 펼친 '근거 보기'는 펼친 채로 둔다
+const saveUrl = () => {
+  const q = new URLSearchParams();
+  if (state.market !== 'kr') q.set('market', state.market);
+  if (state.date && state.date !== state.latest) q.set('date', state.date);
+  if (state.tag !== 'all') q.set('tag', state.tag);
+  history.replaceState(null, '', String(q) ? `?${q}` : location.pathname);
+};
+
+function render(focusRow){
+  const d = state.doc, items = [...d.items].sort((a, b) => b.impact - a.impact || b.changePct - a.changePct), rank = ranksOf(items);
+  const keep = document.activeElement?.id;
+  if (d.date !== lastDate) lastPx.clear();
+  const count = t => t === 'all' ? items.length : items.filter(i => i.tag === t).length;
+  const dates = [...new Set([...state.dates, state.latest, d.date].filter(Boolean))].sort().reverse().slice(0, 10);
+  // 가격은 Yahoo 시세(약 20분 늦음)를 매분 싣는다 — 그 마지막 체결 시각을 쓴다(없던 때의 파일은 게시 시각)
+  const lv = liveState(d);
+  $('status').className = `live pill glass ${lv.cls}`;
+  $('status').innerHTML = `<span class="dot"></span><b>${lv.label}</b><span><span class="pt">가격 </span>${esc(hhmm(d.pricedAt || d.generatedAt))}<span class="pt"> 기준</span></span>${d.pricedAt || state.market !== 'kr' ? `<small>${MK().note}</small>` : ''}`;
+  $('headline').textContent = `${d.date === todayKst() ? '오늘' : md(d.date)} 크게 오른 ${state.market === 'us' ? '미국 ' : ''}${items.length}종목`;
+  renderMarkets();
+  const first = t => items.filter(i => tagOf(i) === t).sort(byRank)[0];
+  $('spots').innerHTML = spot('false', first('false')) + spot('promising', first('promising'));
+  $('dates').innerHTML = dates.map(x =>
+    `<button type="button" data-date="${esc(x)}" aria-pressed="${x === d.date}">${x === todayKst() ? '오늘' : esc(dayLabel(x))}</button>`).join('');
+  $('tags').innerHTML = ['all', 'false', 'promising', 'pending'].map(t =>
+    `<button type="button" data-tag="${t}" aria-pressed="${t === state.tag}"${count(t) || t === 'all' || t === state.tag ? '' : ' disabled'}>${
+      t === 'all' ? '전체' : TAGS[t]}<b>${count(t)}</b></button>`).join('');
+  // 키보드로 고른 경우 눌린 버튼에 초점을 돌려준다(다시 그리면 초점이 사라진다)
+  if (focusRow) $(focusRow).querySelector('[aria-pressed=true]')?.focus();
+  const behind = d.date === state.latest && d.date !== todayKst() ? ` 오늘은 아직 장이 열리지 않아 ${md(d.date)} 결과를 보여 줍니다.` : '';
+  $('hint').textContent = TAG_HINT[state.tag] + behind;
+  // 전체는 되돌림 예상 폭 순, 판정을 고르면 그 판정의 순위(확신도) 순
+  const shown = state.tag === 'all' ? items : items.filter(i => tagOf(i) === state.tag).sort(byRank);
+  $('movers').innerHTML = shown.length ? shown.map(it => card(it, rank[it.code])).join('')
+    : `<div class="empty">${items.length ? `${esc(md(d.date))}에는 ${TAGS[state.tag]}로 판정한 종목이 없습니다.`
+      : `${esc(md(d.date))}에는 10% 넘게 오른 종목이 없거나 장이 열리지 않았습니다.`}</div>`;
+  lastPx.clear();
+  for (const it of items) lastPx.set(it.code, it.price);
+  lastDate = d.date;
+  // 매분 다시 그려도 보던 자리(1위 카드·옮겨 간 종목)의 초점을 지킨다
+  if (!focusRow && keep) document.getElementById(keep)?.focus({preventScroll: true});
+  if (d.date === state.latest) showNews(newsOf(d, items), rank);
+}
+
+// 날짜를 주면 그날 파일, 없으면 최신(latest.json). 없는 날짜면 최신으로 돌아간다
+let token = 0, busy = false;
+async function show(date, focusRow){
+  const mine = ++token; busy = true;
+  try {
+    let doc;
+    const base = MK().base;
+    try { doc = await getJson(date && date !== state.latest ? `${base}${date}.json` : `${base}latest.json`); }
+    catch (e) { if (!date) throw e; doc = await getJson(`${base}latest.json`); if (mine === token) state.latest = doc.date; }
+    if (mine !== token) return;  // 더 늦게 누른 날짜가 이긴다
+    if (!date) state.latest = doc.date;
+    state.doc = doc; state.date = doc.date;
+    saveUrl(); render(focusRow);
+  } catch {
+    if (mine !== token) return;
+    if (!state.doc) $('movers').innerHTML = '<div class="empty">급등주 해석을 불러오지 못했습니다. 잠시 뒤 다시 열어 주세요.</div>';
+    $('status').className = 'live pill glass late';
+    $('status').innerHTML = `<span class="dot"></span>${state.doc ? '새로 받지 못함 · 이전 결과' : '불러오지 못함'}`;
+  } finally { if (mine === token) busy = false; }
+}
+
+$('dates').addEventListener('click', e => { const b = e.target.closest('button[data-date]'); if (b && b.dataset.date !== state.date) show(b.dataset.date, 'dates'); });
+$('tags').addEventListener('click', e => { const b = e.target.closest('button[data-tag]');
+  if (b && !b.disabled && b.dataset.tag !== state.tag) { state.tag = b.dataset.tag; saveUrl(); render('tags'); } });
+// 1위 카드: 그 종목이 지금 목록에 없으면 '전체'로 돌린 뒤 카드로 옮겨 잠깐 표시한다
+$('spots').addEventListener('click', e => { const b = e.target.closest('button[data-code]'); if (b) goTo(b.dataset.code); });
+$('poptrack').addEventListener('click', e => { const b = e.target.closest('button[data-code]'); if (b) goTo(b.dataset.code); });
+$('poptrack').addEventListener('scroll', popCount, {passive: true});
+const popStep = k => { const t = $('poptrack'); t.scrollTo({left: (popAt() + k) * t.clientWidth, behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'}); };
+$('popprev').addEventListener('click', () => popStep(-1));
+$('popnext').addEventListener('click', () => popStep(1));
+$('popclose').addEventListener('click', closeNews);
+$('pop').addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeNews();
+  else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); popStep(e.key === 'ArrowLeft' ? -1 : 1); }
+});
+$('movers').addEventListener('toggle', e => { const c = e.target.dataset?.code; if (c) e.target.open ? openCodes.add(c) : openCodes.delete(c); }, true);
+
+// 시장 고르기: 국내 · 미국. 바꾸면 그 시장의 최신 날짜부터 다시 받는다(팝업·가격 비교·펼친 근거는 시장마다 새로)
+function renderMarkets(focus){
+  $('markets').innerHTML = Object.entries(MARKETS).map(([k, m]) =>
+    `<button type="button" data-market="${k}" aria-pressed="${k === state.market}">${m.label}</button>`).join('');
+  $('lede').textContent = MK().intro;
+  if (focus) $('markets').querySelector('[aria-pressed=true]')?.focus();
+}
+function load(){
+  const mk = state.market;
+  getJson(`${MK().base}dates.json`).then(x => { if (mk === state.market) state.dates = (Array.isArray(x) ? x : []).filter(d => typeof d === 'string' && DATE_RE.test(d)); })
+    .catch(() => {}).finally(() => { if (mk === state.market) show(state.date); });
+}
+$('markets').addEventListener('click', e => {
+  const b = e.target.closest('button[data-market]');
+  if (!b || b.dataset.market === state.market || !Object.hasOwn(MARKETS, b.dataset.market)) return;
+  state.market = b.dataset.market;
+  Object.assign(state, {date: null, dates: [], latest: null, doc: null});
+  SNAP = state.market === 'us' ? 'movers-seen-us:' : SNAP_KR;
+  snap = {date: null, map: null}; lastPx.clear(); lastDate = null; openCodes.clear(); closeNews();
+  token++; busy = false;  // 다른 시장의 받던 응답은 버린다
+  saveUrl(); renderMarkets(true);
+  $('spots').innerHTML = ''; $('dates').innerHTML = ''; $('tags').innerHTML = ''; $('hint').textContent = '';
+  $('movers').innerHTML = '<div class="empty">급등주 해석을 불러오는 중입니다.</div>';
+  load();
+});
+renderMarkets();
+load();
+// 최신을 보고 있을 때만 1분마다 다시 받는다(가격이 매분 바뀐다). 날짜를 받는 중이면 건너뛴다(누른 날짜를 덮지 않게)
+setInterval(() => { if (!busy && (!state.doc || state.date === state.latest)) show(null); }, 60e3);
+</script>
+</body>
+</html>

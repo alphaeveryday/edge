@@ -1,0 +1,110 @@
+# 투자정보 기만 검증 사이트(etforca.com/truth/) 배포 — 랜딩 버킷의 truth/ 접두어만 쓴다.
+#
+# 파일 소유: 이 워크플로는 truth/ 아래 정적 파일(html·css·js·logo)만 올린다. truth/data/ 는
+# 에이전트(apps/etforca/truth-agent)가 매시 게시하는 자리라 건드리지 않는다. 단 truth/data/index.json
+# 이 아직 없을 때(첫 배포)만 저장소 seed 사건으로 한 번 채운다 — 에이전트 첫 실행 전에도 빈 화면이 아니게.
+# 수동 실행의 reseed=true 는 seed 로 공개 데이터를 다시 쓴다(정정·게시 중단이 급할 때). 에이전트가 운영 중이면
+# 다음 실행이 비공개 저장소 내용으로 다시 게시하므로, 그때의 사람 정정은 seed 에 locked 사건으로 넣는 경로를 쓴다.
+# 랜딩(deploy-app-landing)·포트폴리오(deploy-portfolio)와 같은 버킷이지만 서로 다른 접두어만 쓴다.
+name: deploy-truth-web
+
+on:
+  push:
+    branches: [dev]
+    paths:
+      - "apps/etforca/truth-web/**"
+      - ".github/workflows/deploy-truth-web.yml"
+  workflow_dispatch:
+    inputs:
+      reseed:
+        description: "seed 사건으로 truth/data 를 다시 쓴다 (정정·게시 중단용)"
+        type: boolean
+        default: false
+
+permissions:
+  id-token: write # OIDC
+  contents: read # checkout
+
+concurrency:
+  group: deploy-truth-web
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Upload site files
+        working-directory: apps/etforca/truth-web
+        env:
+          BUCKET: ${{ vars.APP_LANDING_BUCKET }}
+        run: |
+          set -euo pipefail
+          : "${BUCKET:?repo var APP_LANDING_BUCKET 이 비어 있다}"
+          # 사이트 링크는 확장자 없는 주소(/truth/issue?id=…)다. CloudFront 에 주소 변환이 없어 같은 내용을 확장자 없는 키에도 둔다.
+          # .html 키도 계속 올려 이미 공유된 주소가 열리게 한다.
+          for page in index issue list privacy today; do
+            for key in "${page}.html" "${page}"; do
+              aws s3 cp "${page}.html" "s3://${BUCKET}/truth/${key}" \
+                --content-type "text/html; charset=utf-8" --cache-control "no-cache"
+            done
+          done
+          aws s3 cp style.css "s3://${BUCKET}/truth/style.css" --content-type "text/css; charset=utf-8" --cache-control "no-cache"
+          aws s3 cp common.js "s3://${BUCKET}/truth/common.js" --content-type "text/javascript; charset=utf-8" --cache-control "no-cache"
+          aws s3 cp intro.js "s3://${BUCKET}/truth/intro.js" --content-type "text/javascript; charset=utf-8" --cache-control "no-cache"
+          aws s3 cp analytics.js "s3://${BUCKET}/truth/analytics.js" --content-type "text/javascript; charset=utf-8" --cache-control "no-cache"
+          aws s3 cp logo.png "s3://${BUCKET}/truth/logo.png" --content-type "image/png" --cache-control "public,max-age=86400"
+          # CloudFront default_root_object 는 / 에만 적용된다 — /truth/ 가 열리게 같은 내용을 'truth/' 키에도 둔다.
+          aws s3api put-object --bucket "$BUCKET" --key 'truth/' --body index.html \
+            --content-type "text/html; charset=utf-8" --cache-control "no-cache" > /dev/null
+          # 슬래시 없는 /truth 는 키 'truth' 로 들어온다 — 404 대신 /truth/ 로 보낸다.
+          printf '<!doctype html><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=/truth/"><link rel="canonical" href="/truth/"><a href="/truth/">/truth/</a>' > "$RUNNER_TEMP/truth-redirect.html"
+          aws s3api put-object --bucket "$BUCKET" --key 'truth' --body "$RUNNER_TEMP/truth-redirect.html" \
+            --content-type "text/html; charset=utf-8" --cache-control "no-cache" > /dev/null
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Seed data on first deploy (or on manual reseed)
+        env:
+          BUCKET: ${{ vars.APP_LANDING_BUCKET }}
+          RESEED: ${{ github.event_name == 'workflow_dispatch' && inputs.reseed }}
+        run: |
+          set -euo pipefail
+          if [ "$RESEED" != "true" ]; then
+            # 404 일 때만 채운다. 권한·네트워크 오류를 '없음'으로 읽으면 에이전트 데이터를 seed 로 덮어쓴다.
+            if out="$(aws s3api head-object --bucket "$BUCKET" --key truth/data/index.json 2>&1)"; then
+              echo "truth/data 는 에이전트가 관리 중 — 건드리지 않는다"
+              exit 0
+            fi
+            if ! grep -q -e "Not Found" -e "(404)" <<< "$out"; then
+              echo "$out" >&2
+              exit 1
+            fi
+          fi
+          uv run --locked --package edge-truth-agent python -m edge_truth_agent build-site \
+            --cases apps/etforca/truth-agent/seed --out "$RUNNER_TEMP/truth-data"
+          # --delete: seed 에서 뺀 사건(게시 중단)의 상세 파일도 공개 위치에서 지운다.
+          aws s3 sync "$RUNNER_TEMP/truth-data" "s3://${BUCKET}/truth/data" --delete \
+            --content-type "application/json; charset=utf-8" --cache-control "no-cache"
+
+      - name: Invalidate and verify
+        env:
+          DISTRIBUTION_ID: ${{ vars.APP_LANDING_DISTRIBUTION_ID }}
+        run: |
+          set -euo pipefail
+          : "${DISTRIBUTION_ID:?repo var APP_LANDING_DISTRIBUTION_ID 가 비어 있다}"
+          id="$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
+            --paths '/truth/*' '/truth/' '/truth' --query 'Invalidation.Id' --output text)"
+          aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$id"
+          for path in truth/ truth/issue truth/list truth/privacy truth/today truth/issue.html truth/data/index.json; do
+            curl --fail --silent --show-error --retry 5 --retry-all-errors -o /dev/null "https://etforca.com/${path}"
+          done
+          echo "truth 배포 완료: https://etforca.com/truth/"

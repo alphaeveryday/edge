@@ -14,8 +14,8 @@
 
 ## 결정
 `serving-api` → Publication 도메인으로 통일한다.
-- 모듈 디렉터리 `apps/onprem/serving-api` → `apps/onprem/publication-api` (`-api` 접미 컨벤션 유지).
-- Gradle 프로젝트 `:apps:onprem:serving-api` → `:apps:onprem:publication-api`.
+- 모듈 디렉터리 `apps/edgesignal/serving-api` → `apps/edgesignal/publication-api` (`-api` 접미 컨벤션 유지).
+- Gradle 프로젝트 `:apps:edgesignal:serving-api` → `:apps:edgesignal:publication-api`.
 - 자바 패키지 `com.edge.serving` → `com.edge.publication` (짧은 도메인명 컨벤션).
 - 클래스: `ServingApplication`→`PublicationApplication`, `ServingErrorStatus`→`PublicationErrorStatus`.
 - `spring.application.name` `serving` → `publication`.

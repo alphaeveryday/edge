@@ -1,0 +1,52 @@
+import type { EtfSummary, Post, Theme, WatchGroup } from '../types';
+
+// 디자인 원본의 ETF 표시 값
+export const ETFS: EtfSummary[] = [
+  { code: 'AXAI', name: 'TIGER 반도체TOP10', theme: 'AI·반도체', logoBg: '#3D34E0', price: 12845, changePct: 3.2, signal: 'strongUp', hot: true, sub: '미래에셋 · 국내 반도체 상위 10종' },
+  { code: 'DEFN', name: 'PLUS K방산', theme: '방산', logoBg: '#131318', price: 21480, changePct: 2.1, signal: 'strongUp', hot: true, sub: '한화 · 국내 방산 대표 10종' },
+  { code: 'GRID', name: 'KODEX 미국AI전력핵심인프라', theme: '배당·인프라', logoBg: '#0E8A6C', price: 15320, changePct: 0.6, signal: 'up', hot: true, sub: '삼성 · 미국 전력 유틸리티·인프라' },
+  { code: 'KBND', name: 'KODEX 국고채30년액티브', theme: '채권', logoBg: '#E0562B', price: 108450, changePct: 0.3, signal: 'neutral', sub: '삼성 · 국고채 30년 만기' },
+  { code: 'MEDX', name: 'TIGER 바이오TOP10', theme: '바이오', logoBg: '#8B34E0', price: 9870, changePct: -1.4, signal: 'down', sub: '미래에셋 · 국내 바이오 상위 10종' },
+  { code: 'SOLR', name: 'TIGER Fn신재생에너지', theme: '친환경', logoBg: '#E8A13D', price: 6240, changePct: -0.8, signal: 'neutral', sub: '미래에셋 · 태양광·풍력·ESS' },
+];
+
+export const THEMES: Theme[] = [
+  { key: 'AI·반도체', label: 'AI·반도체', group: 'industry', bg: '#3D34E0', hot: true },
+  { key: '방산', label: '방산', group: 'industry', bg: '#131318', hot: true },
+  { key: '바이오', label: '바이오', group: 'industry', bg: '#8B34E0' },
+  { key: '친환경', label: '친환경', group: 'industry', bg: '#0E8A6C' },
+  { key: '원자재', label: '원자재', group: 'industry', bg: '#C9820E' },
+  { key: '국내주식', label: '국내주식', group: 'asset', bg: '#1B64DA' },
+  { key: '배당·인프라', label: '배당·인프라', group: 'asset', bg: '#6C5CF5' },
+  { key: '채권', label: '채권', group: 'asset', bg: '#E0562B' },
+];
+
+export const GROUPS: Omit<WatchGroup, 'count'>[] = [
+  { key: 'base', label: '기본 관심' },
+  { key: 'ai', label: 'AI 밸류체인' },
+];
+export const GROUP_MEMBERS: Record<string, string[]> = {
+  base: ['AXAI', 'DEFN', 'GRID', 'SOLR'],
+  ai: ['AXAI', 'GRID'],
+};
+
+export const POSTS: Post[] = [
+  {
+    id: 'p1', etf: { code: 'AXAI', theme: 'AI·반도체', logoBg: '#3D34E0', short: '반도체TOP10' },
+    author: { name: '적립식김씨', handle: '@dca_kim', avatarBg: '#E0562B' }, time: '19분',
+    body: '중국 CXMT가 구형 D램 증설을 늘리고 있어요. 이건 아직 숫자로 안 나왔어요.',
+    like: 93, comment: 9, liked: false,
+  },
+  {
+    id: 'p2', etf: { code: 'DEFN', theme: '방산', logoBg: '#131318', short: 'K방산' },
+    author: { name: '차트만본다', handle: '@chart_only', avatarBg: '#3D34E0' }, time: '34분',
+    body: '수주와 이익률은 좋아졌지만, 주가가 먼저 올라 표결 결과에 달렸어요.',
+    like: 79, comment: 9, liked: false,
+  },
+  {
+    id: 'p3', etf: { code: 'DEFN', theme: '방산', logoBg: '#131318', short: 'K방산' },
+    author: { name: '적립식김씨', handle: '@dca_kim', avatarBg: '#E0562B' }, time: '55분',
+    body: '전쟁이 끝나면 발주 속도가 줄어요. 이건 아직 숫자로 안 나왔어요.',
+    like: 56, comment: 10, liked: false,
+  },
+];

@@ -18,6 +18,7 @@
 | [data-model/](data-model/) | 물리 데이터 모델 ERD — Cloud 7도메인 + On-Prem 세트 (Flyway 파생 DBML 과 CI 대조) | 테이블·FK 관계를 볼 때 |
 | [roadmap.md](roadmap.md) | MVP 이후 확장 가능 영역 | "이건 지금인가 나중인가" 판단 시 |
 | [writing-rules.md](writing-rules.md) | 문서 작성 톤 규칙 (모든 산출물 공통) | 문서·UI 문구·발표 자료 작성 시 |
+| [content-engine.md](content-engine.md) | 콘텐츠 엔진 자리표시 — 채널(인스타그램·유튜브·네이버 프리미엄 콘텐츠) 링크와 목적. 디렉터리는 추가 예정 | 콘텐츠 채널·유입 접점을 찾을 때 |
 | [contracts/sync-protocol.md](contracts/sync-protocol.md) | Sync 프로토콜 계약 (cursor·fan-out·멱등성·목표 계약) — 양단 모두 영서 소유 ([adr/0026](adr/0026-ownership-boundary-db.md)) | Sync 채널 양단을 만질 때 |
 | [contracts/event-bundle-schema.md](contracts/event-bundle-schema.md) | 진기-영서 인터페이스 계약 (Cloud Event Store 스키마 경계면) + 번들 와이어 포맷(영서 소유) — 스키마 경계면은 **공동 승인(CODEOWNERS)** | 인터페이스 경계를 바꿀 때 |
 | [contracts/sync-auth.md](contracts/sync-auth.md) | 인증서 / Cloud Sync 인증 정책 (mTLS·CSR·교체) | Sync 인증을 만질 때 |
@@ -105,4 +106,15 @@
 
 - [Terraform 편입과 SSM 권한](design/portfolio-infrastructure.md)
 - [독립 포트폴리오 에이전트](design/portfolio-worker.md)
+- [보유 ETF 뉴스레터 편집 유형 A~G·매거진형 디자인](design/portfolio-newsletter-formats.md)
 - [포트폴리오 배포·입력 저장·검증](design/portfolio-deployment.md)
+- [Orca UI 디자인 시스템·반복 제작 절차](design/portfolio-design-system.md)
+- [포트폴리오 UI 디테일 조사·레퍼런스·해결 기록](design/portfolio-ui-detail-research.md)
+- [포트폴리오 고객 흐름 UX 문제·원인·해결·검증](design/portfolio-ux-audit.md)
+- [포트폴리오 분석 중단·입력 복구·테스트 제외](design/portfolio-recovery-20261021.md)
+
+# 투자정보 기만 검증 문서
+
+- [투자정보 기만 검증 조사 방법론](design/truth-investigation-methodology.md): 6유형·유형별 판정·경쟁가설·공개용 두 문장. 사건을 쓰거나 판정할 때의 정본.
+- [투자정보 기만 검증 서비스 설계](design/truth-service.md): 사건 JSON 계약, 화면 숫자의 정의, 매시 갱신 흐름과 한계.
+- [오늘의 급등주 해석](design/truth-movers.md): 조사 에이전트(truth-research)가 국내·미국 급등 종목의 급등 이유를 공시(KIND·SEC)·보도와 대조(ACH)해 유망주·허위매물로 판정하는 장중 매시 :35 흐름, 공개 데이터 형식.

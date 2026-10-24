@@ -1,0 +1,616 @@
+"""run.py ↔ 원장 이음매 (ALPHA-530). CLI 핸들러(plan-run·reconcile) + 계측 헬퍼.
+
+run.py 의 diff 를 작게 유지하려고 여기 모은다. 원장 커넥션은 **lazy** — settings.db 가 없으면
+Ledger 를 만들지 않고(instrument 는 투명 통과), plan-run·reconcile 은 fail-loud(원장 DB 필수).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+from datetime import datetime, time, timedelta, timezone
+
+from ..failures import validated_failure
+from ..lake import Storage, collection_log_prefix, quality_log_prefix
+from . import aws, catalog, planner, premarket_watch, reconciler, states, wrapper
+from . import contracts
+from .contracts import ETF_HOLDINGS_KRX_EOD
+from .ledger import Ledger
+from .quality_diagnostics import validated as validated_quality_diagnostics
+
+logger = logging.getLogger(__name__)
+
+# Reconciler advisory lock 키(임의 고정 정수 — 이 워크로드 전용 네임스페이스).
+_RECONCILE_LOCK = 0x0107_0530
+_PLANNER_GRACE = timedelta(minutes=30)  # 예정 직후 Planner 가 뜰 여유 — 이만큼 지나야 결측 판정
+_ETF_UNIVERSE_TASK_KEYS = frozenset({
+    "NAV_COLLECTION_KIS",
+    "ETF_PROFILE_COLLECTION_KIS",
+    "ETF_HOLDINGS_COLLECTION_KRX",
+})
+
+
+def _sched_hhmm() -> tuple[int, int]:
+    """daily 스케줄 시각(KST) HH:MM. **env(OPS_DAILY_SCHED_HHMM)로 주입** — statemachine.tf 의
+    schedule_expression 과 한 곳에서 오게 해 하드코딩 드리프트를 막는다(edge-review). 기본 15:40."""
+    raw = os.environ.get("OPS_DAILY_SCHED_HHMM", "15:40")
+    try:
+        h, m = raw.split(":")
+        return int(h), int(m)
+    except (ValueError, AttributeError):
+        logger.warning("OPS_DAILY_SCHED_HHMM 파싱 실패(%s) — 15:40 사용", raw)
+        return 15, 40
+
+
+def _lane_sched_hhmms(env_name: str) -> list[tuple[int, int]]:
+    """하루 여러 슬롯을 도는 레인의 스케줄 시각(KST) 목록. env(쉼표 구분 "15:00,15:30,23:50")
+    — ops_ledger.tf 가 그 레인의 schedule cron 에서 뽑아 주입한다(드리프트 불가 패턴,
+    ALPHA-564 와 같은 이유). **미주입이면 빈 목록** = 그 레인 결측 판정 없음 — 스케줄이
+    아직 Planner 를 안 타는 배포에서 거짓 PLANNER_MISSING 을 열지 않기 위한 안전 기본값이다.
+
+    불량 항목은 제외가 아니라 **fail-loud** 다(edge-review, Rule 12). 한 항목만 조용히 버리면
+    그 슬롯의 run_key 가 영영 안 만들어져 PLANNER_MISSING 감시가 **관대한 방향으로** 축소된다
+    — Planner 가 안 떠도 아무 이슈가 안 열린다. daily 의 기본값 폴백(_sched_hhmm)과 다른
+    선택인 이유: 폴백할 정답값이 없고(슬롯 집합 자체가 값), 정상 경로에선 terraform 이 cron
+    에서 도출해 넣으므로 여기서 죽는 건 수동 주입 오류뿐이다.
+
+    레인마다 복사하지 않고 env 이름만 받는다(ALPHA-721) — 이 함수가 하는 판단은 "조용히
+    빠지는 슬롯을 만들지 않는다" 하나이고, 레인이 늘 때마다 복제하면 그 판단이 갈린다."""
+    raw = os.environ.get(env_name, "")
+    if not raw.strip():
+        return []
+    slots: list[tuple[int, int]] = []
+    # 값이 있는데 항목이 비었으면(" ,"·후행 쉼표) 그것도 손상이다 — 빈 항목을 걸러 주면
+    # "15:00, ,23:50" 의 가운데 슬롯이 소리 없이 사라진다(위 fail-loud 와 같은 축).
+    for part in (p.strip() for p in raw.split(",")):
+        try:
+            h, m = part.split(":")
+            slots.append((int(h), int(m)))
+        except ValueError:
+            raise SystemExit(
+                f"{env_name} 항목 파싱 실패({part!r}) — 슬롯을 조용히 제외하면 "
+                "그 슬롯의 PLANNER_MISSING 탐지가 사라진다. 값 전체를 고쳐라.")
+    return sorted(slots)
+
+
+def _lane_sched_weekend(env_name: str) -> bool:
+    """이 레인이 **주말에도 예정되는가**. env("true"/"false") — ops_ledger.tf 가 그 레인
+    schedule cron 의 **일·요일 필드 쌍**에서 뽑아 주입한다(HH:MM 과 같은 드리프트 불가 패턴,
+    ALPHA-874). 시각 목록만으로는 알 수 없는 축이라 따로 온다.
+
+    **미주입이면 False = 평일 전용**, 즉 종전 동작이다(ALPHA-874 이전엔 레인 구분 없이
+    주말을 건너뛰었다). 값이 있는데 모르는 표기면 fail-loud 다 — 조용히 False 로 떨어지면
+    그 레인의 주말 결측 탐지가 소리 없이 사라진다(`_lane_sched_hhmms` 와 같은 축)."""
+    raw = os.environ.get(env_name, "").strip()
+    if not raw:
+        return False
+    if raw not in ("true", "false"):
+        raise SystemExit(
+            f"{env_name} 파싱 실패({raw!r}) — 'true'/'false' 만. 조용히 평일 전용으로 "
+            "떨어지면 그 레인 주말 런의 PLANNER_MISSING 탐지가 사라진다.")
+    return raw == "true"
+
+
+def ledger_from_settings(settings) -> Ledger | None:
+    """settings.db 가 있으면 Ledger, 없으면 None(원장 미설정 — instrument 는 통과)."""
+    db = getattr(settings, "db", None)
+    return None if db is None else Ledger(db)
+
+
+def _scheduled_time() -> datetime:
+    """스케줄 시각 — EventBridge 가 넣는 env(OPS_SCHEDULED_TIME, ISO) 또는 지금(UTC)."""
+    raw = os.environ.get("OPS_SCHEDULED_TIME")
+    if raw:
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+        except ValueError:
+            logger.warning("OPS_SCHEDULED_TIME 파싱 실패(%s) — 현재시각 사용", raw)
+    return datetime.now(timezone.utc)
+
+
+def task_key_for(step: str, source: str | None) -> str | None:
+    """이 실행이 어느 논리 작업인가. 미등록이면 None(계측 없이 통과, ALPHA-181).
+
+    **정본은 실제로 돌린 CLI 다.** 원장에 남길 것은 이 컨테이너가 *한 일*이지 오케스트레이터가
+    *의도한 일*이 아니다 — 둘이 어긋날 때 env 를 따르면 하지도 않은 작업을 FULFILLED 로 만든다.
+    `OPS_SFN_STATE_NAME`(env)은 그래서 정체성이 아니라 **드리프트 알람**으로 쓴다: 해소 결과와
+    다르면 경고를 남기고 CLI 를 따른다. env 를 정본으로 두면 벤더까지 맞춰 검증해야 하는데
+    (`ingest-raw` 의 fmp/bigkinds 처럼 한 스텝이 벤더로 갈린다) 그 규칙은 `catalog.by_cli` 에
+    이미 있다 — 두 곳에 두면 갈린다.
+
+    CLI 해소라야 수동 회수도 계측된다(`--run-id <원래 run_id>` 로 원장에 붙이는 경로는 env 없이
+    돈다, README 레시피).
+    """
+    entry = catalog.by_cli(step, source)
+    state = os.environ.get("OPS_SFN_STATE_NAME")
+    if state:
+        by_state = catalog.by_sfn_state(state)
+        # 두 해소가 다르면 전부 드리프트다 — 서로 다른 작업(override), state 이름만 바뀌고
+        # 카탈로그가 안 따라온 경우(by_state=None), 반대로 등록 state 인데 CLI 가 미등록인
+        # 경우(entry=None) 모두. 한쪽만 검사하면 알람이 반쪽이라 덮은 척만 한다.
+        if (by_state.task_key if by_state else None) != (entry.task_key if entry else None):
+            logger.warning(
+                "OPS_SFN_STATE_NAME=%s(%s) 과 실행(%s%s→%s)이 불일치 — 실행을 따른다",
+                state, by_state.task_key if by_state else "미등록", step,
+                f" --source {source}" if source else "",
+                entry.task_key if entry else "미등록")
+    return None if entry is None else entry.task_key
+
+
+def instrument(settings, storage: Storage, task_key: str, run_id: str, run_fn):
+    """등록 작업 하나를 원장 계측으로 감싼다. 원장 없으면 run_fn 만 돈다(투명 통과)."""
+    ledger = ledger_from_settings(settings)
+    attempt_started_at = None
+
+    def run_current_attempt():
+        """attempt 시작 시각을 기록하고 본 작업을 돈다 — observer 의 not_before 하한."""
+        nonlocal attempt_started_at
+        # wrapper가 원장 attempt를 연 뒤 실제 작업을 시작하는 경계다. 같은 run_id의 이전 ECS
+        # 재시도 로그를 현재 시도의 산출물로 승인하지 않도록 observer에 이 하한을 넘긴다.
+        attempt_started_at = datetime.now(timezone.utc)
+        return run_fn()
+
+    observe = (
+        None if ledger is None
+        else lambda ec: _observe_from_log(
+            storage, task_key, run_id, ec, not_before=attempt_started_at
+        )
+    )
+    return wrapper.instrument(
+        run_current_attempt, task_key=task_key, run_id=run_id, ledger=ledger,
+        observe_data_fn=observe
+    )
+
+
+def _load_log(storage: Storage, prefix: str, run_id: str) -> dict | None:
+    """dataset 프리픽스 아래에서 이 run_id 의 로그(런당 1건)를 찾아 파싱. 없으면 None.
+
+    ponytail: dataset 프리픽스 전체 LIST(O(런 이력)). 등록 작업이 늘면 런당 LIST 도 같이 는다 —
+    이력이 커져 느려지면 날짜 후보(오늘·어제)로 정확 키를 만드는 쪽으로 좁혀라.
+    """
+    import json
+
+    # 같은 run_id 재시도가 UTC 날짜를 넘기면 started_date별 로그가 둘 이상일 수 있다.
+    # 최신 날짜부터 봐야 현재 시도의 로그를 옛 로그 뒤에서 놓치지 않는다.
+    for key in reversed(storage.list_keys(prefix)):
+        if f"/run_id={run_id}/" in key and key.endswith("log.json"):
+            try:
+                return json.loads(storage.get_bytes(key).decode("utf-8"))
+            except Exception:
+                logger.warning("로그 파싱 실패: %s", key)
+                return None
+    return None
+
+
+def _log_prefix(entry: catalog.CatalogEntry) -> str:
+    """이 작업의 로그가 사는 dataset 프리픽스. 벤더가 있으면 collection_log, 없으면 quality_log.
+
+    키가 아니라 프리픽스인 이유: 날짜 세그먼트(started_date·checked_date)가 **런 시작 UTC
+    날짜**라 자정을 넘긴 런에서 우리가 추측한 날짜와 어긋난다. 프리픽스 조립은 lake.storage
+    빌더(경로 규약 SSOT)가 한다 — 여기서 키를 문자열로 자르면 파티션이 바뀔 때 조용히 어긋난다.
+    """
+    dataset = entry.log_partition_dataset()
+    if entry.source_vendor:
+        return collection_log_prefix(entry.source_vendor, dataset)
+    return quality_log_prefix(dataset)
+
+
+def _observe_from_log(
+    storage: Storage,
+    task_key: str,
+    run_id: str,
+    exit_code: int,
+    *,
+    not_before: datetime | None = None,
+) -> dict:
+    """스텝이 남긴 S3 로그에서 data_status 신호를 뽑는다. 로그 없으면 {}(→ UNKNOWN, 스펙 §6).
+
+    새 계측을 심지 않고 **이미 나오는 신호**를 읽는다(ALPHA-182 정신). 성공 exit 를 자동으로
+    VALID 로 올리지 않는다 — derive_data_status 가 증명 규칙을 적용한다.
+
+    **task_key 분기가 없다**(ALPHA-181). 스텝이 로그에 남기는 `ops` 봉투(`records_out`·
+    `failed_records`)를 읽을 뿐이다. 이 둘은 스텝만 아는 **판정**이라 여기서 재구성할 수 없다 —
+    예컨대 적재의 `skipped_unknown_instrument` 는 in-band 유실이지만 `skipped_self`(ETF 자기보유
+    제외)는 정상 동작이다. 그래서 봉투는 그 카운터 옆(스텝 안)에 산다.
+
+    ⚠️ 봉투의 스코프는 **이 런이 재판정한 범위**다(활동 기반). 그래서 입력을 매 런 다시 읽고
+    다시 거르는 스텝(적재·정제)은 이미 존재하던 행도 산출로 세지만, 이미 처리된 것을 건너뛰는
+    스텝(tag-news·assemble-events)은 no-op 재실행에서 0건 → UNKNOWN 이다. 산출과 유실이 같은
+    스코프에서 와야 옛 실패가 산출로 뒤집히지 않기 때문이다(비대칭 금지). 상태 기반 완전성
+    ("지금 이 데이터셋이 온전한가")은 스냅샷·완전성 축의 몫이다(ALPHA-490).
+    """
+    entry = catalog.get(task_key)
+    if entry is None:
+        return {"exit_code": exit_code}  # 미등록 작업 — 관측 대상이 아니다
+    log = _load_log(storage, _log_prefix(entry), run_id)
+    if log is None:
+        return {"exit_code": exit_code}
+    if not isinstance(log, dict):
+        logger.warning("로그가 JSON 객체가 아님(task=%s run_id=%s) — data_status UNKNOWN",
+                       task_key, run_id)
+        return {"exit_code": exit_code}
+    ops = log.get("ops")
+    # 봉투 없음/불완전 = 신호 미제공. 조용히 낙관값(0건·실패없음)으로 메우지 않는다 — 특히
+    # failed_records 결측을 '실패 0'으로 읽으면 derive_data_status 의 실패 게이트를 통째로
+    # 건너뛰어 유실이 VALID_EMPTY 로 위장된다. UNKNOWN 으로 남기되 드러낸다(Rule 12).
+    if (not isinstance(ops, dict)
+            or ops.get("records_out") is None or ops.get("failed_records") is None):
+        logger.warning("ops 봉투 없음/불완전(task=%s run_id=%s) — data_status UNKNOWN",
+                       task_key, run_id)
+        return {"exit_code": exit_code}
+    # 요청 완료 증명은 로그 종류마다 다른 곳에서 온다. 수집(collection_log)은 status 가 정본이고
+    # **결측이면 완료로 치지 않는다**(중단·스키마 드리프트를 성공으로 위장 금지). 정제·적재
+    # (quality_log)는 status 필드 자체가 없고 성공 증명이 exit_code 라, exit_code==0 게이트를
+    # 통과한 시점에서 요청은 완료된 것이다.
+    completed = (log.get("status") in ("success", "skipped")) if entry.source_vendor else True
+    signals = {
+        "exit_code": exit_code,
+        "records_out": ops.get("records_out"),
+        "failed_records": ops.get("failed_records"),
+        "request_completed": completed,
+        "empty_allowed": entry.empty_allowed,
+    }
+    # 지원 제외는 일부 작업만 내는 저장 전용 신호다. 공통 봉투의 필수값으로 만들면 아직 이
+    # 계측을 내지 않는 모든 작업이 UNKNOWN 으로 회귀한다. 값이 있으면 그대로 넘기고 검증은
+    # 원장에 쓰기 직전 wrapper의 공통 카운터 검증이 맡는다.
+    if "unsupported_records" in ops:
+        signals["unsupported_records"] = ops["unsupported_records"]
+    if "ops_attempt_id" in log:
+        signals["ops_attempt_id"] = log["ops_attempt_id"]
+        signals["entity_resolution_attempt_id"] = log["ops_attempt_id"]
+    # 완전성의 실제값은 entity grain 을 아는 스텝만 선택적으로 낸다. 공통 필수 봉투로 올리면
+    # 아직 기대 universe 가 없는 다른 작업들이 전부 UNKNOWN 으로 회귀한다(ALPHA-611).
+    if "received_count" in ops:
+        signals["received_count"] = ops["received_count"]
+    if "failure" in ops:
+        failure = validated_failure(ops["failure"])
+        if failure is None:
+            # 값 자체를 로그에 찍으면 이 검증이 막으려던 비밀값을 다시 CloudWatch에 복사한다.
+            logger.warning("안전 실패 구조가 유효하지 않음(task=%s run_id=%s)", task_key, run_id)
+        failure_is_current = log.get("run_id") == run_id
+        if failure_is_current and not_before is not None:
+            try:
+                failure_started_at = datetime.fromisoformat(
+                    str(log["started_at"]).replace("Z", "+00:00")
+                )
+                failure_is_current = (
+                    failure_started_at.tzinfo is not None
+                    and failure_started_at >= not_before
+                )
+            except (KeyError, TypeError, ValueError):
+                failure_is_current = False
+        if failure is not None and failure_is_current:
+            signals["failure"] = failure
+        elif failure is not None:
+            logger.warning("현재 시도의 안전 실패 구조가 아님(task=%s run_id=%s)", task_key, run_id)
+    # 엔티티 해소율은 LOAD_ASSERTIONS만 선택적으로 내는 저장 전용 pair다. 여기서 비율을
+    # 재계산하거나 기본값을 만들지 않는다 — producer가 센 같은 시도의 원시 카운터를 보존한다.
+    for key in ("entity_resolution_arguments_total", "entity_resolution_arguments_resolved"):
+        if key in ops:
+            signals[key] = ops[key]
+    if "quality_diagnostics" in ops and ops["quality_diagnostics"] is not None:
+        diagnostics = validated_quality_diagnostics(ops["quality_diagnostics"])
+        if diagnostics is None:
+            logger.warning("품질 진단 구조가 유효하지 않음(task=%s run_id=%s)", task_key, run_id)
+        else:
+            signals["quality_diagnostics"] = diagnostics
+    if entry.contract_key in (ETF_HOLDINGS_KRX_EOD, contracts.ETF_NAV_KIS_DAILY):
+        # collected_at은 "현재 시도가 raw 산출물과 로그를 새로 남겼다"는 증명이 있을 때만 쓴다.
+        # 같은 run_id의 옛 로그, skipped/깨진 로그, 0건 로그는 수집 산출물 증거가 아니다.
+        records_out = ops.get("records_out")
+        artifact_statuses = {"success", "partial", "error", "stopped"}
+        current_log = False
+        try:
+            started_at = datetime.fromisoformat(str(log["started_at"]).replace("Z", "+00:00"))
+            finished_at = datetime.fromisoformat(str(log["finished_at"]).replace("Z", "+00:00"))
+            observed_at = datetime.now(timezone.utc)
+            saved = log["records_saved"]
+            current_log = (
+                log.get("run_id") == run_id
+                and log.get("source_vendor") == entry.source_vendor
+                and isinstance(saved, int)
+                and not isinstance(saved, bool)
+                and saved == records_out
+                and started_at.tzinfo is not None
+                and finished_at.tzinfo is not None
+                and (not_before is None or started_at >= not_before)
+                and started_at <= finished_at <= observed_at
+            )
+        except (KeyError, TypeError, ValueError):
+            pass
+        if not current_log:
+            logger.warning("현재 시도의 완전한 collection_log가 아님(task=%s run_id=%s)",
+                           task_key, run_id)
+        if (
+            log.get("status") in artifact_statuses
+            and isinstance(records_out, int)
+            and not isinstance(records_out, bool)
+            and records_out > 0
+            and current_log
+        ):
+            signals["artifact_observed"] = True
+            if entry.contract_key == contracts.ETF_NAV_KIS_DAILY:
+                signals["actual_as_of_values"] = ops.get("actual_as_of_values")
+    return signals
+
+
+def _etf_universe_provider(settings):
+    """국내 ETF 3개 수집 작업의 기대 universe를 설정 정본에서 고정한다(ALPHA-611).
+
+    구성종목·NAV·프로필 실행도 모두 ``krx_etf.source.etf_map`` 을 쓰므로 키(our_etf_id)가
+    세 작업의 공통 entity grain 이다. 값(ISIN)이나 실행 결과에서 다시 만들면 기대값과 실제값이
+    같은 실패를 공유해 누락을 못 잡는다.
+    """
+    krx_etf = getattr(settings, "krx_etf", None)
+    if krx_etf is None:
+        raise SystemExit(
+            "krx_etf.source 설정 없음 — etf-daily 기대 universe를 계획할 수 없다"
+        )
+    entity_ids = tuple(sorted(krx_etf.source.etf_map))
+
+    def provide(task_key: str) -> dict | None:
+        """ETF 유니버스 작업이면 기대 universe snapshot dict, 아니면 None."""
+        if task_key not in _ETF_UNIVERSE_TASK_KEYS:
+            return None
+        # 작업별 snapshot JSON이 서로 공유된 mutable list를 갖지 않게 매번 새로 만든다.
+        return {"entity_kind": "ticker", "entity_ids": list(entity_ids)}
+
+    return provide
+
+
+# 레인 → 그 레인 상태머신 ARN 을 담은 env 이름(ALPHA-721). 분기문이 아니라 표인 이유: 레인이
+# 늘 때 고쳐야 할 곳이 한 줄이고, **여기 없는 레인은 자동으로 fail-loud** 다 — if/elif 사슬은
+# else 를 잊으면 조용히 시장 레인으로 떨어진다.
+_LANE_STATE_MACHINE_ARN_ENV = {
+    catalog.PIPELINE_TYPE: "OPS_STATE_MACHINE_ARN",
+    catalog.NEWS_PIPELINE_TYPE: "OPS_NEWS_STATE_MACHINE_ARN",
+    catalog.DISCLOSURE_PIPELINE_TYPE: "OPS_DISCLOSURE_STATE_MACHINE_ARN",
+    catalog.INVESTOR_INTRADAY_PIPELINE_TYPE: "OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN",
+}
+# SFN 이 없는 레인 — Airflow 만 계획·실행한다(ALPHA-1130). 위 표와 겹치지 않는다.
+_AIRFLOW_ONLY_LANES = frozenset({catalog.SOURCE_DAILY_PIPELINE_TYPE, catalog.DIVIDEND_DAILY_PIPELINE_TYPE})
+
+
+# ── CLI 핸들러 ────────────────────────────────────────────
+def plan_run_cli(settings) -> int:
+    """EventBridge → Planner. 상태머신 ARN·원장 DB 필수(없으면 fail-loud). launch 성공만 exit 0.
+
+    레인은 env(OPS_PIPELINE_TYPE, 기본 etf-daily)가 정한다 — 각 스케줄이 자기 레인을 주입하고,
+    레인에 맞는 상태머신 ARN 을 아래 표에서 고른다(ALPHA-591·721). 모르는 레인은 fail-loud —
+    조용히 시장 레인으로 계획하면 하지도 않을 작업이 기대에 실린다.
+    """
+    pipeline_type = os.environ.get("OPS_PIPELINE_TYPE", catalog.PIPELINE_TYPE)
+    arn_env = _LANE_STATE_MACHINE_ARN_ENV.get(pipeline_type)
+    if arn_env is None and pipeline_type not in _AIRFLOW_ONLY_LANES:
+        raise SystemExit(
+            f"모르는 OPS_PIPELINE_TYPE={pipeline_type} — "
+            f"{'·'.join(_LANE_STATE_MACHINE_ARN_ENV)} 만 계획 가능")
+    if not catalog.entries(pipeline_type):
+        # ARN/SFN 정의는 rollback을 위해 남아 있어도 현재 catalog가 빈 은퇴 레인은 실행하지
+        # 않는다. 기대 작업 0개로 SFN을 띄우면 그 실행은 원장 밖이고 minute owner와 겹친다.
+        raise SystemExit(
+            f"OPS_PIPELINE_TYPE={pipeline_type}: catalog 등록 작업 0개 — 은퇴한 레인은 plan-run 불가"
+        )
+    # 실행 주체(Airflow 이관). Airflow 가 부르면 계획만 남기고 SFN 을 시작하지 않는다 — 실행은
+    # 이 plan-run 을 띄운 DAG run 이 한다. 기본값은 기존 스케줄 경로(SFN)라 env 가 없는 배포는 불변.
+    orchestrator = os.environ.get("OPS_ORCHESTRATOR", states.ORCHESTRATOR_SFN)
+    if orchestrator not in states.ORCHESTRATORS:
+        raise SystemExit(f"모르는 OPS_ORCHESTRATOR={orchestrator} — "
+                         f"{'·'.join(sorted(states.ORCHESTRATORS))} 만")
+    orchestrator_run_ref = os.environ.get("OPS_ORCHESTRATOR_RUN_REF") or None
+    arn = os.environ.get(arn_env) if arn_env else None
+    if arn_env is None and orchestrator != states.ORCHESTRATOR_AIRFLOW:
+        raise SystemExit(f"{pipeline_type} 는 SFN 이 없는 Airflow 전용 레인이다 — OPS_ORCHESTRATOR=AIRFLOW 만")
+    if orchestrator == states.ORCHESTRATOR_AIRFLOW:
+        if orchestrator_run_ref is None:
+            # 원장 run ↔ Airflow run 을 잇는 유일한 키다. 없이 계획하면 두 이력이 끊긴다.
+            raise SystemExit("OPS_ORCHESTRATOR=AIRFLOW 는 OPS_ORCHESTRATOR_RUN_REF(dag_id/run_id) 필수")
+        # 없거나 못 읽으면 `_scheduled_time` 이 지금 시각으로 폴백한다 — Airflow 재시도가 분을
+        # 넘기면 다른 run_key(= 다른 run_id)가 생겨 같은 슬롯이 두 번 실행된다.
+        try:
+            datetime.fromisoformat(os.environ["OPS_SCHEDULED_TIME"].replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            raise SystemExit("OPS_ORCHESTRATOR=AIRFLOW 는 읽을 수 있는 OPS_SCHEDULED_TIME(ISO 슬롯 시각) 필수")
+    elif not arn:
+        # 다른 레인 ARN 으로 폴백하지 않는다 — 기대는 이 레인 것이고 실행은 남의 SFN 이 되어
+        # 기대와 실행이 어긋난 런이 원장에 남는다. 시작 전에 죽는 편이 낫다(Rule 12).
+        raise SystemExit(f"{arn_env} 없음 — {pipeline_type} 레인 plan-run 은 그 레인 SFN ARN 필수")
+    ledger = ledger_from_settings(settings)
+    if ledger is None:
+        raise SystemExit("db 설정 없음 — plan-run 은 원장 DB 필수(DATA_PIPELINE_DB__* 주입)")
+    universe_provider = (
+        _etf_universe_provider(settings)
+        if pipeline_type == catalog.PIPELINE_TYPE
+        else None
+    )
+    if os.environ.get("OPS_REPROCESS") == "1":
+        # 재처리 요청(Airflow reprocess_slot)은 기존 슬롯만 — 없는 슬롯을 새로 계획하면 수집 없이 빈 입력
+        # 정제·적재가 성공으로 끝나 "재처리했다"가 거짓이 된다.
+        run_key = planner.slot_run_key(_scheduled_time().astimezone(planner.KST), pipeline_type)
+        ready, reason = ledger.reprocess_ready(run_key)
+        if not ready:
+            raise SystemExit(f"재처리 불가({run_key}): {reason}")
+    result = planner.plan_run(
+        ledger, state_machine_arn=arn, scheduled_time=_scheduled_time(),
+        pipeline_type=pipeline_type, universe_provider=universe_provider,
+        orchestrator=orchestrator, orchestrator_run_ref=orchestrator_run_ref,
+    )
+    logger.info(
+        "plan-run: lane=%s run=%s launch=%s created=%s trading=%s orchestrator=%s",
+        pipeline_type, result.pipeline_run_id, result.launch_status, result.created,
+        result.trading_day, orchestrator,
+    )
+    # LAUNCHED 만 성공. FAILED/CONFLICT/UNKNOWN 은 비0 으로 드러낸다(fail-loud, Rule 12).
+    return 0 if result.launch_status == states.LAUNCH_LAUNCHED else 1
+
+
+def _due_slots(now_kst: datetime) -> list[tuple[str, bool]]:
+    """레인별로 **예정 시각이 지난** 슬롯들의 (run_key, grace_경과) 목록. 없으면 빈 목록.
+
+    레인마다 "가장 최근에 지난 슬롯이 있는 예정일"을 찾아 **그날의 지난 슬롯 전부**를 돌려준다
+    (ALPHA-591). 시장 레인은 하루 1슬롯이라 종전과 같고, 뉴스 레인은 하루 여러 슬롯이라 최신
+    하나만 보면 뒤 슬롯이 지나는 순간 앞 런이 영영 대조되지 않는다(ALPHA-565 사각의 확대재생산)
+    — 같은 날 슬롯을 전부 물고 있으면 주기 reconcile 이 재대조해 늦은 종결도 판정한다.
+
+    ⚠️ **어제 슬롯이 언제 떨어지는지는 "자정"이 아니라 그 레인의 `첫 슬롯`이 정한다.** 이 루프는
+    `break` 로 **한 날짜에서 멈추므로**, 오늘의 첫 슬롯이 지나는 순간 어제 슬롯은 전부 빠진다.
+    ALPHA-905 로 뉴스 day-close 가 00:10 이 되면서 그 경계가 자정 직후로 당겨졌다 — 슬롯별
+    자동 대조 창은 이렇게 바뀐다(실측):
+
+        종전(08:10·23:50): 08:10 → 23.9h · 23:50 →  8.2h   (최악 8.2h)
+        현재(00:10·08:10): 00:10 → 23.9h · 08:10 → 15.9h   (최악 15.9h)
+
+    즉 앞 슬롯(08:10)의 창은 줄지만 **최악 창은 두 배가 됐다** — 순 악화가 아니다(봇 리뷰 P2 의
+    지적은 08:10 한 슬롯만 본 것이다). 창 밖으로 나간 런·이슈는 `OPS_RUN_KEY` 로 지목해야
+    대조된다. 이 `break` 자체(=하루 경계에서 멈춘다)를 걷어내 **비종료 런 전부**를 대조하는 것이
+    ALPHA-565 의 범위다 — 슬롯 시각을 옮길 때마다 이 창이 함께 움직인다는 것이 그 티켓의 근거다.
+    아직 예정 전인 오늘 슬롯은 결측으로 보지 않는다(edge-review) — 평일 전용 레인이면 월요일
+    오전엔 금요일 슬롯을, 주말엔 직전 금요일을 돌려준다. grace 경과 여부는 PLANNER_MISSING
+    판정에 쓴다.
+
+    **주말은 레인마다 다르다**(ALPHA-874) — 현재 주 7일인 것은 뉴스뿐이다. 그래서 주말
+    건너뛰기가 레인 무관 상수이면 안 된다: 상수 "건너뛴다"면 주 7일 레인의 결측 탐지가 0 이
+    되고(조용한 축소), 상수 "안 건너뛴다"면 평일 전용 레인이 매 토·일 거짓 PLANNER_MISSING 을
+    연다(뜰 런이 없어 영영 안 닫힌다). 판단 근거는 그 레인 cron 의 **일·요일 필드 쌍**이고,
+    terraform 이 거기서 뽑아 넣는다(`_lane_sched_weekend`) — 여기에 레인 목록을 하드코딩하지 마라.
+
+    키는 `planner.slot_run_key` 로 만든다 — Planner 가 쓰는 바로 그 함수다(ALPHA-564). 여기서
+    형식을 따로 조립하면 어긋나는 순간 있지도 않은 슬롯을 찾아 PLANNER_MISSING 오탐이 난다.
+    """
+    lanes: list[tuple[str, list[tuple[int, int]], bool]] = [
+        (catalog.PIPELINE_TYPE, [_sched_hhmm()],
+         _lane_sched_weekend("OPS_DAILY_SCHED_WEEKEND")),
+        (catalog.NEWS_PIPELINE_TYPE, _lane_sched_hhmms("OPS_NEWS_SCHED_HHMM"),
+         _lane_sched_weekend("OPS_NEWS_SCHED_WEEKEND")),
+        (catalog.DISCLOSURE_PIPELINE_TYPE, _lane_sched_hhmms("OPS_DISCLOSURE_SCHED_HHMM"),
+         _lane_sched_weekend("OPS_DISCLOSURE_SCHED_WEEKEND")),
+        (catalog.INVESTOR_INTRADAY_PIPELINE_TYPE,
+         _lane_sched_hhmms("OPS_INVESTOR_INTRADAY_SCHED_HHMM"),
+         _lane_sched_weekend("OPS_INVESTOR_INTRADAY_SCHED_WEEKEND")),
+        # 원천 관측(ALPHA-1130). DAG 를 켤 때 ops 태스크 정의에 이 두 env 를 함께 주입해야 결측 판정이 켜진다.
+        (catalog.SOURCE_DAILY_PIPELINE_TYPE, _lane_sched_hhmms("OPS_SOURCE_DAILY_SCHED_HHMM"),
+         _lane_sched_weekend("OPS_SOURCE_DAILY_SCHED_WEEKEND")),
+        (catalog.DIVIDEND_DAILY_PIPELINE_TYPE, _lane_sched_hhmms("OPS_DIVIDEND_DAILY_SCHED_HHMM"),
+         _lane_sched_weekend("OPS_DIVIDEND_DAILY_SCHED_WEEKEND")),
+    ]
+    slots: list[tuple[str, bool]] = []
+    for lane, hhmms, weekend in lanes:
+        if not hhmms:
+            continue   # env 미주입 레인 — 결측 판정 대상 아님(_lane_sched_hhmms 참조)
+        for back in range(7):
+            cand = now_kst.date() - timedelta(days=back)
+            if cand.weekday() >= 5 and not weekend:
+                continue
+            past = [
+                sched for h, m in hhmms
+                if now_kst >= (sched := datetime.combine(cand, time(h, m), tzinfo=planner.KST))
+            ]
+            if past:
+                slots.extend(
+                    (planner.slot_run_key(sched, lane), now_kst >= sched + _PLANNER_GRACE)
+                    for sched in past
+                )
+                break
+    return slots
+
+
+def _execution_holds(run_key: str | None) -> dict[str, dict]:
+    """`OPS_EXECUTION_HOLDS` — Airflow DAG report 가 넘기는 보류 스텝 {task_key: {"kind", "reason"}}(JSON).
+    형식이 틀리면 조용히 버리지 않고 실패한다 — 보류가 원장에 안 남으면 재처리가 그 작업을 우회한다."""
+    raw = os.environ.get("OPS_EXECUTION_HOLDS") or ""
+    if not raw:
+        return {}
+    try:
+        holds = json.loads(raw)
+    except ValueError as exc:
+        raise SystemExit(f"OPS_EXECUTION_HOLDS 가 JSON 이 아니다: {exc}") from exc
+    if not run_key or not isinstance(holds, dict) or not all(
+            catalog.get(k) is not None and isinstance(v, dict) and v.get("kind") in (
+                states.HOLD_ECS_STATE_UNKNOWN, states.HOLD_RESULT_UNKNOWN)
+            for k, v in holds.items()):
+        raise SystemExit("OPS_EXECUTION_HOLDS 는 OPS_RUN_KEY 와 함께, {카탈로그 task_key: "
+                         "{kind: ECS_STATE_UNKNOWN|RESULT_UNKNOWN, reason}} 만")
+    return holds
+
+
+def premarket_watch_cli() -> int:
+    """장전 감시만 단독으로 — 원장·DB 를 안 쓴다(실환경 시험용, `OPS_SCHEDULED_TIME` 으로 시각 지정).
+
+    ok·skip 이면 0, missing·failed 면 1(판정은 로그 문구로도 남는다).
+    """
+    verdict = premarket_watch.run_from_env(_scheduled_time(), aws.logs_client)
+    logger.info("premarket-watch: %s", verdict)
+    return 0 if verdict in ("ok", "skip") else 1
+
+
+def reconcile_cli(settings) -> int:
+    """주기 Reconciler. advisory lock 으로 중복 실행 방지. 예정 지난 슬롯만 PLANNER_MISSING."""
+    ledger = ledger_from_settings(settings)
+    if ledger is None:
+        raise SystemExit("db 설정 없음 — reconcile 은 원장 DB 필수(DATA_PIPELINE_DB__* 주입)")
+    now = _scheduled_time()
+    override = os.environ.get("OPS_RUN_KEY")
+    cluster_arn = os.environ.get("OPS_CLUSTER_ARN")
+    # Airflow DAG 가 끝나며 자기 run_key 를 지목해 부를 때만 판정을 함께 넘긴다(주기 실행은 없음).
+    reported = os.environ.get("OPS_ORCHESTRATION_STATUS") or None
+    if reported is not None and (not override or reported not in (states.ORCH_SUCCEEDED,
+                                                                    states.ORCH_FAILED)):
+        raise SystemExit("OPS_ORCHESTRATION_STATUS 는 OPS_RUN_KEY 와 함께, SUCCEEDED|FAILED 만")
+    holds = _execution_holds(override)
+    if not override:
+        # 장전 레인은 원장 밖이라 아래 슬롯 대조가 못 본다(ALPHA-1431). 원장을 안 건드리는 읽기라
+        # 락보다 앞에 둔다 — 다른 인스턴스가 락을 쥔 주기에도 감시는 돈다. 실패는 안에서 ERROR 로 남는다.
+        premarket_watch.run_from_env(now, aws.logs_client)
+    reported_ref = os.environ.get("OPS_REPORT_RUN_REF") or None
+    lifetime = int(os.environ.get("OPS_AIRFLOW_RUN_LIFETIME_SECONDS")
+                   or reconciler.AIRFLOW_RUN_LIFETIME_SECONDS)
+    with ledger.advisory_lock(_RECONCILE_LOCK) as acquired:
+        if not acquired:
+            if reported is not None or holds:
+                # 보고·보류는 이 호출이 유일한 전달 경로다 — 주기 대조가 락을 쥔 동안 0 으로 끝내면 판정이
+                # 유실되고, 주기 투영은 확정값을 덮지 않아 영영 고쳐지지 않는다. 재시도하게 한다.
+                logger.warning("reconcile: 락 경합 — 보고(%s)를 재시도 대상으로 돌린다", reported)
+                return wrapper.STEP_NOT_RUN_EXIT
+            logger.info("reconcile: 다른 인스턴스가 락 보유 — skip")
+            return 0
+        if holds:
+            # 대조보다 먼저 — 시도 없는 보류 작업이 MISSED(미실행)로 찍히기 전에 보류로 남긴다.
+            reconciler.record_execution_holds(ledger, run_key=override, holds=holds)
+        if override:
+            # override 는 특정 런을 reconcile 하려는 수동 지정이라(미래 슬롯일 수 있다) 결측
+            # 판정 대상이 아니다(edge-review).
+            run_keys = [override]
+        else:
+            due = _due_slots(now.astimezone(planner.KST))
+            if not due:
+                logger.info("reconcile: 예정 지난 슬롯 없음 — 슬롯 대조 skip")
+            # ⚠️ 알려진 사각(ALPHA-565): 주기 reconcile 은 **`_due_slots` 가 만드는 스케줄 슬롯**만
+            # 본다. ALPHA-564 로 수동·백필 실행이 자기 슬롯을 갖게 됐는데, 그 키는 `_due_slots` 가
+            # 절대 만들지 않으므로 `OPS_RUN_KEY` 로 명시 지정하지 않으면 **영영 대조되지 않는다** —
+            # 수동 런이 초기에 죽으면 기대작업이 DUE 로 남은 채 이슈 없이 조용히 통과한다(관대한 쪽).
+            # 제대로 된 해소는 "종료되지 않은 런"을 원장에서 훑는 것이고, 그건 새 쿼리라 별건이다.
+            # (Airflow 런은 아래 sweep 이 "끝나지 않은 시도가 남은 런"을 훑는다 — ALPHA-1088.)
+            # 예정+grace 가 지난 **자동 슬롯**만 결측으로 본다.
+            grace_passed = [key for key, grace in due if grace]
+            if grace_passed:
+                reconciler.detect_planner_missing(ledger, expected_run_keys=grace_passed)
+            run_keys = [key for key, _ in due]
+        for run_key in run_keys:
+            summary = reconciler.reconcile_run(
+                ledger, run_key=run_key, cluster_arn=cluster_arn, now=now,
+                reported_status=reported, reported_ref=reported_ref, lifetime_seconds=lifetime)
+            logger.info("reconcile: %s", summary)
+        if not override:
+            # DAG 의 report·verdict·callback 이 돌지 못한(시간 초과·worker 사망) Airflow 런의 미확정 실행을 찾는다 —
+            # 슬롯 대조와 별개로 매 주기(휴장일·야간 포함) 돈다. 슬롯 대조 뒤에 둔다(실패가 대조를 막지 않게).
+            swept = reconciler.sweep_airflow_runs(ledger, ecs=aws.ecs_client(), cluster_arn=cluster_arn,
+                                                  now=now, lifetime_seconds=lifetime,
+                                                  skip_run_keys=frozenset(run_keys))
+            logger.info("reconcile: airflow sweep %s", swept)
+            if swept.get("errors"):
+                # 슬롯 대조는 이미 끝났다 — 점검이 원장 밖 실행을 확인하지 못한 것을 성공으로 숨기지 않는다.
+                logger.error("reconcile: airflow sweep 미완료 %s", swept["errors"])
+                return 1
+    return 0

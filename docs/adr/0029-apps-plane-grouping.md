@@ -1,10 +1,10 @@
 # ADR-0029: apps 플레인 그룹핑 · schema 마이그레이션 세트 대칭 명명
 
-- 상태: 승인됨
+- 상태: 승인됨 (apps 플레인 그룹핑은 [ADR-0061](0061-product-axis-directory-layout.md)로 대체, 마이그레이션 세트 명명은 유지)
 - 날짜: 2026-07-20
 
 ## 맥락
-[[0001-monorepo-structure]]는 `src/apps`(실행 단위)·`src/libs`(공유 코드)만 정하고
+[[0001-monorepo-structure]]는 `src/apps`(실행 단위)·`libs`(공유 코드)만 정하고
 그 아래를 flat하게 뒀다. 그런데 시스템은 두 실행 환경으로 갈린다 —
 edge 클라우드(벤더 운영)와 증권사 온프렘(고객 통제, [[0010-hybrid-onprem-pivot]]).
 앱이 9개인 지금도 어떤 모듈이 어느 환경에 배포되는지 트리에서 안 보이고,
@@ -20,10 +20,10 @@ schema는 클라우드/온프렘 테이블을 한 SSOT에 담는다([[0016-singl
 
 ## 결정
 플레인을 이름으로 드러낸다.
-- `src/apps/` 아래에만 플레인 디렉터리를 둔다. `src/libs/`는 flat 유지.
+- `src/apps/` 아래에만 플레인 디렉터리를 둔다. `libs/`는 flat 유지.
   - `apps/cloud/` — gateway, tenant-sync-api, super-admin-api, super-admin-ui, data-pipeline, analysis-engine
-  - `apps/onprem/` — serving-api, tenant-console-api, tenant-console-ui, (예정) sync-agent, compliance-engine, widget-ui
-- `src/libs/`는 schema·jvm-common·py-common·ui-kit을 flat로 둔다(플레인 무관 공유).
+  - `apps/edgesignal/` — serving-api, tenant-console-api, tenant-console-ui, (예정) sync-agent, compliance-engine, widget-ui
+- `libs/`는 schema·jvm-common·py-common·ui-kit을 flat로 둔다(플레인 무관 공유).
   schema 내부의 `migrations-cloud/`·`migrations-onprem/` 플레인 분할은 유지 — 모듈은 공유이되
   마이그레이션 세트만 환경별이고, DDL 권한은 단일 SSOT(libs/schema)가 갖는다([[0005-db-as-contract]]).
 - **schema Flyway 세트를 대칭 명명한다: `migrations/` → `migrations-cloud/`** (온프렘 세트
@@ -31,7 +31,7 @@ schema는 클라우드/온프렘 테이블을 한 SSOT에 담는다([[0016-singl
 - 디렉터리·세트 이름은 배포 아티팩트([[0016-single-repo-two-artifacts]]의 edge-cloud/edge-onprem)와
   같은 어휘(cloud/onprem)를 쓴다.
 
-widget-ui는 실행 서버가 아니라 **빌드 산출물**로 `apps/onprem/`에 둔다 — 증권사가 받아서
+widget-ui는 실행 서버가 아니라 **빌드 산출물**로 `apps/edgesignal/`에 둔다 — 증권사가 받아서
 자기 MTS/HTS에 임베드/웹뷰로 띄운다([[0010-hybrid-onprem-pivot]] 재확인, 위젯 서버 부활 아님).
 
 ## 대안

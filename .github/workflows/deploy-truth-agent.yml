@@ -1,0 +1,77 @@
+# truth-agent 이미지 배포 — 매시 사건 갱신 배치(pi 하네스 + DeepSeek) 이미지를 ECR 에 push 한다.
+# 스케줄러가 매 실행 edge/pipeline:truth-agent-latest 를 새로 pull 하므로, push 다음 실행부터 새 이미지가 돈다.
+# 화면 파일(truth-web)도 이미지에 들어간다 — 게시 전 렌더 검사를 실제 화면 코드로 하기 때문이다.
+name: deploy-truth-agent
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dev]
+    paths:
+      - "apps/etforca/truth-agent/**"
+      - "apps/etforca/truth-web/**"
+      - "apps/engine/data-pipeline/**" # 레이크 키 규약·뉴스 정체성을 이 패키지에서 가져온다
+      - "libs/ontology/**"
+      - "pyproject.toml"
+      - ".dockerignore"
+      - ".github/workflows/deploy-truth-agent.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-truth-agent
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: |
+          docker build --platform linux/amd64 \
+            --build-arg "GIT_SHA=${GITHUB_SHA}" \
+            -f apps/etforca/truth-agent/Dockerfile -t truth-agent:ci .
+
+      # push 전에 이미지 안에서 세 런타임이 실제로 도는지 본다 — 빌드 성공만으로는
+      # Chromium 공유 라이브러리 누락·pi 버전 섞임 같은 기동 실패가 첫 매시 실행에서야 드러난다.
+      - name: Smoke test image
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint node truth-agent:ci \
+            /opt/truth/pi/node_modules/@earendil-works/pi-coding-agent/dist/cli.js --version
+          docker run --rm truth-agent:ci validate /opt/truth/seed
+          docker run --rm --entrypoint python truth-agent:ci -c '
+          import json, pathlib
+          from edge_truth_agent.cases import load_dir
+          from edge_truth_agent.render import render
+          cases = load_dir(pathlib.Path("/opt/truth/seed"))
+          result = render(cases, pathlib.Path("/opt/truth/web"), [c["id"] for c in cases])
+          broken = {k: v["errors"] for k, v in result.items() if v["errors"]}
+          print(json.dumps(broken or "렌더 정상", ensure_ascii=False))
+          raise SystemExit(1 if broken else 0)'
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Push image
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+        run: |
+          set -euo pipefail
+          account_id="$(aws sts get-caller-identity --query Account --output text)"
+          repo="${account_id}.dkr.ecr.${AWS_REGION}.amazonaws.com/edge/pipeline"
+          for tag in "truth-agent-${GITHUB_SHA}" "truth-agent-latest"; do
+            docker tag truth-agent:ci "${repo}:${tag}"
+            docker push "${repo}:${tag}"
+          done

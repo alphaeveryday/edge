@@ -2,7 +2,7 @@
 
 - 상태: 승인됨 (2026-09-28 — 인프라 배선 머지로 승인 전환)
 - 날짜: 2026-09-28
-- 관련: ADR-0009(AWS 배포 토폴로지) · ADR-0034(ALB 호스트 1:1) · ADR-0055(앱 계층 다중 인스턴스, ShedLock 선례) · `src/apps/cloud/app-api/README.md` · `src/apps/cloud/app-ui/screens.md`
+- 관련: ADR-0009(AWS 배포 토폴로지) · ADR-0034(ALB 호스트 1:1) · ADR-0055(앱 계층 다중 인스턴스, ShedLock 선례) · `apps/etforca/app-api/README.md` · `apps/etforca/app-ui/screens.md`
 
 ## 맥락
 
@@ -47,4 +47,4 @@ MySQL 이 나은 점도 있다. Redis 장애 실험이 MySQL 기준 실측이고
 
 ## 후속(2026-10-06)
 - write-behind 모드 제거(ALPHA-1179)에 따른 VoteWarmer·VoteFlusher 삭제
-- ShedLock 대상 스케줄 작업은 VoteReconciler 하나
+- ShedLock 대상 스케줄 작업은 VoteReconciler와 SyncService 두 개

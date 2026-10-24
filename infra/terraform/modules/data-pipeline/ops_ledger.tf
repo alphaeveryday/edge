@@ -35,13 +35,14 @@ locals {
     for k in sort(keys(var.disclosure_schedule_expressions)) :
     regex("^cron\\(([0-9]+) ([0-9]+) ", var.disclosure_schedule_expressions[k])
   ]
-  # ⚠️ **스케줄이 ENABLED 일 때만 값을 낸다.** 슬롯 기준은 Reconciler 에게 "이 시각엔 런이
+  # ⚠️ **배치 레인이 공시를 소유할 때만(스케줄 ENABLED 또는 Airflow 실행) 값을 낸다.** 슬롯 기준은 Reconciler 에게 "이 시각엔 런이
   # 있어야 한다"는 주장이라, 스케줄이 꺼진 채 이 값만 주입하면 Planner 가 뜰 리 없는 슬롯을
   # 매시간 결측으로 판정해 **참인 PLANNER_MISSING** 을 10개씩 연다(resolve 되지 않는다 —
   # 실제로 안 돌았으니까). 뉴스 레인엔 이 조건이 없는데, dev 에서 스케줄과 원장 편입이 같은
   # 시점에 켜져 꺼진 구간이 존재하지 않았기 때문이다. 공시는 신설→검증→컷오버로 나뉘어
   # 그 구간이 실재하므로 여기서 묶는다(entry.py `_lane_sched_hhmms` 는 빈 값 = 판정 없음).
-  disclosure_schedule_hhmm = var.disclosure_schedule_state != "ENABLED" ? "" : join(",", sort([
+  # Airflow 가 실행해도(SFN 스케줄 DISABLED) 슬롯은 예정된다 — 조건은 disclosure_pipeline.tf `disclosure_batch_owned`.
+  disclosure_schedule_hhmm = !local.disclosure_batch_owned ? "" : join(",", sort([
     for hm in local._disclosure_cron_hms : format("%02d:%02d", tonumber(hm[1]), tonumber(hm[0]))
   ]))
 
@@ -105,6 +106,9 @@ locals {
   # `airflow/tests/test_source_daily_dag.py` 가 대조한다. 변수가 아닌 이유: 환경이 재정의하면 그 대조가 기본값만 보고
   # 통과한다 — DAG 를 끄는 환경이 생기면 그때 변수로 올리고 테스트가 실제 값을 읽게 한다. 빈 값 = 결측 판정 없음.
   source_daily_schedule_hhmm = "05:20"
+  # 배당 레인(ALPHA-1443) — 원천 관측과 같은 이유로 여기 적는다. DAG(`airflow/dags/edge_dividend_daily.py` CRONS)와 같은지
+  # `airflow/tests/test_dividend_daily_dag.py` 가 대조한다.
+  dividend_daily_schedule_hhmm = "03:00"
 
   daily_schedule_weekend = tostring(local._day_weekend[join("|", regex(local._cron_day_re, var.schedule_expression))])
   news_schedule_weekend = tostring(local._day_weekend[one(distinct([
@@ -162,6 +166,12 @@ resource "aws_iam_role_policy" "ops_task" {
         Action    = ["ecs:DescribeTasks", "ecs:ListTasks"]
         Resource  = ["*"]
         Condition = { ArnEquals = { "ecs:cluster" = var.cluster_arn } }
+      },
+      {
+        # 장전 감시(ALPHA-1431)가 이 모듈의 컨테이너 로그 그룹에서 universe 성공 문구를 찾는다.
+        Effect   = "Allow"
+        Action   = ["logs:FilterLogEvents"]
+        Resource = ["${aws_cloudwatch_log_group.this.arn}:*"]
       },
     ]
   })
@@ -224,6 +234,11 @@ resource "aws_ecs_task_definition" "ops" {
       # 원천 관측 레인(ALPHA-1140) — Airflow 전용이라 cron 변수가 없다. 시각은 DAG 와 테스트로 묶는다(위 locals).
       OPS_SOURCE_DAILY_SCHED_HHMM    = local.source_daily_schedule_hhmm
       OPS_SOURCE_DAILY_SCHED_WEEKEND = "true"
+      # 배당 레인(ALPHA-1443) — 같은 규약. 이게 없으면 03:00 run 이 아예 안 떠도 PLANNER_MISSING 이 열리지 않는다.
+      OPS_DIVIDEND_DAILY_SCHED_HHMM    = local.dividend_daily_schedule_hhmm
+      OPS_DIVIDEND_DAILY_SCHED_WEEKEND = "true"
+      # 장전 레인 실행 누락 감시(ALPHA-1431) — 장전 컨테이너가 쓰는 로그 그룹. 빈 값이면 감시 없음.
+      OPS_PREMARKET_LOG_GROUP = aws_cloudwatch_log_group.this.name
     }) : { name = k, value = v }]
     secrets = [{
       name = "DATA_PIPELINE_DB__PASSWORD", valueFrom = "${var.db_password_secret_arn}:password::"
@@ -269,6 +284,65 @@ resource "aws_cloudwatch_metric_alarm" "scheduler_dlq_arrivals" {
   threshold           = 0
   comparison_operator = "GreaterThanThreshold"
   # 도착이 없는 창은 지표가 아예 안 나온다 — 그건 정상(대부분의 창)이다.
+  treat_missing_data = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alarms.arn]
+}
+
+# 🔴 **PLANNER_MISSING 은 DB 행만 남았다**(ALPHA-1430). 주기 reconcile 이 예정+grace 가 지난 슬롯에서
+# 런을 못 찾으면 이슈를 열지만, 이 이슈를 보는 알람이 없어 Airflow 호스트가 멈춰 슬롯이 통째로
+# 빠져도(10-20·10-21) 아무에게도 안 갔다. Airflow `service_down` 은 태스크가 사라질 때만 운다.
+# reconcile 은 Airflow 호스트 밖 Fargate 태스크라 호스트가 멈춰도 이 경로는 산다.
+# reconciler.py 는 이슈를 **새로 열 때만** 이 문구를 남긴다 — 15분마다 오는 재발 카운트는 안 센다.
+resource "aws_cloudwatch_log_metric_filter" "planner_missing" {
+  name           = "${var.name}-planner-missing"
+  log_group_name = aws_cloudwatch_log_group.this.name
+  pattern        = "\"PLANNER_MISSING run_key=\""
+
+  # namespace 를 var.name 으로 가르는 이유는 tasks.tf raw_ingest_skipped 와 같다(dev·prod 섞임 방지).
+  metric_transformation {
+    name      = "PlannerMissing"
+    namespace = "edge/${var.name}"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "planner_missing" {
+  alarm_name        = "${var.name}-planner-missing"
+  alarm_description = "원장 슬롯이 예정 시각+30분이 지나도 런이 없다(PLANNER_MISSING 새로 열림) — 그 슬롯은 안 돌았다. Airflow 레인이면 호스트 멈춤·DAG pause 를, SFN 레인이면 스케줄을 볼 것. 어느 슬롯인지는 ops 로그의 run_key= 와 ops_reconciliation_issue."
+
+  # 🔴 `FILL(raw, 0)` 이어야 다음 누락이 다시 메일을 낸다. metric filter 는 새 이슈가 있을 때만 값을
+  # 내는데, 결측 구간을 그대로 두면 CloudWatch 가 1구간보다 넓게 조회한 범위의 실데이터를 판정에
+  # 넣는다(AWS "all real data points in the evaluation range are included") — 직전 누락의 1 이
+  # 그 범위에 남아 있는 동안 ALARM 이 유지되고, 통보는 OK→ALARM 전이 때만 나가므로 그 사이 열린
+  # 다른 슬롯은 무음이다(tasks.tf disclosure_confirmed_reject_piling 과 같은 이유).
+  # 판정 창은 1분×5 중 1개(최근 5분에 1이 하나라도 있으면 ALARM)다. 1분×1 이면 지표가 1분 넘게 늦게
+  # 도착해 이미 지난 구간에 찍힐 때 판정이 0 만 보고 넘어가는데, 로그는 이슈를 열 때 한 번뿐이라
+  # 그 메일은 영영 안 온다. 5분이면 그 지연을 견디고, reconcile 이 15분 주기라 다음 주기 전에 OK 로
+  # 돌아와 서로 다른 주기의 누락은 각자 메일을 낸다 — 한 주기에 함께 열린 슬롯들은 메일 한 통이다
+  # (로그에 run_key 가 다 있다).
+  metric_query {
+    id          = "missing"
+    expression  = "FILL(raw, 0)"
+    label       = "새로 열린 PLANNER_MISSING 수(결측 구간은 0)"
+    return_data = true
+  }
+
+  metric_query {
+    id = "raw"
+    metric {
+      namespace   = "edge/${var.name}"
+      metric_name = "PlannerMissing"
+      period      = 60
+      stat        = "Sum"
+    }
+  }
+
+  evaluation_periods  = 5
+  datapoints_to_alarm = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  # 식이 값을 못 내는 때(지표가 한 번도 안 나온 배포 직후)의 기본값이다.
   treat_missing_data = "notBreaching"
 
   alarm_actions = [aws_sns_topic.alarms.arn]
@@ -326,4 +400,56 @@ resource "aws_scheduler_schedule" "reconcile" {
     }
     dead_letter_config { arn = aws_sqs_queue.scheduler_dlq.arn }
   }
+}
+
+# 🔴 **장전 레인은 원장 밖이라 PLANNER_MISSING 이 없다**(ALPHA-1431). premarket_pipeline.tf 의 알람
+# 셋은 전부 SFN 이 실행을 시도해야 운다 — 실행 주체가 Airflow 면 SFN 스케줄이 DISABLED 라 영영 조용하다.
+# 주기 reconcile(Airflow 호스트 밖)이 거래일 07:32~09:00 에 그날 07:00~07:30 의 universe 성공 로그를 찾고,
+# 없으면 `PREMARKET_MISSING`, 조회가 실패하면 `PREMARKET_WATCH_FAILED` 를 남긴다(ops/premarket_watch.py).
+resource "aws_cloudwatch_log_metric_filter" "premarket_missing" {
+  name           = "${var.name}-premarket-missing"
+  log_group_name = aws_cloudwatch_log_group.this.name
+  pattern        = "?\"PREMARKET_MISSING\" ?\"PREMARKET_WATCH_FAILED\""
+
+  metric_transformation {
+    name      = "PremarketMissing"
+    namespace = "edge/${var.name}"
+    value     = "1"
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "premarket_missing" {
+  alarm_name        = "${var.name}-premarket-missing"
+  alarm_description = "거래일 장전 유니버스 배치가 07:30 까지 성공하지 못했다(안 돌았거나·실패했거나·늦었다) 또는 감시가 로그를 조회하지 못했다 — 그날 분봉 세션은 어제 유니버스로 돈다. ops 로그의 PREMARKET_MISSING/PREMARKET_WATCH_FAILED 줄과 Airflow edge_premarket·SFN premarket 실행을 볼 것."
+
+  # 감시는 같은 날 07:32~09:00 의 매 reconcile(15분)마다 ERROR 를 낸다 — 하루 한 통이어야 한다.
+  # 판정 = 최근 90분(5분×18) 안에 1 이 하나라도 있으면 ALARM. 07:3x 첫 ERROR 에서 전이(메일)하고
+  # 08:4x 마지막 ERROR 까지 ALARM 이 이어져 다시 통보하지 않는다. 다음 날 07:3x 전에 OK 로 돌아온다.
+  # `FILL(raw, 0)` 은 결측 구간이 판정 범위를 넓혀 전날 1 을 끌어들이지 않게 한다(planner_missing·
+  # tasks.tf disclosure_confirmed_reject_piling 과 같은 이유). 늦게 도착한 지표도 90분 안이면 본다.
+  metric_query {
+    id          = "missing"
+    expression  = "FILL(raw, 0)"
+    label       = "장전 성공 없음·감시 실패 로그 수(결측 구간은 0)"
+    return_data = true
+  }
+
+  metric_query {
+    id = "raw"
+    metric {
+      namespace   = "edge/${var.name}"
+      metric_name = "PremarketMissing"
+      period      = 300
+      stat        = "Sum"
+    }
+  }
+
+  evaluation_periods  = 18
+  datapoints_to_alarm = 1
+  threshold           = 0
+  comparison_operator = "GreaterThanThreshold"
+  # 식이 값을 못 내는 때(지표가 한 번도 안 나온 배포 직후)의 기본값이다.
+  treat_missing_data = "notBreaching"
+
+  alarm_actions = [aws_sns_topic.alarms.arn]
 }

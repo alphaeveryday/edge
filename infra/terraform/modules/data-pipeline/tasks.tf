@@ -274,7 +274,8 @@ locals {
     # 워터마크 창(ALPHA-987, `disclosure_watermark.py`)은 배치 레인이 공시를 소유할 때만
     # 켠다 — 스케줄 상태에서 **파생**시켜 컷오버가 한 트랜잭션으로 묶인다(별도 토글이면
     # 한쪽만 뒤집힌 배포에서 그림자/활성이 소유와 어긋난다). DISABLED 환경은 그림자 기본.
-    dart = merge(local.db_env, var.disclosure_schedule_state == "ENABLED" ? {
+    # Airflow 실행(disclosure_orchestrator)도 같은 소유다 — disclosure_pipeline.tf `disclosure_batch_owned`.
+    dart = merge(local.db_env, local.disclosure_batch_owned ? {
       DATA_PIPELINE_DART_DISCLOSURE__WATERMARK_WINDOW = "true"
     } : {})
     # TAG_NEWS wrapper 기록용(ALPHA-610) — 위 krx·dart 와 같은 이유. 이 컨테이너는 기사별 LLM

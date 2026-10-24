@@ -1,0 +1,285 @@
+formatVersion: 2
+name: CashDistribution
+label: Cash distribution
+description: Latest received revision of one provider-reported cash distribution for one security. A source observation is not an investor cash receipt.
+group: Holdings & market data
+primaryKey: id
+identity:
+  columns:
+  - market_code
+  - ticker
+  - source_vendor
+  - source_event_key
+  encoding: jsonStringArray
+properties:
+  marketCode:
+    label: marketCode
+    description: Listing-market identity used to distinguish securities with the same ticker.
+    apiName: marketCode
+    displayName: marketCode
+    dataType: String
+    nullable: false
+    mappingStatus: ready
+    status: experimental
+  ticker:
+    label: ticker
+    description: Source security ticker, preserved as a string including leading zeroes and letters.
+    apiName: ticker
+    displayName: ticker
+    dataType: String
+    nullable: false
+    mappingStatus: ready
+    status: experimental
+  id:
+    label: id
+    description: "Stable identity of one source distribution, preserving the market, ticker, provider and source event key."
+    apiName: id
+    displayName: id
+    dataType: String
+    nullable: false
+    mappingStatus: ready
+    status: experimental
+  instrumentId:
+    label: instrumentId
+    description: "Existing internal security identifier resolved by the unique market and ticker pair; absent until a matching master exists."
+    apiName: instrumentId
+    displayName: instrumentId
+    dataType: String
+    nullable: true
+    mappingStatus: ready
+    status: experimental
+  etfInstrumentId:
+    label: etfInstrumentId
+    description: "Existing ETF identifier when the security is an ETF; otherwise absent."
+    apiName: etfInstrumentId
+    displayName: etfInstrumentId
+    dataType: String
+    nullable: true
+    mappingStatus: ready
+    status: experimental
+  equityInstrumentId:
+    label: equityInstrumentId
+    description: "Existing equity identifier when the security is an equity; otherwise absent."
+    apiName: equityInstrumentId
+    displayName: equityInstrumentId
+    dataType: String
+    nullable: true
+    mappingStatus: ready
+    status: experimental
+  sourceVendor:
+    label: sourceVendor
+    description: "Provider of this distribution observation."
+    apiName: sourceVendor
+    displayName: sourceVendor
+    dataType: String
+    nullable: false
+    mappingStatus: ready
+    status: experimental
+  sourceEventKey:
+    label: sourceEventKey
+    description: "Provider-scoped event identity, independent of payment amount corrections."
+    apiName: sourceEventKey
+    displayName: sourceEventKey
+    dataType: String
+    nullable: false
+    mappingStatus: ready
+    status: experimental
+  recordDate:
+    label: recordDate
+    description: "Exact record date reported by the provider; not an inferred ex-dividend date."
+    apiName: recordDate
+    displayName: recordDate
+    dataType: Date
+    nullable: false
+    mappingStatus: ready
+    status: experimental
+  exDate:
+    label: exDate
+    description: "Reported ex-dividend date; absent when not supplied or not exact."
+    apiName: exDate
+    displayName: exDate
+    dataType: Date
+    nullable: true
+    mappingStatus: ready
+    status: experimental
+  payDate:
+    label: payDate
+    description: "Reported distribution payment date; does not confirm an investor account receipt."
+    apiName: payDate
+    displayName: payDate
+    dataType: Date
+    nullable: true
+    mappingStatus: ready
+    status: experimental
+  amountPerShare:
+    label: amountPerShare
+    description: "Gross cash distribution per share in currencyCode, without reinvestment or investor tax deductions."
+    apiName: amountPerShare
+    displayName: amountPerShare
+    dataType: Decimal
+    nullable: true
+    mappingStatus: ready
+    status: experimental
+  currencyCode:
+    label: currencyCode
+    description: "ISO currency of amountPerShare; values in different currencies must not be summed."
+    apiName: currencyCode
+    displayName: currencyCode
+    dataType: String
+    nullable: false
+    mappingStatus: ready
+    status: experimental
+  confirmation:
+    label: confirmation
+    description: "published: amount and payment date known; pending: incomplete announcement; cancelled: revoked source event."
+    apiName: confirmation
+    displayName: confirmation
+    dataType: String
+    nullable: false
+    mappingStatus: ready
+    status: experimental
+  availableAt:
+    label: availableAt
+    description: "Time this revision was received and became available for analysis."
+    apiName: availableAt
+    displayName: availableAt
+    dataType: DateTime
+    nullable: false
+    mappingStatus: ready
+    status: experimental
+  rawKey:
+    label: rawKey
+    description: "Immutable raw lake object used to derive this observation."
+    apiName: rawKey
+    displayName: rawKey
+    dataType: String
+    nullable: false
+    mappingStatus: ready
+    status: experimental
+  rawSha256:
+    label: rawSha256
+    description: "SHA-256 digest of the original source response bytes."
+    apiName: rawSha256
+    displayName: rawSha256
+    dataType: String
+    nullable: false
+    mappingStatus: ready
+    status: experimental
+sourceMapping:
+  connection: aws_work
+  schema: public
+  baseTable: cash_distribution_latest
+  joins: []
+  filters: []
+  properties:
+    ticker:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: ticker
+      sqlFile: sql/views/cash_distribution.sql
+    marketCode:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: market_code
+      sqlFile: sql/views/cash_distribution.sql
+    id:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: id
+      sqlFile: sql/views/cash_distribution.sql
+    instrumentId:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: instrument_id
+      sqlFile: sql/views/cash_distribution.sql
+    etfInstrumentId:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: etf_instrument_id
+      sqlFile: sql/views/cash_distribution.sql
+    equityInstrumentId:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: equity_instrument_id
+      sqlFile: sql/views/cash_distribution.sql
+    sourceVendor:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: source_vendor
+      sqlFile: sql/views/cash_distribution.sql
+    sourceEventKey:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: source_event_key
+      sqlFile: sql/views/cash_distribution.sql
+    recordDate:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: record_date
+      sqlFile: sql/views/cash_distribution.sql
+    exDate:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: ex_date
+      sqlFile: sql/views/cash_distribution.sql
+    payDate:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: pay_date
+      sqlFile: sql/views/cash_distribution.sql
+    amountPerShare:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: amount_per_share
+      sqlFile: sql/views/cash_distribution.sql
+    currencyCode:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: currency
+      sqlFile: sql/views/cash_distribution.sql
+    confirmation:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: confirmation
+      sqlFile: sql/views/cash_distribution.sql
+    availableAt:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: available_at
+      sqlFile: sql/views/cash_distribution.sql
+    rawKey:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: raw_key
+      sqlFile: sql/views/cash_distribution.sql
+    rawSha256:
+      kind: view_column
+      schema: ontology_view
+      table: cash_distribution
+      column: raw_sha256
+      sqlFile: sql/views/cash_distribution.sql
+apiName: CashDistribution
+displayName: Cash distribution
+pluralDisplayName: Cash distributions
+titleProperty: sourceEventKey
+status: experimental
+visibility: normal
+linkTypes:
+- CashDistribution_ForSecurity_ETF
+- CashDistribution_ForSecurity_Equity

@@ -1,0 +1,7 @@
+[Unit]
+Description=ETF Orca administrator proxy; exits after 30 idle minutes, which stops the administrator
+Requires=portfolio-admin.service
+After=portfolio-admin.service
+
+[Service]
+ExecStart=/usr/lib/systemd/systemd-socket-proxyd --exit-idle-time=30min 127.0.0.1:18081

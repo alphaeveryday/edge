@@ -1,0 +1,57 @@
+/* Orca UI 1.1. Public TDS palette; accessible web semantics. */
+:root {
+  color-scheme: light;
+  --color-canvas: #f2f4f6;
+  --color-surface: #ffffff;
+  --color-surface-subtle: #f9fafb;
+  --color-text: #191f28;
+  --color-text-secondary: #4e5968;
+  --color-text-muted: #5f6b7a;
+  --color-border: #e5e8eb;
+  --color-border-strong: #7e8794;
+  --color-primary: #1b64da;
+  --color-primary-hover: #1957c2;
+  --color-primary-soft: #e8f3ff;
+  --color-on-primary: #ffffff;
+  --color-danger: #d22030;
+  --color-danger-soft: #ffeeee;
+  --color-success: #027648;
+  --color-success-soft: #f0faf6;
+  --color-warning: #925a00;
+  --color-warning-soft: #fff3e0;
+  --color-buy: #d22030;
+  --color-sell: #1b64da;
+  --color-overlay: rgb(25 31 40 / .5);
+  --color-shadow: rgb(25 31 40 / .12);
+  /* SVG viewBox units scale with the chart; exact values below use rem text. */
+  --text-chart: 12px;
+  --chart-1: #3182f6; --chart-2: #6b7684; --chart-3: #b16b00;
+  --chart-4: #029359; --chart-5: #bc1b2a; --chart-6: #8222a2;
+  --chart-coral: #fb806b; --chart-ocean: #206985; --chart-violet: #8b5cf6;
+  --chart-slate: #94a3b8; --chart-teal: #007780;
+  --font: 'Pretendard Variable', 'Pretendard', -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  --num: var(--font);
+  --text-display: 2.25rem; --text-title: 1.875rem; --text-heading: 1.375rem;
+  --text-body: 1.0625rem; --text-label: .9375rem; --text-caption: .8125rem;
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px;
+  --space-5: 20px; --space-6: 24px; --space-8: 32px; --space-10: 40px; --space-12: 48px; --space-16: 64px;
+  --radius-control: 14px; --radius-card: 24px; --radius-pill: 999px;
+  --motion-fast: 140ms; --motion-normal: 240ms; --motion-enter: 400ms;
+  --ease: cubic-bezier(.22,1,.36,1);
+  /* Compatibility names used by existing financial layouts, not a second palette. */
+  --bg: var(--color-canvas); --bg-raised: var(--color-surface); --surface: var(--color-canvas);
+  --border: var(--color-border); --border-strong: var(--color-border-strong);
+  --t1: var(--color-text); --t2: var(--color-text-secondary); --t3: var(--color-text-muted);
+  --on-point: var(--color-on-primary); --accent: var(--color-primary); --accent-300: var(--color-primary);
+  --accent-subtle: var(--color-primary-soft); --point: var(--color-primary); --point-400: var(--color-primary-hover);
+  --glass: var(--color-surface); --hair: var(--color-border); --hair-strong: var(--color-border-strong);
+  --grad: linear-gradient(var(--color-primary),var(--color-primary)); --grad-fill: var(--color-primary);
+  --radius: var(--radius-card); --line: var(--color-border); --muted: var(--color-text-secondary);
+  /* 8차 결과: 적립일 앱 알림 버튼(검정 바탕 + 빨간 배지)과 유형 카드 10가지의 진한 바탕. */
+  --color-app: #0b0d10; --color-app-badge: #ff3b30; --color-on-dark-alert: #ffd7d7; --color-star: #ffb800;
+  --type-start-1: #d6336c; --type-start-2: #601731; --type-lev-1: #b16b00; --type-lev-2: #503000;
+  --type-stock-1: #191f28; --type-stock-2: #191f28; --type-chip-1: #8b5cf6; --type-chip-2: #3f296f;
+  --type-div-1: #027648; --type-div-2: #013520; --type-bond-1: #206985; --type-bond-2: #0e2f3c;
+  --type-pension-1: #5b5bd6; --type-pension-2: #292960; --type-kr-1: #d22030; --type-kr-2: #5e0e16;
+  --type-us-1: #1b64da; --type-us-2: #0c2d62; --type-bal-1: #007780; --type-bal-2: #00363a;
+}

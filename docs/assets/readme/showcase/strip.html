@@ -1,0 +1,47 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>edge — EDGE SIGNAL 한 장</title>
+<!--
+  루트 README "실제 서비스 › EDGE SIGNAL" 에 박히는 signal-screens.png 의 원본이다.
+  세로 6블록 showcase(index.html → feature-showcase.jpg)는 제품 README 용이고,
+  이 가로 한 장은 ORCA 의 orca-screens.png(2800x1440) 와 짝을 맞춘다.
+  스크린샷 원본은 이 폴더의 07(폰: demo-mts 의 KODEX 반도체 2026-09-21 게시분,
+  `/?ticker=091160&trade_date=2026-09-21` 를 헤드리스 Chrome 700x1000·2x 로 찍어 베젤만 잘라낸 825x1743)과
+  04-review-queue-20261016(검수 관리 콘솔, 2026-10-16 캡처)이다. 다시 뽑는 법:
+
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+      --headless --disable-gpu --hide-scrollbars --force-device-scale-factor=2 \
+      --window-size=1400,720 --screenshot=/tmp/signal-strip.png \
+      "file://$PWD/docs/assets/readme/showcase/strip.html"
+    cp /tmp/signal-strip.png docs/assets/readme/signal-screens.png
+
+  --window-size 는 캔버스 그대로(1400x720)다. 블록을 바꾸면 아래끝을 눈으로 확인한다.
+-->
+<style>
+  :root { --bg:#f4f6f9; --ink:#2c3444; --muted:#8891a4; --accent:#2563eb; }
+  * { box-sizing:border-box; }
+  html, body { width:1400px; height:720px; margin:0; overflow:hidden; }
+  body { padding:40px 72px; background:var(--bg); color:var(--ink);
+    font-family:Pretendard,-apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo",Inter,sans-serif;
+    -webkit-font-smoothing:antialiased; }
+  .row { display:grid; grid-template-columns: 300px 1fr; gap:64px; align-items:start; }
+  .cap { height:56px; }
+  .cap .role { font-size:12px; font-weight:600; letter-spacing:.12em; color:var(--accent); margin:0 0 6px; }
+  .cap h2 { font-size:24px; font-weight:700; margin:0; letter-spacing:-.01em; }
+  /* 폰은 ORCA 그림처럼 하단을 잘라 보인다(본문이 화면보다 길어 자연스럽게 이어진다). */
+  .phone { width:300px; height:548px; overflow:hidden; border-radius:13.1% 13.1% 0 0 / 6.2% 6.2% 0 0; }
+  .phone img { display:block; width:300px; height:auto; }
+  /* 콘솔 캡처(2026-10-16, 1280x1289)는 세로가 길어 위쪽만 보인다. 높이 449 = 폭 844 x 678/1276, 옛 패널 비율. */
+  .console { width:100%; height:449px; border-radius:8px; overflow:hidden; box-shadow:0 2px 14px rgba(44,52,68,.12); background:#fff; margin-top:36px; }
+  .console img { display:block; width:100%; height:auto; }
+</style>
+<div class="row">
+  <div>
+    <div class="cap"><p class="role">투자자 · MTS</p><h2>가격 변동 설명</h2></div>
+    <div class="phone"><img src="07-mts-ai-20260921.png" alt="MTS 종목 상세의 AI 분석 탭 — KODEX 반도체 2026-09-21 게시분"></div>
+  </div>
+  <div>
+    <div class="cap"><p class="role">기업 검수자 · 테넌트 콘솔</p><h2>검수 관리</h2></div>
+    <div class="console"><img src="04-review-queue-20261016.jpg" alt="테넌트 콘솔 검수 관리"></div>
+  </div>
+</div>

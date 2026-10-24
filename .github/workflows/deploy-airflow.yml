@@ -14,11 +14,12 @@ on:
   push:
     branches: [dev]
     paths:
-      - "src/apps/cloud/airflow/dags/**"
-      - "src/apps/cloud/airflow/deploy/entrypoint.sh"
-      - "src/apps/cloud/airflow/deploy/wait_rollout.sh"
-      - "src/apps/cloud/airflow/Dockerfile"
-      - "src/apps/cloud/airflow/.dockerignore"
+      - "apps/engine/airflow/dags/**"
+      - "apps/engine/airflow/config/**"
+      - "apps/engine/airflow/deploy/entrypoint.sh"
+      - "apps/engine/airflow/deploy/wait_rollout.sh"
+      - "apps/engine/airflow/Dockerfile"
+      - "apps/engine/airflow/.dockerignore"
       - ".github/workflows/deploy-airflow.yml"
   workflow_dispatch:
     inputs:
@@ -106,7 +107,7 @@ jobs:
           else
             # Dockerfile 에 RUN 이 없어 arm64 빌드에 에뮬레이션이 필요 없다.
             docker buildx build --platform linux/arm64 --provenance=false --push \
-              -t "${REPO}:${TAG}" src/apps/cloud/airflow
+              -t "${REPO}:${TAG}" apps/engine/airflow
           fi
 
       - name: 정지 상태 확인
@@ -175,5 +176,5 @@ jobs:
           echo "서비스 갱신 요청: ${service_def} (deployment ${deployment})"
           aws ecs wait services-stable --cluster "${CLUSTER}" --services "${SERVICE}"
           # stable 직후엔 rollout 이 아직 IN_PROGRESS 일 수 있다 — 완료·실패·제한 시간을 가려 기다린다(ALPHA-1138)
-          src/apps/cloud/airflow/deploy/wait_rollout.sh "${CLUSTER}" "${SERVICE}" "${deployment}"
+          apps/engine/airflow/deploy/wait_rollout.sh "${CLUSTER}" "${SERVICE}" "${deployment}"
           echo "배포 완료: ${IMAGE}"

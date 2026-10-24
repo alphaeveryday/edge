@@ -231,6 +231,19 @@ variable "news_schedule_expressions" {
   }
 }
 
+variable "news_orchestrator" {
+  # 레인별 SFN→Airflow 이관(ALPHA-1409, investor_intraday_orchestrator 와 같은 장치). AIRFLOW 면 이 레인의 EventBridge
+  # 스케줄이 꺼진다(SFN 미시작). 뉴스 슬롯 대조(OPS_NEWS_SCHED_HHMM)는 원래 스케줄 상태와 무관하게 주입된다.
+  # 이미 뜬 ECS 태스크는 멈추지 않는다 — 바꾸기 전에 README 의 종료 확인 절차를 따른다.
+  description = "뉴스 레인의 실행 주체(SFN|AIRFLOW). AIRFLOW 면 SFN 스케줄 DISABLED, 슬롯 대조는 유지."
+  type        = string
+  default     = "SFN"
+  validation {
+    condition     = contains(["SFN", "AIRFLOW"], var.news_orchestrator)
+    error_message = "news_orchestrator 는 SFN 또는 AIRFLOW."
+  }
+}
+
 variable "news_schedule_state" {
   description = "뉴스 SFN 스케줄 상태. 검증 동안 DISABLED, 컷오버 시 ENABLED."
   type        = string
@@ -303,6 +316,19 @@ variable "disclosure_schedule_state" {
   description = "공시 SFN 스케줄 상태. 신설 검증 동안 DISABLED, 컷오버(시장 SFN 에서 공시 스텝 제거)와 같은 apply 로 ENABLED."
   type        = string
   default     = "DISABLED"
+}
+
+variable "disclosure_orchestrator" {
+  # 레인별 SFN→Airflow 이관(ALPHA-1407, 장중 수급 investor_intraday_orchestrator 와 같은 장치). AIRFLOW 로 바꾸면
+  # 이 레인의 EventBridge 스케줄이 꺼지고(SFN 미시작) 슬롯 대조·워터마크 창은 유지된다. 이 값은 새 실행 생성만
+  # 바꾸고 이미 뜬 ECS 태스크를 멈추지 않는다 — 바꾸기 전에 README 의 종료 확인 절차를 따른다.
+  description = "공시 레인의 실행 주체(SFN|AIRFLOW). AIRFLOW 면 SFN 스케줄 DISABLED, 슬롯 대조·워터마크는 유지."
+  type        = string
+  default     = "SFN"
+  validation {
+    condition     = contains(["SFN", "AIRFLOW"], var.disclosure_orchestrator)
+    error_message = "disclosure_orchestrator 는 SFN 또는 AIRFLOW."
+  }
 }
 
 variable "disclosure_state_machine_timeout_seconds" {
@@ -399,6 +425,18 @@ variable "premarket_schedule_state" {
   description = "장전 유니버스 SFN 스케줄 상태. 신설이라 겹침 창이 없어 기본 ENABLED."
   type        = string
   default     = "ENABLED"
+}
+
+variable "premarket_orchestrator" {
+  # 레인별 SFN→Airflow 이관(ALPHA-1408, investor_intraday_orchestrator 와 같은 장치). AIRFLOW 면 이 레인의 EventBridge
+  # 스케줄(SFN 직접 시작)이 꺼진다. 원장 밖 레인이라 슬롯 대조는 원래 없다. 이미 뜬 ECS 태스크는 멈추지 않는다.
+  description = "장전 유니버스 레인의 실행 주체(SFN|AIRFLOW). AIRFLOW 면 SFN 스케줄 DISABLED."
+  type        = string
+  default     = "SFN"
+  validation {
+    condition     = contains(["SFN", "AIRFLOW"], var.premarket_orchestrator)
+    error_message = "premarket_orchestrator 는 SFN 또는 AIRFLOW."
+  }
 }
 
 variable "premarket_state_machine_timeout_seconds" {

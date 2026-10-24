@@ -16,35 +16,35 @@ class SelectionTests(unittest.TestCase):
         return selection.select_jobs(list(paths), set(available))
 
     def test_v2_keeps_source_lineage_e2e_without_legacy_units_or_images(self):
-        result = self.select("src/apps/cloud/analysis-engine-v2/src/edge_analysis_v2/sources/database.py")
+        result = self.select("apps/engine/analysis-engine-v2/src/edge_analysis_v2/sources/database.py")
         self.assertEqual(result["legacy"], [])
         self.assertEqual(result["images"], [])
         self.assertTrue(result["e2e"])
         self.assertEqual([p["package"] for p in result["optional"]], ["analysis-engine-v2"])
 
     def test_calculation_library_also_checks_its_agent_consumer(self):
-        result = self.select("src/libs/analysis-tools/tool.py")
+        result = self.select("libs/analysis-tools/tool.py")
         self.assertEqual(len(result["optional"]), 2)
         self.assertEqual(result["legacy"], [])
 
     def test_legacy_app_change_keeps_its_tests_build_and_integration(self):
         for app in ("data-pipeline", "db-query"):
             with self.subTest(app=app):
-                result = self.select(f"src/apps/cloud/{app}/source.py")
+                result = self.select(f"apps/engine/{app}/source.py")
                 self.assertEqual(result["legacy"], [app])
                 self.assertEqual(result["images"], [app])
                 self.assertTrue(result["e2e"])
 
     def test_schema_change_keeps_real_database_e2e_not_unchanged_images(self):
-        result = self.select("src/libs/schema/migrations-cloud/V202609.sql")
+        result = self.select("libs/schema/migrations-cloud/V202609.sql")
         self.assertEqual(result["legacy"], [])
         self.assertEqual(result["images"], [])
         self.assertTrue(result["e2e"])
         self.assertEqual(len(result["optional"]), 2)
 
     def test_shared_or_unknown_python_changes_keep_all_regressions(self):
-        for path in ("src/pyproject.toml", "src/uv.lock", "src/.dockerignore",
-                     "src/libs/ontology/x.py", "src/libs/new-library/x.py",
+        for path in ("pyproject.toml", "uv.lock", ".dockerignore",
+                     "libs/ontology/x.py", "libs/new-library/x.py",
                      ".github/workflows/test-python.yml", ".github/scripts/select_python_jobs.py"):
             with self.subTest(path=path):
                 result = self.select(path)
@@ -53,8 +53,8 @@ class SelectionTests(unittest.TestCase):
                 self.assertTrue(result["e2e"])
 
     def test_mixed_changes_preserve_query_package_checks(self):
-        result = self.select("src/apps/cloud/analysis-engine-v2/agent.py",
-                             "src/apps/cloud/db-query/query.py")
+        result = self.select("apps/engine/analysis-engine-v2/agent.py",
+                             "apps/engine/db-query/query.py")
         self.assertEqual(result["legacy"], ["db-query"])
         self.assertTrue(result["e2e"])
 
@@ -63,31 +63,47 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(any(result[key] for key in ("legacy", "images", "e2e", "optional")))
 
     def test_shared_change_before_v2_registration_does_not_call_missing_package(self):
-        result = self.select("src/uv.lock", available=())
+        result = self.select("uv.lock", available=())
         self.assertEqual(result["optional"], [])
         self.assertEqual(len(result["legacy"]), 2)
 
     def test_calculation_library_can_be_introduced_before_agent(self):
-        result = self.select("src/libs/analysis-tools/tool.py", available=("edge-analysis-tools",))
+        result = self.select("libs/analysis-tools/tool.py", available=("edge-analysis-tools",))
         self.assertEqual([p["package"] for p in result["optional"]], ["edge-analysis-tools"])
+
+    def test_truth_agent_change_runs_only_its_own_offline_tests(self):
+        # 사건 계약 검사기가 바뀌면 그 패키지 테스트는 반드시 돌고, 무관한 DB E2E·이미지는 돌지 않는다.
+        result = self.select("apps/etforca/truth-agent/src/edge_truth_agent/cases.py",
+                             available=("edge-truth-agent",))
+        self.assertEqual([p["package"] for p in result["optional"]], ["edge-truth-agent"])
+        self.assertEqual(result["legacy"], [])
+        self.assertFalse(result["e2e"])
+
+    def test_truth_agent_change_also_tests_the_research_agent_that_reuses_it(self):
+        # 조사 에이전트는 truth-agent 의 도구·작업 폴더를 그대로 쓴다 — truth-agent 만 시험하면 조사 에이전트가 깨진 채 배포된다.
+        result = self.select("apps/etforca/truth-agent/src/edge_truth_agent/tools.py",
+                             available=("edge-truth-agent", "edge-truth-research"))
+        self.assertEqual([p["package"] for p in result["optional"]], ["edge-truth-agent", "edge-truth-research"])
+        own = self.select("apps/etforca/truth-research/src/edge_truth_research/ach.py",
+                          available=("edge-truth-agent", "edge-truth-research"))
+        self.assertEqual([p["package"] for p in own["optional"]], ["edge-truth-research"])
 
     def test_v2_change_without_registration_fails_instead_of_skipping(self):
         with self.assertRaisesRegex(ValueError, "analysis-engine-v2"):
-            self.select("src/apps/cloud/analysis-engine-v2/pyproject.toml", available=())
+            self.select("apps/engine/analysis-engine-v2/pyproject.toml", available=())
 
     def test_optional_package_must_be_registered_and_present(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            source = root / "src"
-            source.mkdir()
+            source = root
             (source / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers=[]\n')
             self.assertEqual(selection.available_optional(root), set())
-            package = source / "apps/cloud/analysis-engine-v2"
+            package = source / "apps/engine/analysis-engine-v2"
             package.mkdir(parents=True)
             (package / "pyproject.toml").write_text('[project]\nname="analysis-engine-v2"\n')
             with self.assertRaisesRegex(ValueError, "workspace"):
                 selection.available_optional(root)
-            (source / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers=["apps/cloud/*"]\n')
+            (source / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers=["apps/engine/*"]\n')
             self.assertEqual(selection.available_optional(root), {"analysis-engine-v2"})
 
     def test_expected_skips_pass_but_selected_skips_fail(self):
@@ -111,8 +127,8 @@ class SelectionTests(unittest.TestCase):
             selection.check_results({"changes": {"result": "failure"}})
 
     def test_airflow_changes_preserve_pipeline_contract_checks(self):
-        for path in ("src/apps/cloud/airflow/dags/investor.py",
-                     "src/apps/cloud/airflow/tests/ecs_stop_cases.json"):
+        for path in ("apps/engine/airflow/dags/investor.py",
+                     "apps/engine/airflow/tests/ecs_stop_cases.json"):
             with self.subTest(path=path):
                 result = self.select(path)
                 self.assertEqual(result["legacy"], ["data-pipeline"])
@@ -121,7 +137,7 @@ class SelectionTests(unittest.TestCase):
     def test_schema_reading_tests_remain_in_real_database_job(self):
         workflow = (Path(__file__).parents[1] / "workflows/test-python.yml").read_text(encoding="utf-8")
         e2e = workflow.split("\n  e2e:\n", 1)[1].split("\n  python-result:\n", 1)[0]
-        self.assertIn("apps/cloud/db-query/tests/e2e", e2e)
+        self.assertIn("apps/engine/db-query/tests/e2e", e2e)
         self.assertIn("tests/minute/test_schema_vocab.py", e2e)
 
     def test_git_rename_preserves_deleted_source_scope(self):
@@ -130,12 +146,12 @@ class SelectionTests(unittest.TestCase):
             def git(*args):
                 return subprocess.check_output(["git", *args], cwd=folder)
             git("init", "-q")
-            file = Path(folder) / "src/apps/cloud/db-query/source.py"
+            file = Path(folder) / "apps/engine/db-query/source.py"
             file.parent.mkdir(parents=True)
             file.write_text("original content")
             git("add", ".")
             git("-c", "user.name=CI", "-c", "user.email=ci@example.invalid", "commit", "-qm", "base")
-            git("mv", "src/apps/cloud/db-query/source.py", "moved.py")
+            git("mv", "apps/engine/db-query/source.py", "moved.py")
             paths = git("diff", "--cached", "--no-renames", "--name-only", "-z").decode().split("\0")
             result = selection.select_jobs(paths, set())
             self.assertIn("db-query", result["legacy"])

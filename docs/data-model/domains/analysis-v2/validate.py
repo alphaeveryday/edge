@@ -22,7 +22,7 @@ def validate(path):
     entities = json.loads(path.read_text(encoding="utf-8"))["collections"]
     tables = entities["tableEntities"]
     columns = entities["tableColumnEntities"]
-    ddl = "\n".join((ROOT / "src/libs/schema/migrations-cloud" / name).read_text(encoding="utf-8")
+    ddl = "\n".join((ROOT / "libs/schema/migrations-cloud" / name).read_text(encoding="utf-8")
                     for name in ("V202609281600__create_v2_analysis_storage.sql",
                                  "V202609282200__add_v2_factor_details.sql",
                                  "V202609301400__isolate_analysis_source.sql",
@@ -75,7 +75,7 @@ def validate(path):
     if actual_uniques != uniques:
         errors.append(f"Unique keys differ: {actual_uniques ^ uniques}")
 
-    dbml = (ROOT / "src/libs/schema/generated/physical-erd.dbml").read_text(encoding="utf-8")
+    dbml = (ROOT / "libs/schema/generated/physical-erd.dbml").read_text(encoding="utf-8")
     generated = {}
     for table, body in re.findall(r'^Table "([^"]+)" \{(.*?)^}', dbml, re.M | re.S):
         if table in table_names:

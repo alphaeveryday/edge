@@ -38,8 +38,8 @@ fix/*     ─┘
 - 따라서 `main`은 **오직 `dev`에서 온 PR만** 받는다. 핫픽스도 예외 없이 `fix/* → dev → main`을 거친다. `main` 직결 경로는 없다.
 
 **스키마 마이그레이션 머지 게이트 (required status check 지정 전 수동 규율)**
-- 마이그레이션(`src/libs/schema/migrations-*`)을 담은 PR은 **머지 직전** 최신 `dev`를 fetch 해 신규 버전이 해당 세트의 최고 버전보다 큰지 재확인한다. CI의 버전 단조성 guard 는 체크 실행 시점의 base 기준이라, 병렬 PR 이 순서대로 머지되면 역행 착지 창이 열린다(2026-07-29 하루 3건 실증, ALPHA-623).
-- 역행이면 **전방 리네임**(내용 그대로 더 큰 버전으로) 후 재검증한다. 규칙 상세와 복구 절차: [src/libs/schema/README.md](../src/libs/schema/README.md) "CI 운영 설정".
+- 마이그레이션(`libs/schema/migrations-*`)을 담은 PR은 **머지 직전** 최신 `dev`를 fetch 해 신규 버전이 해당 세트의 최고 버전보다 큰지 재확인한다. CI의 버전 단조성 guard 는 체크 실행 시점의 base 기준이라, 병렬 PR 이 순서대로 머지되면 역행 착지 창이 열린다(2026-07-29 하루 3건 실증, ALPHA-623).
+- 역행이면 **전방 리네임**(내용 그대로 더 큰 버전으로) 후 재검증한다. 규칙 상세와 복구 절차: [libs/schema/README.md](../libs/schema/README.md) "CI 운영 설정".
 - 릴리스는 `dev → main` 머지 후 `main`에 태그한다.
 
 ### 병렬 작업 (worktree)
@@ -78,7 +78,7 @@ Refs: ALPHA-121
 
 - **type** — `feat`(기능) · `fix`(버그) · `docs`(문서) · `refactor`(리팩터) · `test`(테스트) · `chore`(잡무) · `build`(빌드/의존성) · `ci`(CI) · `perf`(성능)
 - **scope** — 변경된 패키지명. 모노레포라 어느 모듈인지 드러냅니다 (선택, 전역 변경 시 생략).
-  - apps: `tenant-console-ui` · `tenant-console-api` · `tenant-sync-api` · `publication-api` · `sync-agent` · `intake` · `screening-worker` · `super-admin-ui` · `super-admin-api` · `app-api` · `data-pipeline` · `airflow` · `analysis-engine`(`analysis-engine-v2` 모듈) · `db-query`
+  - apps: `tenant-console-ui` · `tenant-console-api` · `tenant-sync-api` · `publication-api` · `sync-agent` · `intake` · `screening-worker` · `super-admin-ui` · `super-admin-api` · `app-api` · `data-pipeline` · `airflow` · `analysis-engine`(`analysis-engine-v2` 모듈) · `db-query` · `truth-agent` · `truth-web`
   - libs: `schema` · `jvm-common` · `ui-kit` · `py-common` · `ontology`
   - 전역: `repo` · `config` 등
 - **제목** — 한국어, 50자 이내, 마침표 없음. 명령형(예: "추가", "수정").

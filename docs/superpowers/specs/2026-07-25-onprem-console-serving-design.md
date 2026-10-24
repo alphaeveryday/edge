@@ -62,8 +62,8 @@ location / {
 
 ### 4.1 신규 파일
 
-- `src/apps/onprem/tenant-console-ui/Dockerfile` — 멀티스테이지: `node`(pnpm 워크스페이스에서 tenant-console-ui 빌드 → `dist/`) → `nginx`(dist + nginx.conf 복사). context 는 `src`(pnpm 워크스페이스 루트, 다른 온프렘 이미지와 동일).
-- `src/apps/onprem/tenant-console-ui/nginx.conf` — §3.2.
+- `apps/edgesignal/tenant-console-ui/Dockerfile` — 멀티스테이지: `node`(pnpm 워크스페이스에서 tenant-console-ui 빌드 → `dist/`) → `nginx`(dist + nginx.conf 복사). context 는 `src`(pnpm 워크스페이스 루트, 다른 온프렘 이미지와 동일).
+- `apps/edgesignal/tenant-console-ui/nginx.conf` — §3.2.
 
 ### 4.2 compose
 
@@ -77,8 +77,8 @@ location / {
 images 매트릭스에 2줄 추가:
 
 ```yaml
-- { svc: tenant-console-api, dockerfile: src/apps/onprem/tenant-console-api/Dockerfile, context: src }
-- { svc: tenant-console-ui,  dockerfile: src/apps/onprem/tenant-console-ui/Dockerfile,  context: src }
+- { svc: tenant-console-api, dockerfile: apps/edgesignal/tenant-console-api/Dockerfile, context: . }
+- { svc: tenant-console-ui,  dockerfile: apps/edgesignal/tenant-console-ui/Dockerfile,  context: . }
 ```
 
 compose job 은 이미 `demo/onprem/docker-compose.yml` 을 번들하므로 서비스 추가만으로 배포된다. **서비스 running 단언 목록에 `tenant-console-api`·`tenant-console-ui` 추가**. MTS 같은 S3/CloudFront job 은 없다(박스 서빙).

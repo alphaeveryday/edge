@@ -7,10 +7,10 @@ on:
   push:
     branches: [dev]
     paths:
-      - "src/apps/cloud/data-pipeline/**"
-      - "src/libs/ontology/**" # 이미지가 edge_ontology lib 를 동봉(ALPHA-539) — 어휘 교체도 재배포 대상
-      - "src/pyproject.toml"
-      - "src/.dockerignore"
+      - "apps/engine/data-pipeline/**"
+      - "libs/ontology/**" # 이미지가 edge_ontology lib 를 동봉(ALPHA-539) — 어휘 교체도 재배포 대상
+      - "pyproject.toml"
+      - ".dockerignore"
 
 permissions:
   id-token: write
@@ -59,10 +59,10 @@ jobs:
           image_latest="${ecr_repo}:data-pipeline-latest"
           docker build --platform linux/amd64 \
             --build-arg "GIT_SHA=${IMAGE_TAG}" \
-            -f src/apps/cloud/data-pipeline/Dockerfile \
+            -f apps/engine/data-pipeline/Dockerfile \
             -t "${image_sha}" \
             -t "${image_latest}" \
-            src
+            .
           docker push "${image_sha}"
           docker push "${image_latest}"
 

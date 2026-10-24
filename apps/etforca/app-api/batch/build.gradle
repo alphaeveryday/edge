@@ -1,0 +1,38 @@
+plugins {
+	id 'java'
+	id 'org.springframework.boot'
+	id 'io.spring.dependency-management'
+}
+
+group = 'com.edge'
+version = '0.0.1-SNAPSHOT'
+
+java {
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(21)
+	}
+}
+
+repositories {
+	mavenCentral()
+}
+
+dependencies {
+	implementation 'org.springframework.boot:spring-boot-starter-batch-jdbc'
+	implementation 'org.springframework.boot:spring-boot-starter-jackson'
+	runtimeOnly 'org.postgresql:postgresql'
+	compileOnly 'org.projectlombok:lombok'
+	annotationProcessor 'org.projectlombok:lombok'
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+	testImplementation 'org.testcontainers:testcontainers-junit-jupiter'
+	testImplementation 'org.testcontainers:testcontainers-postgresql'
+	// 앱 DB 스키마 소유자인 app-api 의 마이그레이션을 테스트 DB 에 그대로 적용
+	testImplementation 'org.springframework.boot:spring-boot-flyway'
+	testImplementation 'org.flywaydb:flyway-database-postgresql'
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+tasks.named('test') {
+	useJUnitPlatform()
+}

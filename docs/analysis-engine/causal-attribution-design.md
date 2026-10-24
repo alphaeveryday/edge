@@ -2,7 +2,7 @@
 
 > **v1 은퇴(#1140) — 역사 기록.** 이 문서가 다룬 v1 분석엔진(`src/apps/cloud/analysis-engine`)은
 > 2026-10-05 #1140(ALPHA-1173)으로 소스째 제거됐다. 본문의 코드 경로·운영 규약은 작성 시점 기준이며
-> 지금 코드와 대응하지 않는다. 현행 분석 코드는 `src/apps/cloud/analysis-engine-v2` 다.
+> 지금 코드와 대응하지 않는다. 현행 분석 코드는 `apps/engine/analysis-engine-v2` 다.
 
 2026-08-01 대화에서 수렴한 설계의 전량 기록. 이 문서가 v1 인과귀속의 설계 SSOT 였다.
 다이어그램: `causal-attribution-frame.drawio` (1p 기계 프레임 · 2p 파이프라인 · 3p 튜플 체계 as-built).

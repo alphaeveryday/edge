@@ -1,0 +1,11 @@
+[Unit]
+Description=Check verified subscriptions and published portfolio newsletters
+
+[Timer]
+OnBootSec=2min
+OnCalendar=*-*-* *:00/5:00 Asia/Seoul
+AccuracySec=1s
+Unit=portfolio-newsletter.service
+
+[Install]
+WantedBy=timers.target

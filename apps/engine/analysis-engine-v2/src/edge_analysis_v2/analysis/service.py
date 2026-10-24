@@ -1,0 +1,503 @@
+"""Execute fixture-backed analyses and assemble screens from committed rows."""
+
+import asyncio
+from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+import json
+import logging
+from pathlib import Path
+import re
+from uuid import uuid4
+import warnings
+
+from psycopg import sql
+from psycopg.rows import dict_row
+from jsonschema import Draft202012Validator
+
+from edge_analysis_v2.agent.output_schema import EDIT_SCHEMAS, FIELDS, INVESTIGATION, MOVEMENT, OUTLOOK, OUTLOOK_REVISION, WRITING, merge_outlook_revision
+from edge_analysis_v2.analysis.current_flow import current_flow
+from edge_analysis_v2.tools.execution import AuditedExecution, ToolInputError
+from edge_analysis_v2.analysis.body_editor import BodyEditor
+from edge_analysis_v2.contracts.outlook_limits import movement_violations, violations
+from edge_analysis_v2.storage.factors import read_factor_details, project_factor_metrics
+from edge_analysis_v2.tools.fixture_data import FixtureTools
+from edge_analysis_v2.agent.runner import load_prompt, run_model
+from edge_analysis_v2.storage.database import retry_transient
+from edge_analysis_v2.storage.publications import PublicationStore
+from edge_analysis_v2.storage.tool_runs import ToolStore
+from edge_analysis_v2.storage.inspection import read_storage
+from edge_analysis_v2.storage.research import DEFINITION as RESEARCH_DEFINITION, load_research, collect_research
+
+LOG = logging.getLogger(__name__)
+KST = timezone(timedelta(hours=9))
+HYPOTHESIS_SKILLS = ('hypothesis-analysis-workflow', 'etf-hypothesis-analysis')
+TASK_SKILLS = ('cause-investigation', *HYPOTHESIS_SKILLS, 'analysis-report-writing')
+MOVEMENT_SKILLS = ('cause-investigation', *HYPOTHESIS_SKILLS, 'focused-analysis-writing')
+REVISION_SKILLS = ('revision-investigation', *HYPOTHESIS_SKILLS, 'focused-analysis-writing')
+OPTIONAL_SKILLS = ()
+
+_LATEST = object()
+
+
+def _previous(connection, kind, etf_code, cutoff, data_source="synthetic"):
+    with connection.cursor(row_factory=dict_row) as cur:
+        query = sql.SQL('SELECT analysis_id FROM {} WHERE etf_code=%s AND status=\'completed\' AND analysis_at<%s AND data_source=%s').format(sql.Identifier(kind + '_analyses'))
+        args = [etf_code, cutoff, data_source]
+        if kind == 'movement':
+            query += sql.SQL(' AND trading_date=%s')
+            args.append(cutoff.astimezone(KST).date())
+        cur.execute(query + sql.SQL(' ORDER BY analysis_at DESC, published_at DESC, analysis_id DESC LIMIT 1'), args)
+        row = cur.fetchone()
+        return row['analysis_id'] if row else None
+
+
+STAGES = ('investigation', 'writing', 'fields')
+# With the instructions rebuilt as skills a movement explanation took 80 seconds longer and a third ran into the
+# old 300 seconds. ponytail: more time, not less work; bring the limit down once the note-taking is trimmed.
+MOVEMENT_SECONDS = 480
+
+
+def total_measurement(stages):
+    """Add the stages' measurements into the one record a run leaves, keeping each stage under ``stages``."""
+    def add(left, right):
+        if isinstance(left, dict) and isinstance(right, dict):
+            return {k: add(left[k], right[k]) if k in left and k in right else left.get(k, right.get(k)) for k in left | right}
+        numbers = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (left, right))
+        return left + right if numbers else left
+    total = {}
+    for measurement in stages.values():
+        total = add(total, measurement) if total else measurement
+    return total | {'stages': stages}
+
+
+def listed_references(value):
+    """Every entry of every ``tool_run_ids`` list in a response."""
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            yield from (inner if key == 'tool_run_ids' and isinstance(inner, list) else listed_references(inner))
+    elif isinstance(value, list):
+        for inner in value:
+            yield from listed_references(inner)
+
+
+def require_references(value, allowed):
+    """Refuse unchecked citations instead of substituting another topic's evidence."""
+    bad = sorted({reference for reference in listed_references(value) if reference not in allowed}, key=str)
+    if bad:
+        raise ValueError('Unverified evidence after repair: ' + ', '.join(map(str, bad)))
+    return value
+
+
+def swap_references(value, table):
+    """Replace each known entry of every ``tool_run_ids`` list; unknown entries pass through for the store to reject."""
+    if isinstance(value, dict):
+        return {k: [table.get(i, i) if isinstance(i, str) else i for i in v] if k == 'tool_run_ids' and isinstance(v, list)
+                else swap_references(v, table) for k, v in value.items()}
+    if isinstance(value, list):
+        return [swap_references(v, table) for v in value]
+    return value
+
+
+class _ToolRecords:
+    """ToolStore calls that each open their own connection, so the model wait holds no session.
+
+    Definitions already registered in one batch before the model starts are not registered again.
+    """
+
+    def __init__(self, run, registered):
+        self._run, self._registered = run, frozenset(registered)
+
+    def register_definition(self, **definition):
+        if definition['tool_id'] not in self._registered:
+            self._run(lambda connection: ToolStore(connection).register_definition(**definition))
+
+    def save_run(self, **saved):
+        return self._run(lambda connection: ToolStore(connection).save_run(**saved))
+
+
+def execute_request(*, kind: str, fixture: dict | None = None, source_tools=None, connection_factory, key: str,
+                    artifacts: Path, analysis_id: str, model='deepseek-flash',
+                    model_call=run_model, previous_analysis_id=_LATEST, system_prompt=None, owner=None, staged=False, staged_since=None) -> dict:
+    """Run one idempotent request with independently committed tool evidence.
+
+    Args:
+        kind: Movement or outlook.
+        fixture: Synthetic observations; mutually exclusive with source_tools.
+        source_tools: Real-source tools prepared at the fixed analysis time.
+        connection_factory: Creates a fresh idle autocommit result DB connection.
+        key: DeepSeek API key, excluded from persisted artifacts.
+        artifacts: Local run folder.
+        analysis_id: Server-created request identity.
+        model: Model configured for the local execution.
+        model_call: Async model runner; replaced only by offline tests.
+        system_prompt: Optional instruction snapshot pinned when a dashboard job starts.
+        previous_analysis_id: Explicit predecessor; None starts independently.
+            Omit to use the latest completed analysis before the cutoff.
+        owner: Single-analysis workflow execution ARN whose slot covers this request (cloud worker).
+            Each database step then opens its own connection and is repeated after a dropped or
+            refused one, nothing is held while the model runs, and a new publication commits only
+            while that slot exists. Without it (dashboard, local runs) two connections and the
+            analysis ID lock are held for the whole request.
+        staged: Write an outlook in three conversations (investigate with every source tool, write the body
+            from the report alone, fill the remaining fields from the body) instead of one. A pinned
+            system_prompt is one conversation's instructions, so it cannot be combined with this.
+            Only an outlook without a predecessor is staged; one that follows another edits it in one conversation.
+        staged_since: Retained for old callers. A deployment cutoff no longer discards a completed predecessor.
+
+    Returns:
+        Final screen objects reassembled from committed database rows.
+
+    Raises:
+        ValueError: Invalid, failed or concurrently executing request, or a reclaimed slot.
+        Exception: Execution or persistence failed; no partial publication succeeds.
+    """
+    if kind not in ('movement', 'outlook'):
+        raise ValueError('Unknown analysis kind')
+    if (fixture is None) == (source_tools is None):
+        raise ValueError('Provide either synthetic fixture or real source tools')
+    tools = FixtureTools(fixture) if source_tools is None else source_tools
+    cutoff = datetime.fromisoformat(tools.fixture['context']['analysis_at'])
+    if cutoff.utcoffset() is None:
+        raise ValueError('Analysis cutoff requires timezone')
+    artifacts.mkdir(parents=True, exist_ok=True)
+    settings = dict(kind=kind, tools=tools, cutoff=cutoff, key=key, artifacts=artifacts, analysis_id=analysis_id,
+                    model=model, model_call=model_call, previous_analysis_id=previous_analysis_id,
+                    system_prompt=system_prompt, owner=owner, staged=staged, staged_since=staged_since)
+    if staged and (kind != 'outlook' or system_prompt is not None):
+        raise ValueError('Only an outlook without a pinned prompt can be staged')
+    if owner is None:
+        with connection_factory() as connection, connection_factory() as audit_connection:
+            locked = connection.execute('SELECT pg_try_advisory_lock(hashtextextended(%s,0))', (kind + ':' + analysis_id,)).fetchone()[0]
+            if not locked:
+                raise ValueError('Request is already executing')
+            return _execute(run=lambda step: step(connection), tool_store=ToolStore(audit_connection), **settings)
+
+    def run(step):
+        def once():
+            with connection_factory() as connection:
+                return step(connection)
+        return retry_transient(once)
+    return _execute(run=run, tool_store=None, **settings)
+
+
+def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_call, previous_analysis_id,
+             system_prompt, owner, run, tool_store, staged=False, staged_since=None):
+    """Body of execute_request; ``run(step)`` gives each database step a connection."""
+    data_source = tools.data_source
+    context = tools.fixture['context']
+    cache_scope = f'{data_source}:{kind}:{context["etf_code"]}'
+    store = lambda connection: PublicationStore(connection, final_tool_names=tools.final_tool_names, owner=owner)
+    read = lambda connection, identity: (store(connection).get_movement if kind == 'movement' else store(connection).get_outlook)(identity)
+    definitions = [*tools.definitions, RESEARCH_DEFINITION]
+    if kind == 'outlook':
+        for schema in EDIT_SCHEMAS:
+            function = schema['function']
+            version = 'v4' if function['name'] == 'apply_outlook_body_changes' else 'v3'
+            definitions.append(dict(tool_id=function['name']+':'+version, function_name=function['name'],
+                version=version, description=function['description'], source_names=['직전 전망과 이번 편집 초안']))
+
+    def begin(connection):
+        with connection.cursor(row_factory=dict_row) as cur:
+            cur.execute(sql.SQL('SELECT previous_analysis_id FROM {} WHERE analysis_id=%s').format(sql.Identifier(kind+'_analyses')), (analysis_id,))
+            existing = cur.fetchone()
+        previous_id = existing['previous_analysis_id'] if existing else (
+            _previous(connection, kind, context['etf_code'], cutoff, data_source) if previous_analysis_id is _LATEST else previous_analysis_id)
+        parent = store(connection).begin(kind, analysis_id, context['etf_code'], cutoff, previous_id, data_source=data_source)
+        return previous_id, parent, read(connection, analysis_id) if parent['status'] == 'completed' else None
+    previous_id, parent, completed = run(begin)
+    if parent['status'] == 'completed':
+        return completed
+    if parent['status'] == 'failed':
+        raise ValueError('Request already failed; start a new request')
+    try:
+        def load(connection):
+            previous = read(connection, previous_id) if previous_id else None
+            previous_at = None
+            if previous_id and kind == 'outlook':
+                with connection.cursor() as cur:
+                    cur.execute('SELECT analysis_at FROM outlook_analyses WHERE analysis_id=%s', (previous_id,))
+                    previous_at = cur.fetchone()[0]
+            items = None
+            selected = []
+            if kind == 'movement':
+                with connection.cursor(row_factory=dict_row) as cur:
+                    if previous_id:
+                        cur.execute('SELECT selected_item_ids FROM movement_analyses WHERE analysis_id=%s', (previous_id,))
+                        selected = cur.fetchone()['selected_item_ids']
+                    cur.execute('''WITH RECURSIVE history AS (
+                        SELECT analysis_id,previous_analysis_id FROM movement_analyses WHERE analysis_id=%s
+                        UNION ALL SELECT a.analysis_id,a.previous_analysis_id FROM movement_analyses a
+                        JOIN history h ON a.analysis_id=h.previous_analysis_id
+                        ) SELECT i.item_id, i.type, i.title_keyword, i.sentence,
+                        i.sentiment,i.tool_run_ids,i.source_as_of FROM movement_items i
+                        JOIN history h ON h.analysis_id=i.analysis_id
+                        JOIN movement_analyses a ON a.analysis_id=i.analysis_id WHERE a.etf_code=%s
+                        AND a.trading_date=%s AND a.status='completed' AND a.analysis_at<%s AND a.data_source=%s
+                        ORDER BY i.created_at,i.item_id''', (previous_id,context['etf_code'],cutoff.astimezone(KST).date(),cutoff,data_source))
+                    items = json.loads(json.dumps(cur.fetchall(), default=str))
+            if tool_store is None:
+                for definition in definitions:  # one connection instead of one per definition
+                    ToolStore(connection).register_definition(**definition)
+            return previous, items, selected, previous_at, load_research(connection, kind, previous_id)
+        previous, previous_items, previous_selected, previous_at, research = run(load)
+        editor = BodyEditor(previous['detail'] if previous and kind == 'outlook' else None, cutoff)
+        initial = tools.initial_input() | {'previous_analysis': previous}
+        previous_fields = None
+        revision_schema = OUTLOOK_REVISION
+        if previous and kind == 'outlook':
+            previous_fields = {key: previous[key] for key in OUTLOOK['properties'] if key != 'issue_detail'}
+            try:
+                issue = run(lambda connection: read_factor_details(connection, previous_id))['이슈']
+            except ValueError as error:
+                if str(error) != 'Incomplete factor details':
+                    raise
+                # Older completed publications could omit factor details; the missing issue must be supplied.
+                revision_schema = OUTLOOK_REVISION | {'required': ['issue_detail'], 'properties': {
+                    **OUTLOOK_REVISION['properties'], 'issue_detail': OUTLOOK['properties']['issue_detail']}}
+                initial['source_notes'] = [*initial.get('source_notes', []),
+                    '직전 이슈 상세가 저장되어 있지 않습니다. 이번 응답에는 issue_detail 완성 객체를 포함하세요.']
+            else:
+                initial['previous_issue_detail'] = {key: issue[key] for key in ('headline', 'items')}
+                previous_fields['issue_detail'] = initial['previous_issue_detail']
+        if previous_id:
+            initial['research_state'] = research.snapshot()
+        if kind == 'outlook' and hasattr(tools, 'news_snapshot') and (snapshot := tools.news_snapshot()) is not None:
+            from edge_analysis_v2.storage.news_snapshots import read_snapshot, save_snapshot
+            baseline = run(lambda connection: read_snapshot(connection, kind, previous_id)) if previous_id else None
+            tools.set_previous_news_snapshot(baseline)
+            run(lambda connection: save_snapshot(connection, kind, analysis_id, context, snapshot))
+            def selected_news(connection):
+                with connection.cursor() as cur:
+                    cur.execute("""SELECT r.output->'result'->'news'
+                        FROM tool_runs r JOIN tool_definitions d USING(tool_id)
+                        WHERE r.tool_run_id=ANY(%s) AND r.status='completed'
+                          AND d.function_name IN ('get_issue_evidence','get_news_evidence') AND r.arguments->>'include_body'='false'
+                        ORDER BY r.started_at,r.tool_run_id""", (sorted(set(listed_references(
+                            [previous, initial.get('previous_issue_detail')]))),))
+                    return {article['news_id']: article for (articles,) in cur.fetchall() for article in articles}
+            prior_news = run(selected_news) if previous else {}
+            old_documents = {row['news_id']: row for row in baseline['documents']} if baseline else {}
+            current_news = {row['news_id'] for row in snapshot['documents']}
+            initial['news_research'] = {
+                'mode': 'revision' if previous else 'initial',
+                'baseline_status': ('ready' if baseline else 'missing') if previous else 'not_applicable',
+                'previous_analysis_id': previous_id,
+                'previous_analysis_at': previous_at.astimezone(cutoff.tzinfo).isoformat() if previous_at else None,
+                'snapshot_id': snapshot['snapshot_id'],
+                'recommended_tool': 'get_event_changes' if previous else 'list_events',
+                'previous_topics': [{'id': item['id'], 'title_keyword': item['title_keyword']}
+                                    for item in previous['detail']['items']] if previous else [],
+                'previous_news': [{'news_id': identity, 'title': article['title'],
+                                   'published_at': old_documents.get(identity, {}).get('published_at'),
+                                   'in_current_scope': identity in current_news}
+                                  for identity, article in sorted(prior_news.items())],
+                'change_condition': previous['conclusion'].get('change_condition') if previous else None,
+            }
+        inherited_over = violations({'detail': previous['detail']}) if previous and kind == 'outlook' else []
+        if inherited_over:
+            # Otherwise the run investigates fully and then fails at publication on text it never touched.
+            initial['source_notes'] = [*initial.get('source_notes', []),
+                f'이전 본문이 현재 화면 상한을 {len(inherited_over)}곳에서 넘습니다. 그대로는 발행되지 않습니다. '
+                '상한을 넘은 부분만 apply_outlook_body_changes 한 호출로 고치고 다른 논점과 ID는 유지하세요.']
+        if kind == 'movement':
+            initial['previous_items'] = previous_items
+            initial['previous_selected_item_ids'] = previous_selected
+        schemas = deepcopy(tools.schemas)
+        for schema in schemas:
+            function = schema['function']
+            if function['name'] in ('calculate_investor_flow','calculate_weighted_flow'):
+                function['parameters']['properties']['operation']['enum'] = ['frequency','streak']
+                function['parameters']['properties']['direction']['enum'] = ['net_buy','net_sell']
+                function['description'] = '[최종 근거 가능] ETF 자체 수급은 사용하지 않으며 개별 대상은 최신 구성종목만 허용합니다. weighted는 분석 시각에 확보된 최신 구성 비중을 전 기간에 고정합니다. 확정 순매수 이력의 빈도 또는 최신일부터의 연속을 계산합니다. frequency는 N일 중 해당 방향 일수, streak는 마지막 날까지 이어진 일수입니다. exact=false는 최소 일수입니다. 금액 합계는 sum_investor_net_flow 또는 sum_weighted_net_flow를 사용하세요.'
+        source_schemas = list(schemas)
+        if kind == 'outlook':
+            schemas += EDIT_SCHEMAS
+        def calculate(name, arguments):
+            if name == 'record_research_state':
+                return {'tool_run_id': uuid4().hex, 'result': research_snapshot}
+            if name == 'write_outlook_body':
+                result = editor.write(**arguments)
+            elif name == 'apply_outlook_body_changes':
+                result = editor.apply(**arguments)
+            else:
+                return tools.call(name, arguments)
+            run(lambda connection: store(connection).validate_outlook_body_evidence(analysis_id, result))
+            return {'tool_run_id':uuid4().hex,'result':result}
+        executor = AuditedExecution(calculate, tool_store or _ToolRecords(run, [d['tool_id'] for d in definitions]),
+            definitions=definitions, analysis_kind=kind, analysis_id=analysis_id, context=context)
+        def call(name, arguments):
+            nonlocal editor
+            previous_editor = deepcopy(editor) if name in ('write_outlook_body', 'apply_outlook_body_changes') else None
+            try:
+                output = executor.call(name, arguments)
+            except Exception:
+                # An edit becomes usable only after its audit result is committed.
+                if previous_editor is not None:
+                    editor = previous_editor
+                raise
+            return output
+        # The model cites a call as f1, f2, ...; the 32-character execution ID never enters its text.
+        references = {}
+        def cited_call(name, arguments):
+            output = call(name, swap_references(arguments, references))
+            reference = f'f{len(references) + 1}'
+            references[reference] = output['tool_run_id']
+            return swap_references(output, {v: k for k, v in references.items()}) | {'tool_run_id': reference}
+        shorten = lambda value: swap_references(value, {v: k for k, v in references.items()})
+        if kind == 'outlook':
+            factor_output = call('get_instrument_factors', {'instrument_id': context['etf_code']})
+            references['f1'] = factor_output['tool_run_id']
+        if any(s['function']['name'] == 'sum_weighted_net_flow' for s in source_schemas):
+            initial['current_flow'] = current_flow(cited_call)
+        if staged and not previous:
+            prompts = Path(__file__).parents[1]/'prompts'
+            def step(name, **settings):
+                # Each stage keeps its own folder; the run folder gets the events of all stages as they happen and
+                # their measurements added up, which is what an observer of a single-stage run already reads.
+                try:
+                    return asyncio.run(model_call(prompt=load_prompt(prompts/f'outlook_{name}.yaml'), call=cited_call,
+                                                  artifacts=artifacts/name, key=key, model=model, effort='high', cache_scope=cache_scope,
+                                                  events_log=artifacts/'events.jsonl', **settings))
+                finally:
+                    measured = {stage: json.loads(path.read_text(encoding='utf-8')) for stage in STAGES
+                                if (path := artifacts/stage/'measurement.json').is_file()}
+                    if measured:
+                        (artifacts/'measurement.json').write_text(json.dumps(total_measurement(measured), ensure_ascii=False, indent=2), encoding='utf-8')
+            def refused(report):
+                """The numbers a report cites that cannot be evidence, each with the reason."""
+                problems = {}
+                for reference in sorted(set(re.findall(r'\[(f\d+)\]', report)), key=lambda r: int(r[1:])):
+                    if reference not in references:
+                        problems[reference] = '이번 조사에 없는 번호입니다.'
+                        continue
+                    try:
+                        run(lambda connection: store(connection).validate_outlook_body_evidence(analysis_id,
+                            {'items': [{'tool_run_ids': [references[reference]]}], 'updates': {'items': []}}))
+                    except ToolInputError as error:
+                        problems[reference] = str(error).replace(references[reference], reference)
+                return problems
+            def uncitable(final):
+                # The writer can only copy these numbers, so one that the store would refuse is settled here.
+                if not re.search(r'\[f\d+\]', final['report']):
+                    return '사실 옆에 그 사실을 준 도구 호출의 번호를 [f3]처럼 적어 주세요. 번호가 없는 문장은 글에서 사실로 쓰이지 않습니다.'
+                problems = refused(final['report'])
+                return ('이 번호들은 글의 근거로 쓸 수 없습니다. 근거로 쓸 수 있는 호출로 다시 확인해 번호를 바꾸거나, '
+                        '그 문장에서 번호를 떼고 추측으로 옮기세요. report 전체를 다시 내세요.\n'
+                        + '\n'.join(f'[{r}]: {why}' for r, why in problems.items())) if problems else None
+            # With a web budget the investigator searches through the attached search MCP and reads through ours;
+            # our own search_web stays offered for when that outside server is down or refuses.
+            web = any(s['function']['name'] == 'read_web_document' for s in source_schemas)
+            report = step('investigation', initial=initial, schemas=source_schemas, output_schema=INVESTIGATION, web_search=web,
+                          skills=('cause-investigation', *HYPOTHESIS_SKILLS), optional_skills=OPTIONAL_SKILLS, timeout_seconds=600,
+                          compare_explanations=True, final_check=uncitable)['report']
+            # Repair exhaustion cannot silently turn an unsupported fact into an uncited assertion.
+            if problem := uncitable({'report': report}):
+                raise ValueError('Investigation evidence failed after repair: ' + problem)
+            # Judgments and the explanation table stay here for review; only cited facts reach the server.
+            (artifacts/'investigation.md').write_text(report, encoding='utf-8')
+            encode = lambda value: json.dumps(shorten(value), ensure_ascii=False, default=str)
+            # The writer's tools already start from yesterday's body; it has to see that body to edit it.
+            written = step('writing', initial={'investigation': report} | ({'previous_body': encode(editor.result())} if previous else {}),
+                           schemas=EDIT_SCHEMAS, output_schema=WRITING,
+                           skills=('analysis-report-writing',), timeout_seconds=480)
+            # The report's numbers were checked above and the factor values are f1. The fields stage can type any
+            # number that exists: one that points at a call the store refuses lost a finished outlook at publication.
+            checked = set(re.findall(r'\[(f\d+)\]', report)) | {'f1'}
+            def unchecked(final):
+                bad = sorted({r for r in listed_references(final) if r not in checked}, key=str)
+                return ('이 번호는 조사 보고에 근거로 적히지 않았어요: ' + ', '.join(map(str, bad)) + '. 조사 보고에 [f3]처럼 적힌 번호와 '
+                        'factor_values의 f1만 쓸 수 있어요. 전체를 다시 내세요.') if bad else None
+            fields = step('fields', initial={'investigation': report, 'body': encode(editor.result()),
+                                             'summary': encode(written), 'factor_values': encode(factor_output | {'tool_run_id': 'f1'})},
+                          schemas=[], output_schema=FIELDS, timeout_seconds=300, final_check=unchecked, structured_only=True)
+            fields = require_references(fields, checked)
+            response = swap_references(written | fields, references)
+        else:
+            def unciteable(final):
+                # A cited call the store refuses was found only at publication, where it lost the whole analysis:
+                # 5 of 45 movement analyses on the first morning. Named here, it costs the agent one correction.
+                problems = []
+                try:
+                    candidate = merge_outlook_revision(previous_fields, final) if previous_fields is not None else final
+                except ValueError as error:
+                    return str(error) + '\n이번 수정에서 의도한 변경 속성을 모두 다시 내세요. 직전 시도에서 유효했던 변경도 포함하세요.'
+                for reference in sorted(set(listed_references(candidate)), key=str):
+                    actual = references.get(reference, reference)
+                    try:
+                        run(lambda connection: store(connection).validate_evidence(kind, analysis_id, [actual]))
+                    except ToolInputError as error:
+                        problems.append(f'{reference}: ' + str(error).replace(str(actual), str(reference)))
+                message = ('이 번호들은 최종 근거로 쓸 수 없습니다. 근거로 쓸 수 있는 호출로 다시 확인해 번호를 바꾸거나 그 항목을 빼세요.\n'
+                           + '\n'.join(problems) + '\n') if problems else ''
+                if previous_fields is not None:
+                    for error in Draft202012Validator(OUTLOOK).iter_errors(candidate):
+                        message += f'직전 값과 병합한 응답을 고쳐 주세요: {error.json_path}: {error.validator}={error.validator_value}\n'
+                long = movement_violations(final, previous_items) if kind == 'movement' else []
+                if long:
+                    message += '글자 수 상한을 넘은 곳이 있습니다. 내용을 버리지 말고 가장 중요한 것만 남겨 줄이세요.\n' + '\n'.join(long) + '\n'
+                retry = ('이번 수정에서 의도한 변경 속성을 모두 다시 내세요. 직전 시도에서 유효했던 변경도 포함하세요. '
+                         '생략한 속성은 직전 발행본 값을 유지합니다.'
+                         if previous_fields is not None else '전체 응답을 다시 내세요.')
+                return message + retry if message else None
+            prompt_name = 'movement_revision' if kind == 'movement' and previous else kind
+            prompt = system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(prompt_name+'.yaml'))
+            if previous_fields is not None:
+                prompt = prompt.replace('전망·요약·5요인·결론·이슈 상세는 각각 완성 객체로 보낸다.', '') + (
+                    '\n이번 실행은 전망 수정이다. 위의 완성 응답 지시보다 다음 제출 규칙을 우선한다. '
+                    '전망·요약·5요인·결론·이슈 상세는 바뀐 속성만 보낸다. 생략한 속성은 직전 값을 유지한다. '
+                    '객체 안에서도 바뀐 속성만 보내고, 배열을 바꾸면 유지할 항목까지 포함한 전체 배열을 보낸다. '
+                    '변경이 없으면 {}를 보낸다. 이전 이슈 상세가 있으면 previous_issue_detail에 있다. '
+                    '직전 이슈 상세가 없는 경우에는 응답 스키마가 요구하는 issue_detail 완성 객체를 보낸다. '
+                    '요약·결론·요인·이슈 상세의 기존 문구 정정은 최종 JSON의 text_replacements를 우선 사용한다. '
+                    'field와 배열 항목의 item_number(1부터), 바뀌는 부분의 old_text/new_text를 지정한다. '
+                    '모든 치환은 직전 발행본 기준이며 대상 밖 문구는 유지한다. 같은 필드나 상위 배열을 일반 수정과 함께 보내지 않는다. '
+                    '이슈 항목·결론 키워드에는 유지할 유효한 기존 근거와 새 근거를 모두 tool_run_ids로 함께 보낸다.')
+            response = swap_references(asyncio.run(model_call(initial=initial,prompt=prompt,
+                schemas=schemas,call=cited_call,output_schema=MOVEMENT if kind=='movement' else revision_schema if previous_fields is not None else OUTLOOK,
+                artifacts=artifacts,key=key,model=model,skills=REVISION_SKILLS if previous else MOVEMENT_SKILLS if kind == 'movement' else TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,timeout_seconds=600 if kind=='outlook' else MOVEMENT_SECONDS,
+                compare_explanations=kind=='outlook' and not previous, final_check=unciteable,
+                effort='low' if kind == 'movement' else 'high', cache_scope=cache_scope)), references)
+            if previous_fields is not None:
+                Draft202012Validator(revision_schema).validate(response)
+                response = merge_outlook_revision(previous_fields, response)
+                Draft202012Validator(OUTLOOK).validate(response)
+        if kind == 'outlook':
+            issue = response['issue_detail']
+            metrics = project_factor_metrics(factor_output, context['etf_code'])
+            features = {k:v for k,v in response.items() if k!='issue_detail'}
+            body = editor.result()
+        research_snapshot = collect_research(research, run(lambda connection: read_storage(connection, kind, analysis_id)), artifacts, references)
+        published_references = set(listed_references(response))
+        if kind == 'outlook':
+            # Deleted-topic audit rows keep old citations without making that research active again.
+            published_references.update(listed_references(body['items']))
+        elif previous:
+            inherited = [item for item in previous_items if item['item_id'] in response['selected_item_ids']]
+            published_references.update(listed_references(inherited if response['selected_item_ids'] else previous))
+        active_references = {research_snapshot['aliases'].get(ref, ref) for ref in published_references}
+        if active_references & research_snapshot['removed'].keys():
+            raise ValueError('Retired research is still cited by the final publication')
+        call('record_research_state', {})
+        def publish(connection):
+            # A repeat after a lost commit reply reads the stored publication instead of writing again.
+            if kind == 'movement':
+                return store(connection).save_movement(analysis_id,response)
+            return store(connection).save_outlook(analysis_id,features,body,factor_details={
+                'metrics':metrics,'issue':{'headline':issue['headline'],'items':issue['items']}})
+        result = run(publish)
+        try:
+            if kind == 'outlook':
+                factor_details = run(lambda connection: read_factor_details(connection,analysis_id))
+                (artifacts/'factor_details.json').write_text(json.dumps(factor_details,ensure_ascii=False,indent=2),encoding='utf-8')
+            (artifacts/'screen.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
+        except Exception:
+            warnings.warn('Publication committed; local screen artifacts are unavailable. Read the saved screen from the database.', RuntimeWarning)
+        return result
+    except Exception as exc:
+        detail = str(exc)[:1500].replace(key, '[redacted]') if isinstance(exc, ValueError) else 'Execution failed; inspect model and tool records.'
+        try:
+            run(lambda connection: store(connection).fail(kind,analysis_id,type(exc).__name__ + ': ' + detail))
+        except Exception as recording:
+            # The database that broke the run may also refuse the failure record; report the original cause.
+            LOG.warning('Failure record not saved analysis_id=%s type=%s', analysis_id, type(recording).__name__)
+        raise

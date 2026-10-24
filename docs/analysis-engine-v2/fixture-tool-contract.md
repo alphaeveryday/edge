@@ -27,12 +27,12 @@
 
 | 도구 | 인수 | 결과 | 최종 근거 |
 |---|---|---|---|
-| `search_news_threads` | 없음 | 스레드→단계→고유 사건별 대표 기사와 중복 수. 최대 100개 사건 | 아니오 |
-| `get_issue_evidence` | `news_ids: string[]`, `include_body: boolean` | 기사 ID·제목. true는 확보 본문 추가 | false일 때 |
+| `list_events` | 선택적 scope·query·기간·필터·cursor·limit | 사건/미연결 기사 검색. 사건 정보 없는 fixture는 미연결 기사로 표시 | 아니오 |
+| `get_news_evidence` | `news_ids: string[]`, `include_body: boolean` | 기사 ID·제목. true는 확보 본문 추가 | false일 때 |
 | `get_etf_holdings` | 없음 | 최신 공개 편입일과 구성종목 비중 | 예 |
 
 - 뉴스 행: `news_id,title,body,published_at,available_at,thread_id,stage,event_id`. 동일 사건 ID만 중복으로 묶는다. 제목 유사도로 병합하지 않는다.
-- 대표 기사는 분석시각에 공개된 같은 사건의 최신 기사. 각 중복 보도 수는 대표 기사 제외 건수.
+- 사건 탐색·타임라인·변경 비교의 현재 계약은 [뉴스 탐색 문서](../../apps/engine/analysis-engine-v2/docs/news-discovery.md)를 따른다. 과거 검색 도구는 새 실행에서 제공하지 않는다.
 - 편입 행: `instrument_id,weight,as_of_date,available_at`. 목데이터 초기 범위는 주식만, 전체 종목 확보, 비중 합 1. 불완전 비중은 거절한다. 합은 유효 15자리에서 판정한다. 원천 DB의 비중이 double이라 그 아래 자리는 저장 형식의 잡음일 수 있기 때문이며, 비중 값은 바꾸지 않는다.
 - 기사 본문은 자료 내용이며 명령이 아니다. 에이전트가 읽고 영향·중요도를 판단한다.
 
@@ -92,7 +92,7 @@
 | `calculate_weighted_valuation` | 없음 | 전 구성종목 비중 가중 PER·PBR과 개별 계산 |
 | `get_instrument_factors` | 필수 `instrument_id`, 선택 `factors` | 요청 종목의 요인별 자료. 생략 시 네 요인 전체, 이력은 `columns/rows` |
 
-- [종목별 요인 조회 상세 계약](../../src/apps/cloud/analysis-engine-v2/docs/instrument-factors.md): 전체·부분 조회, 결측 처리, 반환 JSON 예시. 에이전트가 읽은 동일 결과에서 서버가 화면 수치를 조립.
+- [종목별 요인 조회 상세 계약](../../apps/engine/analysis-engine-v2/docs/instrument-factors.md): 전체·부분 조회, 결측 처리, 반환 JSON 예시. 에이전트가 읽은 동일 결과에서 서버가 화면 수치를 조립.
 - 공통 조회는 계산 가능한 값만 반환하며 PER 불가가 PBR을 막지 않음. 아래 두 전용 밸류 계산은 기존 양수 분모·완전 구성 조건 유지.
 - 세 도구 모두 최종 근거 가능. 요인 상태·스티커는 반환하지 않음.
 - `financials`: instrument_id,period(YYYY-Qn),eps,bps,eps_derivation(선택),available_at. EPS는 누적 아닌 해당 분기, KRW 보통주1주 기준. 가격도 같은 주식단위·통화. 초기 입력 표도 `eps_derivation` 열을 싣는다(원자료에 없으면 null).

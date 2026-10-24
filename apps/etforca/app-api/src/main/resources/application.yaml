@@ -1,0 +1,94 @@
+spring:
+  application:
+    name: app
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:55440/app}
+    username: ${SPRING_DATASOURCE_USERNAME:app}
+    password: ${SPRING_DATASOURCE_PASSWORD:app}
+  jackson:
+    default-property-inclusion: non_null   # PageResponse nextCursor 외 선택 필드의 키 생략 계약
+    datatype:
+      enum:
+        fail-on-numbers-for-enums: true   # {"choice":0} 의 BUY 접수 방지
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    locations: classpath:db/etf-migration
+    table: flyway_etf_schema_history
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6390}
+      timeout: ${VOTE_REDIS_COMMAND_TIMEOUT:500ms}
+      connect-timeout: ${VOTE_REDIS_COMMAND_TIMEOUT:500ms}
+      ssl:
+        enabled: ${SPRING_DATA_REDIS_SSL_ENABLED:false}   # 전송 암호화가 필수인 ElastiCache 대응
+  # host 는 SPRING_MAIL_HOST 로만 설정
+  # host 가 없을 때의 발송기 미생성과 로그 기록
+  mail:
+    port: 587
+    properties:
+      mail.smtp.auth: true
+      mail.smtp.starttls.enable: true
+app:
+  mail:
+    operator: ${APP_MAIL_OPERATOR:operator@localhost}   # 신고 알림 수신 주소
+  jwt:
+    secret: ${APP_JWT_SECRET}   # 기본값 없는 필수 값인 HS256 32바이트 이상 비밀키
+    access-ttl: ${APP_JWT_ACCESS_TTL:PT1H}
+  # 이 주소 한정으로 메일 없이 가입·재설정 코드 123456 을 고정하는 심사용 계정 이메일
+  # 빈 값의 기능 꺼짐
+  review:
+    email: ${APP_REVIEW_EMAIL:}
+  # 앱 client id 인 소셜 idToken audience
+  # 비어 있으면 그 provider 로그인 전부 거절
+  social:
+    apple-client-id: ${APP_APPLE_CLIENT_ID:}
+    google-client-id: ${APP_GOOGLE_CLIENT_ID:}
+    kakao-client-id: ${APP_KAKAO_CLIENT_ID:}
+    # 애플 탈퇴 철회용 client secret 서명, 키 ID·비공개 키(.p8 PEM)는 시크릿 주입
+    apple-team-id: ${APP_APPLE_TEAM_ID:}
+    apple-key-id: ${APP_APPLE_KEY_ID:}
+    apple-private-key: ${APP_APPLE_PRIVATE_KEY:}
+vote:
+  redis:
+    disconnected-behavior: ${VOTE_REDIS_DISCONNECTED_BEHAVIOR:REJECT_COMMANDS}
+    timeout-options: ${VOTE_REDIS_TIMEOUT_OPTIONS:true}
+    read-from: ${VOTE_REDIS_READ_FROM:MASTER}
+  admin-token: ${VOTE_ADMIN_TOKEN:}
+  circuit:
+    scope: ${VOTE_CIRCUIT_SCOPE:shard}
+  reconcile:
+    interval: ${VOTE_RECONCILE_INTERVAL:PT5M}
+resilience4j:
+  circuitbreaker:
+    instances:
+      redis:
+        sliding-window-size: 20
+        minimum-number-of-calls: 10
+        wait-duration-in-open-state: 3s
+        failure-rate-threshold: ${VOTE_CIRCUIT_FAILURE_RATE:50}
+server:
+  tomcat:
+    mbeanregistry:
+      enabled: true
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics
+  health:
+    mail:
+      enabled: false   # 헬스 조회마다 SMTP 접속 방지
+  endpoint:
+    health:
+      # Kubernetes 밖에서 명시적 활성화가 필요한 ALB 용 readiness 노출
+      probes:
+        enabled: true
+      group:
+        # RDS 비밀번호 로테이션 뒤 태스크 교체를 위한 DB 포함
+        # Redis 만 내려가도 기본 헬스가 503 이 되어 전 태스크가 교체되는 문제로 인한 Redis 제외
+        readiness:
+          include: readinessState,db

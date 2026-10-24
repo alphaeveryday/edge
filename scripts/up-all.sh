@@ -101,7 +101,7 @@ done
 echo "  ✓ 전 서비스 컨테이너 생존"
 
 echo "▶ UI 의존성 확인 — pnpm install"
-pnpm -C "$ROOT/src" install
+pnpm -C "$ROOT" install
 
 echo "▶ 콘솔 UI 2종 기동 — vite dev (Ctrl-C 로 함께 내려간다)"
 # --strictPort: 프리플라이트와 기동 사이에 포트를 뺏겨도 다른 포트로 옮겨 앉지
@@ -133,13 +133,13 @@ trap 'trap - INT TERM EXIT; cleanup; exit 143' TERM
 trap cleanup EXIT
 # 주의: `dev -- --strictPort` 로 쓰면 pnpm 이 `--` 를 vite 에 그대로 전달해
 # strictPort 가 무시된다(실증) — 구분자 없이 붙여야 vite 옵션으로 파싱된다.
-pnpm -C "$ROOT/src" --filter tenant-console-ui dev --strictPort &
+pnpm -C "$ROOT" --filter tenant-console-ui dev --strictPort &
 UI_PIDS=($!)
 # 프록시 타깃을 IPv4 루프백으로 명시 — compose 가 super-admin-api 를
 # 127.0.0.1 로만 게시하므로, 기본값 localhost 는 IPv6(::1) 우선 호스트에서
 # 연결 거부가 된다(health 검사와 같은 주소로 고정).
 VITE_API_PROXY_TARGET="http://127.0.0.1:18082" \
-  pnpm -C "$ROOT/src" --filter super-admin-ui dev --strictPort &
+  pnpm -C "$ROOT" --filter super-admin-ui dev --strictPort &
 UI_PIDS+=($!)
 
 # 배너 전에 UI 리슨을 기다린다 — 안 기다리면 "기동 완료" 직후 접속이 실패할 수

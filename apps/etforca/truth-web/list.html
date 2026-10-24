@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>목록 · 투자정보 기만 검증</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<link rel="stylesheet" href="style.css">
+<script src="intro.js"></script>
+<script src="analytics.js"></script>
+<style>
+body{overflow-y:auto}
+.window{height:auto;min-height:calc(100vh - 100px)}
+.back:hover{background:rgba(255,255,255,.1)}
+
+/* 스포티파이 플레이리스트 머리: 큰 제목 + 요약 */
+.lhead{display:flex;align-items:flex-end;gap:24px;padding:20px 8px 26px}
+.lhead h1{font-size:clamp(30px,4.5vw,56px);line-height:1.1;letter-spacing:-.03em;margin:6px 0 12px}
+.lhead p{font-size:14px;color:var(--muted)}
+.lhead p b{color:var(--text)}
+
+.filters{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:0 6px 18px}
+.filters button{font:inherit;font-size:13px;font-weight:500;color:var(--text);padding:7px 14px;border-radius:999px;border:0;background:rgba(255,255,255,.08);cursor:pointer}
+.filters button:hover{background:rgba(255,255,255,.14)}
+.filters button.on{background:#fff;color:#000;font-weight:600}
+.filters i{width:1px;height:20px;background:var(--line);margin:0 6px}
+.chart{padding-top:0}
+
+@media (max-width:900px){
+  .lhead{flex-direction:column;align-items:flex-start}
+}
+</style>
+</head>
+<body>
+<div class="bg ph-img" id="bg"></div>
+
+<main class="window">
+  <header class="top">
+    <a class="back pill glass" href="./">← 홈</a>
+    <div class="score pill glass" id="score"></div>
+  </header>
+  <div class="lhead" id="head"></div>
+  <div class="filters" id="filters"></div>
+  <section class="chart"><div id="rows"></div><p class="cookie-note">방문 통계를 위해 본 페이지·클릭, 기기·브라우저 정보, 접속 IP를 PostHog(미국)로 보냅니다. 쿠키는 허용한 경우에만 쓰고 1년간 유지합니다. 허용하지 않으면 쿠키 없이 그날의 방문 수만 셉니다. <button type="button" data-consent hidden>쿠키 사용 다시 고르기</button> · <a href="privacy">개인정보 처리방침</a></p></section>
+</main>
+
+<script src="common.js"></script>
+<script>
+// list?kind=pending | resolved [&year=2025] [&result=confirmed|refuted]
+const P = new URLSearchParams(location.search);
+const kind = P.get('kind') === 'resolved' ? 'resolved' : 'pending';
+const RESULTS = [['all', '전체'], ['confirmed', '✓ 밝혀짐'], ['refuted', '해소']];
+let year = +P.get('year') || null;
+let result = RESULTS.some(([k]) => k === P.get('result')) ? P.get('result') : 'all';
+let CASES = [];
+
+function set(k, v){
+  if (k === 'year') year = v; else result = v;
+  const q = new URLSearchParams({kind});
+  if (year) q.set('year', year);
+  if (result !== 'all') q.set('result', result);
+  history.replaceState(null, '', '?' + q);
+  render();
+}
+
+// 목록 머리에는 사진을 두지 않는다 — 특정 인물 사진이 목록 전체를 대표하는 것처럼 읽힌다
+function head(cover, title, meta){
+  $('bg').innerHTML = img(cover);
+  $('head').innerHTML = `<div><h1>${title}</h1><p>${meta}</p></div>`;
+}
+
+function render(){
+  renderScore(CASES);
+
+  if (kind === 'pending') {
+    const list = pendingOf(CASES);
+    document.title = '판단 중 전체 순위 · 투자정보 기만 검증';
+    head(list[0]?.cover, '판단 중 전체 순위', `<b>${list.length}건</b> · 파급력 가치 순`);
+    $('rows').className = 'top3';
+    $('rows').innerHTML = list.length ? PENDING_HEAD + list.map(pendingRow).join('') : '<div class="empty">지금 판단 중인 사건이 없습니다.</div>';
+    return;
+  }
+
+  const all = resolvedOf(CASES);
+  const s = scoreOf(CASES);
+  const years = [...new Set(all.map(yearOf))].sort((a, b) => b - a);
+  const list = all.filter(c => (!year || yearOf(c) === year) && (result === 'all' || c.status === result));
+
+  document.title = '밝혀진 거짓 · 투자정보 기만 검증';
+  head(all[0]?.cover, '밝혀진 거짓', `밝혀짐 <b>${s.confirmed}</b> · 해소 <b>${s.refuted}</b> · ${rateText(s)} · 확인일 순`);
+  $('filters').innerHTML =
+    [null, ...years].map(y => `<button class="${y === year ? 'on' : ''}" data-year="${y ?? ''}">${y ?? '전체 연도'}</button>`).join('') +
+    '<i></i>' +
+    RESULTS.map(([k, label]) => `<button class="${k === result ? 'on' : ''}" data-result="${k}">${label}</button>`).join('');
+  $('rows').innerHTML = list.length
+    ? RESOLVED_HEAD + list.map(resolvedRow).join('')
+    : '<div class="empty">조건에 맞는 사건이 없습니다.</div>';
+}
+
+$('filters').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if ('year' in b.dataset) set('year', +b.dataset.year || null);
+  else set('result', b.dataset.result);
+});
+
+loadIndex().then(index => { CASES = index.cases; render(); })
+  .catch(() => { $('rows').innerHTML = '<div class="empty">사건 목록을 불러오지 못했습니다.</div>'; });
+</script>
+</body>
+</html>

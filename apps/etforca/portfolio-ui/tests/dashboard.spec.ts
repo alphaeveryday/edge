@@ -1,0 +1,114 @@
+import { test, expect } from '@playwright/test';
+import { cost, performance, purchases, value, type Asset } from '../src/workbook';
+
+const asset: Asset = { id: 'a', name: 'ETF', account: 'ISA', category: '주식', currency: 'USD', quantity: 80, average: 25, price: 28, cost_fx: 1300, amount: null, weight: null, target: 100, fee: 5000, price_date: null };
+test('chart motion respects reduced motion and monthly bars open the chosen month', async ({ page }) => {
+  await page.goto('/portfolio/?preview=dashboard');
+  await expect(page.locator('.allocation-donut').first()).toHaveCSS('animation-name', 'none');
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.reload();
+  await expect(page.locator('.allocation-donut').first()).toHaveCSS('animation-name', 'donut-enter');
+  await page.getByRole('button', { name: /^2026-10 예상/ }).click();
+  await expect(page.getByRole('heading', { name: /2026년 10월/ })).toBeVisible();
+  await expect(page.locator('.dividend-records')).not.toBeEmpty();
+  await page.goto('/portfolio/?preview=running');
+  await expect(page.locator('.progress-steps')).toHaveCount(0);
+  // 서버 단계(portfolio)의 두 역할만 '검토 중'으로 돈다. 동작 줄이기에서는 도는 표시를 멈추고 글자는 남긴다.
+  await expect(page.locator('.fl-agent[data-s="run"]')).toHaveCount(2);
+  await expect(page.locator('.fl-agent[data-s="run"] .ds-spinner').first()).toHaveCSS('animation-name', 'ds-spin');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(page.locator('.fl-agent[data-s="run"] .ds-spinner').first()).toHaveCSS('animation-name', 'none');
+  await expect(page.locator('.fl-agent[data-s="run"]').first()).toContainText('검토 중');
+  await page.goto('/portfolio/?preview=queued');
+  await expect(page.locator('.fl-agent[data-s="run"]')).toHaveCount(0);
+  await expect(page.getByRole('list', { name: '분석 역할과 검토 흐름' })).toBeVisible();
+});
+test('money calculations preserve FX, fees and unavailable cost; purchases never exceed the budget', () => {
+  expect(value(asset, 1360)).toBe(3046400);
+  expect(cost(asset)).toBe(2605000);
+  expect(cost({ ...asset, cost_fx: null })).toBeNull();
+  expect(value(asset, null)).toBeNull();
+  const plan = purchases([asset], 1360, 1000000);
+  expect(plan[0].quantity).toBe(26);
+  expect(plan[0].amount).toBeLessThanOrEqual(1000000);
+  expect(purchases([{ ...asset, amount: null, quantity: null }], 1360, 1000000)).toEqual([]);
+  const balance = [{ ...asset, currency: 'KRW' as const, quantity: null, price: null, amount: 800, target: 80 }, { ...asset, id: 'cash', category: '현금', quantity: null, price: null, amount: 200, target: 20 }];
+  expect(purchases(balance, null, 100)[0].amount).toBe(80);
+  expect(purchases([{ ...balance[0], amount: 200, target: 20 }, { ...balance[1], amount: 800, target: null }], null, 100)[0].amount).toBe(20);
+  const odd = purchases([{ ...balance[0], amount: 0, target: 50 }, { ...balance[0], id: 'other', amount: 0, target: 50 }], null, 1000001);
+  expect(odd.reduce((s, p) => s + p.amount, 0)).toBe(1000000);
+  expect(odd.every(p => Number.isInteger(p.amount))).toBe(true);
+  const incomplete = [{ ...balance[0], amount: 1000000, target: 40 }, { ...balance[0], id: 'b', amount: 0, target: 40 }];
+  const implicitCash = purchases(incomplete, null, 100000);
+  const explicitCash = purchases([...incomplete, { ...balance[1], amount: 0, target: 20 }], null, 100000);
+  expect(implicitCash.map(p => p.amount)).toEqual(explicitCash.map(p => p.amount));
+  expect(implicitCash[1].amount).toBe(66666);
+  const exactShare = purchases([{ ...asset, quantity: 0, price: 38.2 }], 1300, 49660);
+  expect(exactShare[0].quantity).toBe(1);
+  expect(exactShare[0].amount).toBe(49660);
+});
+test('a deposit is not investment profit and missing months do not compound across gaps', () => {
+  const rows = performance([{ month: '2026-01', value: 100, deposit: 0, withdrawal: 0, return_pct: 10 }, { month: '2026-02', value: 200, deposit: 100, withdrawal: 0, return_pct: null }, { month: '2026-04', value: 220, deposit: 0, withdrawal: 0, return_pct: 5 }]);
+  expect(rows[1].monthly).toBeNull();
+  expect(rows[2].cumulative).toBeCloseTo(5);
+});
+test('preview edits and reloads without sending customer API or analytics traffic', async ({ page }) => {
+  const calls: string[] = [];
+  page.on('request', r => { if (new URL(r.url()).pathname.startsWith('/api/portfolio') || new URL(r.url()).hostname.endsWith('posthog.com')) calls.push(r.url()); });
+  await page.goto('/portfolio/?preview=dashboard');
+  await expect(page.locator('.dashboard-stats')).toContainText('25,586,400원');
+  await expect(page.locator('.dashboard-stats')).toContainText('1,553,400원');
+  await page.getByRole('button', { name: '종목 추가', exact: true }).click();
+  await page.getByRole('dialog').press('Escape');
+  await expect(page.getByRole('button', { name: '종목 추가', exact: true })).toBeFocused();
+  await page.getByRole('button', { name: '종목 추가', exact: true }).click();
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
+  await page.getByRole('option', { name: /KODEX 200/ }).click();
+  await page.getByLabel('보유 수량', { exact: true }).fill('2');
+  await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '종목 추가', exact: true })).toBeFocused();
+  await page.reload();
+  await expect(page.locator('.holdings-table')).toContainText('KODEX 200');
+  await expect(page.locator('.dashboard-stats')).toContainText('25,686,400원');
+  await page.getByRole('button', { name: '배당 달력', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '배당 달력', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '수익 기록', exact: true }).click();
+  await expect(page.getByRole('heading', { name: '일별 수익 기록' })).toBeVisible();
+  await page.getByRole('button', { name: '백테스트', exact: true }).click();
+  await expect(page.locator('.dashboard-main')).toContainText('내 조합 백테스트');
+  expect(calls).toEqual([]);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+});
+test('preview navigation and repeated followups remain isolated from a saved customer job', async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'customer-secret'));
+  const calls: string[] = [];
+  page.on('request', r => { if (new URL(r.url()).pathname.startsWith('/api/portfolio')) calls.push(r.url()); });
+  await page.goto('/portfolio/?preview=dashboard');
+  await page.locator('.dashboard-brand').click();
+  await expect(page).toHaveURL(/preview=input/);
+  await page.goto('/portfolio/?preview=newsletter');
+  await page.getByRole('link', { name: '포트폴리오로 돌아가기' }).click();
+  await expect(page).toHaveURL(/preview=input/);
+  await page.goto('/portfolio/?preview=result');
+  await page.getByRole('textbox', { name: '직접 물어보기', exact: true }).fill('어떻게 살까요?');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await page.getByRole('textbox', { name: '이어서 질문' }).fill('한 번 더 설명해 주세요');
+  await page.getByRole('button', { name: '이어서 질문 보내기' }).click();
+  await expect(page.locator('.chat-bubble--ai')).toHaveCount(2);
+  await expect(page.locator('.chat-bubble--ai').last()).toContainText('테스트 답변');
+  expect(calls).toEqual([]);
+  expect(await page.evaluate(() => localStorage.getItem('edge-portfolio-job'))).toBe('customer-secret');
+});
+for (const screen of ['input', 'queued', 'running', 'partial', 'failed', 'empty', 'newsletter']) {
+  test(`deployed preview supports ${screen} without an agent or network writes`, async ({ page }) => {
+    const calls: string[] = [];
+    page.on('request', r => { if (new URL(r.url()).pathname.startsWith('/api/portfolio') || new URL(r.url()).hostname.endsWith('posthog.com')) calls.push(r.url()); });
+    await page.goto(`/portfolio/?preview=${screen}`);
+    await expect(page.locator('.preview-bar')).toBeVisible();
+    await expect(page.locator('#root')).not.toBeEmpty();
+    await page.waitForTimeout(200);
+    expect(calls).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  });
+}

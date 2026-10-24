@@ -3,6 +3,13 @@ output "state_machine_arn" {
   value       = aws_sfn_state_machine.this.arn
 }
 
+output "batch_state_machine_arns" {
+  description = "Scheduled batches checked before the separate dividend maintenance window"
+  value = [aws_sfn_state_machine.this.arn, aws_sfn_state_machine.news.arn,
+    aws_sfn_state_machine.disclosure.arn, aws_sfn_state_machine.premarket.arn,
+  aws_sfn_state_machine.investor_intraday.arn]
+}
+
 output "task_definition_families" {
   description = "data-pipeline ECS task definition families by vendor"
   value       = { for key, task_definition in aws_ecs_task_definition.this : key => task_definition.family }
@@ -85,6 +92,20 @@ output "scheduler_dlq_arn" {
 output "batch_pass_role_arns" {
   description = "배치 태스크 정의의 execution·task·ops task 역할 ARN — RunTask 호출자의 iam:PassRole 대상"
   value       = [aws_iam_role.execution.arn, aws_iam_role.task.arn, aws_iam_role.ops_task.arn]
+}
+
+# Airflow DAG 가 SFN 잡 목록과 같은 terraform 값을 명령 인자로 쓰도록 넘긴다(ALPHA-1408) — airflow 모듈이
+# env `EDGE_LANE_ARGS` 로 싣고 DAG 가 렌더링 때 읽는다(edge_batch.lane_arg). 키는 잡 목록의 `${var.…}`·`${local.…}`
+# 이름 그대로다(apps/engine/airflow/tests/sfn_commands.py 가 대조). 뉴스 두 값은 그 레인 DAG(ALPHA-1409)가 쓴다 —
+# 미리 싣는 이유는 Airflow 태스크 정의 env 가 바뀌는 배포를 한 번으로 묶기 위해서다.
+output "airflow_lane_args" {
+  description = "Airflow DAG 명령 인자 중 terraform 값 — SFN 잡 목록과 같은 출처"
+  value = {
+    krx_etf_deadline_sec = tostring(var.krx_etf_deadline_sec)
+    minute_universe_uri  = local.minute_universe_uri
+    tag_news_limit       = tostring(var.tag_news_limit)
+    assemble_window_days = tostring(var.assemble_window_days)
+  }
 }
 
 output "ops_task_definition_family" {

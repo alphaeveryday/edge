@@ -1,0 +1,166 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://etforca.com/truth/case.schema.json",
+  "title": "투자정보 기만 검증 사건",
+  "description": "사건 하나 = 파일 하나. 필드는 docs/design/truth-investigation-methodology.md §7 '사건 결과'를 따른다.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion", "id", "subject", "instruments", "aliases", "speaker", "audience",
+    "headline", "status", "behaviors", "contrast", "levels", "legalStatus", "ach",
+    "impact", "impactReason", "body", "rebuttal", "sources", "related",
+    "flaggedAt", "updatedAt", "origin", "locked"
+  ],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{2,63}$" },
+    "subject": { "type": "string", "minLength": 1, "maxLength": 40, "description": "화면에 쓰는 주체 이름" },
+    "instruments": {
+      "type": "array", "minItems": 1, "description": "연결 종목 (방법론 §3 상장종목 연결성)",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["code", "name"],
+        "properties": {
+          "code": { "type": "string", "pattern": "^[0-9A-Z]{6}$" },
+          "name": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "aliases": { "type": "array", "items": { "type": "string", "minLength": 2 }, "description": "뉴스 배정에 쓰는 별칭 (인명·영문명)" },
+    "topics": { "type": "array", "maxItems": 20, "items": { "type": "string", "minLength": 2 }, "description": "이 사건 보도에만 나오는 주제어 (예: 유상증자·공개매수). 제목에 이름과 함께 있어야 관련 보도로 붙는다. 없으면 절차 단서(송치·기소·제재 등)를 쓴다" },
+    "title": { "type": "string", "minLength": 6, "maxLength": 28, "description": "목록·홈에 크게 보이는 짧은 사건 제목: 주체 이름 + 무엇을 둘러싼 사건인지(예: 고려아연, 공개매수 직후 2.5조 증자 발표). 판정·감정을 담지 않는다" },
+    "speaker": { "type": "string", "minLength": 1, "description": "조사 대상 발언자" },
+    "audience": { "type": "string", "minLength": 1, "description": "정보를 받은 대상" },
+    "headline": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "description": "공개용 두 문장 (방법론 §8). [0]=확인 수준을 지킨 행위, [1]=충돌하는 기록 또는 경제적 의미",
+      "items": { "type": "string", "minLength": 10, "maxLength": 140 }
+    },
+    "status": { "enum": ["pending", "confirmed", "refuted"], "description": "pending=판단 중, confirmed=공식 판단으로 행위 확인, refuted=반증·해소" },
+    "resolution": {
+      "type": "object", "additionalProperties": false, "required": ["sourceId", "at", "note"],
+      "description": "status 가 pending 이 아니면 필수. 공식 출처(official·disclosure)만 허용 — 코드가 검사",
+      "properties": {
+        "sourceId": { "type": "string" },
+        "at": { "type": "string", "format": "date" },
+        "note": { "type": "string", "minLength": 5, "maxLength": 200 }
+      }
+    },
+    "behaviors": {
+      "type": "array", "minItems": 1, "description": "적용 유형과 유형별 판정 (방법론 §4)",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["type", "verdict", "basis", "sourceIds"],
+        "properties": {
+          "type": { "enum": ["fabricated", "concealed", "deflected", "disowned", "excused", "blamed"] },
+          "verdict": { "enum": ["confirmed", "suspected", "refuted", "insufficient"] },
+          "basis": { "type": "string", "minLength": 10, "maxLength": 400 },
+          "sourceIds": { "type": "array", "minItems": 1, "items": { "type": "string" }, "description": "판정 근거 출처 (1개 이상)" }
+        }
+      }
+    },
+    "contrast": {
+      "type": "object", "additionalProperties": false, "required": ["before", "after"],
+      "description": "화면의 두 칸 대조: 처음 한 말 ↔ 그와 충돌하는 기록·후속 대응",
+      "properties": {
+        "before": { "$ref": "#/$defs/quote" },
+        "after": { "$ref": "#/$defs/quote" }
+      }
+    },
+    "levels": {
+      "type": "object", "additionalProperties": false, "required": ["behavior", "intent", "harm", "legal"],
+      "description": "행동·고의·피해·법적 책임의 확인 수준을 따로 기록 (방법론 §4.4)",
+      "properties": {
+        "behavior": { "$ref": "#/$defs/level" },
+        "intent": { "$ref": "#/$defs/level" },
+        "harm": { "$ref": "#/$defs/level" },
+        "legal": { "$ref": "#/$defs/level" }
+      }
+    },
+    "legalStatus": { "type": "string", "maxLength": 120, "description": "행정 의결·수사 혐의·기소·법원 판단 중 마지막으로 확인한 절차" },
+    "ach": {
+      "type": "object", "additionalProperties": false, "required": ["best", "strongestCounter", "decisiveEvidence"],
+      "description": "경쟁가설 판별 (방법론 §5)",
+      "properties": {
+        "best": { "enum": ["H0", "H1", "H2", "H3", "undecided"] },
+        "strongestCounter": { "type": "string", "minLength": 5, "maxLength": 400 },
+        "decisiveEvidence": { "type": "string", "minLength": 5, "maxLength": 400, "description": "결론을 바꿀 추가 증거" }
+      }
+    },
+    "beneficiary": { "type": "string", "maxLength": 300, "description": "확인된 경제적 수혜자·위험 부담자. 미확인이면 생략" },
+    "impact": { "type": "number", "minimum": 0, "maximum": 100, "description": "파급력 가치 (단위 억원, 0~100). 조사 우선순위이며 증거가 아니다" },
+    "impactReason": { "type": "string", "minLength": 5, "maxLength": 300 },
+    "cover": { "type": ["string", "null"], "pattern": "^https://" },
+    "video": {
+      "type": ["object", "null"], "additionalProperties": false, "required": ["youtube", "title"],
+      "properties": {
+        "youtube": { "type": "string", "pattern": "^[A-Za-z0-9_-]{11}$" },
+        "title": { "type": "string", "minLength": 1 }
+      }
+    },
+    "body": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/block" } },
+    "rebuttal": { "type": "array", "items": { "$ref": "#/$defs/quote" }, "description": "당사자 반론. 반론의 존재와 내용의 입증은 다르다" },
+    "sources": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/source" } },
+    "related": {
+      "type": "array", "description": "코드가 배정한 관련 보도",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["sourceId", "addedAt"],
+        "properties": { "sourceId": { "type": "string" }, "addedAt": { "type": "string", "format": "date-time" } }
+      }
+    },
+    "flaggedAt": { "type": "string", "format": "date", "description": "이 서비스가 사건으로 기록한 날" },
+    "resolvedAt": { "type": "string", "format": "date" },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "origin": { "enum": ["seed", "agent"], "description": "seed=사람이 조사해 넣은 사건, agent=에이전트가 등록한 사건" },
+    "locked": { "type": "boolean", "description": "true 면 에이전트가 수정하지 않는다" }
+  },
+  "$defs": {
+    "level": { "enum": ["confirmed", "suspected", "refuted", "insufficient", "not_applicable"] },
+    "quote": {
+      "type": "object", "additionalProperties": false, "required": ["label", "text", "sourceId"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1, "maxLength": 40 },
+        "text": { "type": "string", "minLength": 5, "maxLength": 400 },
+        "sourceId": { "type": "string" }
+      }
+    },
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "publisher", "title", "url", "publishedAt", "accessedAt"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z]+-[A-Za-z0-9._-]{2,80}$" },
+        "kind": { "enum": ["official", "disclosure", "news", "web", "video"], "description": "official=감독·수사·법원 등 공식 판단, disclosure=법정공시" },
+        "publisher": { "type": "string", "minLength": 1 },
+        "title": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "pattern": "^https?://[^\\s\\\\]+(?![\\s\\S])", "description": "공백·백슬래시·끝 줄바꿈 금지 (Python 과 브라우저가 호스트를 다르게 읽는 주소 차단)" },
+        "publishedAt": { "type": "string", "format": "date" },
+        "accessedAt": { "type": "string", "format": "date" },
+        "snapshot": { "type": "string", "description": "인용 검증용 원문 보관 위치 (비공개 버킷 키)" }
+      }
+    },
+    "block": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false, "required": ["h"],
+          "properties": { "h": { "type": "string", "minLength": 1, "maxLength": 60 } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["p"],
+          "properties": {
+            "p": { "type": "string", "minLength": 1, "maxLength": 1200 },
+            "sourceIds": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["list"],
+          "properties": { "list": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1, "maxLength": 400 } } }
+        },
+        {
+          "type": "object", "additionalProperties": false, "required": ["img", "caption"],
+          "properties": {
+            "img": { "type": "string", "pattern": "^https://" },
+            "caption": { "type": "string", "minLength": 1, "maxLength": 200 }
+          }
+        }
+      ]
+    }
+  }
+}

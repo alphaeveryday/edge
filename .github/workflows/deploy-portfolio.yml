@@ -4,9 +4,10 @@ on:
   push:
     branches: [dev]
     paths:
-      - 'src/apps/cloud/portfolio-ui/**'
-      - 'src/apps/cloud/portfolio-worker/**'
-      - 'src/pnpm-lock.yaml'
+      - 'apps/etforca/portfolio-ui/**'
+      - 'apps/etforca/portfolio-worker/**'
+      - 'libs/ui-kit/**'
+      - 'pnpm-lock.yaml'
       - '.github/workflows/deploy-portfolio.yml'
   workflow_run:
     workflows: [terraform-apply]
@@ -26,7 +27,7 @@ jobs:
   deploy:
     if: (github.event_name != 'workflow_run' && github.ref == 'refs/heads/dev') || (github.event_name == 'workflow_run' && github.event.workflow_run.head_branch == 'dev' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,12 +39,12 @@ jobs:
         with:
           node-version: 20
           cache: pnpm
-          cache-dependency-path: src/pnpm-lock.yaml
+          cache-dependency-path: pnpm-lock.yaml
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
       - name: Build UI
-        working-directory: src
+        working-directory: .
         run: |
           pnpm install --frozen-lockfile
           pnpm --filter portfolio-ui build
@@ -54,12 +55,12 @@ jobs:
       - name: Release API and worker
         run: |
           python -m pip install boto3==1.42.30
-          python src/apps/cloud/portfolio-worker/deploy/release.py
+          python apps/etforca/portfolio-worker/deploy/release.py
       - name: Publish portfolio files only
         env:
           BUCKET: ${{ vars.APP_LANDING_BUCKET }}
           DISTRIBUTION_ID: ${{ vars.APP_LANDING_DISTRIBUTION_ID }}
-        working-directory: src/apps/cloud/portfolio-ui/dist
+        working-directory: apps/etforca/portfolio-ui/dist
         run: |
           set -euo pipefail
           : "${BUCKET:?APP_LANDING_BUCKET required}"
@@ -82,4 +83,4 @@ jobs:
         run: |
           curl --fail --location https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb -o /tmp/session-manager-plugin.deb
           sudo dpkg -i /tmp/session-manager-plugin.deb
-          python src/apps/cloud/portfolio-worker/deploy/admin_tunnel_smoke.py
+          python apps/etforca/portfolio-worker/deploy/admin_tunnel_smoke.py

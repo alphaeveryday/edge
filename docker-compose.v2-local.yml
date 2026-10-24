@@ -27,6 +27,6 @@ services:
       FLYWAY_CLEAN_DISABLED: "true"
       FLYWAY_VALIDATE_MIGRATION_NAMING: "true"
     volumes:
-      - ./src/libs/schema/migrations-cloud:/flyway/sql:ro
+      - ./libs/schema/migrations-cloud:/flyway/sql:ro
 volumes:
   v2-local-data:

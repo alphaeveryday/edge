@@ -59,6 +59,10 @@ data "aws_ecr_repository" "app_api" {
   name = "edge/app-api"
 }
 
+data "aws_ecr_repository" "app_batch" {
+  name = "edge/app-batch"
+}
+
 # data-pipeline 의 tag-news·analyze 페이즈가 함께 읽는 DeepSeek API 키 시크릿 — 그릇이 TF 밖
 # CLI 로 먼저 생겨 모듈 소유가 아니다(data 로 조회). 이름의 네임스페이스는 data-pipeline 관례.
 # 값은 TF 밖 수동 주입: aws secretsmanager put-secret-value --secret-id <name> --secret-string '{"api_key":"..."}'.
@@ -89,6 +93,7 @@ data "aws_secretsmanager_secret" "app_api_mail" {
 }
 
 # 파이프라인 RDS 읽기 전용 롤(app_sync_ro) 비밀번호. 롤과 시크릿은 수동 선생성(ALPHA-1134)
+# 사용 주체는 app-batch(ADR-0063). 이름의 app-api 접두어는 이전 사용 주체의 흔적
 data "aws_secretsmanager_secret" "app_api_pipeline" {
   name = "${local.prefix}-app-api/pipeline/password"
 }
@@ -494,11 +499,12 @@ module "gha_deploy_dev" {
   pass_role_arns         = [module.schema_migrate.execution_role_arn, module.schema_migrate.task_role_arn]
   log_group_arn          = module.schema_migrate.log_group_arn
 
-  # 앱/배치 이미지 push 권한 — 백엔드 앱(super-admin-api·tenant-sync-api·app-api) + data-pipeline 배치 이미지.
+  # 앱/배치 이미지 push 권한 — 백엔드 앱(super-admin-api·tenant-sync-api·app-api·app-batch) + data-pipeline 배치 이미지.
   app_ecr_repository_arns = [
     data.aws_ecr_repository.super_admin_api.arn,
     data.aws_ecr_repository.tenant_sync_api.arn,
     data.aws_ecr_repository.app_api.arn,
+    data.aws_ecr_repository.app_batch.arn,
     local.data_pipeline_ecr_repository_arn,
   ]
   app_service_arns = concat([
@@ -513,6 +519,8 @@ module "gha_deploy_dev" {
     module.super_admin_api.execution_role_arn, module.super_admin_api.task_role_arn,
     module.tenant_sync_api.execution_role_arn, module.tenant_sync_api.task_role_arn,
     module.app_api.execution_role_arn, module.app_api.task_role_arn,
+    # 태스크 정의 리비전 등록 시 역할 전달(배포만, 실행은 스케줄러 역할)
+    module.app_batch.execution_role_arn, module.app_batch.task_role_arn,
   ]
 
   # 정적 사이트 배포 권한 — S3 sync + CloudFront 무효화.
@@ -596,6 +604,11 @@ module "data_pipeline" {
   # stop 실패는 서비스를 내리지 않으므로 알림 확인 후 잔류를 정리하고 배치를 실행한다.
   # 복구는 정상 drain 뒤 minute source group만 비우고 19:30 배치를 유지한다.
   disclosure_schedule_state = "ENABLED"
+  # 실행 주체(ALPHA-1407·1425). 10-21 전환: 19:30 배치는 Airflow `edge_disclosure` 가 실행한다. AIRFLOW 면 위 스케줄은
+  # DISABLED 로 덮이고, 슬롯 대조·dart 창은 위 ENABLED 에서 그대로 파생된다 — 그래서 위 값은 ENABLED 로 둔다.
+  # 롤백은 edge_disclosure pause → 종료 확인(queued·running·ECS 0) → 이 줄을 지우는 PR → apply 순서다. apply 를 먼저 하면
+  # 두 주체가 같은 슬롯을 계획한다(apps/engine/airflow/README.md "롤백(Airflow → SFN)", 공시 레인 절).
+  disclosure_orchestrator = "AIRFLOW"
   # ops 기대 슬롯과 watermark 활성 환경변수는 이 스케줄 설정에서 파생된다.
   # 주말 활성화의 직전 금요일 거짓 경보는 첫 활성 슬롯 뒤 README 절차로 정리한다(ALPHA-1074).
   disclosure_schedule_expressions = {
@@ -617,8 +630,14 @@ module "data_pipeline" {
   # 실행 주체(ALPHA-1088). ALPHA-1141 상시 운영 전환(2026-10-03 사용자 승인): 장중 수급 5슬롯은 Airflow 가 실행한다.
   # 이 값이 AIRFLOW 면 이 레인의 EventBridge 스케줄 5개는 DISABLED, Reconciler 슬롯 대조는 유지된다.
   # SFN 상태 머신·태스크 정의는 남는다 — 롤백은 이 값을 "SFN" 으로 되돌리는 PR(먼저 Airflow 업무 종료·보류·슬롯
-  # 소유를 확인한다, src/apps/cloud/airflow/README.md "운영 전환·롤백 절차").
+  # 소유를 확인한다, apps/engine/airflow/README.md "운영 전환·롤백 절차").
   investor_intraday_orchestrator = "AIRFLOW"
+
+  # 장전 유니버스 레인(ALPHA-1408·1429). 10-23 전환: 평일 07:00 슬롯은 Airflow `edge_premarket` 이 실행한다.
+  # AIRFLOW 면 premarket_schedule_state(모듈 기본 ENABLED)가 DISABLED 로 덮인다. 원장 밖 레인이라 슬롯 대조는 원래 없다.
+  # 롤백은 edge_premarket pause → 종료 확인(queued·running·ECS 0) → 이 줄을 지우는 PR → apply 순서다. apply 를 먼저 하면
+  # 두 주체가 같은 07:00 슬롯을 돌린다(apps/engine/airflow/README.md "장전 유니버스 레인"의 전환·롤백).
+  premarket_orchestrator = "AIRFLOW"
 
   # 컷오버(ALPHA-588): 원장 도입(ALPHA-530) 때 "Planner 첫 스케줄런 검증 후"를 조건으로 미뤄 둔
   # 대조 스케줄. 켜기 전 실제 스케줄 런(`etf-daily:2026-07-27T15:40`, FAILED)에 OPS_RUN_KEY 를
@@ -696,16 +715,21 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_data_pipeline" {
 }
 
 # ── Airflow 실행 환경 (ALPHA-1119) ──────────────────────
-# 장중 수급 레인의 실행 관리. 업무는 위 data_pipeline 의 Fargate 태스크 그대로다(README src/apps/cloud/airflow
+# 장중 수급 레인의 실행 관리. 업무는 위 data_pipeline 의 Fargate 태스크 그대로다(README apps/engine/airflow
 # "실행 환경"). 실행 주체 전환은 이 블록이 아니라 data_pipeline 의 investor_intraday_orchestrator 가 한다.
 #
 # 메타DB — **기존 업무 RDS(edge-dev) 인스턴스 안의 전용 DB `airflow`·전용 역할 `airflow_meta`**(검증 구성, ALPHA-1119).
 # 새 RDS 를 만들지 않고 인스턴스 사양·파라미터 그룹도 바꾸지 않는다. DB·역할은 TF 가 아니라 검증 절차의 관리
-# 태스크(src/apps/cloud/airflow/verify/dbadmin.sh)가 만들고 지운다 — 역할 비밀번호가 state 에 남지 않게.
+# 태스크(apps/engine/airflow/verify/dbadmin.sh)가 만들고 지운다 — 역할 비밀번호가 state 에 남지 않게.
 # DB·역할을 나눠도 인스턴스 자원(메모리·CPU·IOPS·연결 상한·재부팅)은 공유한다. 재사용 가부는 이 검증(장외)의
 # 관측·중단 기준으로 판단한다(README "기존 RDS 재사용 검증"). 장중 재사용은 미검증이다.
 module "airflow" {
   source = "../../modules/airflow"
+
+  blocking_batch_state_machine_arns = concat(module.data_pipeline.batch_state_machine_arns,
+  [module.analysis_v2.outlook_batch_state_machine_arn, module.analysis_v2.state_machine_arn])
+  blocking_batch_task_families = concat(values(module.data_pipeline.task_definition_families),
+  [module.data_pipeline.ops_task_definition_family])
 
   name       = "${local.prefix}-airflow"
   region     = var.region
@@ -716,7 +740,7 @@ module "airflow" {
   ami_id = "ami-0c15069e7568e5f41"
   # 실제 AWS 단기 검증(ALPHA-1119, 2026-09-29~30) 결과: micro 는 등록 916MiB·호스트 전역 OOM 으로 불가, small·1024 는
   # 업무 task 실행 중 태스크 cgroup OOM 으로 불가. 1408 은 유휴·재시작만 확인했다(업무 실행은 검증 도구 결함으로 미검증).
-  # 근거: src/apps/cloud/airflow/README.md "실제 AWS 단기 검증".
+  # 근거: apps/engine/airflow/README.md "실제 AWS 단기 검증".
   instance_type = "t4g.small"
   task_memory   = 1408
   # ALPHA-1141 상시 운영(2026-10-03 승인) — 장중 수급의 실행 환경. 기간에 따라 내리는 장치는 두지 않는다.
@@ -746,7 +770,14 @@ module "airflow" {
     # 없으면 financial_collect·macro_collect 가 AccessDeniedException 으로 시작도 못 한다.
     module.data_pipeline.task_definition_families["dart"],
     module.data_pipeline.task_definition_families["macro"],
+    # 장전 유니버스 레인 edge_premarket(ALPHA-1408): KRX 수집은 krx task-def.
+    module.data_pipeline.task_definition_families["krx"],
+    # 뉴스 레인 edge_news(ALPHA-1409): 태깅은 deepseek, 이벤트 조립은 events task-def.
+    module.data_pipeline.task_definition_families["deepseek"],
+    module.data_pipeline.task_definition_families["events"],
   ]
+  # DAG 명령 인자 중 terraform 값 — SFN 잡 목록과 같은 변수(ALPHA-1408).
+  lane_command_args            = module.data_pipeline.airflow_lane_args
   batch_task_definition_prefix = "${local.prefix}-data-pipeline"
   batch_pass_role_arns         = module.data_pipeline.batch_pass_role_arns
   batch_security_group_id      = module.data_pipeline.security_group_id
@@ -810,7 +841,7 @@ moved {
 
 # ── ETF Orca 랜딩페이지 (etforca.com) ───────────────────
 # 영역과 인증서는 foundation 이 소유한다(route53.tf·acm.tf 의 etforca). 여기서는 조회만 한다.
-# 파일은 src/apps/cloud/app-landing 에 있고 deploy-app-landing.yml 이 버킷에 올린다(index.html·assets/).
+# 파일은 apps/etforca/app-landing 에 있고 deploy-app-landing.yml 이 버킷에 올린다(index.html·assets/).
 data "aws_route53_zone" "etforca" {
   name = var.landing_domain
 }
@@ -946,9 +977,6 @@ module "app_api" {
     SPRING_MAIL_HOST     = "smtp.gmail.com"
     SPRING_MAIL_USERNAME = "asm.alphaeveryday@gmail.com"
     APP_MAIL_OPERATOR    = "asm.alphaeveryday@gmail.com"
-    # 파이프라인 RDS 읽기 동기화. URL 이 없으면 앱은 동기화를 돌리지 않는다
-    APP_PIPELINE_URL      = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
-    APP_PIPELINE_USERNAME = "app_sync_ro"
     # 앱 심사용 데모 계정. 이 주소만 가입·재설정 코드 고정, 비우면 꺼짐
     APP_REVIEW_EMAIL = "review@example.com"
   }
@@ -956,7 +984,6 @@ module "app_api" {
     SPRING_DATASOURCE_PASSWORD = "${module.app_rds.master_user_secret_arn}:password::"
     APP_JWT_SECRET             = "${data.aws_secretsmanager_secret.app_api_jwt.arn}:secret::"
     SPRING_MAIL_PASSWORD       = "${data.aws_secretsmanager_secret.app_api_mail.arn}:secret::"
-    APP_PIPELINE_PASSWORD      = "${data.aws_secretsmanager_secret.app_api_pipeline.arn}:secret::"
     # 소셜 로그인. 비면 해당 제공자 로그인 거절
     APP_KAKAO_CLIENT_ID   = "${data.aws_secretsmanager_secret.app_api_kakao.arn}:secret::"
     APP_APPLE_CLIENT_ID   = "${data.aws_secretsmanager_secret.app_api_apple.arn}:clientId::"
@@ -968,7 +995,6 @@ module "app_api" {
     module.app_rds.master_user_secret_arn,
     data.aws_secretsmanager_secret.app_api_jwt.arn,
     data.aws_secretsmanager_secret.app_api_mail.arn,
-    data.aws_secretsmanager_secret.app_api_pipeline.arn,
     data.aws_secretsmanager_secret.app_api_apple.arn,
     data.aws_secretsmanager_secret.app_api_kakao.arn,
   ]
@@ -985,15 +1011,6 @@ resource "aws_vpc_security_group_ingress_rule" "app_rds_from_app_api" {
   description                  = "app-api to postgres"
 }
 
-resource "aws_vpc_security_group_ingress_rule" "rds_from_app_api" {
-  security_group_id            = module.rds.security_group_id
-  referenced_security_group_id = module.app_api.security_group_id
-  ip_protocol                  = "tcp"
-  from_port                    = 5432
-  to_port                      = 5432
-  description                  = "app-api pipeline read sync to postgres"
-}
-
 resource "aws_vpc_security_group_ingress_rule" "app_redis_from_app_api" {
   security_group_id            = module.app_redis.security_group_id
   referenced_security_group_id = module.app_api.security_group_id
@@ -1001,6 +1018,68 @@ resource "aws_vpc_security_group_ingress_rule" "app_redis_from_app_api" {
   from_port                    = 6379
   to_port                      = 6379
   description                  = "app-api to redis"
+}
+
+# ── ETF Orca 동기화 배치: app-batch (ADR-0063) ─────────────
+# 파이프라인 RDS 발행본을 앱 DB 로 옮기는 Spring Batch 잡. 10분마다 태스크 1개가 뜨고 잡을 마치면 종료한다.
+# 이미지 리비전은 deploy-app-batch.yml 이 등록하고, 스케줄은 최신 리비전을 실행한다.
+module "app_batch" {
+  source = "../../modules/ecs-scheduled-task"
+
+  name   = "app-batch"
+  region = var.region
+
+  cluster_arn = module.worker_cluster.cluster_arn
+  vpc_id      = module.network.vpc_id
+  subnet_ids  = module.network.private_subnet_ids
+
+  # TF baseline 은 배포가 매번 옮기는 latest 태그(ECR 수명 주기 보존)
+  container_image = "${data.aws_ecr_repository.app_batch.repository_url}:latest"
+
+  # app-api 와 같은 JVM 크기(512MiB OOM 교훈)
+  cpu    = "512"
+  memory = "1024"
+
+  # 기존 app-api 동기화 주기와 같은 10분
+  schedule_expression = "rate(10 minutes)"
+  schedule_enabled    = true
+
+  alarm_topic_arn = module.data_pipeline.alarm_topic_arn
+  # Spring Batch 의 잡 완료 로그(COMPLETED) — 30분 동안 0회면 알람
+  success_log_pattern = "\"[name=syncJob]]\" \"status: [COMPLETED]\""
+
+  environment = {
+    SPRING_DATASOURCE_URL      = "jdbc:postgresql://${module.app_rds.endpoint}/${module.app_rds.db_name}"
+    SPRING_DATASOURCE_USERNAME = module.app_rds.master_username
+    APP_PIPELINE_URL           = "jdbc:postgresql://${module.rds.endpoint}/${module.rds.db_name}"
+    APP_PIPELINE_USERNAME      = "app_sync_ro"
+  }
+  secrets = {
+    SPRING_DATASOURCE_PASSWORD = "${module.app_rds.master_user_secret_arn}:password::"
+    APP_PIPELINE_PASSWORD      = "${data.aws_secretsmanager_secret.app_api_pipeline.arn}:secret::"
+  }
+  secret_arns = [
+    module.app_rds.master_user_secret_arn,
+    data.aws_secretsmanager_secret.app_api_pipeline.arn,
+  ]
+}
+
+resource "aws_vpc_security_group_ingress_rule" "app_rds_from_app_batch" {
+  security_group_id            = module.app_rds.security_group_id
+  referenced_security_group_id = module.app_batch.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "app-batch to postgres"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "rds_from_app_batch" {
+  security_group_id            = module.rds.security_group_id
+  referenced_security_group_id = module.app_batch.security_group_id
+  ip_protocol                  = "tcp"
+  from_port                    = 5432
+  to_port                      = 5432
+  description                  = "app-batch pipeline read sync to postgres"
 }
 
 resource "aws_route53_record" "app_api" {

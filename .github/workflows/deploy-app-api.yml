@@ -1,4 +1,4 @@
-# app-api dev 배포 (ETF Orca 앱 API, ADR-0056). 자기 코드(또는 모든 JVM 앱 이미지에 영향을 주는
+# app-api dev 배포 (ETF Orca 앱 API, ADR-0056). 자기 코드(또는 이미지에 영향을 주는
 # 공유 경로)가 바뀐 dev push 에서만 트리거되는 독립 배포. 절차는 deploy-app.yml 한 벌을 재사용한다.
 #
 # paths 필터 주의: diff 를 계산할 수 없는 push(force 등)에서는 GitHub 이 fail-open 으로
@@ -15,14 +15,11 @@ on:
   push:
     branches: [dev]
     paths:
-      - "src/apps/cloud/app-api/**"
-      # 공유 경로. 모든 JVM 앱 이미지에 영향(schema SQL 은 migrate 소관이라 제외).
-      - "src/libs/jvm-common/**"
-      - "src/settings.gradle"
-      - "src/gradle/**"
-      - "src/gradlew"
-      - "src/gradlew.bat"
-      - "src/.dockerignore"
+      - "apps/etforca/app-api/**"
+      # 같은 Gradle 루트의 배치 하위 프로젝트는 별도 이미지(deploy-app-batch.yml)
+      - "!apps/etforca/app-api/batch/**"
+      # 자체 Gradle 루트라 루트 빌드 설정과 libs 는 이미지에 무관
+      - ".dockerignore"
       # 배포 절차 자체의 변경. tenant-sync-api 와 같이 이 파일 자신은 넣지 않는다.
       # 이 워크플로가 신설되는 머지 push 에서 terraform-apply(권한·서비스 생성)와 경주해
       # 첫 실행이 반드시 실패하기 때문. 부트스트랩은 workflow_dispatch 가 담당한다.
@@ -43,4 +40,4 @@ jobs:
     uses: ./.github/workflows/deploy-app.yml
     with:
       app: app-api
-      plane: cloud
+      product: etforca
