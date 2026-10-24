@@ -165,9 +165,11 @@ def similar_events(event_type: str, metric: str, op: str, value: str, unit: str,
             continue
         if v.is_finite() and OPERATORS[op](v, threshold):
             m = matched.setdefault((*happening, v.normalize()), {"date": r.get("d"), "what": _what(r.get("title")), "value": _number(v),
-                                                                  "unit": unit, "basis": basis, "who": list(who)[:3], "reports": 0})
-            m["reports"] += 1
+                                                                  "unit": unit, "basis": basis, "who": list(who)[:3], "events": set()})
+            m["events"].add(r["id"])  # 행은 (사건, 측정) 쌍 — 보도 수는 사건 수로 센다
             m["what"] = max(m["what"], _what(r.get("title")), key=len)
     unknown -= {k[:2] for k in matched}
+    for m in matched.values():
+        m["reports"] = len(m.pop("events"))
     return {"matched": sorted(matched.values(), key=lambda m: str(m["date"] or ""), reverse=True),
             "unknown": len(unknown), "scanned": len(rows), "truncated": len(rows) >= FETCH_LIMIT, "days": days}

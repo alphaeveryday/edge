@@ -68,7 +68,7 @@ def test_similar_events_compares_decimals_and_counts_other_units_as_unknown_not_
         return [{"issuer": "actor_mine"}] if q == graph.ISSUER else rows
     found = graph.similar_events("COMPANY.CONTRACT.SIGNING", "CONTRACT_VALUE", "gte", "100000000000", "KRW", "TOTAL",
                                  TODAY, 180, exclude_code="138360", run=run)
-    assert [(m["value"], m["reports"]) for m in found["matched"]] == [("930,900,000,000", 3)]
+    assert [(m["value"], m["reports"]) for m in found["matched"]] == [("930,900,000,000", 2)]  # 사건 e1·e7(e1 은 측정 2개)
     assert found["unknown"] == 4 and found["scanned"] == 9 and not found["truncated"]
 
 

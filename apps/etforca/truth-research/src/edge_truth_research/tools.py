@@ -387,14 +387,14 @@ def company_events(ws: Workspace, args: dict) -> str:
     types, labels = graph.registry()
     lines = [f"최근 {days}일 사건 {len(events)}건(같은 일은 묶음, 최신순). 근거로 쓰려면 기사·공시를 직접 읽는다:"]
     if result["truncated"]:
-        lines[0] += f" — 보도가 많아 {result['oldest']} 이후만 봤다(그보다 옛 사건이 없다는 뜻이 아니다. days 를 줄여 다시 볼 수 있다)"
+        lines[0] += f" — 보도가 많아 {result['oldest']} 이후만 봤다(그보다 옛 사건이 없다는 뜻이 아니다)"
     for e in events[:20]:
         arts = ", ".join(f"news-{a[:16]}" for a in e["articles"]) or "기사 id 없음"
         stage = f" | 단계 {e['stage']}" if e["stage"] else ""
         lines.append(f"- {e['date']} | {e['type']} {labels.get(e['type'], '')} {e['predicate'] or ''} | 이 회사 {e['role']} | "
                      f"{e['what'][:160]} | 보도 {e['reports']}건{stage} | {arts}")
     if len(events) > 20:
-        lines.append(f"(그 밖 {len(events) - 20}건 생략 — days 를 줄여 다시 볼 수 있다)")
+        lines.append(f"(그보다 옛 사건 {len(events) - 20}건 생략)")
     return "\n".join(lines)
 
 
