@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date, datetime, timedelta
 
 import pandas as pd
@@ -652,10 +653,11 @@ async def test_analysis_waits_only_for_what_the_store_lacks_and_reports_the_coll
     # The analysis never calls a provider: stored prices answer at once, only missing ones are
     # requested from the collector (in order) and awaited, and a collector failure is that instrument's code.
     stored = {'KR:A': record()}
-    requested, polls = [], iter([{}, {'KR:B': None}, {'KR:C': 'PRICE_STALE'}])
-    def saved_prices(keys, as_of, rejected=None, latest=True):
-        assert latest == ('KR:A' in keys), 'Only a read after the collector served a request relaxes the latest-session rule'
-        rejected.update({key: 'PRICE_NOT_STORED' for key in keys if key not in stored})
+    reads, requested = [], []
+    polls = iter([{}, {'KR:B': None}, {'KR:C': 'PRICE_STALE', 'KR:D': 'PRICE_PUBLICATION_SUPERSEDED'}])
+    def saved_prices(keys, as_of, rejected=None, collected=False):
+        reads.append((keys, collected))
+        rejected.update({key: 'PRICE_HISTORY_INCOMPLETE' for key in keys if key not in stored})
         return {key: stored[key] for key in keys if key in stored}
     def request(keys):
         requested.extend(keys)
@@ -666,14 +668,42 @@ async def test_analysis_waits_only_for_what_the_store_lacks_and_reports_the_coll
     monkeypatch.setattr(preload, 'finished_requests', lambda keys, requested: next(polls))
     monkeypatch.setattr(market_data, 'fetch_prices', lambda *a, **k: pytest.fail('analysis must not call a provider'))
     records, failures = {}, {'KR:A': 'PRICE_QUEUE_TIMEOUT'}
-    await preload.stored_prices(['KR:A', 'KR:B', 'KR:C'], date(2026, 10, 12), records, failures, poll=0)
-    assert requested == ['KR:B', 'KR:C']
-    assert set(records) == {'KR:A', 'KR:B'} and failures == {'KR:C': 'PRICE_STALE'}
+    await preload.stored_prices(['KR:A', 'KR:B', 'KR:C', 'KR:D'], date(2026, 10, 12), records, failures, poll=0)
+    assert requested == ['KR:B', 'KR:C', 'KR:D']
+    assert set(records) == {'KR:A', 'KR:B'}
+    assert failures == {'KR:C': 'PRICE_STALE', 'KR:D': 'PRICE_HISTORY_INCOMPLETE'}, \
+        'A collector code outside the price failures falls back to why the stored record is unusable'
+    assert (['KR:B'], True) in reads and (['KR:C'], False) in reads, 'Only a published whole-history fetch relaxes the checks'
+
+
+async def test_a_deadline_keeps_every_price_already_read(monkeypatch):
+    def saved_prices(keys, as_of, rejected=None, collected=False):
+        if keys == ['KR:B']:
+            import time
+            time.sleep(.2)
+        return {key: record() for key in keys}
+    monkeypatch.setattr(work, 'saved_prices', saved_prices)
+    records, failures = {}, {}
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(.1):
+            await preload.stored_prices(['KR:A', 'KR:B'], date(2026, 10, 12), records, failures, poll=0)
+    assert set(records) == {'KR:A'}
+
+
+async def test_a_lost_request_status_fails_the_waiting_prices_instead_of_the_analysis(monkeypatch):
+    monkeypatch.setattr(work, 'saved_prices', lambda keys, as_of, rejected=None, collected=False: {})
+    monkeypatch.setattr(preload, 'request_prices', lambda keys: 'requested')
+    def lost(keys, requested):
+        raise RuntimeError('statement timeout')
+    monkeypatch.setattr(preload, 'finished_requests', lost)
+    failures = {}
+    await preload.stored_prices(['KR:A'], date(2026, 10, 12), {}, failures, poll=0)
+    assert failures == {'KR:A': 'PRICE_READ_FAILED'}
 
 
 async def test_a_store_that_cannot_take_requests_fails_missing_prices_with_the_reason(monkeypatch):
     # A read-only review container (or a database fault) cannot queue requests; waiting would only burn the budget.
-    monkeypatch.setattr(work, 'saved_prices', lambda keys, as_of, rejected=None: rejected.update({k: 'PRICE_STALE' for k in keys}) or {})
+    monkeypatch.setattr(work, 'saved_prices', lambda keys, as_of, rejected=None, collected=False: rejected.update({k: 'PRICE_STALE' for k in keys}) or {})
     def refuse(keys):
         raise RuntimeError('read only')
     monkeypatch.setattr(preload, 'request_prices', refuse)

@@ -262,20 +262,20 @@ async def records_for(ids, day, *, valuation_since=None, include_fx=True, collec
     return records, failures
 
 
-def analysis_archive(key, payload, as_of, *, latest=True):
+def analysis_archive(key, payload, as_of, *, collected=False):
     """The collector's stored record cut like a fetch for `as_of`. Analysis never fetches, so anything the collector
     would have published from a fetch is usable; only a recent-quotes-only or out-of-date record is not.
-    `latest` also asks for the last finished session; once the collector has just refreshed the instrument,
-    the same staleness a fresh fetch allows (price_status) is enough."""
+    `collected`: the collector has just published a whole-history fetch for this request, so the stored record is
+    what that fetch returned (incomplete only so the collector retries Yahoo) and price_status alone decides."""
     from .market_data import decode_prices, expected_sessions, positive_price, price_status
     record = decode_prices(json.dumps(payload))
     # The fallback provider's whole series is stored as incomplete only so the collector retries Yahoo.
-    if record.get('history_complete') is not True and not record.get('provider', '').startswith('FinanceDataReader:'):
+    if not collected and record.get('history_complete') is not True and not record.get('provider', '').startswith('FinanceDataReader:'):
         raise ValueError('PRICE_HISTORY_INCOMPLETE')
     frame = record['frame'].loc[record['frame'].index < pd.Timestamp(as_of)]
     closes = frame.index[frame['Close'].map(positive_price)]
     sessions = expected_sessions(key, as_of - timedelta(days=14), as_of - timedelta(days=1))
-    if latest and (closes.empty or not len(sessions) or closes[-1] < sessions[-1]):
+    if not collected and (closes.empty or not len(sessions) or closes[-1] < sessions[-1]):
         raise ValueError('PRICE_STALE')
     record = {**record, 'frame': frame}
     failure = price_status(record, as_of)
@@ -284,7 +284,7 @@ def analysis_archive(key, payload, as_of, *, latest=True):
     return record
 
 
-def saved_prices(keys, as_of, rejected=None, *, latest=True):
+def saved_prices(keys, as_of, rejected=None, *, collected=False):
     """The collector's stored prices usable for `as_of`. One row per query: a whole archive is 1-2MB and many
     in one statement can pass the 5-second statement limit. `rejected` receives why each other key is unusable."""
     rejected = {} if rejected is None else rejected
@@ -297,7 +297,7 @@ def saved_prices(keys, as_of, rejected=None, *, latest=True):
                     rejected[key] = 'PRICE_NOT_STORED'
                     continue
                 try:
-                    records[key] = analysis_archive(key, row['payload'], as_of, latest=latest)
+                    records[key] = analysis_archive(key, row['payload'], as_of, collected=collected)
                 except Exception as error:
                     rejected[key] = str(error) if isinstance(error, ValueError) and str(error).startswith('PRICE_') else 'PRICE_RESPONSE_INVALID'
     except Exception as error:

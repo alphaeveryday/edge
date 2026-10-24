@@ -111,17 +111,18 @@ def finished_requests(keys, requested):
 
 async def stored_prices(keys, as_of, records, failures, *, poll=1.0):
     """Analysis prices come only from the collector's store. Missing instruments go to the front of the collector's
-    queue and are awaited; the caller's deadline bounds the wait and leaves PRICE_QUEUE_TIMEOUT behind."""
+    queue and are awaited; the caller's deadline bounds the wait and leaves PRICE_QUEUE_TIMEOUT behind.
+    Each instrument is read on its own so a deadline keeps every price already read."""
     from .dashboard_work import saved_prices
-    keys = [key for key in keys if key not in records]
-    if not keys:
-        return
+    from .market_data import PRICE_FAILURES
     rejected = {}
-    found = await asyncio.to_thread(saved_prices, keys, as_of, rejected)
-    records.update(found)
-    for key in found:
-        failures.pop(key, None)
-    missing = [key for key in keys if key not in found]
+    async def read(key, collected=False):
+        found = await asyncio.to_thread(saved_prices, [key], as_of, rejected, collected=collected)
+        if key in found:
+            records[key] = found[key]
+            failures.pop(key, None)
+        return key in found
+    missing = [key for key in keys if key not in records and not await read(key)]
     if not missing:
         return
     for key in missing:
@@ -134,15 +135,16 @@ async def stored_prices(keys, as_of, records, failures, *, poll=1.0):
         return
     while missing:
         await asyncio.sleep(poll)
-        done = await asyncio.to_thread(finished_requests, missing, requested)
-        served = [key for key in done if not done[key]]
-        found = await asyncio.to_thread(saved_prices, served, as_of, rejected, latest=False) if served else {}
-        records.update(found)
-        for key in done:
-            if key in found:
-                failures.pop(key, None)
-            else:
-                failures[key] = done[key] or rejected.get(key, 'PRICE_UNAVAILABLE')
+        try:
+            done = await asyncio.to_thread(finished_requests, missing, requested)
+        except Exception as error:
+            log.warning('price request status unavailable code=%s', type(error).__name__)
+            failures.update({key: 'PRICE_READ_FAILED' for key in missing})
+            return
+        for key, failure in done.items():
+            # A published whole-history fetch is taken as stored; after a failed one only a current whole record is.
+            if not await read(key, collected=not failure):
+                failures[key] = (failure if failure in PRICE_FAILURES else None) or rejected.get(key, 'PRICE_UNAVAILABLE')
         missing = [key for key in missing if key not in done]
 
 
@@ -217,10 +219,11 @@ async def collect_one(stopping=None, *, now=None, session=None, urgent=False):
             saved = db.execute("SELECT day,payload->>'actions_checked_on' AS checked,payload->>'history_complete' AS complete,payload->>'actions_complete' AS actions_complete,payload->'price_recovery'->>'status' AS recovery FROM portfolio_dashboard_prices WHERE instrument=%s", (key,)).fetchone()
             limited = 'PRICE_PROVIDER_RATE_LIMIT' in (record.get('price_recovery', {}).get('reason'), record.get('primary_failure'))
             if not published and (not saved or saved['complete'] != 'true' or saved['day'] != end or saved['checked'] != str(now.date())):
+                # A whole-history fetch that did not land is a failure for the analysis waiting on it.
                 db.execute("""UPDATE portfolio_market_preload SET lease_until=NULL,urgent_at=CASE WHEN %s THEN urgent_at END,history_after=now()+interval '1 minute',
                     quote_after=greatest(quote_after,now()+interval '1 minute'),
-                    last_error=%s,failed_at=CASE WHEN %s THEN now() ELSE failed_at END WHERE instrument=%s""",
-                    (job['quote'], 'PRICE_PROVIDER_RATE_LIMIT' if limited else 'PRICE_PUBLICATION_SUPERSEDED', limited, key))
+                    last_error=%s,failed_at=CASE WHEN %s OR NOT %s THEN now() ELSE failed_at END WHERE instrument=%s""",
+                    (job['quote'], 'PRICE_PROVIDER_RATE_LIMIT' if limited else 'PRICE_PUBLICATION_SUPERSEDED', limited, job['quote'], key))
                 log.info('market preload instrument=%s result=superseded; archive retry scheduled', key)
                 return True
             if limited:
