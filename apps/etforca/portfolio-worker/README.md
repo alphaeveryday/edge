@@ -162,7 +162,7 @@ region = ap-northeast-2
 
 접속 후 브라우저가 자동으로 열리며 Ctrl+C로 터널을 종료한다. 스크립트는 전용 역할 설정과 실제 STS 신원을 모두 검사하며 IAM 사용자나 다른 역할의 직접 접속을 거부한다. SSO 계정 생성은 필요 없다. 정책에 광범위한 셸·임의 포트 권한을 더하지 않는다.
 
-UI 빌드는 공개 `dist`와 내부 `dist-admin`으로 분리한다. 관리자 프로세스는 호스트 루프백 18080에만 게시한다. 로컬 실행은 `PORTFOLIO_DATABASE_URL` 및 `PORTFOLIO_ADMIN_UI_DIR`(빌드된 dist-admin 경로)을 지정한 뒤 `uv run uvicorn edge_portfolio.admin_app:app --host 127.0.0.1 --port 18080`을 사용한다.
+UI 빌드는 공개 `dist`와 내부 `dist-admin`으로 분리한다. 관리자 프로세스는 호스트 루프백 18080에만 게시하고, 터널로 첫 접속이 올 때만 켠다(30분 동안 접속이 없으면 끈다). 로컬 실행은 `PORTFOLIO_DATABASE_URL` 및 `PORTFOLIO_ADMIN_UI_DIR`(빌드된 dist-admin 경로)을 지정한 뒤 `uv run uvicorn edge_portfolio.admin_app:app --host 127.0.0.1 --port 18080`을 사용한다.
 
 조회는 10초마다 갱신하며 실패 시 화면의 입력값을 지운다. 방문 기록은 90일 유지하고 같은 쿠키의 여러 탭은 한 방문자다. 실제 사람 수가 아니며 과거 방문 기록은 소급 생성하지 않는다. [설계·접속 경계](../../../docs/design/portfolio-admin.md)를 참고한다.
 
