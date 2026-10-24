@@ -337,7 +337,13 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 #
 # 정상 실행은 NormalizeNews manifest의 직접 parquet와 현재 article_id만 읽는다. --from/--to는
 # 명시적 과거 복구, --all은 명시적 전체 복구다. --limit은 이번 런의 새 LLM 호출 수 상한이다.
+#
+# 태거는 TAGGER_BACKEND 가 고른다(ALPHA-1446, ADR-0064). 기본 llm 은 DeepSeek(LLM_API_KEY 필수),
+# roberta 는 로컬 int8 모델(LLM 키 불필요 — torch·transformers 가 깔린 환경, 이미지에는 있다).
+# roberta 의 모델 묶음은 레이크 models/tagger/<버전>/ 에서 받고, 로컬은 TAGGER_MODEL_DIR 로 디렉터리를
+# 직접 준다. tagger_version 이 달라 백엔드를 바꾸면 그 창의 기사는 다시 태깅된다.
 LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-news --input-run-id 20260701T000000Z --limit 50
+#   로컬 모델: TAGGER_BACKEND=roberta TAGGER_MODEL_DIR=<묶음 디렉터리> uv run --package data-pipeline python -m data_pipeline.run tag-news ...
 #   기간 복구: ... run tag-news --from 2026-07-01 --to 2026-07-08
 #   전체 복구: ... run tag-news --all
 
@@ -479,6 +485,8 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 뉴스 SFN 은 --window-days 1 로 [어제,오늘] 겹침(ALPHA-592) — day-close 가 00:10 이라(ALPHA-905)
 # assemble 은 **언제나** 다음 날짜에 돈다. 겹침이 없으면 닫으려던 어제를 통째로 못 읽고
 # read=0 으로 성공한다. 멱등이라 겹침 비용은 스캔뿐.
+# TAGGER_BACKEND=roberta 면 LLM 2콜 대신 기사마다 로컬 모델이 제목+리드로 분류·추출하고, 1분 단건
+# 조립과 같은 변환으로 적재한다(ko 기사만, LLM_API_KEY 불필요 — tag-news 단서와 같은 env).
 LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run assemble-events
 

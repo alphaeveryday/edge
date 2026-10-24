@@ -7,6 +7,8 @@
 
 import json
 
+import pytest
+
 from data_pipeline.lake import (
     LocalStorage,
     canonical_run_manifest_key,
@@ -324,6 +326,45 @@ def test_tagger_version_change_forces_retag(tmp_path):
     assert tag_news.run(storage, "R2", complete_fn=_fake_complete(calls)) == 0
     assert len(calls) == 1  # 재태깅됨
     assert _read_feature(storage, "ko", "2026-07-01")[0]["tagger_version"] == TAGGER_VERSION
+
+
+class _CountingTagger:
+    """RobertaTagger 대역(ALPHA-1446) — 사건 1건을 내고 호출 수를 센다."""
+
+    def __init__(self, version: str):
+        self.version, self.calls = version, 0
+
+    def parse(self, title, lead):
+        """고정 사건 1건."""
+        self.calls += 1
+        return {"doc_class": "EVENT", "events": [{
+            "event_type_code": "COMPANY.CONTRACT.SIGNING", "predicate_code": None,
+            "arguments": [{"role_code": "SUPPLIER", "text": "삼성전자"}], "confidence": 0.9}]}
+
+
+def test_injected_tagger_version_decides_retagging(tmp_path):
+    """WHY(ALPHA-1446): 재태깅 축은 **실제로 돌린 태거**의 버전이다. 전역 env 버전과 비교하면
+    주입한 태거가 자기 결과를 매 런 다시 태깅하고(비용·값 흔들림), LLM 판정과 섞여도 구분이 안 된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete([])) == 0  # LLM 판정이 먼저 있다
+
+    roberta = _CountingTagger("tagging-roberta-test")
+    assert tag_news.run(storage, "R2", tagger=roberta) == 0
+    assert roberta.calls == 1  # 다른 태거의 판정이라 다시 태깅
+    assert tag_news.run(storage, "R3", tagger=roberta) == 0
+    assert roberta.calls == 1  # 자기 판정은 건너뛴다
+    assert _read_feature(storage, "ko", "2026-07-01")[0]["tagger_version"] == "tagging-roberta-test"
+
+
+def test_run_without_any_tagger_refuses_to_start(tmp_path):
+    """WHY(ALPHA-1446): LLM·로컬 태거가 둘 다 없으면 모든 기사가 llm_error 로 저장되고 런은 성공으로
+    끝난다(기존 판정을 오류 행으로 덮을 수도 있다) — 아무것도 쓰기 전에 막아야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    with pytest.raises(ValueError, match="하나가 필요하다"):
+        tag_news.run(storage, "R1")
+    assert _read_feature(storage, "ko", "2026-07-01") == []
 
 
 def test_english_articles_are_not_tagged(tmp_path):

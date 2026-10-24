@@ -59,7 +59,7 @@ from ..lake import (
     feature_run_manifest_key,
     quality_log_key,
 )
-from ..tagging.extract import PROMPT_LANGUAGES, TAGGER_VERSION, extract_assertions
+from ..tagging.extract import LLM_TAGGER_VERSION, PROMPT_LANGUAGES, TAGGER_VERSION, extract_assertions
 from ..tagging.ontology import ontology_version
 from .normalize_news import _union_mentions
 
@@ -162,7 +162,7 @@ def _write_parquet_rows(rows: list[dict]) -> bytes:
     return buf.getvalue()
 
 
-def _is_current(row: object, fingerprint: str) -> bool:
+def _is_current(row: object, fingerprint: str, tagger_version: str = TAGGER_VERSION) -> bool:
     """이 feature 행이 **현재 태거·온톨로지가 현재 텍스트에 내린 유효한 판정**인가 — 그러면
     재태깅하지 않는다. 세 축이 전부 맞아야 현재다.
 
@@ -178,7 +178,7 @@ def _is_current(row: object, fingerprint: str) -> bool:
     if row.get("status") in RETRYABLE_STATUSES:
         return False
     return (
-        row.get("tagger_version") == TAGGER_VERSION
+        row.get("tagger_version") == tagger_version
         and row.get("ontology_version") == ontology_version()
         and row.get("input_fingerprint") == fingerprint
     )
@@ -515,7 +515,8 @@ def run(
     storage: Storage,
     run_id: str,
     *,
-    complete_fn,
+    complete_fn=None,
+    tagger=None,
     input_run_id: str | None = None,
     from_date: str | None = None,
     to_date: str | None = None,
@@ -533,9 +534,15 @@ def run(
     concurrency 는 LLM 호출 병렬도다(파티션 안에서 기사별 extract 를 동시 실행). 카운터·격리·
     merged 병합은 결과 취합 뒤 메인스레드에서 순차로 해 경합을 없앤다 — 순차 실행과 결과 동일.
     """
+    if complete_fn is None and tagger is None:
+        # 둘 다 없으면 모든 기사가 llm_error 로 저장되고 런은 성공으로 끝난다 — 시작 전에 막는다.
+        raise ValueError("complete_fn(LLM) 또는 tagger(로컬 모델) 중 하나가 필요하다")
     concurrency = max(1, min(concurrency, MAX_TAG_CONCURRENCY))
     now = datetime.now(timezone.utc)
     tagged_at = now.isoformat()
+    # 재태깅 판정·로그의 버전은 **이 런이 실제로 쓰는 태거**의 것이다 — 전역 TAGGER_VERSION(env)만
+    # 보면 주입한 태거와 어긋날 때 자기 결과를 매번 다시 태깅하거나 남의 결과를 건너뛴다.
+    tagger_version = tagger.version if tagger is not None else LLM_TAGGER_VERSION
     checked_date = tagged_at[:10]
     manifest_key = feature_run_manifest_key(DATASET, run_id)
     try:
@@ -658,7 +665,7 @@ def run(
                     continue
                 article_id = article.get("article_id")
                 fingerprint = _input_fingerprint(article)
-                if _is_current(by_id.get(article_id), fingerprint):
+                if _is_current(by_id.get(article_id), fingerprint, tagger_version):
                     skipped += 1
                     continue
                 if limit is not None and tagged + len(to_tag) >= limit:
@@ -673,7 +680,8 @@ def run(
                 workers = min(concurrency, len(to_tag))
                 with ThreadPoolExecutor(max_workers=workers) as pool:
                     results = list(pool.map(
-                        lambda item: extract_assertions(item[1], complete_fn=complete_fn), to_tag))
+                        lambda item: extract_assertions(item[1], complete_fn=complete_fn,
+                                                   tagger=tagger), to_tag))
             else:
                 results = []
 
@@ -753,7 +761,7 @@ def run(
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "started_at": tagged_at, "finished_at": datetime.now(timezone.utc).isoformat(),
         "languages": list(TAGGED_LANGUAGES),
-        "tagger_version": TAGGER_VERSION, "ontology_version": ontology_version(),
+        "tagger_version": tagger_version, "ontology_version": ontology_version(),
         "articles_read": read, "articles_tagged": tagged,
         "articles_skipped_already_tagged": skipped, "articles_left_by_limit": limited,
         "articles_skipped_no_mention": skipped_no_mention,

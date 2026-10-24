@@ -13,6 +13,8 @@
         **비결정적·유료 추론의 결과**라 존을 가른다 — 재실행이 값을 바꿀 수 있으므로 한 번
         만든 것은 버전(tagger_version·ontology_version)이 같으면 다시 만들지 않는다.
 - 로그: operations_archive/collection_logs/ 아래 run_id 별 1건.
+- models: 데이터가 아니라 운영 산출물(학습된 로컬 태거 가중치) — models/tagger/<버전>/ 아래
+        버전마다 불변 묶음(`tagger_model_prefix`, ALPHA-1446).
 
 백엔드는 설정(storage.backend)으로 고른다. MVP 개발은 local 스텁으로 돌리고,
 배포는 s3 로 전환한다(같은 키 규약 — local 은 루트 디렉터리 아래 동일 상대경로).
@@ -851,6 +853,15 @@ def canonical_business_segment_fact_partition(report_date: str) -> str:
     은 유일하지 않아(제품/용역 sub-row) 순서 인덱스로 키를 잡는다. source_vendor(dart)는 컬럼.
     """
     return f"canonical/disclosures/business_segment_fact/report_date={report_date}"
+
+
+def tagger_model_prefix(version: str) -> str:
+    """로컬 뉴스 태거 모델 묶음(ALPHA-1446)의 키 프리픽스 — 버전마다 불변 디렉터리.
+
+    데이터가 아니라 운영 산출물(학습된 가중치)이라 raw·canonical·feature 존 밖에 둔다.
+    묶음 형식은 `tagging/roberta.py` 독스트링이 정본이다.
+    """
+    return f"models/tagger/{version}/"
 
 
 def quality_log_key(dataset: str, checked_date: str, run_id: str) -> str:

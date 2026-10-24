@@ -6,7 +6,7 @@ kernel(ALPHA-672)이 실행 자격·재시도·격리·ack 을 전부 정하므�
 ```text
 payload(job_id·source_code·article_id·source_item_id·input_fingerprint·generation)
 → (source_code, article_id) 로 기사 정본 읽기        ← PG document + news_document
-→ tagging.extract_assertions(article, complete_fn)   ← 결정 로직·프롬프트는 기존 것 그대로
+→ tagging.extract_assertions(article, complete_fn | tagger)   ← 결정 로직·검증은 기존 것 그대로
 → feature 존 결과 artifact 불변 PUT                  ← job 축(원장이 색인)
 → 같은 결과를 날짜축 feature 파티션에 미러            ← 배치가 보는 자리 (ALPHA-900)
 → 그 바이트의 sha256 을 반환 (= job.result_checksum)
@@ -307,7 +307,9 @@ class NewsExtractionHandler:
     """
 
     storage: Storage
-    complete_fn: Callable[[str, str], str]
+    # 둘 중 하나를 쓴다 — tagger(로컬 RoBERTa)가 있으면 그것, 없으면 complete_fn(LLM).
+    # 진입점이 TAGGER_BACKEND 로 고른다(`tagging.backend`).
+    complete_fn: Callable[[str, str], str] | None
     article_reader: ArticleReader = field(repr=False)
     # job 이 생성 시점에 고정한 정체성을 읽는다(`JobLedger.news_job_identity`) — payload
     # 만 믿으면 "정상 backlog"와 "다른 기사를 가리키는 결함"이 구분되지 않는다. 기본값을
@@ -316,6 +318,7 @@ class NewsExtractionHandler:
     # 추출 성공을 event 계보로 단건 조립한다(ALPHA-727) — 기본값 없음: 빠뜨리면 추출은
     # 되는데 설명 근거(event)가 조용히 영영 없다.
     event_assembler: EventAssembler = field(repr=False)
+    tagger: object | None = field(default=None, repr=False)
 
     def __call__(
         self, *, job_id: str, payload: object, attempt: int, redrive_generation: int
@@ -381,7 +384,7 @@ class NewsExtractionHandler:
                 job_id, article_id,
             )
 
-        result = extract_assertions(article, complete_fn=self.complete_fn)
+        result = extract_assertions(article, complete_fn=self.complete_fn, tagger=self.tagger)
         status = result.get("status")
         if status in _RETRY_STATUSES:
             # 판정이 아니라 "물어보지도 못했다" — 결과로 남기면 안 물어본 것이 판정으로
@@ -601,8 +604,10 @@ def news_consumer_cli(settings, *, max_ticks: int | None = None) -> int:
     만료로 회수된다. realtime·backfill 은 핸들러가 같고 큐만 달라, 같은 스텝을
     `DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL` 만 바꿔 서비스 2개로 띄운다.
 
-    LLM 자격증명은 env(`LLM_API_KEY` 등, tag-news 관례)다 — llm.py 는 env 를 모르고,
-    DATA_PIPELINE_* 는 수집 설정 네임스페이스라 LLM 이 거기 안 든다(run.py tag-news 단서).
+    태거는 `TAGGER_BACKEND` env 가 고른다(`tagging.backend`, 기본 llm). llm 이면 LLM 자격증명이
+    env(`LLM_API_KEY` 등, tag-news 관례)다 — llm.py 는 env 를 모르고, DATA_PIPELINE_* 는 수집 설정
+    네임스페이스라 LLM 이 거기 안 든다(run.py tag-news 단서). roberta 면 기동 때 레이크에서 모델
+    묶음을 받고 LLM 키가 필요 없다.
     `--max-ticks` 는 로컬 확인용 — 배선 오류 신호(poison·misrouted·orphan·ahead)가
     있으면 1 로 끝난다.
     """
@@ -624,21 +629,29 @@ def news_consumer_cli(settings, *, max_ticks: int | None = None) -> int:
             "minute_news_consumer 설정 없음 — 큐 URL 필수"
             "(DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL 주입)"
         )
-    # 공백-only 도 결손이다 — 통과시키면 기동은 되고 job 마다 잘못된 인증으로 llm_error
-    # 재시도가 예산을 태워 DEAD 를 쌓는다(price-worker 토스 자격증명 가드와 같은 축).
-    api_key = os.environ.get("LLM_API_KEY", "").strip()
-    if not api_key:
-        raise SystemExit("LLM_API_KEY 가 없다 — news-consumer 는 추출 LLM 호출이 필수다")
-    complete_fn = openai_compatible_complete_fn(
-        api_key=api_key,
-        base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
-        model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
-    )
+    from ..tagging.backend import load_tagger
+
+    storage = make_storage(settings.storage)
+    # TAGGER_BACKEND=roberta 면 로컬 모델(기동 때 레이크에서 묶음을 받는다), llm 이면 None.
+    tagger = load_tagger(storage)
+    complete_fn = None
+    if tagger is None:
+        # 공백-only 도 결손이다 — 통과시키면 기동은 되고 job 마다 잘못된 인증으로 llm_error
+        # 재시도가 예산을 태워 DEAD 를 쌓는다(price-worker 토스 자격증명 가드와 같은 축).
+        api_key = os.environ.get("LLM_API_KEY", "").strip()
+        if not api_key:
+            raise SystemExit("LLM_API_KEY 가 없다 — news-consumer 는 추출 LLM 호출이 필수다")
+        complete_fn = openai_compatible_complete_fn(
+            api_key=api_key,
+            base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
+            model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
+        )
     from .event_assembly import NewsEventAssembler
 
     handler = NewsExtractionHandler(
-        storage=make_storage(settings.storage),
+        storage=storage,
         complete_fn=complete_fn,
+        tagger=tagger,
         article_reader=PgArticleReader(db=settings.db),
         job_identities=JobLedger(db=settings.db),
         event_assembler=NewsEventAssembler(db=settings.db),

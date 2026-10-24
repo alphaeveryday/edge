@@ -644,12 +644,16 @@ def _spy_tag_news(monkeypatch):
 
     captured = {}
 
-    def fake_run(storage, run_id, *, complete_fn, input_run_id, from_date, to_date,
+    def fake_run(storage, run_id, *, complete_fn, tagger, input_run_id, from_date, to_date,
                  limit, concurrency):
         captured["window"] = (from_date, to_date)
         captured["input_run_id"] = input_run_id
+        # 태거가 없으면(TAGGER_BACKEND=llm) run.py 가 LLM 경로를 배선해야 한다(ALPHA-1446).
+        captured["backend"] = ("llm" if complete_fn is not None and tagger is None else "other")
         return 0
 
+    # 바깥 env(TAGGER_BACKEND)와 무관하게 '태거 없음'으로 고정한다 — 모델 로딩을 타지 않는다.
+    monkeypatch.setattr(run_mod, "load_tagger", lambda storage: None)
     monkeypatch.setattr(run_mod.tag_news, "run", fake_run)
     return run_mod, captured
 
@@ -660,6 +664,7 @@ def test_tag_news_forwards_normalize_manifest_scope(monkeypatch):
     assert main(["tag-news", "--run-id", "R", "--input-run-id", "N1"]) == 0
     assert captured["input_run_id"] == "N1"
     assert captured["window"] == (None, None)
+    assert captured["backend"] == "llm"
 
 
 def test_tag_news_requires_explicit_scope(monkeypatch):
@@ -929,11 +934,13 @@ def _spy_assemble(monkeypatch):
 
     captured = {}
 
-    def fake_run(storage, run_id, *, db, complete_fn, from_date, to_date, window_days,
+    def fake_run(storage, run_id, *, db, complete_fn, tagger, from_date, to_date, window_days,
                  concurrency):
         captured["window"] = (from_date, to_date, window_days)
+        captured["backend"] = ("llm" if complete_fn is not None and tagger is None else "other")
         return 0
 
+    monkeypatch.setattr(run_mod, "load_tagger", lambda storage: None)  # 바깥 env 와 무관하게 '태거 없음'
     monkeypatch.setattr(run_mod.assemble_events, "run", fake_run)
     monkeypatch.setattr(run_mod, "db_config_from_env", lambda base: base)
     return run_mod, captured
@@ -946,6 +953,7 @@ def test_assemble_window_days_reaches_step(monkeypatch):
     run_mod, captured = _spy_assemble(monkeypatch)
     assert main(["assemble-events", "--run-id", "R", "--window-days", "1"]) == 0
     assert captured["window"] == (None, None, 1)
+    assert captured["backend"] == "llm"
 
 
 def test_assemble_explicit_window_beats_window_days(monkeypatch):

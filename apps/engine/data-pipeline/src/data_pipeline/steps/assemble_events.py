@@ -67,6 +67,7 @@ from ..ops.quality_diagnostics import (
     build as build_quality_diagnostics,
     issue as quality_issue,
 )
+from ..tagging.extract import PROMPT_LANGUAGES, extract_assertions
 from ..tagging.ontology import default_predicate, identity_roles
 from .dart_values import match_dart_values
 
@@ -247,6 +248,8 @@ def read_daily_news(storage: Storage, published_date: str) -> list[dict]:
                 rows.append({
                     "article_id": article_id,
                     "title": title,
+                    # 로컬 태거(ALPHA-1446)는 제목+리드를 본다 — LLM 2콜 체인은 제목만 쓴다.
+                    "lead_text": rec.get("lead_text"),
                     "published_at": rec.get("published_at"),
                     "publisher": rec.get("publisher"),
                     "source_vendor": rec.get("source_vendor") or "bigkinds",
@@ -756,6 +759,61 @@ def classify_titles(complete_fn, rows: list[dict], view: ProcessRegistry,
         logger.warning("추출 콜 누락 %d건(다음 런 재시도): %s",
                        len(missing), sorted(missing)[:10])
     return results
+
+
+def classify_with_tagger(tagger, rows: list[dict], view: ProcessRegistry,
+                         entity_index: dict[str, str], resolution_index: ResolutionIndex,
+                         gate_drops_out: dict[str, int] | None = None,
+                         gate_types_out: dict[str, int] | None = None) -> dict[str, dict]:
+    """article_id → 검증된 추출 — 로컬 RoBERTa 태거로(ALPHA-1446). `classify_titles` 의 대체.
+
+    기사마다 `extract_assertions(tagger=...)` 로 문서 분류·타입·인자를 뽑고, 1분 단건 조립과
+    **같은** `to_classification` 으로 cls 형상을 만든다 — 두 writer 가 같은 변환을 지나야 같은
+    기사에 같은 계보가 선다. 모델은 기사당 사건 1건만 낸다. primary 미해소는 적재하지 않고 사유로
+    센다(LLM 게이트 드롭과 같은 규약). 태거 실패는 예외로 올린다(LLM 호출 실패와 같은 규약).
+    """
+    from ..minute.event_assembly import to_classification  # 그 모듈이 이 모듈을 읽는다(순환 회피)
+
+    def _drop(reason: str) -> None:
+        if gate_drops_out is not None:
+            gate_drops_out[reason] = gate_drops_out.get(reason, 0) + 1
+
+    ticker_by_entity = {v: k for k, v in entity_index.items()}
+    out: dict[str, dict] = {}
+    for row in rows:
+        if row.get("language") not in PROMPT_LANGUAGES:
+            # 모델이 한국어 기사로만 학습됐다 — 다른 언어에 씌우면 판정은 나오고 품질만 조용히
+            # 무너진다(tag-news·1분 소비자와 같은 제한). 건너뛰되 센다.
+            _drop("unsupported_language")
+            continue
+        result = extract_assertions(
+            {"article_id": row["article_id"], "title": row["title"], "lead_text": row.get("lead_text")},
+            tagger=tagger)
+        if result["status"] != "ok":
+            # 추론 실패는 판정이 아니라 '물어보지도 못했다'다 — 드롭으로 세고 넘어가면 런이
+            # 성공으로 끝나 SFN 실패 경로가 안 돈다. LLM 경로(_complete_json 재시도 소진)처럼
+            # 올려 이 날짜를 롤백하고 exit 1 로 드러낸다.
+            raise RuntimeError(
+                f"태거 실패: article_id={row['article_id']} status={result['status']} "
+                f"{result.get('reasons')}")
+        if not result["assertions"]:
+            if result["doc_class"] == "EVENT":
+                # 사건이라 판정했는데 검증을 통과한 사건이 없다(NO_EVENT 타입·허용 밖 타입) —
+                # 비이벤트와 섞으면 그 탈락이 안 보인다.
+                _drop("event_without_valid_assertion")
+            continue  # 사건 없는 기사(시세·분석·홍보) — 조립 대상이 아니다
+        assertion = result["assertions"][0]
+        if gate_types_out is not None:
+            etype = assertion["event_type_code"]
+            gate_types_out[etype] = gate_types_out.get(etype, 0) + 1
+        cls = to_classification(assertion, article_id=row["article_id"], view=view,
+                                entity_index=entity_index, ticker_by_entity=ticker_by_entity,
+                                res_index=resolution_index)
+        if cls is None:
+            _drop("primary_unresolved")
+            continue
+        out[row["article_id"]] = cls
+    return out
 
 
 def load_entity_index(conn) -> dict[str, str]:
@@ -1406,7 +1464,8 @@ def run(
     run_id: str,
     *,
     db: DbConfig,
-    complete_fn,
+    complete_fn=None,
+    tagger=None,
     from_date: str | None = None,
     to_date: str | None = None,
     window_days: int | None = None,
@@ -1428,6 +1487,9 @@ def run(
     00:03 자정 crossing 때 실측된 그 모양이, 사고가 아니라 매일이 된다). 멱등(document-exists
     skip)이라 겹침 비용은 스캔뿐이다.
     """
+    if complete_fn is None and tagger is None:
+        # 둘 다 없으면 분류가 날짜마다 실패한다 — 시작 전에 사유를 분명히 해서 막는다.
+        raise ValueError("complete_fn(LLM) 또는 tagger(로컬 모델) 중 하나가 필요하다")
     started_at = datetime.now(timezone.utc)
     news_read = in_universe_count = already_normalized = assembled_during_classify = 0
     classified = events_created = threaded = unknown_thread = 0
@@ -1470,12 +1532,18 @@ def run(
                 todo = [n for n in in_universe if n["article_id"] not in already]
                 date_gate_drops: dict[str, int] = {}
                 date_gate_types: dict[str, int] = {}
-                classifications = (classify_titles(complete_fn, todo, view, entity_index,
-                                                   resolution_index=resolution_index,
-                                                   concurrency=concurrency,
-                                                   gate_drops_out=date_gate_drops,
-                                                   gate_types_out=date_gate_types)
-                                   if todo else {})
+                if not todo:
+                    classifications = {}
+                elif tagger is not None:
+                    classifications = classify_with_tagger(
+                        tagger, todo, view, entity_index, resolution_index,
+                        gate_drops_out=date_gate_drops, gate_types_out=date_gate_types)
+                else:
+                    classifications = classify_titles(complete_fn, todo, view, entity_index,
+                                                      resolution_index=resolution_index,
+                                                      concurrency=concurrency,
+                                                      gate_drops_out=date_gate_drops,
+                                                      gate_types_out=date_gate_types)
                 # 적재 직전 자국 재확인(ALPHA-730) — 분류(LLM, 수 분) 창에서 1분 단건
                 # 조립이 먼저 조립한 기사는 뺀다. doc 락은 이 날짜 커밋까지 유지된다.
                 raced = recheck_assembled(conn, todo, classifications)
@@ -1571,6 +1639,8 @@ def run(
         "job": JOB_NAME, "run_id": run_id, "dataset": DATASET,
         "ops_attempt_id": os.environ.get("OPS_LEDGER_ATTEMPT_ID"),
         "assembler_version": ASSEMBLER_VERSION,
+        # 분류를 누가 했나(ALPHA-1446) — 로컬 태거면 그 버전, LLM 2콜 체인이면 None(assembler_version 이 말한다).
+        "tagger_version": tagger.version if tagger is not None else None,
         "started_at": started_at.isoformat(), "finished_at": datetime.now(timezone.utc).isoformat(),
         "from_date": from_date, "to_date": to_date, "languages": list(LANGUAGES),
         "news_read": news_read, "in_universe": in_universe_count,
