@@ -691,9 +691,9 @@ def test_analyses_keep_the_global_admission_limit_without_backtests(isolated_db)
     assert store.submit('analysis-owner', 'analysis-key', {'holdings': []})['id']
 
 
-def test_analysis_reuses_only_archives_as_current_as_a_new_fetch():
-    # ALPHA-1437: a reused archive must equal what the provider would return for as_of,
-    # otherwise the analysis would silently compare an older window.
+def test_analysis_uses_a_stored_archive_only_when_it_is_whole_and_current():
+    # ALPHA-1437: analysis reads only the collector's store. A record must equal what a fetch would
+    # return for as_of, otherwise the analysis would silently compare an older or shorter window.
     import json
     from edge_portfolio.price_fetch import serialize
     as_of = date(2026, 10, 16)
@@ -701,8 +701,29 @@ def test_analysis_reuses_only_archives_as_current_as_a_new_fetch():
         prices = [100. + i for i in range(len(days))]
         frame = pd.DataFrame({'Close': prices, 'Adj Close': prices}, index=pd.to_datetime(days))
         return json.loads(serialize({'frame': frame, 'currency': 'KRW', 'source_url': 'https://example.com', 'history_complete': True, **extra}))
+    def rejected(payload):
+        with pytest.raises(ValueError) as error:
+            work.analysis_archive('KR:069500', payload, as_of)
+        return str(error.value)
     current = work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15', '2026-10-16']), as_of)
     assert [str(d.date()) for d in current['frame'].index] == ['2026-10-14', '2026-10-15'], 'The as_of session is cut like a fetch'
-    assert work.analysis_archive('KR:069500', saved(['2026-10-13', '2026-10-14']), as_of) is None, 'Missing the last finished session'
-    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], history_complete=False), as_of) is None, 'Recent quotes only'
-    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], return_basis='price'), as_of) is None
+    assert rejected(saved(['2026-10-13', '2026-10-14'])) == 'PRICE_STALE', 'Missing the last finished session'
+    # Fetched after the analysis asked: as current as the provider allows, so a week's age (price_status) is the bound.
+    from datetime import timezone
+    asked = datetime(2026, 10, 16, 1, tzinfo=timezone.utc)
+    after, before = '2026-10-16T01:00:05+00:00', '2026-10-16T00:59:00+00:00'
+    assert work.analysis_archive('KR:069500', saved(['2026-10-13', '2026-10-14'], requested_at=after), as_of, fetched_since=asked)
+    with pytest.raises(ValueError, match='PRICE_STALE'):
+        work.analysis_archive('KR:069500', saved(['2026-10-13', '2026-10-14'], requested_at=before), as_of, fetched_since=asked)
+    with pytest.raises(ValueError, match='PRICE_STALE'):
+        work.analysis_archive('KR:069500', saved(['2026-10-01', '2026-10-02'], requested_at=after), as_of, fetched_since=asked)
+    # Yahoo closes with fallback returns from a whole-history fetch are stored incomplete only so the collector retries Yahoo.
+    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], history_complete=False, whole_history=True), as_of)
+    assert rejected(saved(['2026-10-14', '2026-10-15'], history_complete=False)) == 'PRICE_HISTORY_INCOMPLETE', 'Recent quotes only'
+    # What a fetch would have returned is usable as-is: the analysis has no better source to wait for.
+    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], return_basis='price'), as_of)
+    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], history_complete=False,
+                                                     provider='FinanceDataReader:NAVER:069500'), as_of)
+    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], price_recovery={'status': 'partial'}), as_of)
+
+

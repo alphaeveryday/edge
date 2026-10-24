@@ -131,6 +131,12 @@ async def collection_loop(stopping):
         while not stopping.is_set():
             preloaded = False
             try:
+                # A waiting analysis comes before every scheduled refresh; its instruments share one warm session.
+                if await preload.collect_one(stopping, session=session, urgent=True):
+                    continue
+            except Exception as error:
+                log.warning('urgent price request failed code=%s', type(error).__name__)
+            try:
                 worked = await collect_once(stopping, preload_session=session)
             except Exception as error:
                 log.warning('shared quote loop failed code=%s', type(error).__name__)

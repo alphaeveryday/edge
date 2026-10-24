@@ -376,14 +376,16 @@ async def test_current_timeout_keeps_completed_recommended_history(monkeypatch):
     request = AnalysisInput(holdings=[{'name': 'current', 'instrument_id': 'KR:360750', 'amount_krw': 100}], horizon='10년 이상')
     market = MarketData(request, date(2026, 10, 12))
     market.records['KR:069500'] = record()
-    async def slow(*args, **kwargs):
+    async def slow(keys, as_of, records, failures, **_):
+        failures.update({key: 'PRICE_QUEUE_TIMEOUT' for key in keys})
         await asyncio.sleep(1)
     original_timeout = asyncio.timeout
-    monkeypatch.setattr('edge_portfolio.market_data.fetch_prices', slow)
+    monkeypatch.setattr('edge_portfolio.market_preload.stored_prices', slow)
     monkeypatch.setattr(asyncio, 'timeout', lambda seconds: original_timeout(.01 if seconds == 65 else seconds))
     result = await market.get([{'instrument_id': 'KR:069500', 'weight_pct': 100}])
     assert result['status'] == 'available'
     assert result['history']['points'][-1]['current'] is None
+    assert result['failures'] == {'KR:360750': 'PRICE_QUEUE_TIMEOUT'}
 
 
 async def test_cancelling_provider_kills_and_reaps_process(monkeypatch):

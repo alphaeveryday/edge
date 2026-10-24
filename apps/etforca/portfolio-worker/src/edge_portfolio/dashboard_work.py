@@ -158,7 +158,7 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
             record = {**record, 'frame': pd.concat([saved['frame'].drop(record['frame'].index, errors='ignore'), record['frame']]).sort_index(),
                       'history_complete': saved.get('history_complete', True),
                       'repair_since': min(saved.get('repair_since', str(end)), record.get('repair_since', str(end)))}
-            for metadata in ('return_basis', 'return_source_url'):
+            for metadata in ('return_basis', 'return_source_url', 'whole_history'):
                 if metadata in saved and metadata not in record:
                     record[metadata] = saved[metadata]
             if saved.get('price_recovery', {}).get('status') in ('partial', 'unavailable', 'rejected'):
@@ -262,44 +262,50 @@ async def records_for(ids, day, *, valuation_since=None, include_fx=True, collec
     return records, failures
 
 
-def analysis_archive(key, payload, as_of):
-    """A preloaded full archive cut like a new fetch for `as_of`, or None when a fetch could do better."""
+def analysis_archive(key, payload, as_of, *, fetched_since=None):
+    """The collector's stored record cut like a fetch for `as_of`. Analysis never fetches, so anything the collector
+    would have published from a fetch is usable; only a recent-quotes-only or out-of-date record is not.
+    `fetched_since`: a record whose own fetch started at or after this time is as current as a fetch can be,
+    so it need not reach the last finished session (price_status still bounds its age)."""
     from .market_data import decode_prices, expected_sessions, positive_price, price_status
     record = decode_prices(json.dumps(payload))
-    if (record.get('history_complete') is not True or record.get('return_basis') == 'price'
-            or record.get('provider', '').startswith('FinanceDataReader:NAVER:')
-            or record.get('price_recovery', {}).get('status') in ('unavailable', 'partial', 'rejected')):
-        return None
+    # A whole-history fetch stored as incomplete (Yahoo closes with fallback returns) is incomplete only so the
+    # collector retries Yahoo; the fallback provider always returns its whole series (load_fallback_prices reads from 1970).
+    if (record.get('history_complete') is not True and not record.get('whole_history')
+            and not record.get('provider', '').startswith('FinanceDataReader:')):
+        raise ValueError('PRICE_HISTORY_INCOMPLETE')
     frame = record['frame'].loc[record['frame'].index < pd.Timestamp(as_of)]
     closes = frame.index[frame['Close'].map(positive_price)]
     sessions = expected_sessions(key, as_of - timedelta(days=14), as_of - timedelta(days=1))
-    # Missing the latest finished session means a new fetch could still add it.
-    if closes.empty or not len(sessions) or closes[-1] < sessions[-1]:
-        return None
+    fresh = fetched_since is not None and datetime.fromisoformat(record.get('requested_at') or '0001-01-01T00:00:00+00:00') >= fetched_since
+    if not fresh and (closes.empty or not len(sessions) or closes[-1] < sessions[-1]):
+        raise ValueError('PRICE_STALE')
     record = {**record, 'frame': frame}
-    # The same check that admits a new primary fetch: valid Adj Close and Close, not stale.
-    return None if price_status(record, as_of) else record
+    failure = price_status(record, as_of)
+    if failure:
+        raise ValueError(failure)
+    return record
 
 
-def saved_prices(keys, as_of):
-    """Analysis reads preloaded archives first; only the rest wait for the single provider slot."""
-    if not keys:
-        return {}
+def saved_prices(keys, as_of, rejected=None, *, fetched_since=None):
+    """The collector's stored prices usable for `as_of`. One row per query: a whole archive is 1-2MB and many
+    in one statement can pass the 5-second statement limit. `rejected` receives why each other key is unusable."""
+    rejected = {} if rejected is None else rejected
+    records = {}
     try:
         with store.connect() as db:
-            rows = db.execute('SELECT instrument,payload FROM portfolio_dashboard_prices WHERE instrument=ANY(%s)', (list(keys),)).fetchall()
+            for key in keys:
+                row = db.execute('SELECT payload FROM portfolio_dashboard_prices WHERE instrument=%s', (key,)).fetchone()
+                if not row:
+                    rejected[key] = 'PRICE_NOT_STORED'
+                    continue
+                try:
+                    records[key] = analysis_archive(key, row['payload'], as_of, fetched_since=fetched_since)
+                except Exception as error:
+                    rejected[key] = str(error) if isinstance(error, ValueError) and str(error).startswith('PRICE_') else 'PRICE_RESPONSE_INVALID'
     except Exception as error:
-        log.warning('saved prices unavailable code=%s; fetching from providers', type(error).__name__)
-        return {}
-    records = {}
-    for row in rows:
-        try:
-            record = analysis_archive(row['instrument'], row['payload'], as_of)
-        except Exception as error:
-            log.warning('saved price=%s unusable code=%s', row['instrument'], type(error).__name__)
-            record = None
-        if record:
-            records[row['instrument']] = record
+        log.warning('saved prices unavailable code=%s', type(error).__name__)
+        rejected.update({key: 'PRICE_READ_FAILED' for key in keys if key not in records and key not in rejected})
     return records
 
 

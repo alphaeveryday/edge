@@ -122,6 +122,27 @@ def batch():
     return request, market, groups
 
 
+def collector(monkeypatch, prices, slow=()):
+    """The collector's store as an analysis sees it: `prices` maps an instrument to its stored record or the
+    collector's failure code; `slow` instruments never arrive. Returns each request's keys in order."""
+    requested = []
+    async def stored_prices(keys, as_of, records, failures, **_):
+        requested.append(list(keys))
+        for key in keys:
+            value = prices.get(key)
+            if key in slow:
+                failures[key] = 'PRICE_QUEUE_TIMEOUT'
+            elif isinstance(value, dict):
+                records[key] = value
+                failures.pop(key, None)
+            else:
+                failures[key] = value or 'PRICE_NOT_STORED'
+        if set(keys) & set(slow):
+            await asyncio.Event().wait()
+    monkeypatch.setattr('edge_portfolio.market_preload.stored_prices', stored_prices)
+    return requested
+
+
 async def test_saved_holdings_removed_from_catalog_are_reported_without_losing_recovery():
     request, market, groups = batch()
     market.current = {'KR:REMOVED': 1}
@@ -228,33 +249,16 @@ async def test_a_failed_price_batch_can_recover_without_a_frozen_unavailable_res
     assert (await optimizer.tool({'combinations': groups}))['status'] == 'available'
 
 
-async def test_shared_baseline_and_fx_are_loaded_before_slow_optional_candidates(monkeypatch):
+async def test_shared_baseline_and_fx_are_requested_before_optional_candidates(monkeypatch):
+    # The collector serves requests in order: the baseline and FX lead, so a slow candidate cannot hold them back.
     request, market, groups = batch()
     market.current = {'US:VOO': 1}
     market.catalog['US:VOO'] = {'ticker': 'VOO', 'market': 'US', 'kind': 'etf'}
-    market.semaphore = asyncio.Semaphore(2)
-    calls = []
-    baseline_finished = False
-    premature_candidates = []
-    async def fetch(symbol, *_args, **_kwargs):
-        nonlocal baseline_finished
-        calls.append(symbol)
-        if symbol == 'KRW=X':
-            return record(start=1000, finish=1000)
-        if symbol == 'VOO':
-            await asyncio.sleep(.01)
-            baseline_finished = True
-            return record('USD', finish=105)
-        if not baseline_finished:
-            premature_candidates.append(symbol)
-        if symbol == 'A.KS':
-            return record(finish=120)
-        await asyncio.wait_for(asyncio.Event().wait(), timeout=_kwargs['provider_timeout'])
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
-    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .1)
+    prices = {'FX': record(start=1000, finish=1000), 'US:VOO': record('USD', finish=105), 'KR:A': record(finish=120)}
+    requested = collector(monkeypatch, prices, slow={'KR:B', 'KR:C', 'KR:D', 'KR:E'})
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .1)
     result = await Optimizer(market).tool({'combinations': groups})
-    assert calls[:2] == ['KRW=X', 'VOO']
-    assert not premature_candidates
+    assert requested[0][:2] == ['FX', 'US:VOO']
     assert result['status'] == 'available'
     assert result['candidates'][0]['allocations'] == [{'instrument_id': 'KR:A', 'weight_pct': 100}]
 
@@ -340,21 +344,18 @@ async def test_unexpected_optimizer_exception_never_publishes_internal_details(m
 async def test_partial_price_failures_preserve_nine_independent_combinations(monkeypatch, failure):
     request, market, groups = batch()
     if failure == 'timeout':
-        monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .05)
+        monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .05)
     if failure == 'fx':
         market.catalog['KR:E']['market'] = 'US'
     if failure == 'shared-window':
         market.as_of = date(2026, 10, 2)
-    async def fetch(symbol, as_of, **kwargs):
-        if failure == 'timeout' and symbol == 'E.KS':
-            await asyncio.wait_for(asyncio.sleep(10), timeout=kwargs['provider_timeout'])
-        if symbol == 'KRW=X':
-            raise ValueError('No FX available')
+    prices = {'FX': 'PRICE_STALE'}
+    for key in market.catalog:
         dates = None
         if failure == 'shared-window':
-            dates = pd.bdate_range('2025-10-01', '2026-10-01') if symbol == 'E.KS' else pd.bdate_range('2025-09-30', '2026-09-30')
-        return record(currency='USD' if symbol == 'E' else 'KRW', dates=dates)
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+            dates = pd.bdate_range('2025-10-01', '2026-10-01') if key == 'KR:E' else pd.bdate_range('2025-09-30', '2026-09-30')
+        prices[key] = record(dates=dates)
+    collector(monkeypatch, prices, slow={'KR:E'} if failure == 'timeout' else ())
     result = await Optimizer(market, request).tool({'combinations': groups})
     assert result['status'] == 'available'
     assert len(result['candidates']) == (10 if failure == 'shared-window' else 9)
@@ -492,19 +493,13 @@ async def test_optimizer_retains_the_failed_instrument_and_provider_cause():
     assert result['rejected_combinations'] == [{'combination': 5, 'reason': 'INSTRUMENT_PRICE_UNAVAILABLE'}]
 
 
-async def test_collection_timeout_does_not_overwrite_an_already_known_price_failure(monkeypatch):
+async def test_collection_deadline_does_not_overwrite_a_failure_the_collector_reported(monkeypatch):
     request, market, groups = batch()
-    async def fetch(symbol, _, **kwargs):
-        if symbol == 'E.KS':
-            raise ValueError('PRICE_STALE')
-        if symbol == 'D.KS':
-            await asyncio.wait_for(asyncio.sleep(10), timeout=kwargs['provider_timeout'])
-        return record()
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
-    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .05)
+    collector(monkeypatch, {**{key: record() for key in market.catalog}, 'KR:E': 'PRICE_STALE'}, slow={'KR:D'})
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .05)
     result = await Optimizer(market, request).tool({'combinations': groups})
     assert result['failures']['KR:E'] == 'PRICE_STALE'
-    assert result['failures']['KR:D'] == 'PRICE_PROVIDER_TIMEOUT'
+    assert result['failures']['KR:D'] == 'PRICE_QUEUE_TIMEOUT'
 
 
 async def test_all_provider_failed_combinations_are_accounted_for_in_diagnostics():
@@ -553,67 +548,17 @@ def test_agent_can_withhold_backtest_winner_when_rating_evidence_is_insufficient
         optimizer.validate(final)
 
 
-async def test_queued_instruments_receive_their_own_provider_timeout(monkeypatch):
-    from edge_portfolio import market_data
-    request, market, groups = batch()
-    started = []
-    async def fetch(symbol, _, **kwargs):
-        started.append(symbol)
-        await asyncio.sleep(.01)
-        return record()
-    monkeypatch.setattr(market_data, '_fetch_prices', fetch)
-    monkeypatch.setattr(market_data, 'price_status', lambda *_: None)
-    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .1)
-    assert market_data._PRICE_SLOTS.acquire(blocking=False)
-    task = asyncio.create_task(Optimizer(market, request).tool({'combinations': groups}))
-    try:
-        await asyncio.sleep(.2)  # Another loop occupies the shared slot longer than a provider deadline.
-        assert not started
-    finally:
-        market_data._PRICE_SLOTS.release()
-    result = await task
-    assert result['status'] == 'available'
-    assert set(started) == {'A.KS', 'B.KS', 'C.KS', 'D.KS', 'E.KS'}
-    assert not market.failures
-    assert result['tested_combinations'] == 10
-
-
 @pytest.mark.parametrize('completed', [False, True])
-async def test_batch_deadline_distinguishes_unstarted_prices_from_interrupted_providers(monkeypatch, completed):
+async def test_batch_deadline_keeps_arrived_prices_and_names_the_rest_as_still_queued(monkeypatch, completed):
     request, market, groups = batch()
-    started = []
-    completed_record = record()
-    async def fetch(symbol, _, **kwargs):
-        started.append(symbol)
-        if completed and symbol == 'A.KS':
-            return completed_record
-        await asyncio.sleep(10)
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    arrived = {'KR:A'} if completed else set()
+    collector(monkeypatch, {key: record() for key in arrived}, slow=set(market.catalog) - arrived)
     monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .05)
     result = await Optimizer(market, request).tool({'combinations': groups})
-    assert len(started) == 2 + int(completed)
-    assert set(market.failures.values()) == {'PRICE_COLLECTION_TIMEOUT', 'PRICE_QUEUE_TIMEOUT'}
-    assert sum(reason == 'PRICE_QUEUE_TIMEOUT' for reason in market.failures.values()) == 3 - int(completed)
+    assert market.failures == {key: 'PRICE_QUEUE_TIMEOUT' for key in set(market.catalog) - arrived}
     assert bool(result['candidates']) == completed
     if completed:
-        assert market.records['KR:A'] is completed_record
         assert result['tested_combinations'] == 1
-
-
-async def test_timeout_checkpoint_is_not_reported_as_an_unavailable_instrument(monkeypatch):
-    request, market, groups = batch()
-    async def fetch(symbol, _, **kwargs):
-        try:
-            await asyncio.wait_for(asyncio.sleep(10), timeout=kwargs['provider_timeout'])
-        except TimeoutError:
-            kwargs['on_raw'](record())
-            raise
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
-    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .03)
-    result = await Optimizer(market, request).tool({'combinations': groups})
-    assert result['status'] == 'available'
-    assert result['tested_combinations'] == 10
-    assert result['failures'] == {}
 
 
 def test_rating_alone_cannot_withhold_an_available_candidate():
@@ -631,24 +576,18 @@ def test_rating_alone_cannot_withhold_an_available_candidate():
 async def test_price_retries_share_collection_time_and_keep_completed_candidates(monkeypatch):
     from itertools import combinations
     request, market, groups = batch()
-    started = []
-    async def fetch(symbol, _, **kwargs):
-        started.append(symbol)
-        if symbol == 'A.KS':
-            return record()
-        await asyncio.sleep(10)
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    requested = collector(monkeypatch, {'KR:A': record()}, slow=set(market.catalog) - {'KR:A'})
     monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .03)
     optimizer = Optimizer(market, request)
     first = await optimizer.tool({'combinations': groups})
-    attempts = list(started)
+    attempts = len(requested)
     second = await optimizer.tool({'combinations': groups})
-    assert started == attempts  # Retrying cannot consume the report-writing time again.
+    assert len(requested) == attempts  # Retrying cannot consume the report-writing time again.
     assert first['status'] == second['status'] == 'available'
     assert [row['allocations'] for row in first['candidates']] == [row['allocations'] for row in second['candidates']]
     assert first['failures'] == second['failures']
     third = await optimizer.tool({'combinations': [list(group) for group in combinations(market.catalog, 3)]})
-    assert started == attempts  # A different candidate batch shares the same collection budget.
+    assert len(requested) == attempts  # A different candidate batch shares the same collection budget.
     assert [row['allocations'] for row in third['candidates']] == [row['allocations'] for row in first['candidates']]
 
 
@@ -815,7 +754,7 @@ async def test_dividend_chip_shows_trailing_yields_so_the_model_can_favor_higher
 
 
 class SavedPrices:
-    """portfolio_dashboard_prices as the market preload leaves it, without a database."""
+    """portfolio_dashboard_prices as the collector leaves it, without a database."""
     def __init__(self, payloads):
         self.payloads = payloads
     def __enter__(self):
@@ -823,13 +762,15 @@ class SavedPrices:
     def __exit__(self, *_):
         return False
     def execute(self, _, params):
-        return SimpleNamespace(fetchall=lambda: [{'instrument': key, 'payload': self.payloads[key]} for key in params[0] if key in self.payloads])
+        payload = self.payloads.get(params[0])
+        return SimpleNamespace(fetchone=lambda: {'payload': payload} if payload else None)
 
 
-async def test_twelve_holdings_with_a_slow_provider_do_not_time_out_together(monkeypatch):
+async def test_twelve_holdings_answer_from_the_store_and_only_the_missing_one_waits(monkeypatch):
     # ALPHA-1437: one provider slot served twelve holdings one by one until the shared
-    # 180-second budget ran out, so every holding failed at once. Preloaded archives
-    # must answer immediately; only the instrument without one may wait and fail alone.
+    # 180-second budget ran out, so every holding failed at once. The analysis now reads the
+    # collector's store: stored holdings answer at once and are never requested again;
+    # only the instrument the store lacks is requested, and it alone fails when the collector is slow.
     import json
     from edge_portfolio import store
     from edge_portfolio.price_fetch import serialize
@@ -840,13 +781,12 @@ async def test_twelve_holdings_with_a_slow_provider_do_not_time_out_together(mon
     payloads = {key: json.loads(serialize({**record(finish=110 + n), 'history_complete': True})) for n, key in enumerate(held)}
     monkeypatch.setattr(store, 'connect', lambda: SavedPrices(payloads))
     asked = []
-    async def slow(symbol, _, **kwargs):
-        asked.append(symbol)
-        await asyncio.sleep(10)
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', slow)
-    # Reading the archives counts toward the budget, so leave room for that but not for the provider.
-    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', 3)
+    monkeypatch.setattr('edge_portfolio.market_preload.request_prices', lambda keys: asked.extend(keys) or 'requested')
+    monkeypatch.setattr('edge_portfolio.market_preload.finished_requests', lambda requested: {})
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', 1.5)
     result = await Optimizer(market, request).tool({'combinations': [[held[0], held[1]], ['KR:NEW']]})
-    assert asked == ['NEW.KS'], 'Saved archives must not queue behind the provider again'
-    assert market.failures == {'KR:NEW': 'PRICE_COLLECTION_TIMEOUT'}
+    assert asked == ['KR:NEW'], 'Stored archives must not be requested from the collector again'
+    assert market.failures == {'KR:NEW': 'PRICE_QUEUE_TIMEOUT'}
     assert result['status'] != 'unavailable' and result['candidates']
+
+
