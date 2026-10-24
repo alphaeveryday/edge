@@ -98,6 +98,14 @@ def test_similar_events_without_basis_matches_unknown_basis_and_shows_it():
     assert found["unknown"] == 1  # 단위가 다른 것만 모름
 
 
+def test_similar_events_reads_news_days_and_disclosure_day_as_one_unit():
+    # WHY: 계약 기간은 공시에서 DAY, 뉴스 파서에서 DAYS 로 저장된다 — 한쪽만 맞추면 다른 쪽 선례가 '모름'으로 빠진다
+    rows = [_measure("e1", "900", unit="DAY"), _measure("e2", "1000", unit="DAYS")]
+    found = graph.similar_events("COMPANY.CONTRACT.SIGNING", "CONTRACT_DURATION", "gte", "365", "DAY", "",
+                                 TODAY, 180, run=lambda q, p: rows)
+    assert sorted(m["value"] for m in found["matched"]) == ["1,000", "900"] and found["unknown"] == 0
+
+
 @pytest.mark.parametrize("args, message", [
     (("COMPANY.NOPE", "CONTRACT_VALUE", "gte", "1"), "온톨로지에 없는"),
     (("COMPANY.CONTRACT.SIGNING", "DEAL_VALUE", "gte", "1"), "수치가 아닙니다"),

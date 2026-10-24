@@ -40,6 +40,7 @@ DEADLINE = 30  # 초. 서버 쪽 시간 초과(25초)를 서버가 지키지 않
 OPERATORS = {"gte": operator.ge, "lte": operator.le}
 UNITS = ("KRW", "USD", "PCT", "COUNT", "DAY", "YEARS", "MONTHS")  # 운영 그래프에 저장된 단위 전부(2026-10-24 실측). 단위 계열 이름이 아니다
 BASES = ("TOTAL", "ANNUAL", "QUARTERLY", "UNKNOWN")
+SAME_UNIT = {"DAY": {"DAY", "DAYS"}}  # 공시는 DAY, 뉴스 파서(data-pipeline events/amounts.py)는 DAYS 로 저장한다 — 같은 단위로 본다
 SKILL = Path(__file__).resolve().parent / "prompts" / "event-graph.md"
 
 
@@ -164,7 +165,7 @@ def similar_events(event_type: str, metric: str, op: str, value: str, unit: str,
             continue
         who = tuple(sorted(r.get("who") or []))
         happening = (r.get("d"), who)
-        if r.get("unit") != unit or (basis and r.get("basis") != basis) or r.get("value") is None \
+        if r.get("unit") not in SAME_UNIT.get(unit, {unit}) or (basis and r.get("basis") != basis) or r.get("value") is None \
                 or r.get("vsrc") == "UNRESOLVED" or r.get("parse") not in (None, "ok"):
             unknown.add(happening)
             continue
