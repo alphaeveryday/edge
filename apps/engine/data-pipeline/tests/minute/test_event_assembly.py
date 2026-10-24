@@ -133,3 +133,33 @@ def test_institution_partner_resolves_without_enabling_realtime_instrument_alias
         "삼성전자": "inst_SAMSUNG", "금융감독원": "actor_auth_kr_fss", "현대자동차": None,
     }
     assert cls["primary_ticker"] == "005930"
+
+
+def test_thread_event_carries_analyst_firm_text_for_the_news_key():
+    """WHY(ALPHA-508): 뉴스 스레드 키는 증권사 리포트를 증권사 원문으로 가른다 — 1분 경로가 그 원문을
+    안 실으면 배치(fetch_unthreaded_events, event_argument.mention_text)와 키가 갈려 같은 리포트가
+    두 스레드가 된다. 해소 안 된 증권사여도 원문은 실린다."""
+    cls = {"event_type_code": "MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE", "predicate_code": "RAISE",
+           "lifecycle_stage": None, "anchor_role": None,
+           "arguments": [{"role_code": "RATED_ENTITY", "entity_id": "inst_SAMSUNG",
+                          "mention_text": "삼성전자"},
+                         {"role_code": "ANALYST_FIRM", "entity_id": None,
+                          "mention_text": "대신증권"}]}
+    created = {"source_event_id": "evt_1", "entity_id": "inst_SAMSUNG",
+               "available_at": "2026-07-15T09:00:00+09:00"}
+    event = event_assembly._thread_event(created, cls, "2026-07-15T09:00:00+09:00")
+    assert event["analyst_firm"] == "대신증권"
+    assert event["role_values"] == {"RATED_ENTITY": "inst_SAMSUNG"}
+
+
+def test_thread_event_picks_the_analyst_firm_the_batch_will_read():
+    """WHY: 같은 증권사(같은 entity)로 해소된 인자가 둘이면 저장은 첫 원문만 남긴다 — 1분 경로가
+    버려질 원문까지 후보로 쓰면 배치(저장된 행)와 다른 증권사 키를 골라 스레드가 갈린다."""
+    cls = {"event_type_code": "MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE", "predicate_code": "RAISE",
+           "lifecycle_stage": None, "anchor_role": None,
+           "arguments": [{"role_code": "ANALYST_FIRM", "entity_id": "actor_nh", "mention_text": "NH투자증권"},
+                         {"role_code": "ANALYST_FIRM", "entity_id": "actor_nh", "mention_text": "A NH"}]}
+    created = {"source_event_id": "evt_2", "entity_id": "inst_SAMSUNG",
+               "available_at": "2026-07-15T09:00:00+09:00"}
+    event = event_assembly._thread_event(created, cls, "2026-07-15T09:00:00+09:00")
+    assert event["analyst_firm"] == "NH투자증권"   # 저장되는 첫 원문 — 정규화 최소값("anh")이 아니다

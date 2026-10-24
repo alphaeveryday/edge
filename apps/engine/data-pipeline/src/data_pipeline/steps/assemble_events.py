@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import unicodedata
 from collections import Counter
 from dataclasses import replace
 from concurrent.futures import ThreadPoolExecutor
@@ -1195,6 +1196,128 @@ def _thread_key(event_type_code: str, role_values: dict[str, str]) -> tuple[str 
     return "||".join(parts), []
 
 
+# 뉴스 스레드(ALPHA-508, ADR-0064 T5) — 키는 타입 + 주체 회사(+증권사 리포트는 증권사)이고 identity
+# 역할이 아니다. v2 스레드 정답(후속 단계 47건)에서 identity 키·시간 무제한(운영 규칙)보다 묶기·구분
+# 모두 나았다. 같은 키라도 마지막 보도에서 창을 넘게 끊기면 새 스레드, 스레드 안에서 하루 넘게
+# 끊겼다 다시 나오면 후속 단계다. 창 6개월은 결정값이다 — 정답은 45일 구간까지만 재서, 그보다 긴
+# 창이 다른 사건을 합치는 정도는 측정 밖이다(ADR-0064).
+NEWS_THREAD_WINDOW = timedelta(days=183)
+NEWS_STORY_GAP = timedelta(days=1)
+_ANALYST_TYPE_PREFIX = "MARKET_INFO."
+_NO_COMPANY = "<news: no primary company>"
+# 회사 축이 될 수 있는 역할 종별. 평가자(증권사·신용평가사)는 회사가 아니라 구분자다.
+_COMPANY_KINDS = frozenset({"ISSUER", "COMPANY_ENTITY"})
+_EVALUATOR_ROLES = frozenset({"ANALYST_FIRM", "RATING_AGENCY"})
+
+
+def _analyst_key(text: str) -> str:
+    """증권사 원문 정규화 — NFKC·공백 제거·소문자."""
+    return "".join(unicodedata.normalize("NFKC", text).split()).lower()
+
+
+def news_analyst_firm(mentions) -> str | None:
+    """ANALYST_FIRM 원문이 여럿이면 정규화 값이 가장 앞선 것 — 1분 경로와 배치가 같은 규칙을 쓴다.
+
+    인자 순서·DB 정렬에 기대면 두 writer 가 같은 기사에 다른 증권사를 골라 스레드가 갈린다.
+    """
+    texts = [m for m in mentions if m and m.strip()]
+    return min(texts, key=_analyst_key) if texts else None
+
+
+def _ts(value: object) -> datetime:
+    """available_at·last_state_at(문자열 또는 datetime) → 비교 가능한 시각."""
+    return value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+
+
+def _news_thread_base(event: dict, role_values: dict[str, str]) -> str | None:
+    """뉴스 스레드 키의 구간 앞부분 — 타입 + 주체 회사(+증권사). 주체가 없으면 None(UNKNOWN).
+
+    주체는 **회사 종별 역할**(ISSUER·COMPANY_ENTITY, 평가자 제외)에서만 고른다 — 규제기관·규칙·
+    제품 개념이 회사 자리에 들어가면 서로 다른 회사의 보도가 그 기관·개념 스레드로 합쳐진다.
+    순서는 1분 단건 조립의 primary 선정과 같다: 타입의 primary 역할 → 필수 역할 → 남은 역할 코드
+    사전순, 그 역할의 첫 값(정렬). 증권사는 해소 여부와 무관하게 원문을 정규화해 쓴다 — 해소된
+    기사와 안 된 기사가 갈리면 같은 리포트가 두 스레드로 나뉜다.
+    """
+    present = {r: v for r, v in role_values.items()
+               if v and r not in _EVALUATOR_ROLES and role_entity_kind(r) in _COMPANY_KINDS}
+    if not present:
+        return None
+    tv = load_process_registry().get(event["event_type_code"])
+    order = (*tv.primary_roles, *tv.required_roles) if tv else ()
+    role = next((r for r in order if r in present), None) or min(present)
+    company = sorted(role_entities(present[role]))[0]
+    base = f"news:event_type_id={event['event_type_code']}||company={company}"
+    firm = event.get("analyst_firm")
+    if event["event_type_code"].startswith(_ANALYST_TYPE_PREFIX) and firm:
+        base += "||analyst=" + _analyst_key(firm)
+    return base
+
+
+def _news_segments(conn, bases: list[str]) -> dict[str, list[list]]:
+    """base → 그 키의 스레드 구간 전부 [[thread_key, thread_id, opened_at, last_state_at], ...](시작 순).
+
+    구간 키는 `{base}||since=<ISO 시각>` 이다. 접두 비교는 `starts_with` 로 한다 — 범위 비교
+    (`>= base AND < base~`)는 DB 기본 정렬(언어별 collation)이 문장부호를 무시하면 어긋나 기존
+    구간을 못 찾고 매번 새 스레드를 연다. 최신 구간만이 아니라 전부 읽는 이유: 늦게 온 과거 보도
+    (백필·UNKNOWN 재평가)는 그 시각의 구간에 붙어야 한다. base 전부를 한 쿼리로 찾는다.
+    """
+    if not bases:
+        return {}
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT b.base, t.thread_key, t.thread_id, t.opened_at, t.last_state_at"
+            " FROM unnest(%s::text[]) AS b(base)"
+            " JOIN event_thread t ON starts_with(t.thread_key, b.base || '||since=')"
+            " ORDER BY b.base, t.opened_at",
+            (list(bases),),
+        )
+        rows = cur.fetchall()
+    out: dict[str, list[list]] = {}
+    for base, key, thread_id, opened_at, last_at in rows:
+        out.setdefault(base, []).append([key, str(thread_id), _ts(opened_at), _ts(last_at)])
+    return out
+
+
+def _previous_report_at(conn, thread_id: str, at: datetime, source_event_id: str) -> datetime | None:
+    """그 스레드에서 `at` 이전(같은 시각 포함, 자기 자신 제외) 마지막 보도 시각(DB) — 늦게 온 과거
+    보도의 하루 공백 판정용. 같은 시각을 빼면 같은 시각 재보도가 그보다 앞 보도와 비교돼 후속이 된다."""
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT max(se.available_at) FROM event_thread_link l"
+            " JOIN source_event se ON se.source_event_id = l.source_event_id"
+            " WHERE l.thread_id = %s AND se.available_at <= %s AND l.source_event_id <> %s",
+            (thread_id, at, source_event_id),
+        )
+        row = cur.fetchone()
+    return _ts(row[0]) if row and row[0] is not None else None
+
+
+def _assign_news_segment(segs: list[list], base: str, at: datetime) -> tuple[list, timedelta | None]:
+    """보도 시각 `at` 의 구간을 고르거나 새로 연다 → (구간, gap). segs 를 제자리에서 갱신한다.
+
+    직전 구간(시작 ≤ at)이 창 안이면 거기, 아니면 다음 구간(시작 > at)이 창 안이면 거기(그 구간의
+    시작을 앞당긴다), 둘 다 아니면 새 구간이다. gap 은 같은 구간 마지막 보도와의 간격이다 — 구간
+    마지막 보도보다 이른 보도(늦게 온 과거 보도)는 여기서 알 수 없어 None 이고, 호출부가 DB 의
+    직전 보도로 다시 잰다(`_previous_report_at`). 새 구간도 None.
+    """
+    prev = next((g for g in reversed(segs) if g[2] <= at), None)
+    nxt = next((g for g in segs if g[2] > at), None)
+    if prev is not None and at - prev[3] <= NEWS_THREAD_WINDOW:
+        seg = prev
+    elif nxt is not None and nxt[2] - at <= NEWS_THREAD_WINDOW:
+        seg = nxt
+    else:
+        # 시작 시각은 UTC 로 적는다 — 같은 순간이 표기(+09:00/+00:00)에 따라 다른 thread_id 가 되지 않게.
+        key = f"{base}||since={at.astimezone(timezone.utc).isoformat()}"
+        seg = [key, _stable_id("thr", key), at, at]
+        segs.append(seg)
+        segs.sort(key=lambda g: g[2])
+        return seg, None
+    gap = at - seg[3] if at >= seg[3] else None
+    seg[2], seg[3] = min(seg[2], at), max(seg[3], at)
+    return seg, gap
+
+
 def _stage_rank(event_type_code: str, stage: str | None) -> int | None:
     """타입 lifecycle 순서축에서의 위치 — 메뉴 밖(구 오염 행 포함)·결측은 None(정보 없음)."""
     if not stage:
@@ -1206,14 +1329,16 @@ def _stage_rank(event_type_code: str, stage: str | None) -> int | None:
         return None
 
 
-def _novelty(event: dict, prior: int, thread_stage: str | None) -> str:
+def _novelty(event: dict, prior: int, thread_stage: str | None,
+             gap: timedelta | None = None) -> str:
     """계약 novelty 판정(news_thread_contract) — DB CHECK 5종 안의 값만 낸다.
 
     prior=0 → FIRST_IN_THREAD. 그 뒤로는: 정정 마커(predicate/stage 에 correction_markers
     포함, 예: REVISE·CANCELLED) → CORRECTION, stage 가 스레드의 현 단계보다 **진행**(순서축
     전진 또는 첫 단계 정보) → FOLLOW_UP_STAGE, 그 외(단계 정보 없음·동일·후퇴) →
     DUPLICATE_REBROADCAST. 구 구현은 prior>0 을 전부 FOLLOW_UP_STAGE 로 뭉쳐 재보도와
-    진행을 구분 못 했다(ALPHA-545).
+    진행을 구분 못 했다(ALPHA-545). `gap`(뉴스만 — 같은 스레드 직전 보도와의 간격)이 하루를
+    넘으면 단계 정보가 없어도 FOLLOW_UP_STAGE 다(ALPHA-508).
     """
     if prior == 0:
         return "FIRST_IN_THREAD"
@@ -1227,13 +1352,23 @@ def _novelty(event: dict, prior: int, thread_stage: str | None) -> str:
         prior_rank = _stage_rank(event["event_type_code"], thread_stage)
         if prior_rank is None or rank > prior_rank:
             return "FOLLOW_UP_STAGE"
+    if gap is not None and gap > NEWS_STORY_GAP:
+        # 뉴스: 스레드 안에서 하루 넘게 끊겼다 다시 나온 보도는 새 단계다(ADR-0064 T5).
+        return "FOLLOW_UP_STAGE"
     return "DUPLICATE_REBROADCAST"
 
 
 def thread_events(conn, events: list[dict]) -> int:
-    """event_thread 계보 — 계약 identity_roles 기반 thread_key + novelty(ALPHA-457·545).
+    """event_thread 계보 — 뉴스는 시간 창 키(ALPHA-508), 공시는 identity_roles 키 + novelty(ALPHA-457·545).
 
-    thread_key 는 그 타입의 `identity_roles` 값들로 구성한다(엔진 정본 §2). identity 를 못
+    **뉴스**(source_class NEWS): 키는 타입 + 주체 회사(+증권사)이고(`_news_thread_base`), 같은 키의
+    마지막 보도에서 `NEWS_THREAD_WINDOW` 를 넘게 끊기면 새 스레드 구간(`||since=<시각>`)을 연다.
+    스레드 안 직전 보도와 `NEWS_STORY_GAP` 을 넘게 벌어진 보도는 FOLLOW_UP_STAGE 다. 주체 회사가
+    없을 때만 UNKNOWN 이다. 근거·창 결정은 ADR-0064. 이 키 이전(identity 키)으로 묶인 뉴스 스레드는
+    이어받지 않는다 — 키의 의미가 달라 옮길 대응이 없어, 전환 시점부터 새 키로 시작한다(옛 스레드·
+    링크는 그대로 남는다).
+
+    **공시**: thread_key 는 그 타입의 `identity_roles` 값들로 구성한다(엔진 정본 §2). identity 를 못
     채우는 이벤트(개념·날짜 역할 등 미해소)는 thread 를 만들지 않고
     `novelty_status='UNKNOWN'`·`thread_id=NULL`·`unknown_reason` 으로 link/snapshot 만
     남긴다(불변식 5). **UNKNOWN 처리 건수를 반환한다** — 조용히 삼키지 않고 run 로그에
@@ -1242,6 +1377,11 @@ def thread_events(conn, events: list[dict]) -> int:
     novelty 는 `_novelty` 가 계약 5종으로 세분한다(정정=CORRECTION·stage 진행=FOLLOW_UP_STAGE·
     재보도=DUPLICATE_REBROADCAST). 스레드의 현 단계는 event_thread.current_stage 에서 시드하고
     배치 내에선 순서축 전진일 때만 갱신한다(메뉴 밖 오염 값은 rank=None 이라 헤더를 못 건드린다).
+
+    알려진 천장(뉴스 구간): 늦게 온 과거 보도가 이미 갈라진 두 구간 사이를 이어도(둘 다 창 안이 돼도)
+    두 구간을 합치지 않는다 — 이미 연결된 링크의 thread_id 를 다시 써야 하는 일이라, 처리 순서에 따라
+    구간 수가 달라질 수 있다. 183일 넘게 끊긴 보도 사이에 백필이 끼는 경우만 해당하고, 회피는 아래와
+    같은 운영 지침(백필은 과거→현재 순)이다.
 
     알려진 천장(엔진 정본 그대로): prior 판정이 기존 링크 **총수** 기준이라, 이미 처리된
     날짜보다 **오래된** 날짜를 나중에 백필하면 novelty 가 역전된다(옛 이벤트가 FOLLOW_UP).
@@ -1268,30 +1408,63 @@ def thread_events(conn, events: list[dict]) -> int:
 
     keyed: list[tuple[dict, str]] = []          # identity 충족 — 스레드 대상
     unknown: list[tuple[dict, list[str]]] = []  # identity 결측 — UNKNOWN
+    news_keyed: list[tuple[dict, str]] = []     # 뉴스 — 구간(창) 배정 전 base 키
     issuers = issuer_mapping(conn, (
         entity for event in events for value in event["role_values"].values() if value
         for entity in role_entities(value)
     ))
     for event in events:
-        thread_key, missing = _thread_key(
-            event["event_type_code"], actor_role_values(event["role_values"], issuers))
+        values = actor_role_values(event["role_values"], issuers)
+        if event.get("source_class", "NEWS") == "NEWS":
+            base = _news_thread_base(event, values)
+            (unknown.append((event, [_NO_COMPANY])) if base is None
+             else news_keyed.append((event, base)))
+            continue
+        thread_key, missing = _thread_key(event["event_type_code"], values)
         (unknown.append((event, missing)) if thread_key is None
          else keyed.append((event, thread_key)))
 
-    keys = list({key for _event, key in keyed})
+    # 뉴스 구간 배정 — 시각 순으로, 같은 base 의 마지막 보도에서 창을 넘으면 새 구간(새 스레드).
+    # gap 은 같은 구간 직전 보도와의 간격(novelty 의 하루 공백 규칙 입력), 새 구간이면 None.
+    segments = _news_segments(conn, sorted({b for _e, b in news_keyed}))
+    news_ids: dict[str, str] = {}
+    gaps: dict[str, timedelta | None] = {}
+    run_times: dict[str, list[datetime]] = {}   # 구간별 이번 런 보도 시각
+    for event, base in sorted(news_keyed, key=lambda eb: _ts(eb[0]["available_at"])):
+        at = _ts(event["available_at"])
+        segs = segments.setdefault(base, [])
+        before = len(segs)
+        last_before = {g[0]: g[3] for g in segs}
+        seg, gap = _assign_news_segment(segs, base, at)
+        if gap is None and len(segs) == before and at < last_before[seg[0]]:
+            # 늦게 온 과거 보도 — 같은 스레드에서 이 보도 직전 보도와의 간격으로 하루 공백을 잰다.
+            prior_times = [x for x in run_times.get(seg[0], []) if x <= at]
+            db_prev = _previous_report_at(conn, seg[1], at, event["source_event_id"])
+            prev = max([*prior_times, *([db_prev] if db_prev else [])], default=None)
+            gap = at - prev if prev is not None else None
+        gaps[event["source_event_id"]] = gap
+        run_times.setdefault(seg[0], []).append(at)
+        news_ids[seg[0]] = seg[1]
+        keyed.append((event, seg[0]))
+
+    keys = list({key for _event, key in keyed} - set(news_ids))
     with conn.cursor() as cur:
         cur.execute("SELECT thread_key, thread_id FROM event_thread WHERE thread_key = ANY(%s)",
                     (keys,))
         existing_ids = dict(cur.fetchall())
     ids = {key: existing_ids.get(key, _stable_id("thr", key)) for key in keys}
+    ids.update(news_ids)
     prior_counts = _thread_prior_counts(conn, ids)
     thread_stages = _thread_current_stages(conn, ids)
     per_thread_seen: dict[str, int] = {}
-    for event, thread_key in sorted(keyed, key=lambda ek: ek[0]["available_at"]):
+    # 실제 시각순 — 원문 문자열순이면 시간대 표기가 섞일 때(+09:00 대 +00:00) 순서가 뒤집혀 첫 보도
+    # 판정이 바뀌고 opened_at > last_state_at 헤더(ck_event_thread_time 위반)가 생긴다.
+    for event, thread_key in sorted(keyed, key=lambda ek: _ts(ek[0]["available_at"])):
         # A key migration preserves the historical ID and every external reference.
         thread_id = ids[thread_key]
         prior = prior_counts.get(thread_key, 0) + per_thread_seen.get(thread_key, 0)
-        novelty = _novelty(event, prior, thread_stages.get(thread_key))
+        novelty = _novelty(event, prior, thread_stages.get(thread_key),
+                           gaps.get(event["source_event_id"]))
         per_thread_seen[thread_key] = per_thread_seen.get(thread_key, 0) + 1
         # current_stage 는 순서축 **전진**일 때만 갱신 — 재보도·후퇴·메뉴 밖 값이 스레드
         # 상태를 되돌리거나 오염시키지 못한다.
@@ -1315,7 +1488,8 @@ def thread_events(conn, events: list[dict]) -> int:
                           None, evaluated_at))
 
     for event, missing in unknown:
-        reason = "missing required identity roles: " + ", ".join(missing)
+        reason = ("missing primary company" if missing == [_NO_COMPANY]
+                  else "missing required identity roles: " + ", ".join(missing))
         links.append((event["source_event_id"], None,
                       event.get("source_class", "NEWS"), "UNKNOWN",
                       event.get("link_type", "TITLE_EVENT"),
@@ -1378,11 +1552,12 @@ def fetch_unthreaded_events(conn, event_date: str) -> list[dict]:
     가 아니라 event_argument 전 행을 모아 role 별로 접는다. 한 역할에 값이 여럿이면 정렬된
     JSON 배열로 축약한다(계약 `_collect_role_values` 규약 — 결정적 순서).
     lifecycle_stage·predicate_code 도 함께 싣는다 — novelty 세분(_novelty)의 입력이다(ALPHA-545).
+    증권사 리포트 타입의 ANALYST_FIRM 원문은 `analyst_firm` 으로 싣는다 — 뉴스 스레드 키(ALPHA-508).
     """
     with conn.cursor() as cur:
         cur.execute(
             "SELECT se.source_event_id, se.event_type_code, se.available_at,"
-            " se.lifecycle_stage, se.predicate_code, ea.role_code, ea.entity_id"
+            " se.lifecycle_stage, se.predicate_code, ea.role_code, ea.entity_id, ea.mention_text"
             " FROM source_event se"
             # LEFT JOIN — 아규먼트 0건 이벤트(다중 primary 타입에서 anchor 조작을 안 한 건)도
             # 스레딩에 넘겨 계약대로 UNKNOWN 링크를 받게 한다. INNER 면 그 이벤트가 조회에서
@@ -1405,7 +1580,7 @@ def fetch_unthreaded_events(conn, event_date: str) -> list[dict]:
         rows = cur.fetchall()
     events: dict[str, dict] = {}
     role_lists: dict[str, dict[str, list[str]]] = {}
-    for sid, event_type_code, available_at, stage, predicate, role_code, entity_id in rows:
+    for sid, event_type_code, available_at, stage, predicate, role_code, entity_id, mention in rows:
         sid = str(sid)
         event = events.get(sid)
         if event is None:
@@ -1414,6 +1589,10 @@ def fetch_unthreaded_events(conn, event_date: str) -> list[dict]:
                                    "lifecycle_stage": stage, "predicate_code": predicate,
                                    "role_values": {}}
             role_lists[sid] = {}
+        if role_code == "ANALYST_FIRM" and mention:
+            # 뉴스 스레드 키의 증권사 구분(ALPHA-508) — 해소 여부와 무관하게 원문, 여럿이면 1분 경로와
+            # 같은 규칙(news_analyst_firm)으로 하나를 고른다.
+            event["analyst_firm"] = news_analyst_firm([event.get("analyst_firm"), str(mention)])
         if role_code is None or entity_id is None:
             # 아규먼트 0건, 또는 **미해소 참여자**(ALPHA-563) — 둘 다 identity 재료가 아니다.
             # 미해소를 str(None)="None" 으로 실으면 서로 다른 사건(각자 다른 미해소 고객사)이

@@ -36,6 +36,7 @@ from ..entity_resolution import load_resolution_index, resolve
 from ..steps.assemble_events import (
     _validate_extraction,
     load_entity_index,
+    news_analyst_firm,
     persist_normalization,
     thread_events,
 )
@@ -277,9 +278,24 @@ def _thread_event(created: dict, cls: dict, published_at: str) -> dict:
     if cls["anchor_role"] and not any(
             a["entity_id"] == primary_entity for a in cls["arguments"]):
         role_lists.setdefault(cls["anchor_role"], []).append(str(primary_entity))
+    # 증권사 원문 — 뉴스 스레드 키의 증권사 구분(ALPHA-508). 배치(fetch_unthreaded_events)도 같은
+    # event_argument.mention_text 를 싣는다.
+    # 저장(persist_normalization)과 같은 접기 — (역할, 접지 또는 원문) 첫 인자만 — 를 거친 원문 중에서
+    # 고른다. 저장에서 버려진 원문까지 후보로 쓰면 배치(저장된 행을 읽음)와 다른 증권사를 고른다.
+    kept: set[tuple[str, str]] = set()
+    firms = []
+    for argument in cls["arguments"]:
+        identity = argument.get("entity_id") or argument.get("mention_text")
+        if identity is None or (argument["role_code"], identity) in kept:
+            continue
+        kept.add((argument["role_code"], identity))
+        if argument["role_code"] == "ANALYST_FIRM":
+            firms.append(argument.get("mention_text"))
+    analyst_firm = news_analyst_firm(firms)
     return {
         "source_event_id": created["source_event_id"],
         "event_type_code": cls["event_type_code"],
+        "analyst_firm": analyst_firm,
         "available_at": created.get("available_at") or published_at,
         "lifecycle_stage": cls["lifecycle_stage"],
         "predicate_code": cls["predicate_code"],

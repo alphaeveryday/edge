@@ -85,8 +85,9 @@ def test_assembled_actor_event_reaches_v2_news_tools(tmp_path, pg):
         assert thread_id is not None
         assert seed.execute("SELECT role_code,entity_id FROM event_argument WHERE source_event_id=%s", (event_id,)).fetchall() == [("ISSUER", actor)]
         assert seed.execute("SELECT entity_id FROM document_entity WHERE document_id=%s", (document_id,)).fetchall() == [(SHARE,)]
-        assert seed.execute("SELECT thread_key FROM event_thread WHERE thread_id=%s", (thread_id,)).fetchone() == (
-            f"event_type_id={EVENT_TYPE}||required:ISSUER={actor}",)
+        # 뉴스 스레드 키는 타입 + 주체 회사(Actor) + 구간 시작(ALPHA-508, ADR-0064) — identity 키가 아니다.
+        [thread_key] = seed.execute("SELECT thread_key FROM event_thread WHERE thread_id=%s", (thread_id,)).fetchone()
+        assert thread_key.startswith(f"news:event_type_id={EVENT_TYPE}||company={actor}||since=")
 
         # Reprocessing the same source must not split identity or history.
         assert assemble_events.run(storage, article_id + "-retry", db=config, complete_fn=classify, from_date=DAY, to_date=DAY) == 0
