@@ -76,6 +76,20 @@ variable "deepseek_secret_arn" {
   type        = string
 }
 
+# 뉴스 태거(ALPHA-1446·1449, ADR-0064). llm = DeepSeek, roberta = 로컬 int8 모델(레이크
+# `models/tagger/<버전>/` 묶음이 먼저 있어야 한다 — 없으면 태거를 쓰는 서비스·배치가 기동을 거부한다).
+# 이 값 하나가 env(TAGGER_BACKEND)와 태깅 태스크 크기를 **함께** 바꾼다 — 되돌리기도 이 값 하나다.
+# news-worker 에도 싣는 이유: job 이 선언하는 tagger_version 과 consumer 가 실행하는 버전이 같아야 한다.
+variable "tagger_backend" {
+  description = "뉴스 태거 백엔드(llm|roberta). roberta 면 태깅 서비스·배치 태스크 크기도 함께 커진다."
+  type        = string
+  default     = "llm"
+  validation {
+    condition     = contains(["llm", "roberta"], var.tagger_backend)
+    error_message = "tagger_backend 는 llm 또는 roberta."
+  }
+}
+
 variable "task_cpu" {
   type    = number
   default = 1024

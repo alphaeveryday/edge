@@ -249,12 +249,28 @@ locals {
   # KRX ETF 수집(ALPHA-387)은 as-of 라벨을 거래일 판정으로 정한다 — 비거래일 런은 KRX 가 직전
   # 거래일 PDF 를 주므로 그 날짜로 라벨해야 한다. Planner 와 **같은** 휴장일 집합을 받아야
   # "Planner 는 비거래일로 건너뛴 날을 수집은 거래일로 라벨"하는 모순이 안 생긴다.
+  # 뉴스 태거 선택(ALPHA-1449) — 태거를 쓰는 배치(tag-news=deepseek 세트, assemble-events=events 세트)에 싣는다.
+  # llm(기본)이면 아무것도 싣지 않는다 — 코드 기본값이 llm 이라, 되돌리면 env·revision 이 이 기능 이전과 같다.
+  tagger_env = var.tagger_backend == "roberta" ? { TAGGER_BACKEND = "roberta" } : {}
+  # roberta 면 태깅 배치만 키운다(나머지는 task_cpu·task_memory 그대로). Fargate 실측(2026-10-24, 기사당):
+  # 8 vCPU 0.23초 · 4 vCPU 1.18초 · 1 vCPU(스레드 1) 2.2초, 기동 20~28초, 피크 메모리 2.0~2.2GB.
+  # tag-news: 00:10 런 신규 400~800건 → 8 vCPU 로 약 3분(뉴스 SFN 상한 40분, 런 동안만 과금).
+  # assemble-events: 같은 런 tag-news 판정을 재사용해 추론은 적다 — 1 vCPU, 모델을 올릴 메모리만.
+  batch_task_sizes = var.tagger_backend == "roberta" ? {
+    deepseek = { cpu = 8192, memory = 16384 }
+    events   = { cpu = 1024, memory = 4096 }
+  } : {}
+  # 추론 스레드 = 태스크 vCPU 수(TAGGER_THREADS). Fargate 는 CPU 를 실제 할당보다 많이 보여 줘서(1 vCPU 에 2개)
+  # 그대로 두면 스레드끼리 다퉈 두 배 느리다 — 크기를 아는 여기서 넣는다.
+  batch_tagger_env = { for k, size in local.batch_task_sizes :
+  k => merge(local.tagger_env, { TAGGER_THREADS = tostring(floor(size.cpu / 1024)) }) }
+
   env_sets = {
     # 가격 마트 적재(load-price-daily)가 canonical 파트가 여럿일 때 정제와 **같은** 승자 규칙
     # (`normalize_price._pick_winner`)으로 다시 고른다 — 그 규칙의 휴장일 판정이 정제 컨테이너
     # (bigkinds)와 같은 달력을 봐야 두 계층이 갈리지 않는다(ALPHA-1120).
     rds    = merge(local.db_env, { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) })
-    events = local.db_env
+    events = merge(local.db_env, lookup(local.batch_tagger_env, "events", local.tagger_env))
     # iNAV(ALPHA-557)는 거래일·개장 이후에만 수집한다 — 응답에 날짜가 없어 거래일을 수집
     # 시각으로 붙이는데 KIS 가 휴장일에도 직전 거래일 값을 주기 때문. 그 판정이 KRX 와 **같은**
     # 휴장일 집합을 봐야 한다. 안 주면 is_trading_day 가 평일 공휴일을 거래일로 보고 가드가
@@ -282,7 +298,7 @@ locals {
     # 실패를 격리해 exit 0 으로 끝나므로, 원장이 봉투(failed_records)를 읽지 못하면 전건 실패도
     # 초록으로 보인다. 이 배선(#379)이 한 배포 앞서고 카탈로그 플래그 전환이 뒤따랐다 —
     # 순서를 뒤집으면 Reconciler 가 resolve 불가한 LEDGER_GAP 을 연다.
-    deepseek = local.db_env
+    deepseek = merge(local.db_env, lookup(local.batch_tagger_env, "deepseek", local.tagger_env))
     # MACRO_COLLECTION(ALPHA-1136) wrapper 기록용 — 위 deepseek 와 같은 순서: 이 배선이 한 배포
     # 앞서고 카탈로그 instrumented 전환이 뒤따른다(그 전까지 test_ops_catalog `_WIRING_AHEAD_OF_FLAG`).
     macro = local.db_env
@@ -378,8 +394,8 @@ resource "aws_ecs_task_definition" "this" {
   family                   = "${var.name}-${each.key}"
   requires_compatibilities = ["FARGATE"]
   network_mode             = "awsvpc"
-  cpu                      = var.task_cpu
-  memory                   = var.task_memory
+  cpu                      = try(local.batch_task_sizes[each.key].cpu, var.task_cpu)
+  memory                   = try(local.batch_task_sizes[each.key].memory, var.task_memory)
   execution_role_arn       = aws_iam_role.execution.arn
   task_role_arn            = aws_iam_role.task.arn
 

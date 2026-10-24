@@ -572,6 +572,8 @@ module "data_pipeline" {
   db_user                = module.rds.master_username
   db_password_secret_arn = module.rds.master_user_secret_arn
   deepseek_secret_arn    = data.aws_secretsmanager_secret.deepseek.arn
+  # 로컬 RoBERTa 태거(ALPHA-1449, ADR-0064). 되돌리기는 "llm" — DeepSeek 키는 그대로 주입돼 있다.
+  tagger_backend = "roberta"
 
   # 컷오버: raw 전량성공 게이트 제거(ADR-0030) + 일주일치 백필 실증(#178) 후 일일 트리거 활성화.
   schedule_state = "ENABLED"
