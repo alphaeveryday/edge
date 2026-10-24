@@ -61,3 +61,39 @@ def test_download_refuses_keys_that_escape_the_bundle(tmp_path):
 
     with pytest.raises(RuntimeError, match="묶음 밖"):
         backend._download(_Storage())
+
+
+def test_threads_come_from_the_deployed_task_size(monkeypatch):
+    # WHY: Fargate 1 vCPU 태스크는 CPU 가 2개로 보이고 할당량도 컨테이너에 안 보인다 — 보이는 수로
+    # 스레드를 띄우면 서로 다퉈 기사당 4.1초(1개면 2.2초)라 9시 피크(시간당 약 1,000건)를 못 따라간다.
+    monkeypatch.setenv("TAGGER_THREADS", "1")
+    assert backend.cpu_threads() == 1
+    monkeypatch.delenv("TAGGER_THREADS")
+    assert backend.cpu_threads() is None          # 안 주면 보이는 CPU 수(RobertaTagger 기본)
+    monkeypatch.setenv("TAGGER_THREADS", "0")
+    with pytest.raises(RuntimeError, match="1 이상"):
+        backend.cpu_threads()
+
+
+def test_load_tagger_passes_the_thread_count_to_the_model(monkeypatch, tmp_path):
+    # WHY: env 를 읽기만 하고 태거에 안 넘기면 TAGGER_THREADS=1 이어도 보이는 CPU 수로 돌아 경합이 재발한다.
+    import sys
+    import types
+
+    seen = {}
+
+    class _Tagger:
+        version = backend.ROBERTA_TAGGER_VERSION
+
+        def __init__(self, model_dir, threads=None):
+            seen.update(model_dir=model_dir, threads=threads)
+
+    fake = types.ModuleType("data_pipeline.tagging.roberta")
+    fake.RobertaTagger = _Tagger
+    monkeypatch.setitem(sys.modules, "data_pipeline.tagging.roberta", fake)
+    monkeypatch.setattr(backend, "TAGGER_BACKEND", "roberta")
+    monkeypatch.setenv("TAGGER_MODEL_DIR", str(tmp_path))
+    monkeypatch.setenv("TAGGER_THREADS", "1")
+
+    backend.load_tagger(storage=None)
+    assert seen == {"model_dir": str(tmp_path), "threads": 1}

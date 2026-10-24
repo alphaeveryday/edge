@@ -57,7 +57,7 @@ def _context(title: str, lead: str | None) -> str:
 
 
 def _cpu_threads() -> int:
-    """이 프로세스가 쓸 수 있는 CPU 수(컨테이너 할당 기준)."""
+    """보이는 CPU 수 — threads 를 안 준 경우의 기본값. 운영은 backend.cpu_threads(할당량 기준)를 넘긴다."""
     try:
         return max(1, len(os.sched_getaffinity(0)))
     except AttributeError:  # sched_getaffinity 없는 OS(로컬 개발)

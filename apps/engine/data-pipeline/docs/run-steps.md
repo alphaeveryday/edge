@@ -342,6 +342,8 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # roberta 는 로컬 int8 모델(LLM 키 불필요 — torch·transformers 가 깔린 환경, 이미지에는 있다).
 # roberta 의 모델 묶음은 레이크 models/tagger/<버전>/ 에서 받고, 로컬은 TAGGER_MODEL_DIR 로 디렉터리를
 # 직접 준다. tagger_version 이 달라 백엔드를 바꾸면 그 창의 기사는 다시 태깅된다.
+# 추론 스레드는 TAGGER_THREADS(태스크 vCPU 수, terraform 이 넣는다) — Fargate 1 vCPU 는 CPU 가 2개로 보여
+# 그대로 두면 스레드끼리 다퉈 두 배 느리다(ALPHA-1449).
 LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-news --input-run-id 20260701T000000Z --limit 50
 #   로컬 모델: TAGGER_BACKEND=roberta TAGGER_MODEL_DIR=<묶음 디렉터리> uv run --package data-pipeline python -m data_pipeline.run tag-news ...
 #   기간 복구: ... run tag-news --from 2026-07-01 --to 2026-07-08
