@@ -12,14 +12,15 @@ interface SheetScrollCtx {
   native: NativeGesture;
   scrollRef?: AnimatedRef<Animated.ScrollView>;
   scrollY: { value: number };
+  locked: boolean;
   onSeen: (pct: number) => void;
 }
-const SheetScroll = createContext<SheetScrollCtx>({ native: Gesture.Native(), scrollY: { value: 0 }, onSeen: () => {} });
+const SheetScroll = createContext<SheetScrollCtx>({ native: Gesture.Native(), scrollY: { value: 0 }, locked: false, onSeen: () => {} });
 
-// 맨 위에서 아래로 끌면 시트가 내려가는 시트 안 목록. 스크롤하다 맨 위에 닿은 뒤의 끌어내림도 이어서 시트로 넘어감
+// 맨 위에서 아래로 끌면 시트가 내려가는 시트 안 목록. 스크롤하다 맨 위에 닿은 뒤의 끌어내림은 위쪽 여백만 드러냄
 // 본 만큼의 비율을 시트에 보고
 export function SheetScrollView({ ref, ...props }: ScrollViewProps & { ref?: Ref<ScrollView> }) {
-  const { native, scrollRef, scrollY, onSeen } = useContext(SheetScroll);
+  const { native, scrollRef, scrollY, locked, onSeen } = useContext(SheetScroll);
   const m = useRef({ y: 0, view: 0, content: 0 });
   const report = () => m.current.content > 0 && m.current.view > 0 && onSeen(Math.min(100, Math.round(((m.current.y + m.current.view) / m.current.content) * 100)));
   const onScroll = useSheetScroll(scrollY, (y) => { m.current.y = y; report(); });
@@ -37,7 +38,7 @@ export function SheetScrollView({ ref, ...props }: ScrollViewProps & { ref?: Ref
         onLayout={(e) => { m.current.view = e.nativeEvent.layout.height; report(); }}
         onContentSizeChange={(_, h) => { m.current.content = h; report(); }}
         scrollEventThrottle={16}
-        bounces={false}
+        scrollEnabled={!locked}
         overScrollMode="never"
         showsVerticalScrollIndicator={false}
         {...props}
@@ -104,7 +105,7 @@ export function BottomSheet({ open, onClose, children, head, tall, padded = true
               </GestureDetector>
               <GestureDetector gesture={drag.body}>
                 <View style={tall && styles.body}>
-                  <SheetScroll.Provider value={{ native: drag.native, scrollRef: drag.scrollRef, scrollY: drag.scrollY, onSeen: stats.onSeen }}>{last.current.children}</SheetScroll.Provider>
+                  <SheetScroll.Provider value={{ native: drag.native, scrollRef: drag.scrollRef, scrollY: drag.scrollY, locked: drag.locked, onSeen: stats.onSeen }}>{last.current.children}</SheetScroll.Provider>
                 </View>
               </GestureDetector>
               <SheetGap />

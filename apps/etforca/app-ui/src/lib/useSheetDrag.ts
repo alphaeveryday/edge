@@ -31,6 +31,8 @@ const CLOSE_MS = 180;
 const FLING_MIN_MS = 80;
 // 세로 이동으로 판정하는 거리
 const SLOP = 6;
+// 본문 끌기의 시트·스크롤 판정 거리. 처음 몇 px 의 흔들림 무시
+const DECIDE = 10;
 // RN Animated.spring 의 speed·bounciness 를 같은 물리 모델의 stiffness·damping 으로 환산한 값
 // 열기 14·0, 스냅·fit 높이 맞춤 16·0
 // Reanimated 기본 mass 가 4 라 RN 과 같은 1 명시
@@ -52,7 +54,7 @@ interface Options {
 
 // 시트의 보이는 높이 하나로 열기·닫기·끌기와 배경 투명도를 함께 움직임
 // tall 시트는 화면 70%에서 시작해 95%까지 확장
-// 본문 목록은 네이티브 스크롤과 동시에 끌기를 받아, 맨 위에 닿은 뒤 이어지는 끌어내림이 손을 떼지 않아도 시트로 넘어옴
+// 본문 끌기는 터치 하나에 시트·스크롤 중 하나. 맨 위에서 아래로 출발하면 시트, 그 밖은 스크롤
 export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   const { height: screen } = useWindowDimensions();
   const { top } = useSafeAreaInsets();
@@ -73,11 +75,14 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   // 본문 목록의 스크롤 위치
   const scrollY = useSharedValue(0);
   const scrollRef = useAnimatedRef<Animated.ScrollView>();
-  // 끌기 시작 시점의 높이와 직전 이동량
+  // 끌기 시작 시점의 높이와 이동량
   const start = useSharedValue(0);
-  const lastTy = useSharedValue(0);
-  // 본문 끌기가 시트를 움직이는 중인지
-  const dragging = useSharedValue(false);
+  const startTy = useSharedValue(0);
+  // 터치 시작 때 목록이 맨 위였는지와 이번 터치의 본문 끌기 모드(0 미정·1 시트·2 스크롤)
+  const atTop = useSharedValue(false);
+  const mode = useSharedValue(0);
+  // 시트 모드 동안의 목록 스크롤 잠금
+  const [locked, setLocked] = useState(false);
 
   // 처음부터 빠르게 출발해 끝에서 감속하는 닫힘
   const dismiss = useRef((ms: number) => {
@@ -152,48 +157,50 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
       })
       .onEnd((e) => release(e.velocityY))
       .onFinalize((_, ok) => { if (!ok) snap(stops.value.low); });
-    // 본문: 목록이 맨 위인 상태의 아래 방향 끌기만 시트가 넘겨받고, 그동안 목록은 맨 위에 고정
-    // 끌기 시작 높이까지 되돌리면 다시 목록 스크롤로 넘김
+    // 본문: 판정 거리를 넘는 순간의 누적 방향으로 이번 터치의 모드를 정하고 손을 뗄 때까지 유지
+    // 시트 모드는 손잡이처럼 시트가 손가락을 따르고 목록은 맨 위에 고정
+    // 스크롤 모드는 시트를 건드리지 않아 맨 위 너머로 끌면 목록 위쪽 여백만 드러남
     const body = Gesture.Pan()
       .activeOffsetY([-SLOP, SLOP])
       .simultaneousWithExternalGesture(native)
-      .onStart(() => {
-        lastTy.value = 0;
-        dragging.value = false;
+      .onBegin(() => {
+        atTop.value = scrollY.value <= 0;
+        mode.value = 0;
       })
       .onUpdate((e) => {
-        const dy = e.translationY - lastTy.value;
-        lastTy.value = e.translationY;
-        if (!dragging.value) {
-          if (!(scrollY.value <= 0 && dy > 0)) return;
+        if (mode.value === 0) {
+          // 활성화 직후 이벤트의 이동량이 0 인 경우가 있어 판정 거리는 직접 확인
+          if (Math.abs(e.translationY) < DECIDE && Math.abs(e.translationX) < DECIDE) return;
+          if (!(atTop.value && e.translationY > 0 && e.translationY >= Math.abs(e.translationX))) {
+            mode.value = 2;
+            return;
+          }
           cancelAnimation(pos);
-          dragging.value = true;
+          mode.value = 1;
           start.value = pos.value;
+          startTy.value = e.translationY;
+          runOnJS(setLocked)(true);
         }
-        const next = pos.value - dy;
-        if (next >= start.value) {
-          pos.value = start.value;
-          dragging.value = false;
-          return;
-        }
-        pos.value = Math.max(0, next);
+        if (mode.value !== 1) return;
+        const { high } = stops.value;
+        const raw = start.value - (e.translationY - startTy.value);
+        pos.value = raw > high ? high + rubber(raw - high) : Math.max(0, raw);
+        // 스크롤 잠금이 반영되기 전 프레임의 목록 고정
         scrollTo(scrollRef, 0, 0, false);
       })
       .onEnd((e) => {
-        if (!dragging.value) return;
-        dragging.value = false;
-        release(e.velocityY);
+        if (mode.value === 1) release(e.velocityY);
       })
       .onFinalize((_, ok) => {
-        if (!ok && dragging.value) {
-          dragging.value = false;
-          snap(stops.value.low);
-        }
+        if (mode.value !== 1) return;
+        mode.value = 0;
+        if (!ok) snap(stops.value.low);
+        runOnJS(setLocked)(false);
       });
     // 스크롤 쪽에도 선언해야 스크롤된 상태에서 시작한 끌기가 활성화됨(웹 실측)
     native.simultaneousWithExternalGesture(body);
     return { grip, body, native };
-  }, [pos, stops, start, lastTy, dragging, scrollY, scrollRef, dismiss]);
+  }, [pos, stops, start, startTy, atTop, mode, scrollY, scrollRef, dismiss]);
 
   const backdrop = useAnimatedStyle(() => ({
     opacity: interpolate(pos.value, [0, Math.max(stops.value.low, 1)], [0, 1], Extrapolation.CLAMP),
@@ -210,7 +217,7 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   const onLayout = tall ? undefined : (h: number) => setFit(Math.round(h));
   // 시트 안 배경·뒤로가기 닫힘의 즉시 출발
   const closeNow = () => shown.current && !instant && dismiss(CLOSE_MS);
-  return { mounted, grip, body, native, scrollRef, scrollY, backdrop, sheet, onLayout, closeNow };
+  return { mounted, grip, body, native, scrollRef, scrollY, locked, backdrop, sheet, onLayout, closeNow };
 }
 
 // 본문 목록의 스크롤 위치를 시트에 보고하고 통계용 콜백을 JS 에서 호출
