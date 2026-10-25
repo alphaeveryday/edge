@@ -209,3 +209,26 @@ def test_skill_failure_runs_the_session_without_graph_tools(tmp_path, cfg, monke
     session.run(replace(cfg, graph_uri="bolt://graph:7687"), _ws(tmp_path), code="138360", prompt="p", corpus_path=tmp_path / "c")
     assert "company_events" not in calls["cmd"][calls["cmd"].index("--tools") + 1]
     assert calls["env"]["TRUTH_GRAPH"] == "0"
+
+
+def test_session_start_log_shows_the_skill_and_the_transcript_keeps_whole_messages_only(tmp_path, cfg, monkeypatch, caplog):
+    # WHY: 모델이 무엇을 받았고 왜 그렇게 조사했는지는 이 둘로만 확인한다. 글자 단위 스트림까지 남기면 기록이 수십 배로 커진다
+    import json
+    import logging
+    from dataclasses import replace
+    events = [{"type": "message_update", "delta": "생"}, {"type": "message_end", "message": {"role": "assistant", "content": []}},
+              {"type": "tool_execution_end", "toolName": "company_events", "isError": False}]
+
+    class Proc:
+        returncode, pid = 0, 1
+
+        def communicate(self, timeout):
+            return b"\n".join(json.dumps(e).encode() for e in events) + b"\nnot json\n", b""
+    monkeypatch.setattr(session.subprocess, "Popen", lambda *a, **k: Proc())
+    ws = _ws(tmp_path)
+    with caplog.at_level(logging.INFO, logger=session.log.name):
+        session.run(replace(cfg, graph_uri="bolt://graph:7687"), ws, code="138360", prompt="p", corpus_path=tmp_path / "c")
+    start = next(json.loads(r.getMessage()) for r in caplog.records if '"session_start"' in r.getMessage())
+    assert start["graph"] and start["skill"] and start["systemChars"] > 7000 and "find_events" in start["tools"]
+    kept = [json.loads(l)["type"] for l in (ws.root / session.TRANSCRIPT).read_text(encoding="utf-8").splitlines()]
+    assert kept == ["message_end", "tool_execution_end"]
