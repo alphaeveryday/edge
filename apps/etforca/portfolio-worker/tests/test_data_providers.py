@@ -6,7 +6,7 @@ import pandas as pd
 import pytest
 
 from edge_portfolio.data_providers import load_fallback_prices, fetch_official_source
-from edge_portfolio.market_data import fetch_prices, normalized_prices, comparison
+from edge_portfolio.market_data import normalized_prices, comparison
 
 
 @pytest.mark.parametrize('symbol,feed,currency', [
@@ -50,68 +50,6 @@ def test_stock_fallback_never_labels_split_adjusted_prices_as_dividend_reinvestm
     assert record['currency'] == 'KRW'
     assert record['return_basis'] == 'price', 'Stock cash dividends are not supplied by this chart feed'
     assert 'Dividends' not in record['frame']
-
-
-async def test_price_failure_switches_feed_instead_of_repeating_the_same_provider(monkeypatch):
-    calls = []
-    async def fetch(*args, provider='yahoo', **kwargs):
-        calls.append(provider)
-        if provider == 'yahoo':
-            raise ValueError('PRICE_STALE')
-        return {'frame': 'recovered'}
-    monkeypatch.setattr('edge_portfolio.market_data._fetch_prices', fetch)
-    assert (await fetch_prices('379800.KS', date(2026, 10, 14)))['frame'] == 'recovered'
-    assert calls == ['yahoo', 'fallback']
-
-
-async def test_isolated_invalid_quote_does_not_erase_usable_primary_history(monkeypatch):
-    original = {'frame': pd.DataFrame({'Close': [0., 100.], 'Adj Close': [0., 100.]},
-                                      index=pd.to_datetime(['2026-10-12', '2026-10-13']))}
-    calls = []
-    async def fetch(*args, provider='yahoo', **kwargs):
-        calls.append(provider)
-        if provider == 'fallback':
-            raise ValueError('PRICE_PROVIDER_UNAVAILABLE')
-        return original
-    monkeypatch.setattr('edge_portfolio.market_data._fetch_prices', fetch)
-    result = await fetch_prices('VOO', date(2026, 10, 14))
-    assert calls == ['yahoo']
-    assert result['frame'].equals(original['frame'])
-
-
-async def test_entirely_invalid_primary_column_uses_alternate_feed(monkeypatch):
-    calls = []
-    async def fetch(*args, provider='yahoo', **kwargs):
-        calls.append(provider)
-        if provider == 'yahoo':
-            return {'frame': pd.DataFrame({'Close': [0., 0.], 'Adj Close': [0., 0.]})}
-        return {'frame': 'recovered'}
-    monkeypatch.setattr('edge_portfolio.market_data._fetch_prices', fetch)
-    assert (await fetch_prices('VOO', date(2026, 10, 14)))['frame'] == 'recovered'
-    assert calls == ['yahoo', 'fallback']
-
-
-async def test_stale_adjusted_column_uses_alternate_even_when_raw_close_is_current(monkeypatch):
-    calls = []
-    async def fetch(*args, provider='yahoo', **kwargs):
-        calls.append(provider)
-        if provider == 'yahoo':
-            return {'frame': pd.DataFrame({'Close': [100., 101.], 'Adj Close': [100., None]},
-                                         index=pd.to_datetime(['2026-10-01', '2026-10-13']))}
-        return {'frame': 'recovered'}
-    monkeypatch.setattr('edge_portfolio.market_data._fetch_prices', fetch)
-    assert (await fetch_prices('VOO', date(2026, 10, 14)))['frame'] == 'recovered'
-    assert calls == ['yahoo', 'fallback']
-
-
-async def test_two_unusable_feeds_leave_an_instrument_failure_instead_of_a_success_record(monkeypatch):
-    async def fetch(*args, provider='yahoo', **kwargs):
-        if provider == 'yahoo':
-            return {'frame': pd.DataFrame({'Close': [0.], 'Adj Close': [0.]})}
-        raise ValueError('PRICE_PROVIDER_UNAVAILABLE')
-    monkeypatch.setattr('edge_portfolio.market_data._fetch_prices', fetch)
-    with pytest.raises(ValueError, match='PRICE_PROVIDER_UNAVAILABLE'):
-        await fetch_prices('VOO', date(2026, 10, 14))
 
 
 def test_unrecoverable_asset_does_not_change_other_assets_to_price_returns():
@@ -179,3 +117,54 @@ async def test_official_feed_enters_the_existing_citable_evidence_path(monkeypat
     assert evidence.sources[0]['url'] == url
     assert evidence.sources[0]['passages'][0]['id'] == 'p1'
     assert evidence.attempts[0]['status'] == 'available'
+
+
+def warm_loader(monkeypatch, primary, fallback):
+    """The collector's price process (price_fetch.load_preload_prices) with both feeds replaced; returns the call log."""
+    from edge_portfolio import data_providers, price_fetch
+    calls = []
+    def first(*args, **kwargs):
+        calls.append('yahoo')
+        if isinstance(primary, Exception):
+            raise primary
+        return primary
+    def second(*args):
+        calls.append('fallback')
+        if isinstance(fallback, Exception):
+            raise fallback
+        return fallback
+    monkeypatch.setattr(price_fetch, 'load_prices', first)
+    monkeypatch.setattr(data_providers, 'load_fallback_prices', second)
+    return calls
+
+
+def primary_frame(close, adjusted, days):
+    return {'currency': 'USD', 'frame': pd.DataFrame({'Close': close, 'Adj Close': adjusted}, index=pd.to_datetime(days))}
+
+
+def test_isolated_invalid_quote_does_not_erase_usable_primary_history(monkeypatch):
+    from edge_portfolio.price_fetch import load_preload_prices
+    original = primary_frame([0., 100.], [0., 100.], ['2026-10-12', '2026-10-13'])
+    calls = warm_loader(monkeypatch, original, ValueError('PRICE_PROVIDER_UNAVAILABLE'))
+    result = load_preload_prices('VOO', date(2026, 10, 14), None, lambda _: None)
+    assert calls == ['yahoo']
+    assert result['frame'].equals(original['frame'])
+
+
+def test_stale_adjusted_column_uses_alternate_even_when_raw_close_is_current(monkeypatch):
+    from edge_portfolio.price_fetch import load_preload_prices
+    stale = primary_frame([100., 101.], [100., None], ['2026-10-01', '2026-10-13'])
+    recovered = primary_frame([100., 101.], [100., 101.], ['2026-10-12', '2026-10-13'])
+    calls = warm_loader(monkeypatch, stale, recovered)
+    result = load_preload_prices('VOO', date(2026, 10, 14), None, lambda _: None)
+    assert calls == ['yahoo', 'fallback']
+    assert result['primary_failure'] == 'PRICE_STALE'
+
+
+@pytest.mark.parametrize('primary', [ValueError('PRICE_STALE'), primary_frame([0.], [0.], ['2026-10-13'])])
+def test_two_unusable_feeds_leave_an_instrument_failure_after_one_try_each(monkeypatch, primary):
+    from edge_portfolio.price_fetch import load_preload_prices
+    calls = warm_loader(monkeypatch, primary, ValueError('PRICE_PROVIDER_UNAVAILABLE'))
+    with pytest.raises(ValueError, match='PRICE_PROVIDER_UNAVAILABLE'):
+        load_preload_prices('VOO', date(2026, 10, 14), None, lambda _: None)
+    assert calls == ['yahoo', 'fallback'], 'Failover is bounded: never the same provider again'

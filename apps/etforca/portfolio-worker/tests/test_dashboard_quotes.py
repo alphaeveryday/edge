@@ -3,8 +3,9 @@ import time
 from datetime import date
 import pytest
 
+from edge_portfolio.market_preload import PriceSession
 from edge_portfolio import dashboard, dashboard_work as work, dashboard_quotes as quotes, market_data, store
-from test_dashboard_work import asset, record
+from test_dashboard_work import asset, record, serve
 from test_store import isolated_db  # noqa: F401
 
 
@@ -56,22 +57,21 @@ async def test_an_analysis_waiting_for_prices_is_served_before_customer_quotes(m
     assert events == ['urgent:KR:A', 'urgent:KR:B', 'customer']
 
 
-async def test_customer_releases_warm_preload_slot_before_fetching(isolated_db, monkeypatch):
+async def test_customer_quotes_reuse_the_warm_preload_process(isolated_db, monkeypatch):
+    # A new process per holding re-imports the libraries and calendars and fetches a new cookie (5-8s each).
     from edge_portfolio import market_preload as preload
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
     session = preload.PriceSession()
     assert market_data._PRICE_SLOTS.acquire(blocking=False)
     session.admitted = True
-    fetched = []
-    async def fetch(*args, **kwargs):
-        assert not session.admitted, 'A warm background child must not deadlock customer collection'
-        async with market_data.price_slot():
-            fetched.append(True)
-            return {}
+    used = []
+    async def fetch(ids, day, *, session, **kwargs):
+        used.append(session)
+        return {}, []
     monkeypatch.setattr(work, 'records_for', fetch)
     try:
         assert await quotes.collect_once(preload_session=session)
-        assert fetched == [True]
+        assert used == [session] and session.admitted, 'The warm process stays open for the next turn'
     finally:
         await session.close()
 
@@ -105,7 +105,7 @@ async def test_saves_serve_shared_prices_immediately_and_only_new_instrument_is_
     async def fetch(symbol, day, **kwargs):
         fetched.append(symbol)
         return record()
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    serve(monkeypatch, fetch)
     dashboard.save('first', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
     assert await quotes.collect_once()
     before = time.monotonic()
@@ -135,7 +135,7 @@ async def test_slow_provider_and_duplicate_collectors_cannot_block_saved_values(
         started.set()
         await release.wait()
         return record()
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    serve(monkeypatch, fetch)
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
     pending = asyncio.create_task(quotes.collect_once())
     await started.wait()
@@ -195,7 +195,7 @@ async def test_previous_day_actions_cannot_value_a_new_post_split_quantity(isola
     monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
     async def fetch(*args, **kwargs):
         return record()
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    serve(monkeypatch, fetch)
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
     await quotes.collect_once()
     await work.work_once()
@@ -267,7 +267,7 @@ async def test_a_reclaimed_collector_cannot_publish_its_prices(isolated_db, monk
         with store.connect() as db:
             db.execute("UPDATE portfolio_quote_refresh SET lease_until=now()+interval '10 minutes'")
         return record()
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    serve(monkeypatch, fetch)
     await quotes.collect_once()
     with store.connect() as db:
         assert db.execute('SELECT count(*) AS n FROM portfolio_dashboard_prices').fetchone()['n'] == 0
@@ -291,13 +291,13 @@ async def test_return_only_fallback_cannot_replace_actual_close_cache(isolated_d
     monkeypatch.setattr(work, 'today', lambda: date(2026, 10, 18))
     async def actual(*args, **kwargs):
         return {**record(), 'provider': 'Yahoo', 'price_recovery': {'status': 'partial'}}
-    monkeypatch.setattr(market_data, 'fetch_prices', actual)
+    serve(monkeypatch, actual)
     dashboard.save('owner', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
     await quotes.collect_once()
     async def adjusted_only(*args, **kwargs):
         return {**record((999., 999.)), 'provider': 'FinanceDataReader:NAVER:adjusted', 'return_basis': 'total_return'}
-    monkeypatch.setattr(market_data, 'fetch_prices', adjusted_only)
-    returns, _ = await work.records_for(['KR:069500'], date(2026, 10, 18))
+    serve(monkeypatch, adjusted_only)
+    returns, _ = await work.records_for(['KR:069500'], date(2026, 10, 18), session=PriceSession())
     assert returns['KR:069500']['provider'].startswith('FinanceDataReader:NAVER:')
     dashboard.save('other', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
     assert work.tracking('other')['market']['payload']['assets'][0]['value'] == 1100, 'Adjusted history must not evict actual closes needed by every owner'
@@ -314,11 +314,11 @@ async def test_a_slow_old_backtest_cannot_overwrite_newer_split_observations(iso
             await release.wait()
             return record()
         return {**record(), 'pending_splits': ['2026-10-19']}
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
-    older = asyncio.create_task(work.records_for(['KR:069500'], date(2026, 10, 18)))
+    serve(monkeypatch, fetch)
+    older = asyncio.create_task(work.records_for(['KR:069500'], date(2026, 10, 18), session=PriceSession()))
     await started.wait()
     try:
-        await work.records_for(['KR:069500'], date(2026, 10, 18), valuation_since={'KR:069500': date(2026, 10, 18)})
+        await work.records_for(['KR:069500'], date(2026, 10, 18), valuation_since={'KR:069500': date(2026, 10, 18)}, session=PriceSession())
     finally:
         release.set()
         await older
@@ -333,12 +333,12 @@ async def test_new_fetch_cannot_move_fx_observation_backwards(isolated_db, monke
     fresh['frame'].index = pd.to_datetime(['2026-10-16', '2026-10-19'])
     async def fetch(*args, **kwargs):
         return {**fresh, 'price_recovery': {'status': 'partial'}}
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
-    await work.records_for(['FX'], date(2026, 10, 20), valuation_since={'FX': date(2026, 10, 20)})
+    serve(monkeypatch, fetch)
+    await work.records_for(['FX'], date(2026, 10, 20), valuation_since={'FX': date(2026, 10, 20)}, session=PriceSession())
     async def stale(*args, **kwargs):
         return record((1300., 1320.))
-    monkeypatch.setattr(market_data, 'fetch_prices', stale)
-    await work.records_for(['FX'], date(2026, 10, 20))
+    serve(monkeypatch, stale)
+    await work.records_for(['FX'], date(2026, 10, 20), session=PriceSession())
     with store.connect() as db:
         payload = db.execute("SELECT payload FROM portfolio_dashboard_prices WHERE instrument='FX'").fetchone()['payload']
     assert payload['observed_on'] == '2026-10-19' and payload['frame'][-1]['Close'] == 1450
