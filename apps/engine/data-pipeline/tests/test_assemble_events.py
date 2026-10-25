@@ -2081,3 +2081,21 @@ def test_unreadable_tag_news_cache_falls_back_to_inference(tmp_path, monkeypatch
     assert [t for t, _l in tagger.seen] == ["삼성전자 배당 결정"]
     log = _log(storage)
     assert log["tagger_cache_errors"] == 1 and log["tagger_reused"] == 0
+
+
+def test_local_tagger_assembles_korean_articles_without_universe_mentions(tmp_path, monkeypatch):
+    """WHY(ALPHA-1456): 종목명 탐지 목록(mentions)으로 조립 대상을 거르는 건 LLM 경로의 비용 가드다.
+    로컬 태거 경로는 모델이 뽑은 참여자를 표기 매칭기로 해소하므로, 목록이 비었거나 유니버스 밖인 한국어
+    기사도 분류에 넣어야 한다. 학습 언어가 아닌 기사는 예전처럼 목록으로 거른다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1", mentions="[]", title="디비하이텍 공급 계약")])
+    _write_news(storage, "en", "2026-07-15", [_article("e1", mentions="[]", title="Fed holds rates")])
+    _setup(monkeypatch, _FakeConn(assertion_rows=[]))
+    monkeypatch.setattr(assemble_events, "current_results", lambda *_a: {})
+    tagger = _FakeTagger({"디비하이텍 공급 계약": {"doc_class": "NO_EVENT_MARKET_COMMENTARY", "events": []}})
+
+    assert assemble_events.run(storage, "R1", db=_db(), tagger=tagger,
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+
+    assert [t for t, _l in tagger.seen] == ["디비하이텍 공급 계약"]
+    assert _log(storage)["in_universe"] == 1
