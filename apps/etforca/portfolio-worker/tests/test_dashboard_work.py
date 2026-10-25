@@ -13,6 +13,7 @@ def asset(**changes):
 def record(prices=(100., 110.), currency='KRW', dividends=(0., 2.)):
     return {'frame': pd.DataFrame({'Close': prices, 'Adj Close': prices, 'Dividends': dividends}, index=pd.to_datetime(['2026-10-15', '2026-10-16'])), 'currency': currency, 'source_url': 'https://example.com/prices'}
 
+
 def serve(monkeypatch, load):
     """Answer the collector's warm price session (market_preload.PriceSession) from `load`, without a process."""
     from edge_portfolio.market_preload import PriceSession

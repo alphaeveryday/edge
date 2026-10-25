@@ -439,7 +439,7 @@ async def test_slow_admission_does_not_lose_raw_prices_at_collector_deadline(iso
         await asyncio.sleep(.3)
         return await original_spawn(sys.executable, '-u', '-c', code, **kwargs)
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', spawn)
-    monkeypatch.setattr(asyncio, 'timeout', lambda seconds: original_timeout({30: .8, 40: 1.}.get(seconds, seconds)))
+    monkeypatch.setattr(asyncio, 'timeout', lambda seconds: original_timeout({30: .8, 75: 1.}.get(seconds, seconds)))
     session = preload.PriceSession()
     try:
         assert await preload.collect_one(now=NOW, session=session)
@@ -841,4 +841,59 @@ async def test_warm_process_passes_the_held_repair_window_and_keeps_the_sanitize
             await session.fetch('SOXL', date(2026, 10, 20), date(2025, 10, 13), repair_since=date(2026, 10, 1))
     finally:
         await session.close()
-    assert sent == [{'symbol': 'SOXL', 'end': '2026-10-20', 'start': '2025-10-13', 'repair_since': '2026-10-01'}]
+    assert sent == [{'symbol': 'SOXL', 'end': '2026-10-20', 'start': '2025-10-13', 'repair_since': '2026-10-01', 'failure': None}]
+
+
+async def test_a_stalled_primary_leaves_the_fallback_its_own_time(monkeypatch):
+    # Yahoo can block past the deadline before returning any closes; the fallback still runs, in a new process.
+    from edge_portfolio.price_fetch import serialize
+    code = ("import sys,json,time\nfor line in sys.stdin:\n"
+            " request=json.loads(line)\n"
+            " if not request['failure']:time.sleep(60)\n"
+            f" print({serialize({**record(), 'primary_failure': 'PRICE_PROVIDER_TIMEOUT'})!r},flush=True)\n")
+    spawned = child(monkeypatch, code)
+    original_timeout = asyncio.timeout
+    monkeypatch.setattr(asyncio, 'timeout', lambda seconds: original_timeout({30: .5, 15: 5}.get(seconds, seconds)))
+    session = preload.PriceSession()
+    try:
+        result = await session.fetch('069500.KS', date(2026, 10, 20), None)
+    finally:
+        await session.close()
+    assert result['primary_failure'] == 'PRICE_PROVIDER_TIMEOUT'
+    assert len(spawned) == 2, 'The stalled process is killed and the fallback runs in a fresh one'
+
+
+def test_warm_loader_never_checkpoints_closes_that_are_old_or_in_another_currency(monkeypatch):
+    # A checkpoint stands in for the record when the parent's deadline hits, and is published as is.
+    from edge_portfolio import price_fetch, data_providers
+    old = record()
+    old['frame'].loc[old['frame'].index[-1], 'Close'] = float('nan')  # The last row is current, its close is not.
+    old['frame'].index = pd.to_datetime(['2026-10-01', '2026-10-16'])
+    def primary(*args, on_raw, **kwargs):
+        on_raw(old)
+        on_raw(record(currency='USD'))
+        raise ValueError('PRICE_PROVIDER_TIMEOUT')
+    monkeypatch.setattr(price_fetch, 'load_prices', primary)
+    monkeypatch.setattr(data_providers, 'load_fallback_prices', lambda *args: {**record(), 'provider': 'fallback'})
+    checkpoints = []
+    price_fetch.load_preload_prices('069500.KS', date(2026, 10, 17), None, checkpoints.append)
+    assert checkpoints == []
+
+
+def test_warm_fallback_keeps_the_repaired_actual_closes(monkeypatch):
+    # Repair fills held sessions the raw response lacked; merging the raw closes would drop them again.
+    from edge_portfolio import price_fetch, data_providers
+    raw = record()
+    raw['frame'].loc[raw['frame'].index[0], 'Close'] = float('nan')
+    repaired = record()
+    repaired['frame']['Adj Close'] = float('nan')  # Returns are still unusable, so the fallback supplies them.
+    def primary(*args, on_raw, **kwargs):
+        on_raw(raw)
+        return repaired
+    monkeypatch.setattr(price_fetch, 'load_prices', primary)
+    monkeypatch.setattr(data_providers, 'load_fallback_prices', lambda *args: {
+        **record(prices=(90., 99.)), 'provider': 'FinanceDataReader:NAVER:069500', 'return_basis': 'total_return',
+        'source_url': 'https://example.com/fallback'})
+    saved = price_fetch.load_preload_prices('069500.KS', date(2026, 10, 17), None, lambda _: None)
+    assert list(saved['frame']['Close']) == [100., 110.]
+    assert list(saved['frame']['Adj Close']) == [90., 99.]

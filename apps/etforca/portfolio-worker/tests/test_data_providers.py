@@ -154,7 +154,8 @@ def test_isolated_invalid_quote_does_not_erase_usable_primary_history(monkeypatc
 def test_stale_adjusted_column_uses_alternate_even_when_raw_close_is_current(monkeypatch):
     from edge_portfolio.price_fetch import load_preload_prices
     stale = primary_frame([100., 101.], [100., None], ['2026-10-01', '2026-10-13'])
-    recovered = primary_frame([100., 101.], [100., 101.], ['2026-10-12', '2026-10-13'])
+    recovered = {**primary_frame([100., 101.], [100., 101.], ['2026-10-12', '2026-10-13']),
+                 'return_basis': 'price', 'source_url': 'https://example.com/fallback'}
     calls = warm_loader(monkeypatch, stale, recovered)
     result = load_preload_prices('VOO', date(2026, 10, 14), None, lambda _: None)
     assert calls == ['yahoo', 'fallback']

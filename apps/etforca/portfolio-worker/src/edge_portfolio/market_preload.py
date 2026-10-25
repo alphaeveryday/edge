@@ -21,7 +21,8 @@ class PriceSession:
         self.admitted = False
         self.stopping = stopping
 
-    async def fetch(self, symbol, end, start, *, repair_since=None):
+    async def fetch(self, symbol, end, start, *, repair_since=None, failure=None):
+        """`failure`: the primary already failed this way, so the new process runs only the fallback (15 seconds)."""
         from . import market_data
         captured = None
         if market_data._SLOT_WAITERS:
@@ -39,7 +40,7 @@ class PriceSession:
                         raise InterruptedError()
                     await asyncio.sleep(.05)
                 self.admitted = True
-            async with asyncio.timeout(30):
+            async with asyncio.timeout(15 if failure else 30):
                 if self.process is None:
                     if self.stopping and self.stopping.is_set():
                         raise InterruptedError()
@@ -50,7 +51,8 @@ class PriceSession:
                 if self.stopping and self.stopping.is_set():
                     raise InterruptedError()
                 self.process.stdin.write((json.dumps({'symbol': symbol, 'end': str(end), 'start': str(start) if start else None,
-                                                      'repair_since': str(repair_since) if repair_since else None}) + '\n').encode())
+                                                      'repair_since': str(repair_since) if repair_since else None,
+                                                      'failure': failure}) + '\n').encode())
                 await self.process.stdin.drain()
                 while True:
                     record = market_data.decode_prices(await self.process.stdout.readline())
@@ -63,6 +65,9 @@ class PriceSession:
             if captured is not None:
                 captured['price_recovery'] = {'status': 'unavailable', 'reason': market_data.price_failure(error), 'dates': []}
                 return captured
+            if isinstance(error, TimeoutError) and failure is None:
+                # The primary stalled before any usable closes: the fallback gets its own time.
+                return await self.fetch(symbol, end, start, repair_since=repair_since, failure='PRICE_PROVIDER_TIMEOUT')
             raise
         except BaseException:
             await self.close()
@@ -221,7 +226,8 @@ async def collect_one(stopping=None, *, session, now=None, urgent=False):
         symbol = price_symbol(key)
         requested_at = started.isoformat()
         # Recent quotes are available before an instrument's long archive is collected.
-        async with asyncio.timeout(40):
+        # A newsletter quote's turn at the slot (25s), the primary (30s) and a fallback after a stall (15s).
+        async with asyncio.timeout(75):
             record = await session.fetch(symbol, end, end - timedelta(days=35) if job['quote'] else None)
         if record['currency'] != ('USD' if key.startswith('US:') else 'KRW'):
             raise ValueError('UNSUPPORTED_CURRENCY')
