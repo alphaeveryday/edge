@@ -60,6 +60,7 @@
           }
         }
       ],
+      "./plugins/withKakaoAuthUrl.js",
       [
         "@react-native-seoul/kakao-login",
         {}
