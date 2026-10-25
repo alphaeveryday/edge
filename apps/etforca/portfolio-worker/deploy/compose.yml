@@ -74,10 +74,9 @@ services:
       EXA_API_KEY: ${EXA_API_KEY:?Exa key is required for the worker}
       PORTFOLIO_OUTLOOK_URL: http://outlook:8093/outlook
       AWS_EC2_METADATA_DISABLED: "true"
-      # Threads freeing large price buffers kept ~250 MB in glibc arenas and the worker hit 768m (2026-10-25 OOM loop).
+      # Return freed large price buffers to the OS instead of keeping them in per-thread glibc arenas.
       MALLOC_ARENA_MAX: "2"
       MALLOC_MMAP_THRESHOLD_: "131072"
-      PORTFOLIO_MEMORY_TRACE: "1"  # Temporary: remove with the OOM fix.
     mem_limit: 768m
     healthcheck:
       test: ["CMD", "python", "-c", "import pathlib,time; p=pathlib.Path('/tmp/portfolio-worker-ready'); assert p.exists() and time.time()-p.stat().st_mtime < 660"]
