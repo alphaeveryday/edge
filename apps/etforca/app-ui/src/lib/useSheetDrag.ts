@@ -31,8 +31,11 @@ const CLOSE_MS = 180;
 const FLING_MIN_MS = 80;
 // 세로 이동으로 판정하는 거리
 const SLOP = 6;
-const OPEN_SPRING = { damping: 24, stiffness: 220, overshootClamping: true };
-const SNAP_SPRING = { damping: 20, stiffness: 220 };
+// RN Animated.spring 의 speed·bounciness 를 같은 물리 모델의 stiffness·damping 으로 환산한 값
+// 열기 14·0, 스냅 16·6, fit 높이 맞춤 16·0
+const OPEN_SPRING = { stiffness: 385, damping: 39, overshootClamping: true };
+const SNAP_SPRING = { stiffness: 427, damping: 31 };
+const FIT_SPRING = { stiffness: 427, damping: 41, overshootClamping: true };
 
 // 끝 지점 너머의 끌림이 점점 무거워지는 고무줄 저항
 const rubber = (over: number) => {
@@ -109,7 +112,7 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
 
   // 내용 높이가 바뀐 fit 시트의 새 높이 맞춤
   useEffect(() => {
-    if (!tall && shown.current) pos.value = withSpring(low, OPEN_SPRING);
+    if (!tall && shown.current) pos.value = withSpring(low, FIT_SPRING);
   }, [tall, low, pos]);
 
   const { grip, body, native } = useMemo(() => {
