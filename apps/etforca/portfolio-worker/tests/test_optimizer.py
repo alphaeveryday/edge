@@ -771,14 +771,13 @@ async def test_twelve_holdings_answer_from_the_store_and_only_the_missing_one_wa
     # 180-second budget ran out, so every holding failed at once. The analysis now reads the
     # collector's store: stored holdings answer at once and are never requested again;
     # only the instrument the store lacks is requested, and it alone fails when the collector is slow.
-    import json
     from edge_portfolio import store
     from edge_portfolio.price_fetch import serialize
     held = [f'KR:H{number:02d}' for number in range(12)]
     request, market, _ = batch()
     market.catalog = {key: {'ticker': key[3:], 'market': 'KR', 'kind': 'etf'} for key in [*held, 'KR:NEW']}
     market.current = {key: 1 / 12 for key in held}
-    payloads = {key: json.loads(serialize({**record(finish=110 + n), 'history_complete': True})) for n, key in enumerate(held)}
+    payloads = {key: serialize({**record(finish=110 + n), 'history_complete': True}) for n, key in enumerate(held)}  # payload::text
     monkeypatch.setattr(store, 'connect', lambda: SavedPrices(payloads))
     asked = []
     monkeypatch.setattr('edge_portfolio.market_preload.request_prices', lambda keys: asked.extend(keys) or 'requested')
