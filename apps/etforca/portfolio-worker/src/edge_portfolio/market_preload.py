@@ -40,7 +40,7 @@ class PriceSession:
                         raise InterruptedError()
                     await asyncio.sleep(.05)
                 self.admitted = True
-            async with asyncio.timeout(15 if failure else 30):
+            async with asyncio.timeout(15 if failure else 30) as deadline:
                 if self.process is None:
                     if self.stopping and self.stopping.is_set():
                         raise InterruptedError()
@@ -57,7 +57,9 @@ class PriceSession:
                 while True:
                     line = await self.process.stdout.readline()
                     if line.startswith(b'{"_fallback"'):
-                        failure = json.loads(line)['_fallback']  # The primary failed; the fallback is running.
+                        # The primary failed; the fallback gets its own 15 seconds however late that was.
+                        failure = json.loads(line)['_fallback']
+                        deadline.reschedule(asyncio.get_running_loop().time() + 15)
                         continue
                     record = market_data.decode_prices(line)
                     if record.pop('_checkpoint', False):
@@ -74,8 +76,8 @@ class PriceSession:
             if isinstance(error, TimeoutError) and failure is None:
                 # The primary stalled before any usable closes: the fallback gets its own time.
                 return await self.fetch(symbol, end, start, repair_since=repair_since, failure='PRICE_PROVIDER_TIMEOUT')
-            if isinstance(error, TimeoutError) and failure == 'PRICE_PROVIDER_RATE_LIMIT':
-                raise ValueError(failure) from error  # As when the fallback fails outright.
+            if failure == 'PRICE_PROVIDER_RATE_LIMIT':
+                raise ValueError(failure) from error  # However the fallback failed, the rate limit stays the reason.
             raise
         except BaseException:
             await self.close()

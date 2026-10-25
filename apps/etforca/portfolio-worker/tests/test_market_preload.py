@@ -915,3 +915,28 @@ async def test_a_stalled_fallback_after_a_rate_limit_keeps_the_rate_limit(monkey
     finally:
         await session.close()
     assert len(spawned) == 1, 'The fallback already ran; it is not started again'
+
+
+@pytest.mark.parametrize('ending', ['exit', 'late'])
+async def test_a_late_primary_failure_still_leaves_the_fallback_its_time(monkeypatch, ending):
+    # Yahoo can fail just before the deadline; the fallback that starts then gets its own 15 seconds,
+    # and a fallback process that dies keeps the rate limit as the reason.
+    from edge_portfolio.price_fetch import serialize
+    marker = "print('{\"_fallback\": \"PRICE_PROVIDER_RATE_LIMIT\"}',flush=True)\n"
+    if ending == 'exit':
+        code = f"import sys\nsys.stdin.readline()\n{marker}"
+    else:
+        code = (f"import sys,time\nsys.stdin.readline()\ntime.sleep(.4)\n{marker}time.sleep(.4)\n"
+                f"print({serialize({**record(), 'primary_failure': 'PRICE_PROVIDER_RATE_LIMIT'})!r},flush=True)\n")
+    child(monkeypatch, code)
+    original_timeout = asyncio.timeout
+    monkeypatch.setattr(asyncio, 'timeout', lambda seconds: original_timeout(.6 if seconds == 30 else seconds))
+    session = preload.PriceSession()
+    try:
+        if ending == 'exit':
+            with pytest.raises(ValueError, match='PRICE_PROVIDER_RATE_LIMIT'):
+                await session.fetch('SOXL', date(2026, 10, 20), None)
+        else:
+            assert (await session.fetch('SOXL', date(2026, 10, 20), None))['primary_failure'] == 'PRICE_PROVIDER_RATE_LIMIT'
+    finally:
+        await session.close()
