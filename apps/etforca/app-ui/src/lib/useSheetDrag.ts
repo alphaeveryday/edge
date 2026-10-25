@@ -20,10 +20,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const LOW = 0.7;
 const HIGH = 0.95;
-const CLOSE_DY = 120;
+// 시작 높이 아래로 이만큼(화면 높이 비율) 내리면 닫힘
+const CLOSE_DY = 0.14;
 // 손을 뗀 속도(px/ms)의 기준
 const FLING = 0.5;
-const FLING_CLOSE = 2;
 const RUBBER = 140;
 // 버튼·배경 닫힘의 길이이자 끌어 닫기 길이의 상한
 const CLOSE_MS = 180;
@@ -32,10 +32,10 @@ const FLING_MIN_MS = 80;
 // 세로 이동으로 판정하는 거리
 const SLOP = 6;
 // RN Animated.spring 의 speed·bounciness 를 같은 물리 모델의 stiffness·damping 으로 환산한 값
-// 열기 14·0, 스냅 16·6, fit 높이 맞춤 16·0
-const OPEN_SPRING = { stiffness: 385, damping: 39, overshootClamping: true };
-const SNAP_SPRING = { stiffness: 427, damping: 31 };
-const FIT_SPRING = { stiffness: 427, damping: 41, overshootClamping: true };
+// 열기 14·0, 스냅·fit 높이 맞춤 16·0
+// Reanimated 기본 mass 가 4 라 RN 과 같은 1 명시
+const OPEN_SPRING = { stiffness: 385, damping: 39, mass: 1, overshootClamping: true };
+const SNAP_SPRING = { stiffness: 427, damping: 41, mass: 1, overshootClamping: true };
 
 // 끝 지점 너머의 끌림이 점점 무거워지는 고무줄 저항
 const rubber = (over: number) => {
@@ -62,8 +62,9 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   const high = tall ? screen - Math.max(screen * (1 - HIGH), top + 8) : fit;
   const low = tall ? screen * LOW : fit;
   const ready = low > 0;
-  const stops = useSharedValue({ low, high });
-  useEffect(() => { stops.value = { low, high }; }, [stops, low, high]);
+  const shut = low - screen * CLOSE_DY;
+  const stops = useSharedValue({ low, high, shut });
+  useEffect(() => { stops.value = { low, high, shut }; }, [stops, low, high, shut]);
   const shown = useRef(false);
   // 닫힘 애니메이션 중 여부
   const closing = useRef(false);
@@ -112,34 +113,34 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
 
   // 내용 높이가 바뀐 fit 시트의 새 높이 맞춤
   useEffect(() => {
-    if (!tall && shown.current) pos.value = withSpring(low, FIT_SPRING);
+    if (!tall && shown.current) pos.value = withSpring(low, SNAP_SPRING);
   }, [tall, low, pos]);
 
   const { grip, body, native } = useMemo(() => {
-    const snap = (to: number) => {
+    // 손을 뗀 속도(px/s)를 이어받는 스냅
+    const snap = (to: number, velocityY = 0) => {
       'worklet';
-      pos.value = withSpring(to, SNAP_SPRING);
+      pos.value = withSpring(to, { ...SNAP_SPRING, velocity: -velocityY });
     };
-    // 손을 뗀 속도(px/s)로 닫기·스냅 결정
+    // 손을 뗀 속도(px/s)로 닫기·스냅 결정. 95% 에서 빠르게 내리면 70% 에 멈춤
     const release = (velocityY: number) => {
       'worklet';
       const vy = velocityY / 1000;
-      const { low, high } = stops.value;
+      const { low, high, shut } = stops.value;
       const cur = pos.value;
-      if (vy > FLING_CLOSE || cur < low - CLOSE_DY || (vy > FLING && cur <= low)) {
+      if (cur < shut || (vy > FLING && cur <= low)) {
         // 손을 뗀 속도로 출발하는 길이. 감속 곡선의 출발 속도는 평균의 두 배
         const ms = vy > 0 ? (2 * cur) / vy : CLOSE_MS;
         runOnJS(dismiss)(Math.min(CLOSE_MS, Math.max(FLING_MIN_MS, ms)));
         runOnJS(close.current)();
-      } else if (vy > FLING) snap(low);
-      else if (vy < -FLING) snap(high);
-      else snap(Math.abs(cur - low) <= Math.abs(cur - high) ? low : high);
+      } else if (vy > FLING) snap(low, velocityY);
+      else if (vy < -FLING) snap(high, velocityY);
+      else snap(Math.abs(cur - low) <= Math.abs(cur - high) ? low : high, velocityY);
     };
     const native = Gesture.Native().shouldCancelWhenOutside(false);
     // 손잡이·헤더: 세로 이동이면 버튼 위에서도 끌기
     const grip = Gesture.Pan()
       .activeOffsetY([-SLOP, SLOP])
-      .failOffsetX([-SLOP, SLOP])
       .onStart(() => {
         cancelAnimation(pos);
         start.value = pos.value;
@@ -155,7 +156,6 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
     // 끌기 시작 높이까지 되돌리면 다시 목록 스크롤로 넘김
     const body = Gesture.Pan()
       .activeOffsetY([-SLOP, SLOP])
-      .failOffsetX([-SLOP, SLOP])
       .simultaneousWithExternalGesture(native)
       .onStart(() => {
         lastTy.value = 0;
