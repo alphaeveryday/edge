@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import date
 import json
+import os
 from pathlib import Path
 import re
 
@@ -22,6 +23,7 @@ from edge_truth_agent.tools import (SHOW_CHARS, ToolError, _corpus_path, _kst_da
 from edge_truth_agent.workspace import Workspace
 
 from . import ach, graph
+from .dart import Dart, DartError
 from .kind import Kind, KindError, is_market_notice
 from .markets import US, of_exchange
 from .sec import Sec, SecError
@@ -99,6 +101,14 @@ def _mentions(ws: Workspace, text: str) -> bool:
 
 
 # ── 공시 ──
+def _kr_document(ws: Workspace, acpt: str, item: dict) -> str:
+    """국내 공시 원문. 회사 공시는 DART 에서 받는다 — KIND 뷰어는 AWS 출구 IP 를 막는다(ALPHA-1457).
+    거래소 시장조치는 DART 에 없어 KIND 로 받고(AWS 밖에서만 열린다), 인증키가 없는 로컬 실행도 KIND 를 쓴다."""
+    if is_market_notice(item) or not os.environ.get("DART_API_KEY"):
+        return Kind().document(acpt)
+    return Dart().document(_mover(ws).get("code", ""), acpt, item.get("title", ""), item.get("submitter", ""))
+
+
 def read_disclosure(ws: Workspace, args: dict) -> str:
     """첫 메시지 목록의 공시·시장조치 원문을 읽는다. 읽은 공시는 kind-<접수번호>(미국 sec-<접수번호>)로 증거·출처에 쓴다."""
     pre, us = _pre(ws), _us(ws)
@@ -115,8 +125,8 @@ def read_disclosure(ws: Workspace, args: dict) -> str:
             state["disclosureReads"] = state.get("disclosureReads", 0) + 1
             ws.save_state(state)
         try:
-            text = Sec().document(item["url"]) if us else Kind().document(acpt)
-        except (KindError, SecError) as error:
+            text = Sec().document(item["url"]) if us else _kr_document(ws, acpt, item)
+        except (KindError, SecError, DartError) as error:
             raise ToolError(f"{error} 제목과 보도로 판단하세요.") from error
         label = "미국 SEC EDGAR" if us else "한국거래소 KIND"
         ws.save_snapshot(sid, {"id": sid, "url": item["url"], "title": item["title"], "publisher": item["submitter"] or label,

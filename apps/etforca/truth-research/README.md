@@ -23,6 +23,7 @@ uv run --package edge-truth-research pytest apps/etforca/truth-research/tests -q
 | `TRUTH_PUBLISH` | ✓ | 공개 데이터 위치(`s3://<랜딩>/truth/data` 또는 로컬 폴더) |
 | `DEEPSEEK_RESIST_NEWS_API_KEY` | ✓ | 모델 키(truth-agent 와 같은 시크릿) |
 | `TRUTH_DB_HOST` · `TRUTH_DB_PASSWORD` | ✓ | 국내 보도(빅카인즈)를 읽는 운영 PostgreSQL. 계정은 분석 엔진의 읽기 전용 `edge_analysis_v2_reader`(`TRUTH_DB_USER` 로 바꿀 수 있다), 비밀번호는 시크릿 `edge/analysis-v2/readonly`. 붙지 못하면 실행이 실패한다 |
+| `DART_API_KEY` | | 국내 회사 공시 원문을 OpenDART 에서 받는다(`dart.py`). KIND 공시 뷰어는 AWS 출구 IP 를 막는다. 운영은 data-pipeline 의 시크릿 `edge-dev-data-pipeline/dart/api-key` 를 함께 쓴다. 없으면(로컬) KIND 뷰어로 받는다 |
 | `GRAPH_URI` · `GRAPH_PASSWORD` | | 국내 종목 사건 그래프(PuppyGraph Bolt, `bolt://puppygraph.<name>.internal:7687`)와 그 로그인. 있으면 국내 세션에 `company_events`·`find_events` 와 사건 그래프 스킬(`prompts/event-graph.md` + 온톨로지 타입 목록)을 연다(`graph.py`). 그래프는 평일 05:30~16:00 KST 에만 떠 있다 |
 | `RDS_CA_PATH` | | 서버 인증서 검증용 RDS CA 묶음(이미지 기본 `/app/rds-ca.pem`) |
 | `EXA_API_KEY` | | 웹 검색·원문. 없으면 웹 도구를 끈다 |

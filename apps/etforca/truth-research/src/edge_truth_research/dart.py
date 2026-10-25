@@ -1,0 +1,94 @@
+"""OpenDART 로 공시 원문을 받는다 (ALPHA-1457).
+
+KIND 공시 뷰어(/common/disclsviewer.do)는 AWS 출구 IP 를 Akamai 에서 막는다(2026-10-25 ECS 실측: 목록은 되고
+뷰어만 'Access Denied'). 같은 공시가 DART 에도 올라오지만 접수번호가 다르다(삼성물산 대량보유: KIND 20261023000989 ·
+DART 20261023000484). 그래서 회사·날짜로 DART 공시목록을 받아 제목·제출인이 맞는 건의 원문(document.xml)을 읽는다.
+거래소 시장조치(시장감시위원회·시장본부)는 DART 에 없다.
+"""
+from __future__ import annotations
+
+import io
+import json
+import os
+from pathlib import Path
+import re
+import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
+
+from .kind import _text
+
+API = "https://opendart.fss.or.kr/api"
+
+
+class DartError(RuntimeError):
+    """DART 에서 원문을 받지 못했다(사유 포함, 인증키는 담지 않는다)."""
+
+
+def _norm(text: str) -> str:
+    """제목 비교용: 글자·숫자만. KIND '투자판단 관련 주요경영사항(임상시험 결과)' ≈ DART '투자판단관련주요경영사항(임상시험결과)'."""
+    return re.sub(r"[\W_]+", "", text or "")
+
+
+def match(items: list[dict], title: str, submitter: str) -> str | None:
+    """DART 목록에서 KIND 공시와 같은 건의 접수번호. DART 제목은 잘려 올 수 있어 앞부분이 맞으면 같다고 본다.
+    같은 날 같은 제목이 여럿이면 제출인으로 가르고, 그래도 여럿이면 고르지 않는다(엉뚱한 원문을 읽지 않게)."""
+    want = _norm(title)
+    same = [i for i in items if (got := _norm(i.get("report_nm", ""))) and (want.startswith(got) or got.startswith(want))]
+    if len(same) > 1:
+        same = [i for i in same if _norm(i.get("flr_nm", "")) == _norm(submitter)]
+    return same[0]["rcept_no"] if len(same) == 1 else None
+
+
+class Dart:
+    def __init__(self, key: str | None = None, *, timeout: float = 20.0, cache: Path | None = None):
+        self.key = key or os.environ.get("DART_API_KEY", "")
+        if not self.key:
+            raise DartError("DART 인증키(DART_API_KEY)가 없습니다")
+        self.timeout = timeout
+        self.cache = cache or Path(tempfile.gettempdir()) / "truth-dart-corp.json"
+
+    def _get(self, path: str, **params) -> bytes:
+        url = f"{API}/{path}?" + urllib.parse.urlencode({"crtfc_key": self.key, **params})
+        try:
+            with urllib.request.urlopen(url, timeout=self.timeout) as res:
+                return res.read()
+        except urllib.error.HTTPError as error:
+            raise DartError(f"DART HTTP {error.code}") from None  # 예외 문자열에 주소(인증키)가 실리지 않게
+        except (urllib.error.URLError, TimeoutError) as error:
+            raise DartError(f"DART 연결 실패: {type(error).__name__}") from None
+
+    def corp_code(self, stock_code: str) -> str | None:
+        """종목코드 → DART 고유번호. 전체 표(corpCode.xml)는 한 번 받아 임시 파일에 둔다(도구는 호출마다 새 프로세스다)."""
+        try:
+            table = json.loads(self.cache.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            with zipfile.ZipFile(io.BytesIO(self._get("corpCode.xml"))) as z:
+                xml = z.read(z.namelist()[0]).decode("utf-8", "replace")
+            table = {s: c for c, s in re.findall(r"<corp_code>(\d+)</corp_code>.*?<stock_code>\s*(\w{6})\s*</stock_code>", xml, re.S)}
+            self.cache.write_text(json.dumps(table), encoding="utf-8")
+        return table.get(stock_code)
+
+    def document(self, stock_code: str, acptno: str, title: str, submitter: str, max_chars: int = 15000) -> str:
+        """KIND 공시(접수번호·제목·제출인)와 같은 DART 공시의 본문 글자(앞 max_chars 자)."""
+        corp = self.corp_code(stock_code)
+        if not corp:
+            raise DartError(f"DART 에 종목 {stock_code} 이 없습니다")
+        day = acptno[:8]
+        listing = json.loads(self._get("list.json", corp_code=corp, bgn_de=day, end_de=day, page_count="100"))
+        if listing.get("status") not in ("000", "013"):  # 013 = 조회된 데이터 없음
+            raise DartError(f"DART 목록 오류 {listing.get('status')}: {listing.get('message', '')[:80]}")
+        rcept = match(listing.get("list") or [], title, submitter)
+        if not rcept:
+            raise DartError(f"DART 에서 같은 공시를 찾지 못했습니다({day} '{title[:40]}')")
+        raw = self._get("document.xml", rcept_no=rcept)
+        if raw[:2] != b"PK":  # 오류면 ZIP 대신 <result><status/><message/></result> XML 이 온다
+            message = re.search(r"<message>(.*?)</message>", raw.decode("utf-8", "replace"))
+            raise DartError(f"DART 원문 오류: {message.group(1)[:80] if message else '알 수 없는 응답'}")
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            text = _text(z.read(z.namelist()[0]).decode("utf-8", "replace"))
+        if not text:
+            raise DartError(f"DART 공시 {rcept} 본문이 비었습니다")
+        return text[:max_chars]

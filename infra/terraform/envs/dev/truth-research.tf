@@ -24,6 +24,9 @@ module "truth_research" {
   db_secret_arn        = data.aws_secretsmanager_secret.analysis_v2_reader.arn
   db_security_group_id = module.rds.security_group_id
 
+  # 국내 공시 원문 — KIND 뷰어가 AWS IP 를 막아 DART 에서 받는다. data-pipeline 의 OpenDART 키를 함께 쓴다(ALPHA-1457)
+  dart_secret_arn = module.data_pipeline.dart_secret_arn
+
   # 국내 종목 사건 그래프(ALPHA-1453)
   graph_uri                    = module.ontology_graph.bolt_uri
   graph_security_group_id      = module.ontology_graph.security_group_id

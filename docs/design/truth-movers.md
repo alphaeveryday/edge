@@ -37,7 +37,7 @@ etforca.com/truth/today. 오늘 급등한 국내·미국 주식마다 **왜 올�
    - 순위 응답이 비었거나 형식이 다르면 실패로 끝낸다('오늘 급등 없음'으로 게시하지 않는다).
 2. **재료 모으기 (코드):** 종목마다 다음을 모은다.
    - 장중 5분 시세와 현재가: Yahoo 차트(`<code>.KS|.KQ`, `interval=5m`). 그날 봉만 쓰고 라벨은 구간 끝 시각. 게시하는 가격·상승률은 이 현재가로 낸다(순위의 Naver 가격은 넥스트레이드 체결이 섞인다). 한국 종목은 약 20분 늦다
-   - 최근 14일 공시·시장조치 목록과 원문: 한국거래소 KIND(키 없음, 종목코드로 조회. 시장감시위원회의 투자주의·경고도 함께 나온다)
+   - 최근 14일 공시·시장조치 목록: 한국거래소 KIND(키 없음, 종목코드로 조회. 시장감시위원회의 투자주의·경고도 함께 나온다). 회사 공시 원문은 OpenDART 에서 받는다 — KIND 공시 뷰어가 AWS 출구 IP 를 막고(2026-10-25 실측), DART 는 접수번호가 달라 회사·날짜 목록에서 제목·제출인으로 찾는다(ALPHA-1457). 거래소 시장조치는 DART 에 없어 원문을 못 받으면 제목으로 판단한다
    - 관련 보도: 운영 DB `document`·`news_document` 의 최근 21일 빅카인즈 기사(1분 컨슈머가 장중 적재, ALPHA-1450). 실행마다 한 번 읽어 검색 색인을 만든다. 기사 id 는 `source_document_id`(예전 truth-agent 말뭉치와 같은 값). 계정은 분석 엔진의 읽기 전용 계정(연결 한도 50 중 여유분으로, 실행마다 몇 초 1~2개)이고, 붙지 못하면 실행이 실패한다
    - 회사 로고: KIND 회사 개요의 홈페이지에서 아이콘을 받아 랜딩 버킷 `truth/data/logos/<code>.<확장자>` 에 저장(PNG·JPG·ICO·WebP 만, SVG 는 스크립트를 담을 수 있어 받지 않는다)
 3. **조사 (모델, ACH):** 종목마다 세션 하나를 연다(동시 3개, 한 실행 5종목, 세션당 도구 40회·웹 10회·공시 원문 8회). 도구: `read_disclosure`·`view_news`·`search_news`·`web_search`·`web_fetch` 로 증거를 모으고, `set_hypotheses`·`add_evidence` 로 표를 채우고, `set_verdict`(코드가 태그 결정)·`finish`. 국내 세션은 그래프 DB 가 있으면 `company_events`(이 회사의 최근 사건 — 기사마다 따로 뽑힌 사건을 타입·날짜·역할로 묶는다)·`find_events`(같은 타입 사건 중 수치 조건에 맞는 다른 회사 선례 — 단위는 저장값(KRW·PCT 등), 기준은 생략하면 무관, 단위가 다르거나 값이 불확실하면 '모름'으로 따로 센다)도 쓰고, 시스템 지시 끝에 사건 그래프 스킬이 붙는다(`prompts/event-graph.md`: 저장 구조·수치가 차 있는 (타입·수치·단위)와 크기·탐색법 + `libs/ontology` 타입 목록 53개, 약 7.6천 자. ALPHA-1453, ALPHA-1455). 결과는 실마리이고 증거는 적힌 기사·공시를 읽어 넣는다. 그래프는 평일 05:30~16:00 KST 에만 떠 있어 국내 실행 시간을 덮는다. 꺼져 있으면 도구가 오류를 돌려주고 세션은 계속된다.
@@ -107,7 +107,7 @@ etforca.com/truth/today. 오늘 급등한 국내·미국 주식마다 **왜 올�
 
 ## 5. 비밀값
 
-따로 두는 키가 없다. truth-agent 의 `edge-dev-truth-agent/runtime` 시크릿(`DEEPSEEK_RESIST_NEWS_API_KEY`·`EXA_API_KEY`)을 같이 읽는다. 시세(Naver·Yahoo)와 공시(KIND·SEC)는 키가 없다. SEC 는 요청 머리글에 연락처 이메일을 요구해 태스크 환경변수 `TRUTH_SEC_CONTACT`(비밀값 아님, truth 처리방침에 공개한 운영 연락처)로 넣는다.
+따로 두는 키가 없다. truth-agent 의 `edge-dev-truth-agent/runtime` 시크릿(`DEEPSEEK_RESIST_NEWS_API_KEY`·`EXA_API_KEY`)을 같이 읽는다. 시세(Naver·Yahoo)와 공시 목록(KIND·SEC)은 키가 없다. 국내 공시 원문은 data-pipeline 의 OpenDART 시크릿(`edge-dev-data-pipeline/dart/api-key`)을 `DART_API_KEY` 로 같이 읽는다(ALPHA-1457). SEC 는 요청 머리글에 연락처 이메일을 요구해 태스크 환경변수 `TRUTH_SEC_CONTACT`(비밀값 아님, truth 처리방침에 공개한 운영 연락처)로 넣는다.
 
 ## 6. 미국 주식
 
@@ -119,7 +119,7 @@ etforca.com/truth/today. 오늘 급등한 국내·미국 주식마다 **왜 올�
 | 기준 | 10% · 거래대금 30억원 | 10% · 거래대금 200만 달러 · 주가 1달러 이상(동전주 제외) |
 | 보통주 거르기 | 종목 유형·코드 끝자리·'스팩' | 종목 유형 · 영문 이름의 Rights·Warrant·Unit·Acquisition Corp |
 | 5분 시세 | Yahoo `<code>.KS\|.KQ` | Yahoo `<티커>`(BRK.B → BRK-B) |
-| 공시 | KIND 목록·본문(`kind-<접수번호>`, 목록 `kind-list`) | SEC EDGAR 최근 공시·원문(`sec-<접수번호>`, 목록 `sec-list`). 8-K 항목 번호에 뜻을 붙이고, 원문은 첫 EX-99 첨부(보도자료)까지 읽는다 |
+| 공시 | KIND 목록, 회사 공시 본문은 DART(`kind-<접수번호>`, 목록 `kind-list`) | SEC EDGAR 최근 공시·원문(`sec-<접수번호>`, 목록 `sec-list`). 8-K 항목 번호에 뜻을 붙이고, 원문은 첫 EX-99 첨부(보도자료)까지 읽는다 |
 | 로고 | 회사 홈페이지 아이콘 → `logos/<code>` | 순위가 주는 Naver 로고 PNG(`ssl.pstatic.net` 만) → `logos/us/<티커>` |
 | 시각·날짜 | KST, 정규장 09:00~15:30 | 뉴욕 현지, 정규장 09:30~16:00(서머타임은 시간대가 맡는다) |
 | 스케줄 | 매시 `cron(35 9-15)`·매분 `cron(* 9-15)` Asia/Seoul | 매시 `cron(35 9-15)`·매분 `cron(* 9-16)` America/New_York |
