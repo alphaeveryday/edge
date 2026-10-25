@@ -6,8 +6,9 @@ from datetime import date
 from .market_data import load_prices, positive_price, price_failure, price_status, with_actual_prices
 
 
-def load_preload_prices(symbol, end, start, on_raw, repair_since=None, failure=None):
-    """`failure`: the primary already failed this way (the parent's deadline killed it), so only the fallback runs."""
+def load_preload_prices(symbol, end, start, on_raw, repair_since=None, failure=None, on_fallback=None):
+    """`failure`: the primary already failed this way (the parent's deadline killed it), so only the fallback runs.
+    `on_fallback(failure)` tells the parent the primary has failed and the fallback is running."""
     captured = None
     pending = []
     expected = 'KRW' if symbol == 'KRW=X' or symbol.endswith(('.KS', '.KQ')) else 'USD'
@@ -27,12 +28,13 @@ def load_preload_prices(symbol, end, start, on_raw, repair_since=None, failure=N
             failure = price_status(record, end)
             if failure is None:
                 return record
-            if usable(record):
-                captured = record  # The repaired closes, not the raw ones.
+            capture(record)  # The repaired closes replace the raw ones, here and at the parent's deadline.
             if record.get('price_recovery', {}).get('reason') == 'PRICE_PROVIDER_RATE_LIMIT':
                 failure = 'PRICE_PROVIDER_RATE_LIMIT'
         except Exception as error:
             failure = price_failure(error)
+        if on_fallback:
+            on_fallback(failure)
     from .data_providers import load_fallback_prices
     try:
         record = load_fallback_prices(symbol, end)
@@ -62,7 +64,8 @@ if __name__ == '__main__':
             record = load_preload_prices(request['symbol'], date.fromisoformat(request['end']),
                 date.fromisoformat(request['start']) if request.get('start') else None,
                 lambda raw: print(serialize({**raw, '_checkpoint': True}), flush=True),
-                date.fromisoformat(request['repair_since']) if request.get('repair_since') else None, request.get('failure'))
+                date.fromisoformat(request['repair_since']) if request.get('repair_since') else None, request.get('failure'),
+                lambda failure: print(json.dumps({'_fallback': failure}), flush=True))
             print(serialize(record), flush=True)
         except Exception as error:
             print(json.dumps({'error': price_failure(error)}), flush=True)

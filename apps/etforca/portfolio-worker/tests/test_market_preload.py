@@ -894,6 +894,24 @@ def test_warm_fallback_keeps_the_repaired_actual_closes(monkeypatch):
     monkeypatch.setattr(data_providers, 'load_fallback_prices', lambda *args: {
         **record(prices=(90., 99.)), 'provider': 'FinanceDataReader:NAVER:069500', 'return_basis': 'total_return',
         'source_url': 'https://example.com/fallback'})
-    saved = price_fetch.load_preload_prices('069500.KS', date(2026, 10, 17), None, lambda _: None)
+    checkpoints = []
+    saved = price_fetch.load_preload_prices('069500.KS', date(2026, 10, 17), None, checkpoints.append)
     assert list(saved['frame']['Close']) == [100., 110.]
     assert list(saved['frame']['Adj Close']) == [90., 99.]
+    assert checkpoints[-1] is repaired, 'A fallback that fails or stalls still leaves the parent the repaired closes'
+
+
+async def test_a_stalled_fallback_after_a_rate_limit_keeps_the_rate_limit(monkeypatch):
+    # The rate limit pauses every bulk fetch for 15 minutes; a second fallback call would hide it.
+    code = ("import sys,time\nsys.stdin.readline()\n"
+            "print('{\"_fallback\": \"PRICE_PROVIDER_RATE_LIMIT\"}',flush=True)\ntime.sleep(60)\n")
+    spawned = child(monkeypatch, code)
+    original_timeout = asyncio.timeout
+    monkeypatch.setattr(asyncio, 'timeout', lambda seconds: original_timeout(.5 if seconds == 30 else seconds))
+    session = preload.PriceSession()
+    try:
+        with pytest.raises(ValueError, match='PRICE_PROVIDER_RATE_LIMIT'):
+            await session.fetch('SOXL', date(2026, 10, 20), None)
+    finally:
+        await session.close()
+    assert len(spawned) == 1, 'The fallback already ran; it is not started again'

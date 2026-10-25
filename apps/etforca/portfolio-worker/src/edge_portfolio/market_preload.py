@@ -55,7 +55,11 @@ class PriceSession:
                                                       'failure': failure}) + '\n').encode())
                 await self.process.stdin.drain()
                 while True:
-                    record = market_data.decode_prices(await self.process.stdout.readline())
+                    line = await self.process.stdout.readline()
+                    if line.startswith(b'{"_fallback"'):
+                        failure = json.loads(line)['_fallback']  # The primary failed; the fallback is running.
+                        continue
+                    record = market_data.decode_prices(line)
                     if record.pop('_checkpoint', False):
                         captured = record
                     else:
@@ -64,10 +68,14 @@ class PriceSession:
             await self.close()
             if captured is not None:
                 captured['price_recovery'] = {'status': 'unavailable', 'reason': market_data.price_failure(error), 'dates': []}
+                if failure:
+                    captured['primary_failure'] = failure  # A rate limit still pauses the bulk collector.
                 return captured
             if isinstance(error, TimeoutError) and failure is None:
                 # The primary stalled before any usable closes: the fallback gets its own time.
                 return await self.fetch(symbol, end, start, repair_since=repair_since, failure='PRICE_PROVIDER_TIMEOUT')
+            if isinstance(error, TimeoutError) and failure == 'PRICE_PROVIDER_RATE_LIMIT':
+                raise ValueError(failure) from error  # As when the fallback fails outright.
             raise
         except BaseException:
             await self.close()
