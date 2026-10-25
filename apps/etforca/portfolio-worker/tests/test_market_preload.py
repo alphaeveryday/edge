@@ -439,7 +439,7 @@ async def test_slow_admission_does_not_lose_raw_prices_at_collector_deadline(iso
         await asyncio.sleep(.3)
         return await original_spawn(sys.executable, '-u', '-c', code, **kwargs)
     monkeypatch.setattr(asyncio, 'create_subprocess_exec', spawn)
-    monkeypatch.setattr(asyncio, 'timeout', lambda seconds: original_timeout({30: .8, 75: 1.}.get(seconds, seconds)))
+    monkeypatch.setattr(asyncio, 'timeout', lambda seconds: original_timeout({30: .8}.get(seconds, seconds)))
     session = preload.PriceSession()
     try:
         assert await preload.collect_one(now=NOW, session=session)

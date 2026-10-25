@@ -236,9 +236,9 @@ async def collect_one(stopping=None, *, session, now=None, urgent=False):
         symbol = price_symbol(key)
         requested_at = started.isoformat()
         # Recent quotes are available before an instrument's long archive is collected.
-        # A newsletter quote's turn at the slot (25s), the primary (30s) and a fallback after a stall (15s).
-        async with asyncio.timeout(75):
-            record = await session.fetch(symbol, end, end - timedelta(days=35) if job['quote'] else None)
+        # No outer deadline: the session bounds the fetch itself (Yahoo 30s, then the fallback 15s), and an outer one
+        # would also count the slot wait for newsletter quotes and replace a known rate limit with a timeout.
+        record = await session.fetch(symbol, end, end - timedelta(days=35) if job['quote'] else None)
         if record['currency'] != ('USD' if key.startswith('US:') else 'KRW'):
             raise ValueError('UNSUPPORTED_CURRENCY')
         _, observed = work.last_close(record)
