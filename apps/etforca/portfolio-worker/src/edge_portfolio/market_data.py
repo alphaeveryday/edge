@@ -3,11 +3,9 @@ import asyncio
 import logging
 import math
 import json
-import sys
-import subprocess
 import tempfile
 from contextlib import asynccontextmanager
-from threading import BoundedSemaphore
+from threading import BoundedSemaphore, Lock
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -25,6 +23,10 @@ from .catalog import analysis_catalog, price_symbol
 log = logging.getLogger(__name__)
 # The analysis process and price libraries share one container memory limit.
 _PRICE_SLOTS = BoundedSemaphore(1)
+# Callers waiting in price_slot (the newsletter's quotes). The collector's warm process holds the slot between
+# fetches and hands it over while this is non-zero.
+_SLOT_WAITERS = 0
+_WAITERS_LOCK = Lock()
 # KRX notice (2026 local election / Constitution Day), absent in calendars 4.13.2:
 # https://stock.mk.co.kr/news/disclosure/template/1029043
 KRX_EXTRA_CLOSURES = pd.DatetimeIndex(['2026-06-03', '2026-07-17'])
@@ -173,75 +175,19 @@ def with_actual_prices(returns, actual):
 @asynccontextmanager
 async def price_slot():
     # Admission is separate from provider timeouts; a busy worker is not a bad source.
-    while not _PRICE_SLOTS.acquire(blocking=False):
-        await asyncio.sleep(.05)
+    global _SLOT_WAITERS
+    with _WAITERS_LOCK:
+        _SLOT_WAITERS += 1
+    try:
+        while not _PRICE_SLOTS.acquire(blocking=False):
+            await asyncio.sleep(.05)
+    finally:
+        with _WAITERS_LOCK:
+            _SLOT_WAITERS -= 1
     try:
         yield
     finally:
         _PRICE_SLOTS.release()
-
-
-async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None, history_start=None):
-    async with price_slot():
-        try:
-            options = {k: v for k, v in {'repair_since': repair_since, 'history_start': history_start}.items() if v is not None}
-            original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, **options), timeout=provider_timeout)
-            if on_primary:
-                on_primary(original)
-            primary_failure = price_status(original, as_of)
-            if primary_failure is None:
-                return original
-        except (ValueError, TimeoutError) as error:
-            primary_failure = price_failure(error)
-        record = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback'), timeout=provider_timeout)
-        record['primary_failure'] = primary_failure
-        return record
-
-
-async def _fetch_prices(symbol, as_of, *, on_raw=None, provider='yahoo', repair_since=None, history_start=None):
-    with tempfile.TemporaryDirectory(prefix='portfolio-prices-') as directory:
-        options = {k: v for k, v in {'repair_since': repair_since, 'history_start': history_start}.items() if v is not None}
-        return await _fetch_prices_with_checkpoint(symbol, as_of, Path(directory) / 'original.json', on_raw, provider, **options)
-
-
-async def _fetch_prices_with_checkpoint(symbol, as_of, checkpoint, on_raw=None, provider='yahoo', *, repair_since=None, history_start=None):
-    """A cancellable process bounds library calls that can block beyond HTTP timeout."""
-    options = [repair_since.isoformat() if repair_since else '-', history_start.isoformat()] if history_start else ([repair_since.isoformat()] if repair_since else [])
-    process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', symbol, as_of.isoformat(), str(checkpoint), provider, *options,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
-    try:
-        repair_failure = None
-        try:
-            async with asyncio.timeout(25):
-                stdout, _ = await process.communicate()
-        except TimeoutError:
-            if not checkpoint.is_file():
-                raise
-            stdout = checkpoint.read_bytes()
-            repair_failure = 'PRICE_PROVIDER_TIMEOUT'
-        if process.returncode and checkpoint.is_file():
-            stdout = checkpoint.read_bytes()
-            repair_failure = 'PRICE_PROVIDER_UNAVAILABLE'
-        record = decode_prices(stdout)
-        if process.returncode and not repair_failure:
-            raise ValueError('PRICE_PROVIDER_UNAVAILABLE')
-        if repair_failure:
-            record['price_recovery'] = {'status': 'unavailable', 'reason': repair_failure, 'dates': []}
-        return record
-    except asyncio.CancelledError:
-        if on_raw and checkpoint.is_file():
-            try:
-                record = decode_prices(checkpoint.read_bytes())
-                record['price_recovery'] = {'status': 'unavailable', 'reason': 'PRICE_REPAIR_INTERRUPTED', 'dates': []}
-                on_raw(record)
-            except Exception as error:
-                log.warning('Price checkpoint unavailable: %s', type(error).__name__)
-        raise  # Preserve whole-analysis cancellation; the collector may use saved prices.
-    finally:
-        if process.returncode is None:
-            process.kill()
-            await process.wait()
 
 
 def decode_prices(body):

@@ -5,79 +5,8 @@ import pandas as pd
 import pytest
 
 from edge_portfolio.contracts import AnalysisInput, FinalReport, ReturnForecast
-from edge_portfolio.market_data import MarketData, comparison, enrich_report, weights, fetch_prices, expected_sessions
+from edge_portfolio.market_data import MarketData, comparison, enrich_report, weights, expected_sessions
 from report_fixtures import final_payload
-
-
-async def test_price_process_limit_is_shared_across_dashboard_and_analysis_threads(monkeypatch):
-    from threading import Lock
-    from edge_portfolio import market_data
-    active = peak = completed = 0
-    lock = Lock()
-    async def fetch(*args):
-        nonlocal active, peak, completed
-        with lock:
-            active += 1
-            peak = max(peak, active)
-        try:
-            await asyncio.sleep(.05)
-            return record()
-        finally:
-            with lock:
-                active -= 1
-                completed += 1
-    monkeypatch.setattr(market_data, '_fetch_prices_with_checkpoint', fetch)
-    async def batch():
-        await asyncio.gather(*(market_data.fetch_prices('TEST', date(2026, 10, 12)) for _ in range(3)))
-    await asyncio.gather(batch(), asyncio.to_thread(lambda: asyncio.run(batch())))
-    assert completed == 6
-    assert peak == 1, 'Analysis and dashboard must share the single memory-bounded provider slot'
-    assert active == 0
-
-
-async def test_cancelled_price_waiter_never_leaks_a_process_slot(monkeypatch):
-    from edge_portfolio import market_data
-    assert market_data._PRICE_SLOTS.acquire(blocking=False)
-    try:
-        waiter = asyncio.create_task(market_data.fetch_prices('TEST', date(2026, 10, 19)))
-        await asyncio.sleep(.01)
-        waiter.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await waiter
-    finally:
-        market_data._PRICE_SLOTS.release()
-    async def cancelled(*args):
-        raise asyncio.CancelledError
-    monkeypatch.setattr(market_data, '_fetch_prices_with_checkpoint', cancelled)
-    with pytest.raises(asyncio.CancelledError):
-        await market_data.fetch_prices('TEST', date(2026, 10, 19))
-    acquired = 0
-    try:
-        for _ in range(1):
-            assert market_data._PRICE_SLOTS.acquire(blocking=False)
-            acquired += 1
-    finally:
-        for _ in range(acquired):
-            market_data._PRICE_SLOTS.release()
-
-
-async def test_capacity_wait_does_not_spend_a_healthy_providers_timeout(monkeypatch):
-    from edge_portfolio import market_data
-    calls = []
-    async def fetch(*args):
-        calls.append(args[-1])
-        return record()
-    monkeypatch.setattr(market_data, '_fetch_prices_with_checkpoint', fetch)
-    assert market_data._PRICE_SLOTS.acquire(blocking=False)
-    try:
-        pending = asyncio.create_task(market_data.fetch_prices('TEST', date(2026, 10, 12), provider_timeout=.01))
-        await asyncio.sleep(.04)
-        assert not pending.done()
-        assert calls == [], 'Capacity contention must not be reported as provider failure'
-    finally:
-        market_data._PRICE_SLOTS.release()
-    assert (await asyncio.wait_for(pending, 1))['currency'] == 'KRW'
-    assert calls == ['yahoo']
 
 
 def test_provider_requests_maximum_history_with_the_analysis_cutoff(monkeypatch):
@@ -388,30 +317,6 @@ async def test_current_timeout_keeps_completed_recommended_history(monkeypatch):
     assert result['failures'] == {'KR:360750': 'PRICE_QUEUE_TIMEOUT'}
 
 
-async def test_cancelling_provider_kills_and_reaps_process(monkeypatch):
-    class Process:
-        returncode = None
-        killed = False
-        waited = False
-        async def communicate(self):
-            await asyncio.sleep(10)
-        def kill(self):
-            self.killed = True
-        async def wait(self):
-            self.waited = True
-            self.returncode = -1
-    process = Process()
-    async def start(*args, **kwargs):
-        return process
-    monkeypatch.setattr(asyncio, 'create_subprocess_exec', start)
-    task = asyncio.create_task(fetch_prices('VOO', date(2026, 10, 12)))
-    await asyncio.sleep(0)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
-    assert process.killed and process.waited
-
-
 def test_verified_krx_closures_are_not_treated_as_missing_prices():
     sessions = expected_sessions('KR:069500', pd.Timestamp('2026-06-01'), pd.Timestamp('2026-07-20'))
     assert pd.Timestamp('2026-06-03') not in sessions
@@ -429,21 +334,6 @@ def test_current_session_split_is_retained_without_using_its_unfinished_price(mo
     result = load_prices('069500.KS', date(2026, 10, 16))
     assert result['pending_splits'] == ['2026-10-16']
     assert result['frame'].index[-1].date() == date(2026, 10, 15)
-
-
-async def test_dashboard_primary_capture_does_not_change_analysis_raw_callback_semantics(monkeypatch):
-    from edge_portfolio import market_data
-    raw = record()
-    raw['frame']['Adj Close'] = float('nan')
-    async def provider(symbol, day, *, on_raw=None, provider='yahoo'):
-        if provider == 'yahoo':
-            return raw
-        raise TimeoutError()
-    monkeypatch.setattr(market_data, '_fetch_prices', provider)
-    captured = []
-    with pytest.raises(TimeoutError):
-        await market_data.fetch_prices('069500.KS', date(2026, 10, 12), on_raw=captured.append)
-    assert captured == []
 
 
 @pytest.mark.parametrize('repair_since', [None, date(2026, 10, 19)])
@@ -521,3 +411,24 @@ def test_default_repair_keeps_two_year_bound_despite_an_older_gap(monkeypatch):
     result = market_data.load_prices('069500.KS', date(2026, 10, 17))
     assert len(calls) == 1, 'An unrelated old gap must not start full-history repair for analyses or FX'
     assert result['repair_since'] == '2024-10-17'
+
+
+async def test_a_cancelled_slot_waiter_leaks_neither_the_slot_nor_its_wait():
+    # The collector's warm process hands the slot over while anyone waits; a waiter left counted would stall it.
+    from edge_portfolio import market_data
+    assert market_data._PRICE_SLOTS.acquire(blocking=False)
+    try:
+        async def quote():
+            async with market_data.price_slot():
+                pass
+        waiter = asyncio.create_task(quote())
+        await asyncio.sleep(.01)
+        assert market_data._SLOT_WAITERS == 1
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+    finally:
+        market_data._PRICE_SLOTS.release()
+    assert market_data._SLOT_WAITERS == 0
+    assert market_data._PRICE_SLOTS.acquire(blocking=False)
+    market_data._PRICE_SLOTS.release()

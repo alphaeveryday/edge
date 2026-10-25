@@ -99,16 +99,19 @@ async def collect_once(stopping=None, *, preload_session=None):
             db.execute('DELETE FROM portfolio_quote_refresh WHERE instrument=%s AND lease_until=%s', (job['instrument'], job['lease_until']))
             return True
     from .dashboard_work import records_for, today
+    from .market_preload import PriceSession
     key = job['instrument']
+    # The preload's warm process: no new process (imports, calendars, cookies) per holding.
+    session = preload_session or PriceSession(stopping)
     try:
-        if preload_session:
-            await preload_session.close()
         if stopping and stopping.is_set():
             return True
-        await records_for([key], today(), valuation_since={key: job['since']}, include_fx=False, collector_lease=job['lease_until'])
+        await records_for([key], today(), session=session, valuation_since={key: job['since']}, include_fx=False, collector_lease=job['lease_until'])
     except Exception as error:
         log.warning('shared quote failed instrument=%s code=%s', key, type(error).__name__)
     finally:
+        if session is not preload_session:
+            await session.close()
         with store.connect() as db:
             updated = db.execute('''UPDATE portfolio_quote_refresh SET lease_until=NULL,
                 refresh_after=CASE WHEN since<%s THEN now() ELSE now()+interval '1 minute' END

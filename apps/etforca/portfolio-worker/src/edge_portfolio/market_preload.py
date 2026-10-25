@@ -21,29 +21,47 @@ class PriceSession:
         self.admitted = False
         self.stopping = stopping
 
-    async def fetch(self, symbol, end, start):
+    async def fetch(self, symbol, end, start, *, repair_since=None, failure=None):
+        """`failure`: the primary already failed this way, so the new process runs only the fallback (15 seconds)."""
         from . import market_data
         captured = None
+        if market_data._SLOT_WAITERS:
+            # A newsletter quote is waiting for the slot this warm process holds: hand it over, then queue again.
+            await self.close()
+            while market_data._SLOT_WAITERS:
+                if self.stopping and self.stopping.is_set():
+                    raise InterruptedError()
+                await asyncio.sleep(.05)
         try:
-            async with asyncio.timeout(30):
-                if not self.admitted:
-                    while not market_data._PRICE_SLOTS.acquire(blocking=False):
-                        if self.stopping and self.stopping.is_set():
-                            raise InterruptedError()
-                        await asyncio.sleep(.05)
-                    self.admitted = True
+            # Waiting for the slot is not part of the provider deadline: a busy worker is not a bad source.
+            if not self.admitted:
+                while not market_data._PRICE_SLOTS.acquire(blocking=False):
                     if self.stopping and self.stopping.is_set():
                         raise InterruptedError()
-                    self.process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', '--serve',
+                    await asyncio.sleep(.05)
+                self.admitted = True
+            async with asyncio.timeout(15 if failure else 30) as deadline:
+                if self.process is None:
+                    if self.stopping and self.stopping.is_set():
+                        raise InterruptedError()
+                    self.process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch',
                         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
                         limit=16 * 1024 * 1024,
                         creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
                 if self.stopping and self.stopping.is_set():
                     raise InterruptedError()
-                self.process.stdin.write((json.dumps({'symbol': symbol, 'end': str(end), 'start': str(start) if start else None}) + '\n').encode())
+                self.process.stdin.write((json.dumps({'symbol': symbol, 'end': str(end), 'start': str(start) if start else None,
+                                                      'repair_since': str(repair_since) if repair_since else None,
+                                                      'failure': failure}) + '\n').encode())
                 await self.process.stdin.drain()
                 while True:
-                    record = market_data.decode_prices(await self.process.stdout.readline())
+                    line = await self.process.stdout.readline()
+                    if line.startswith(b'{"_fallback"'):
+                        # The primary failed; the fallback gets its own 15 seconds however late that was.
+                        failure = json.loads(line)['_fallback']
+                        deadline.reschedule(asyncio.get_running_loop().time() + 15)
+                        continue
+                    record = market_data.decode_prices(line)
                     if record.pop('_checkpoint', False):
                         captured = record
                     else:
@@ -52,7 +70,14 @@ class PriceSession:
             await self.close()
             if captured is not None:
                 captured['price_recovery'] = {'status': 'unavailable', 'reason': market_data.price_failure(error), 'dates': []}
+                if failure:
+                    captured['primary_failure'] = failure  # A rate limit still pauses the bulk collector.
                 return captured
+            if isinstance(error, TimeoutError) and failure is None:
+                # The primary stalled before any usable closes: the fallback gets its own time.
+                return await self.fetch(symbol, end, start, repair_since=repair_since, failure='PRICE_PROVIDER_TIMEOUT')
+            if failure == 'PRICE_PROVIDER_RATE_LIMIT':
+                raise ValueError(failure) from error  # However the fallback failed, the rate limit stays the reason.
             raise
         except BaseException:
             await self.close()
@@ -171,7 +196,7 @@ def next_quote(key, now):
     return target if target > local else target + timedelta(days=1)
 
 
-async def collect_one(stopping=None, *, now=None, session=None, urgent=False):
+async def collect_one(stopping=None, *, session, now=None, urgent=False):
     """One scheduled instrument, or with `urgent` one an analysis waits for (any hour, even beside customer work)."""
     from . import dashboard_work as work, market_data
     now = now or datetime.now(KST)
@@ -211,9 +236,9 @@ async def collect_one(stopping=None, *, now=None, session=None, urgent=False):
         symbol = price_symbol(key)
         requested_at = started.isoformat()
         # Recent quotes are available before an instrument's long archive is collected.
-        async with asyncio.timeout(40):
-            record = await (session.fetch(symbol, end, end - timedelta(days=35) if job['quote'] else None) if session else
-                market_data.fetch_prices(symbol, end, provider_timeout=15, history_start=end - timedelta(days=35) if job['quote'] else None))
+        # No outer deadline: the session bounds the fetch itself (Yahoo 30s, then the fallback 15s), and an outer one
+        # would also count the slot wait for newsletter quotes and replace a known rate limit with a timeout.
+        record = await session.fetch(symbol, end, end - timedelta(days=35) if job['quote'] else None)
         if record['currency'] != ('USD' if key.startswith('US:') else 'KRW'):
             raise ValueError('UNSUPPORTED_CURRENCY')
         _, observed = work.last_close(record)

@@ -180,13 +180,14 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
     return bool(updated)
 
 
-async def records_for(ids, day, *, valuation_since=None, include_fx=True, collector_lease=None):
-    from .market_data import decode_prices, fetch_prices, positive_price, year_before, with_actual_prices
+async def records_for(ids, day, *, session, valuation_since=None, include_fx=True, collector_lease=None):
+    """`session`: the collector's warm price process (market_preload.PriceSession), shared with the preload."""
+    from .market_data import decode_prices, positive_price, year_before
     records, failures = {}, []
     keys = set(ids) - {'CASH:KRW', None}
     if include_fx and any(k.startswith('US:') for k in keys):
         keys.add('FX')
-    # One subprocess at a time keeps the existing small worker within its memory limit.
+    # One warm price process keeps the existing small worker within its memory limit.
     try:
         async with asyncio.timeout(210):
             for key in sorted(keys):
@@ -220,24 +221,10 @@ async def records_for(ids, day, *, valuation_since=None, include_fx=True, collec
                         requested_at = datetime.now(ZoneInfo('UTC')).isoformat()
                         symbol = price_symbol(key)
                         expected = 'KRW' if key == 'FX' or key.startswith('KR:') else 'USD'
-                        captured = None
-                        def capture(record):
-                            nonlocal captured
-                            _, stamp = last_close(record)
-                            if record['currency'] == expected and 0 <= (end - date.fromisoformat(stamp)).days <= 7:
-                                captured = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat(), 'requested_at': requested_at}
-                                records[key] = captured
-                        try:
-                            budget = 200 / max(1, len(keys))
-                            record = await fetch_prices(symbol, end, on_raw=capture, on_primary=capture, provider_timeout=budget * .45,
-                                                        repair_since=since, **({'history_start': min(since or end, end - timedelta(days=35) if key == 'FX' else year_before(end) - timedelta(days=7))} if valuation_since is not None else {}))
-                            record = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat(), 'requested_at': requested_at}
-                        except TimeoutError:
-                            if key not in records:
-                                raise
-                            record = records[key]
-                        if record.get('provider', '').startswith('FinanceDataReader:NAVER:') and captured and not captured.get('provider', '').startswith('FinanceDataReader:NAVER:'):
-                            record = with_actual_prices(record, captured)
+                        # On a provider deadline the session returns the unrepaired history it already has.
+                        record = await session.fetch(symbol, end, (min(since or end, end - timedelta(days=35) if key == 'FX' else year_before(end) - timedelta(days=7))
+                                                                   if valuation_since is not None else None), repair_since=since)
+                        record = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat(), 'requested_at': requested_at}
                         if record['currency'] != expected:
                             raise ValueError('UNSUPPORTED_CURRENCY')
                         record['observed_on'] = last_close(record)[1]

@@ -83,7 +83,7 @@ async def test_each_stage_names_the_failure_point_and_never_prints_customer_inpu
 
 async def test_review_reads_the_store_like_the_analysis_and_never_asks_a_provider(prices, monkeypatch):
     # 분석은 수집기가 저장한 가격만 쓴다. 검토도 같은 곳만 읽어야 분석이 실제로 볼 실패를 잰다
-    monkeypatch.setattr('edge_portfolio.market_data.fetch_prices', lambda *a, **k: pytest.fail('the review must not call a provider'))
+    monkeypatch.setattr('edge_portfolio.market_preload.PriceSession.fetch', lambda *a, **k: pytest.fail('the review must not call a provider'))
     monkeypatch.setattr('edge_portfolio.market_preload.request_prices', lambda *a: pytest.fail('a read-only review cannot queue requests'))
     records, rejected = await past_review.collect_prices({'KR:069500', 'US:VOO'}, AS_OF)
     assert set(records) == {'KR:069500'} and rejected == {'US:VOO': 'PRICE_STALE'}

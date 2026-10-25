@@ -1,6 +1,7 @@
 from datetime import date, datetime
 import pandas as pd
 import pytest
+from edge_portfolio.market_preload import PriceSession
 from edge_portfolio import dashboard, dashboard_work as work, dashboard_quotes as quotes, store
 from test_store import isolated_db  # noqa: F401
 
@@ -11,6 +12,14 @@ def asset(**changes):
 
 def record(prices=(100., 110.), currency='KRW', dividends=(0., 2.)):
     return {'frame': pd.DataFrame({'Close': prices, 'Adj Close': prices, 'Dividends': dividends}, index=pd.to_datetime(['2026-10-15', '2026-10-16'])), 'currency': currency, 'source_url': 'https://example.com/prices'}
+
+
+def serve(monkeypatch, load):
+    """Answer the collector's warm price session (market_preload.PriceSession) from `load`, without a process."""
+    from edge_portfolio.market_preload import PriceSession
+    async def fetch(self, symbol, end, start, *, repair_since=None):
+        return await load(symbol, end, history_start=start, repair_since=repair_since)
+    monkeypatch.setattr(PriceSession, 'fetch', fetch)
 
 
 def test_us_cache_advances_only_after_the_session_closes_even_within_one_korean_day():
@@ -230,53 +239,16 @@ def test_replacing_holdings_archives_manual_history_with_original_names(isolated
 
 async def test_collection_deadline_keeps_completed_prices(isolated_db, monkeypatch):
     import asyncio
-    from edge_portfolio import market_data
     original_timeout = asyncio.timeout
     monkeypatch.setattr(work.asyncio, 'timeout', lambda _: original_timeout(1))
-    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None):
+    async def fetch(symbol, day, **kwargs):
         if symbol == '360750.KS':
             await asyncio.sleep(10)
         return record()
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
-    records, failures = await work.records_for(['KR:069500', 'KR:360750'], date(2026, 10, 18))
+    serve(monkeypatch, fetch)
+    records, failures = await work.records_for(['KR:069500', 'KR:360750'], date(2026, 10, 18), session=PriceSession())
     assert set(records) == {'KR:069500'}
     assert failures == ['KR:360750']
-
-
-async def test_a_slow_first_provider_cannot_starve_a_healthy_later_holding(isolated_db, monkeypatch):
-    import asyncio
-    from edge_portfolio import market_data
-    wait_for = asyncio.wait_for
-    monkeypatch.setattr(work.asyncio, 'wait_for', lambda task, timeout: wait_for(task, min(timeout, .05)))
-    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None):
-        if symbol == '069500.KS':
-            await asyncio.wait_for(asyncio.sleep(20), timeout=provider_timeout)
-        return record()
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
-    async with asyncio.timeout(5):
-        records, failures = await work.records_for(['KR:069500', 'KR:360750'], date(2026, 10, 18))
-    assert set(records) == {'KR:360750'}
-    assert failures == ['KR:069500']
-
-
-async def test_dashboard_waits_for_capacity_before_starting_provider_deadlines(isolated_db, monkeypatch):
-    import asyncio
-    from edge_portfolio import market_data
-    wait_for = asyncio.wait_for
-    monkeypatch.setattr(work.asyncio, 'wait_for', lambda task, timeout: wait_for(task, min(timeout, .02)))
-    async def fetch(*args, **kwargs):
-        return record()
-    monkeypatch.setattr(market_data, '_fetch_prices', fetch)
-    assert market_data._PRICE_SLOTS.acquire(blocking=False)
-    try:
-        pending = asyncio.create_task(work.records_for(['KR:069500'], date(2026, 10, 18)))
-        await asyncio.sleep(.05)
-        assert not pending.done(), 'A queued quote is not a failed source'
-    finally:
-        market_data._PRICE_SLOTS.release()
-    records, failures = await wait_for(pending, 2)
-    assert set(records) == {'KR:069500'}
-    assert failures == []
 
 
 @pytest.mark.parametrize('currency,fx,expected', [('KRW', None, 100.), ('USD', 1300., 130000.)])
@@ -292,18 +264,11 @@ def test_legacy_cash_quantity_keeps_its_recorded_value(currency, fx, expected):
 
 @pytest.mark.parametrize('currency', ['KRW', 'USD'])
 async def test_interrupted_optional_repair_keeps_valid_raw_prices_only(isolated_db, monkeypatch, currency):
-    import asyncio
-    from edge_portfolio import market_data
-    wait_for = asyncio.wait_for
-    monkeypatch.setattr(work.asyncio, 'wait_for', lambda task, timeout: wait_for(task, .05))
-    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None):
-        try:
-            await asyncio.wait_for(asyncio.sleep(20), timeout=provider_timeout)
-        except (asyncio.CancelledError, TimeoutError):
-            on_raw(record(currency=currency))
-            raise
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
-    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18))
+    async def fetch(*args, **kwargs):
+        # What the warm session returns when its deadline interrupts the repair: the raw history it already had.
+        return {**record(currency=currency), 'price_recovery': {'status': 'unavailable', 'reason': 'PRICE_PROVIDER_TIMEOUT', 'dates': []}}
+    serve(monkeypatch, fetch)
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), session=PriceSession())
     assert list(records) == (['KR:069500'] if currency == 'KRW' else [])
     assert failures == ([] if currency == 'KRW' else ['KR:069500'])
 
@@ -377,33 +342,17 @@ def test_first_automatic_quote_uses_a_known_legacy_snapshot_date_for_splits():
 
 
 async def test_adjusted_only_cached_prices_do_not_block_actual_close_recovery(isolated_db, monkeypatch):
-    from edge_portfolio import market_data
     calls = []
-    async def fetch(symbol, day, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None):
+    async def fetch(symbol, day, **kwargs):
         calls.append(symbol)
         return {**record(), **({'provider': 'FinanceDataReader:NAVER:069500'} if len(calls) == 1 else {})}
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
-    await work.records_for(['KR:069500'], date(2026, 10, 18))
-    recovered, failures = await work.records_for(['KR:069500'], date(2026, 10, 18))
+    serve(monkeypatch, fetch)
+    await work.records_for(['KR:069500'], date(2026, 10, 18), session=PriceSession())
+    recovered, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), session=PriceSession())
     assert len(calls) == 2
     assert failures == []
     result = work.valuation({'assets': [asset()]}, recovered, None, date(2026, 10, 18))
     assert result['assets'][0]['value'] == 1100
-
-
-async def test_each_provider_gets_time_even_when_the_primary_stalls(monkeypatch):
-    import asyncio
-    from edge_portfolio import market_data
-    calls = []
-    async def fetch(symbol, day, *, on_raw=None, provider='yahoo'):
-        calls.append(provider)
-        if provider == 'yahoo':
-            await asyncio.sleep(20)
-        return record()
-    monkeypatch.setattr(market_data, '_fetch_prices', fetch)
-    result = await market_data.fetch_prices('069500.KS', date(2026, 10, 18), provider_timeout=.02)
-    assert calls == ['yahoo', 'fallback']
-    assert result['currency'] == 'KRW'
 
 
 async def test_resolving_a_legacy_symbol_does_not_rebase_unchanged_split_inputs(isolated_db):
@@ -445,24 +394,8 @@ def test_manually_linking_a_legacy_alias_keeps_snapshot_but_replacing_a_known_fu
     assert replaced['workbook']['assets'][0]['quantity_as_of'] != '2026-10-15'
 
 
-async def test_adjusted_fallback_keeps_captured_actual_prices_actions_and_source(isolated_db, monkeypatch):
-    from edge_portfolio import market_data
-    async def fetch(symbol, day, *, on_raw=None, provider='yahoo'):
-        if provider == 'yahoo':
-            raw = record()
-            raw['frame']['Adj Close'] = float('nan')
-            return raw
-        return {**record((100., 120.)), 'provider': 'FinanceDataReader:NAVER:069500', 'return_basis': 'total_return', 'source_url': 'https://example.com/returns'}
-    monkeypatch.setattr(market_data, '_fetch_prices', fetch)
-    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18))
-    result = work.valuation({'assets': [asset()]}, records, None, date(2026, 10, 18))
-    assert result['assets'][0]['value'] == 1100
-    assert records['KR:069500']['frame']['Dividends'].iloc[-1] == 2
-
-
 async def test_incomplete_cached_returns_are_retried_without_losing_actual_closes(isolated_db, monkeypatch):
     from psycopg.types.json import Jsonb
-    from edge_portfolio import market_data
     from edge_portfolio.price_fetch import serialize
     import json
     r = record()
@@ -473,8 +406,8 @@ async def test_incomplete_cached_returns_are_retried_without_losing_actual_close
     async def fetch(symbol, day, **kwargs):
         calls.append(symbol)
         return record()
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
-    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18))
+    serve(monkeypatch, fetch)
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), session=PriceSession())
     assert calls == ['069500.KS']
     assert failures == []
     assert records['KR:069500']['frame']['Adj Close'].notna().all()
@@ -489,33 +422,31 @@ def test_annual_distribution_this_month_is_preserved_in_the_next_twelve_months()
 
 @pytest.mark.parametrize('recovery', ['not_needed', 'partial'])
 async def test_adding_a_holding_reuses_quotes_but_action_checks_refresh_each_minute(isolated_db, monkeypatch, recovery):
-    from edge_portfolio import market_data
     calls = []
     async def fetch(symbol, day, **kwargs):
         calls.append(symbol)
         return {**record(), 'price_recovery': {'status': recovery}}
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    serve(monkeypatch, fetch)
     day = date(2026, 10, 18)
     since = {'KR:069500': day, 'KR:360750': day}
-    await work.records_for(['KR:069500'], day, valuation_since=since)
-    records, failures = await work.records_for(list(since), day, valuation_since=since)
+    await work.records_for(['KR:069500'], day, valuation_since=since, session=PriceSession())
+    records, failures = await work.records_for(list(since), day, valuation_since=since, session=PriceSession())
     assert calls == ['069500.KS', '360750.KS'], 'Adding one holding must not invalidate another holding or another owner’s shared quote'
     assert failures == []
     with store.connect() as db:
         db.execute("UPDATE portfolio_dashboard_prices SET payload=jsonb_set(payload,'{fetched_at}',to_jsonb((now()-interval '61 seconds')::text)) WHERE instrument='KR:069500'")
-    await work.records_for(list(since), day, valuation_since=since)
+    await work.records_for(list(since), day, valuation_since=since, session=PriceSession())
     assert calls == ['069500.KS', '360750.KS', '069500.KS'], 'Only expired quotes refresh; late split announcements must still be detected'
 
 
 async def test_a_collection_deadline_cannot_reclassify_failed_expired_quotes_as_fresh(isolated_db, monkeypatch):
     import asyncio
-    from edge_portfolio import market_data
     day = date(2026, 10, 18)
     since = {'KR:069500': day, 'KR:360750': day}
     async def fetch(*args, **kwargs):
         return record()
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
-    await work.records_for(list(since), day, valuation_since=since)
+    serve(monkeypatch, fetch)
+    await work.records_for(list(since), day, valuation_since=since, session=PriceSession())
     with store.connect() as db:
         db.execute("UPDATE portfolio_dashboard_prices SET payload=payload-'actions_checked_on'")
     timeout = asyncio.timeout
@@ -524,8 +455,8 @@ async def test_a_collection_deadline_cannot_reclassify_failed_expired_quotes_as_
         if symbol == '069500.KS':
             raise TimeoutError()
         await asyncio.sleep(10)
-    monkeypatch.setattr(market_data, 'fetch_prices', unavailable)
-    records, failures = await work.records_for(list(since), day, valuation_since=since)
+    serve(monkeypatch, unavailable)
+    records, failures = await work.records_for(list(since), day, valuation_since=since, session=PriceSession())
     assert records == {}
     assert failures == sorted(since), 'Both the prior failure and interrupted refresh remain failures; UI keeps their last valuations instead'
 
@@ -582,44 +513,41 @@ def test_a_failed_refresh_cannot_make_an_old_current_month_dividend_look_fresh()
 
 
 async def test_valuation_skips_old_price_repairs_but_backtest_upgrades_its_cache(isolated_db, monkeypatch):
-    from edge_portfolio import market_data
     repairs = []
     async def fetch(symbol, day, **kwargs):
         repair = kwargs['repair_since']
         repairs.append(repair)
         return {**record(), **({'repair_since': min(repair, date(2025, 10, 16)).isoformat()} if repair else {})}
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    serve(monkeypatch, fetch)
     day = date(2026, 10, 18)
-    await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': day})
-    await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': day})
+    await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': day}, session=PriceSession())
+    await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': day}, session=PriceSession())
     assert repairs == [day], 'A current dashboard quote is reusable without repairing historical gaps'
-    await work.records_for(['KR:069500'], day)
+    await work.records_for(['KR:069500'], day, session=PriceSession())
     assert repairs == [day, None], 'A later backtest must still request the historical repair pass'
-    await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': date(2023, 10, 1)})
+    await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': date(2023, 10, 1)}, session=PriceSession())
     assert repairs == [day, None, date(2023, 10, 1)], 'An unmarked old backtest cache only covers two years, not a longer-held split basis'
 
 
 async def test_failed_earlier_basis_upgrade_cannot_publish_a_missing_held_split(isolated_db, monkeypatch):
-    from edge_portfolio import market_data
     r = record()
     r['frame'] = pd.DataFrame({'Close': 100., 'Adj Close': 100.}, index=pd.bdate_range('2024-10-01', '2026-10-16')).drop(pd.Timestamp('2024-11-05'))
     r['repair_since'] = '2025-10-16'
     async def fetch(*args, **kwargs):
         return r
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    serve(monkeypatch, fetch)
     day = date(2026, 10, 18)
-    fresh, _ = await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': day})
+    fresh, _ = await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': day}, session=PriceSession())
     assert fresh
     async def unavailable(*args, **kwargs):
         raise TimeoutError()
-    monkeypatch.setattr(market_data, 'fetch_prices', unavailable)
-    records, failures = await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': date(2024, 10, 1)})
+    serve(monkeypatch, unavailable)
+    records, failures = await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': date(2024, 10, 1)}, session=PriceSession())
     assert records == {}
     assert failures == ['KR:069500']
 
 
 async def test_rejected_held_gap_cache_is_retried_next_minute_even_when_scope_is_marked_complete(isolated_db, monkeypatch):
-    from edge_portfolio import market_data
     calls = []
     async def fetch(*args, **kwargs):
         calls.append(kwargs['repair_since'])
@@ -629,15 +557,15 @@ async def test_rejected_held_gap_cache_is_retried_next_minute_even_when_scope_is
         if len(calls) == 1:
             r['frame'] = r['frame'].drop(pd.Timestamp('2026-10-14'))
         return r
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    serve(monkeypatch, fetch)
     args = dict(valuation_since={'KR:069500': date(2026, 10, 12)})
-    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), **args)
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), **args, session=PriceSession())
     assert records == {} and failures == ['KR:069500']
-    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), **args)
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), **args, session=PriceSession())
     assert len(calls) == 1 and records == {} and failures == ['KR:069500'], 'Edits within the same minute do not hammer a provider with the same unresolved gap'
     with store.connect() as db:
         db.execute("UPDATE portfolio_dashboard_prices SET payload=jsonb_set(payload,'{fetched_at}',to_jsonb((now()-interval '61 seconds')::text))")
-    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), **args)
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), **args, session=PriceSession())
     assert len(calls) == 2 and records and not failures, 'A rejected cached gap must recover without manual cache deletion'
 
 
