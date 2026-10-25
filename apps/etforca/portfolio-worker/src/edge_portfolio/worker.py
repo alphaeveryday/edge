@@ -147,8 +147,30 @@ async def dashboard_loop(stopping):
     await asyncio.gather(loop(), collection_loop(stopping))
 
 
+def trace_memory():
+    """Temporary OOM diagnosis (PORTFOLIO_MEMORY_TRACE=1): every minute, the code lines that grew the most.
+    Logs file:line and sizes only, never values."""
+    import threading
+    import tracemalloc
+    tracemalloc.start(12)
+
+    def report():
+        first = tracemalloc.take_snapshot()
+        while True:
+            time.sleep(60)
+            snapshot = tracemalloc.take_snapshot()
+            current, peak = tracemalloc.get_traced_memory()
+            log.info('memory traced_mb=%d peak_mb=%d', current >> 20, peak >> 20)
+            for stat in snapshot.compare_to(first, 'traceback')[:4]:
+                frames = ' <- '.join(f'{frame.filename.rsplit("/", 2)[-1]}:{frame.lineno}' for frame in reversed(stat.traceback[-12:]))
+                log.info('memory grew_kb=%d count=%d at %s', stat.size_diff >> 10, stat.count_diff, frames)
+    threading.Thread(target=report, daemon=True).start()
+
+
 async def main():
     HEARTBEAT.unlink(missing_ok=True)
+    if os.getenv('PORTFOLIO_MEMORY_TRACE') == '1':
+        trace_memory()
     if not os.getenv("DEEPSEEK_API_KEY"):
         raise RuntimeError("DEEPSEEK_API_KEY is required")
     store.initialize()
