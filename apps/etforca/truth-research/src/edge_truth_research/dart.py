@@ -33,11 +33,22 @@ def _norm(text: str) -> str:
     return re.sub(r"[\W_]+", "", text or "")
 
 
+def _decode(data: bytes) -> str:
+    """DART 문서 글자. UTF-8 로 엄격히 풀고, 안 되면 CP949(EUC-KR 상위). 선언된 charset 은 믿지 않는다 —
+    거래소 공시는 'charset=euc-kr' 이라 적고 실제로는 UTF-8 이다(2026-10-25 실측), 옛 문서는 진짜 EUC-KR 이다."""
+    for encoding in ("utf-8", "cp949"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", "replace")
+
+
 def _unzip(raw: bytes, what: str) -> str:
     """DART ZIP 응답의 첫 파일 글자. ZIP 이 아니면(한도 초과·키 오류 등은 XML 로 온다) DartError."""
     try:
         with zipfile.ZipFile(io.BytesIO(raw)) as z:
-            return z.read(z.namelist()[0]).decode("utf-8", "replace")
+            return _decode(z.read(z.namelist()[0]))
     except (zipfile.BadZipFile, IndexError):
         message = re.search(r"<message>(.*?)</message>", raw[:500].decode("utf-8", "replace"))
         raise DartError(f"DART {what} 오류: {message.group(1)[:80] if message else '알 수 없는 응답'}") from None
@@ -56,11 +67,11 @@ def parse_corp_codes(xml: str) -> dict[str, str]:
 
 def match(items: list[dict], title: str, submitter: str) -> str | None:
     """DART 목록에서 KIND 공시와 같은 건의 접수번호. DART 제목은 잘려 올 수 있어 앞부분이 맞으면 같다고 본다.
-    같은 날 같은 제목이 여럿이면 제출인으로 가르고, 그래도 여럿이면 고르지 않는다(엉뚱한 원문을 읽지 않게)."""
-    want = _norm(title)
-    same = [i for i in items if (got := _norm(i.get("report_nm", ""))) and (want.startswith(got) or got.startswith(want))]
-    if len(same) > 1:
-        same = [i for i in same if _norm(i.get("flr_nm", "")) == _norm(submitter)]
+    제출인도 같아야 한다(KIND·DART 제출인 표기는 같다, 2026-10-25 실측) — 후보가 하나여도 확인한다. 찾는 공시가 아직
+    DART 에 없을 때 다른 사람의 같은 제목 보고서를 집지 않게. 그래도 여럿이면 고르지 않는다(엉뚱한 원문을 읽지 않게)."""
+    want, filer = _norm(title), _norm(submitter)
+    same = [i for i in items if (got := _norm(i.get("report_nm", ""))) and (want.startswith(got) or got.startswith(want))
+            and filer and _norm(i.get("flr_nm", "")) == filer]
     return same[0]["rcept_no"] if len(same) == 1 else None
 
 

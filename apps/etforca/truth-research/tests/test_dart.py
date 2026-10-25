@@ -5,6 +5,7 @@ DART 는 같은 공시를 다른 접수번호로 싣는다 — 제목·제출인
 인증키는 주소에 실리므로 오류 문구에 새면 세션 기록·로그로 퍼진다.
 """
 import io
+import json
 import zipfile
 
 import pytest
@@ -27,6 +28,7 @@ def test_match_uses_the_filer_for_same_day_same_title_and_refuses_to_guess_other
     items = [_item("1", "임원ㆍ주요주주특정증권등소유상황보고서", "서경헌"), _item("2", "임원ㆍ주요주주특정증권등소유상황보고서", "홍길동")]
     assert dart.match(items, "임원ㆍ주요주주특정증권등소유상황보고서", "홍길동") == "2"
     assert dart.match(items, "임원ㆍ주요주주특정증권등소유상황보고서", "다른사람") is None  # 고르지 않는다
+    assert dart.match(items[1:], "임원ㆍ주요주주특정증권등소유상황보고서", "서경헌") is None  # 후보가 하나여도 남의 보고서는 안 된다
     assert dart.match(items, "주요사항보고서(유상증자결정)", "홍길동") is None
 
 
@@ -35,6 +37,13 @@ def test_corp_codes_never_borrow_the_code_of_an_unlisted_corp_listed_before():
     xml = ("<result><list><corp_code>00000001</corp_code><corp_name>비상장</corp_name><stock_code> </stock_code></list>"
            "<list><corp_code>00000002</corp_code><corp_name>상장</corp_name><stock_code>123456</stock_code></list></result>")
     assert dart.parse_corp_codes(xml) == {"123456": "00000002"}
+
+
+def test_decode_reads_utf8_declared_as_euckr_and_real_euckr():
+    # 거래소 공시는 charset=euc-kr 이라 적고 UTF-8 로 온다. 옛 문서는 진짜 EUC-KR — 어느 쪽도 한글이 깨진 채 증거가 되면 안 된다
+    utf8 = '<meta charset="euc-kr">공급계약 해지'.encode("utf-8")
+    euckr = '<meta charset="euc-kr">공급계약 해지'.encode("euc-kr")
+    assert dart._decode(utf8).endswith("공급계약 해지") and dart._decode(euckr).endswith("공급계약 해지")
 
 
 def _zip(html: str) -> bytes:
@@ -52,7 +61,7 @@ def test_document_reads_the_matched_filing_and_errors_never_carry_the_key(tmp_pa
         if path == "corpCode.xml":
             return _zip("<list><corp_code>01053540</corp_code><corp_name>퓨쳐켐</corp_name><stock_code>220100</stock_code></list>")
         if path == "list.json":
-            return b'{"status": "000", "list": [{"rcept_no": "20261023900540", "report_nm": "\\uc784\\uc0c1\\uc2dc\\ud5d8\\uacb0\\uacfc", "flr_nm": "x"}]}'
+            return json.dumps({"status": "000", "list": [{"rcept_no": "20261023900540", "report_nm": "\uc784\uc0c1\uc2dc\ud5d8\uacb0\uacfc", "flr_nm": "\ud4e8\uccd0\ucf10"}]}).encode()
         return _zip("<html><style>.x{}</style><body>ORR 38.9%</body></html>") if params["rcept_no"] == "20261023900540" else b""
     monkeypatch.setattr(Dart, "_get", fake)
     d = Dart("SECRET-KEY", cache=tmp_path / "corp.json")
