@@ -7,6 +7,7 @@ DART 20261023000484). 그래서 회사·날짜로 DART 공시목록을 받아 �
 """
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import os
@@ -30,6 +31,16 @@ class DartError(RuntimeError):
 def _norm(text: str) -> str:
     """제목 비교용: 글자·숫자만. KIND '투자판단 관련 주요경영사항(임상시험 결과)' ≈ DART '투자판단관련주요경영사항(임상시험결과)'."""
     return re.sub(r"[\W_]+", "", text or "")
+
+
+def _unzip(raw: bytes, what: str) -> str:
+    """DART ZIP 응답의 첫 파일 글자. ZIP 이 아니면(한도 초과·키 오류 등은 XML 로 온다) DartError."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            return z.read(z.namelist()[0]).decode("utf-8", "replace")
+    except (zipfile.BadZipFile, IndexError):
+        message = re.search(r"<message>(.*?)</message>", raw[:500].decode("utf-8", "replace"))
+        raise DartError(f"DART {what} 오류: {message.group(1)[:80] if message else '알 수 없는 응답'}") from None
 
 
 def parse_corp_codes(xml: str) -> dict[str, str]:
@@ -68,7 +79,7 @@ class Dart:
                 return res.read()
         except urllib.error.HTTPError as error:
             raise DartError(f"DART HTTP {error.code}") from None  # 예외 문자열에 주소(인증키)가 실리지 않게
-        except (urllib.error.URLError, TimeoutError) as error:
+        except (OSError, http.client.HTTPException) as error:  # URLError·시간 초과·연결 끊김·응답 잘림
             raise DartError(f"DART 연결 실패: {type(error).__name__}") from None
 
     def corp_code(self, stock_code: str) -> str | None:
@@ -76,10 +87,12 @@ class Dart:
         try:
             table = json.loads(self.cache.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            with zipfile.ZipFile(io.BytesIO(self._get("corpCode.xml"))) as z:
-                xml = z.read(z.namelist()[0]).decode("utf-8", "replace")
-            table = parse_corp_codes(xml)
-            self.cache.write_text(json.dumps(table), encoding="utf-8")
+            table = parse_corp_codes(_unzip(self._get("corpCode.xml"), "고유번호 표"))
+            if not table:
+                raise DartError("DART 고유번호 표가 비었습니다") from None
+            tmp = self.cache.with_name(f"{self.cache.name}.{os.getpid()}")  # 동시 세션이 반쯤 쓴 파일을 읽지 않게
+            tmp.write_text(json.dumps(table), encoding="utf-8")
+            os.replace(tmp, self.cache)
         return table.get(stock_code)
 
     def document(self, stock_code: str, acptno: str, title: str, submitter: str, max_chars: int = 15000) -> str:
@@ -88,18 +101,17 @@ class Dart:
         if not corp:
             raise DartError(f"DART 에 종목 {stock_code} 이 없습니다")
         day = acptno[:8]
-        listing = json.loads(self._get("list.json", corp_code=corp, bgn_de=day, end_de=day, page_count="100"))
+        try:
+            listing = json.loads(self._get("list.json", corp_code=corp, bgn_de=day, end_de=day, page_count="100"))
+        except ValueError:
+            raise DartError("DART 목록 응답을 읽지 못했습니다") from None
         if listing.get("status") not in ("000", "013"):  # 013 = 조회된 데이터 없음
             raise DartError(f"DART 목록 오류 {listing.get('status')}: {listing.get('message', '')[:80]}")
         rcept = match(listing.get("list") or [], title, submitter)
         if not rcept:
             raise DartError(f"DART 에서 같은 공시를 찾지 못했습니다({day} '{title[:40]}')")
         raw = self._get("document.xml", rcept_no=rcept)
-        if raw[:2] != b"PK":  # 오류면 ZIP 대신 <result><status/><message/></result> XML 이 온다
-            message = re.search(r"<message>(.*?)</message>", raw.decode("utf-8", "replace"))
-            raise DartError(f"DART 원문 오류: {message.group(1)[:80] if message else '알 수 없는 응답'}")
-        with zipfile.ZipFile(io.BytesIO(raw)) as z:
-            text = _text(z.read(z.namelist()[0]).decode("utf-8", "replace"))
+        text = _text(_unzip(raw, f"공시 {rcept} 원문"))
         if not text:
             raise DartError(f"DART 공시 {rcept} 본문이 비었습니다")
         return text[:max_chars]
