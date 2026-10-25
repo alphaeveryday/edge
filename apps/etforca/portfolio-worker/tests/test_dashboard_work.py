@@ -622,13 +622,12 @@ def test_analyses_keep_the_global_admission_limit_without_backtests(isolated_db)
 def test_analysis_uses_a_stored_archive_only_when_it_is_whole_and_current():
     # ALPHA-1437: analysis reads only the collector's store. A record must equal what a fetch would
     # return for as_of, otherwise the analysis would silently compare an older or shorter window.
-    import json
     from edge_portfolio.price_fetch import serialize
     as_of = date(2026, 10, 16)
-    def saved(days, **extra):
+    def saved(days, **extra):  # The stored payload as the text saved_prices reads (payload::text).
         prices = [100. + i for i in range(len(days))]
         frame = pd.DataFrame({'Close': prices, 'Adj Close': prices}, index=pd.to_datetime(days))
-        return json.loads(serialize({'frame': frame, 'currency': 'KRW', 'source_url': 'https://example.com', 'history_complete': True, **extra}))
+        return serialize({'frame': frame, 'currency': 'KRW', 'source_url': 'https://example.com', 'history_complete': True, **extra})
     def rejected(payload):
         with pytest.raises(ValueError) as error:
             work.analysis_archive('KR:069500', payload, as_of)

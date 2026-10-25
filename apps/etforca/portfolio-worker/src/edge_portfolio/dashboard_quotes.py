@@ -1,6 +1,5 @@
 """Shared instrument collection, independent of workbook reads and valuations."""
 import asyncio
-import json
 import logging
 from datetime import date, datetime, timedelta
 from time import monotonic
@@ -47,12 +46,15 @@ def cached(db, since, day):
     records = {}
     if not since:
         return records
-    for row in db.execute('SELECT * FROM portfolio_dashboard_prices WHERE instrument=ANY(%s)', (list(since),)).fetchall():
+    # Only current rows, read as text and parsed one at a time: holding every whole archive (KO 3 MB) as jsonb dict
+    # trees at once took the worker past its 768 MB limit (2026-10-25 OOM loop).
+    ends = {key: price_end(key, day) for key in since}
+    for row in db.execute('''SELECT instrument,payload::text AS payload FROM portfolio_dashboard_prices p
+            JOIN unnest(%s::text[],%s::date[]) c(instrument,day) USING(instrument,day)
+            WHERE p.payload->>'actions_checked_on'=%s''', (list(ends), list(ends.values()), str(day))):
         key = row['instrument']
-        end = price_end(key, day)
-        if row['day'] != end or row['payload'].get('actions_checked_on') != str(day):
-            continue
-        record = decode_prices(json.dumps(row['payload']))
+        end = ends[key]
+        record = decode_prices(row['payload'])
         if not held_history_missing(key, record, since[key], end - timedelta(days=1)):
             records[key] = record
     return records

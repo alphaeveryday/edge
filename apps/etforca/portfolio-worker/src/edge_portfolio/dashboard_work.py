@@ -1,6 +1,5 @@
 """Daily dashboard valuation on the existing worker."""
 import asyncio
-import json
 import logging
 import math
 from datetime import date, datetime, timedelta
@@ -102,8 +101,9 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
         return False
     # Serialize read/merge/write; a partial daily update must retain the archive.
     db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', ('portfolio-price:' + key,))
-    old = db.execute('SELECT payload FROM portfolio_dashboard_prices WHERE instrument=%s', (key,)).fetchone()
-    saved = decode_prices(json.dumps(old['payload'])) if old else None
+    # Stored prices are read as text and parsed once: a jsonb dict tree of a whole archive (KO 3 MB) is ~10x its size.
+    old = db.execute('SELECT payload::text AS payload FROM portfolio_dashboard_prices WHERE instrument=%s', (key,)).fetchone()
+    saved = decode_prices(old['payload']) if old else None
     if saved:
         record = {**record, 'pending_splits': sorted(set(record.get('pending_splits', [])) |
             {day for day in saved.get('pending_splits', []) if day >= str(end)})}
@@ -168,7 +168,7 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
         record['frame'].loc[priced, column].isna().any()
         for column in ('Dividends', 'Stock Splits') if column in record['frame']))
     record = {**record, 'observed_on': observed_on, 'actions_complete': actions_complete}
-    updated = db.execute('''INSERT INTO portfolio_dashboard_prices VALUES (%s,%s,%s)
+    updated = db.execute('''INSERT INTO portfolio_dashboard_prices VALUES (%s,%s,%s::jsonb)
         ON CONFLICT(instrument) DO UPDATE SET day=excluded.day,payload=excluded.payload
         WHERE (portfolio_dashboard_prices.day<excluded.day OR
             (portfolio_dashboard_prices.day=excluded.day AND coalesce(portfolio_dashboard_prices.payload->>'requested_at',portfolio_dashboard_prices.payload->>'fetched_at','')<=excluded.payload->>'requested_at'))
@@ -176,7 +176,7 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
                 (SELECT max(p->>'date') FROM jsonb_array_elements(portfolio_dashboard_prices.payload->'frame') p WHERE (p->>'Close')::numeric>0),'')
             AND (coalesce(excluded.payload->>'provider','') NOT LIKE 'FinanceDataReader:NAVER:%%'
                 OR coalesce(portfolio_dashboard_prices.payload->>'provider','') LIKE 'FinanceDataReader:NAVER:%%')
-        RETURNING instrument''', (key, end, Jsonb(json.loads(serialize(record))))).fetchone()
+        RETURNING instrument''', (key, end, serialize(record))).fetchone()
     return bool(updated)
 
 
@@ -194,10 +194,10 @@ async def records_for(ids, day, *, session, valuation_since=None, include_fx=Tru
                 since = (valuation_since or {}).get(key)
                 end = price_end(key, day)
                 with store.connect() as db:
-                    cached = db.execute('SELECT payload FROM portfolio_dashboard_prices WHERE instrument=%s AND day=%s', (key, end)).fetchone()
+                    cached = db.execute('SELECT payload::text AS payload FROM portfolio_dashboard_prices WHERE instrument=%s AND day=%s', (key, end)).fetchone()
                 try:
                     if cached:
-                        saved = decode_prices(json.dumps(cached['payload']))
+                        saved = decode_prices(cached['payload'])
                         needed_since = since or (end - timedelta(days=35) if valuation_since is not None else year_before(end, 2))
                         incomplete = date.fromisoformat(saved.get('repair_since', year_before(end, 2).isoformat())) > needed_since
                         if valuation_since is not None:
@@ -216,7 +216,7 @@ async def records_for(ids, day, *, session, valuation_since=None, include_fx=Tru
                                 records[key] = saved
                             cached = None  # Retain usable observations while retrying missing data.
                     if cached:
-                        record = decode_prices(json.dumps(cached['payload']))
+                        record = saved
                     else:
                         requested_at = datetime.now(ZoneInfo('UTC')).isoformat()
                         symbol = price_symbol(key)
@@ -250,12 +250,12 @@ async def records_for(ids, day, *, session, valuation_since=None, include_fx=Tru
 
 
 def analysis_archive(key, payload, as_of, *, fetched_since=None):
-    """The collector's stored record cut like a fetch for `as_of`. Analysis never fetches, so anything the collector
+    """`payload`: the stored record as text. The collector's stored record cut like a fetch for `as_of`. Analysis never fetches, so anything the collector
     would have published from a fetch is usable; only a recent-quotes-only or out-of-date record is not.
     `fetched_since`: a record whose own fetch started at or after this time is as current as a fetch can be,
     so it need not reach the last finished session (price_status still bounds its age)."""
     from .market_data import decode_prices, expected_sessions, positive_price, price_status
-    record = decode_prices(json.dumps(payload))
+    record = decode_prices(payload)
     # A whole-history fetch stored as incomplete (Yahoo closes with fallback returns) is incomplete only so the
     # collector retries Yahoo; the fallback provider always returns its whole series (load_fallback_prices reads from 1970).
     if (record.get('history_complete') is not True and not record.get('whole_history')
@@ -282,7 +282,7 @@ def saved_prices(keys, as_of, rejected=None, *, fetched_since=None):
     try:
         with store.connect() as db:
             for key in keys:
-                row = db.execute('SELECT payload FROM portfolio_dashboard_prices WHERE instrument=%s', (key,)).fetchone()
+                row = db.execute('SELECT payload::text AS payload FROM portfolio_dashboard_prices WHERE instrument=%s', (key,)).fetchone()
                 if not row:
                     rejected[key] = 'PRICE_NOT_STORED'
                     continue
