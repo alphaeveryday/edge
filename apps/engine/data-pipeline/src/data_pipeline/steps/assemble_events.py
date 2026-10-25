@@ -1722,7 +1722,12 @@ def run(
             # 커밋된 날짜 뒤에서 실패해도 날짜 단위 재실행이 no-op 수렴한다.
             with connect(db) as conn:
                 news = read_daily_news(storage, date)
-                in_universe = [n for n in news if any(t in entity_index for t in n["tickers"])]
+                # 종목명 탐지 목록(mentions)으로 거르는 건 LLM 경로의 비용 가드다. 로컬 태거는 모델이
+                # 뽑은 참여자를 표기 매칭기로 해소하므로 학습 언어(ko) 기사를 전부 본다(ALPHA-1456) —
+                # 해소 안 되면 primary_unresolved 로 빠진다. 다른 언어는 예전처럼 목록으로 거른다.
+                in_universe = [n for n in news
+                               if (tagger is not None and n["language"] in PROMPT_LANGUAGES)
+                               or any(t in entity_index for t in n["tickers"])]
                 already = assembled_source_ids(conn, [n["article_id"] for n in in_universe])
                 todo = [n for n in in_universe if n["article_id"] not in already]
                 date_gate_drops: dict[str, int] = {}
