@@ -102,6 +102,11 @@ variable "db_secret_arn" {
   description = "읽기 전용 DB 계정 시크릿 ARN(JSON 의 password 키를 TRUTH_DB_PASSWORD 로 주입한다)."
 }
 
+variable "dart_secret_arn" {
+  type        = string
+  description = "OpenDART 인증키 시크릿 ARN(JSON 의 apikey 를 DART_API_KEY 로 주입). 국내 공시 원문을 DART 에서 받는다(ALPHA-1457)."
+}
+
 variable "db_security_group_id" {
   type        = string
   description = "RDS 보안 그룹. 태스크는 이 그룹으로만 5432 를 나간다."
