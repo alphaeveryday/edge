@@ -13,6 +13,8 @@ from edge_truth_agent.workspace import Workspace
 
 log = logging.getLogger(__name__)
 PROMPTS = Path(__file__).resolve().parent / "prompts"
+TRANSCRIPT = "transcript.jsonl"  # 작업 폴더 안 세션 기록. 조사 실행이 비공개 저장소에 올린다
+KEPT = ("message_end", "tool_execution_start", "tool_execution_end")  # 완성된 메시지(생각·답·도구 호출)와 도구 실행·결과
 __all__ = ["SessionResult", "run", "command"]
 
 
@@ -45,6 +47,20 @@ def _system(ws: Workspace) -> Path:
     return path
 
 
+def _kept(stdout: bytes) -> bytes:
+    """pi JSON 출력에서 세션 기록으로 남길 이벤트만. 글자 단위 스트림 이벤트는 같은 내용이 message_end 에 다시 오므로 뺀다."""
+    lines = []
+    for raw in stdout.split(b"\n"):  # 레코드 구분은 LF 뿐이다
+        raw = raw.rstrip(b"\r")
+        try:
+            kind = json.loads(raw).get("type")
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        if kind in KEPT:
+            lines.append(raw)
+    return b"".join(line + b"\n" for line in lines)
+
+
 def _env(cfg, ws: Workspace, corpus_path: Path, graph: bool | None = None) -> dict:
     env = {k: v for k, v in os.environ.items() if k not in ("DEEPSEEK_RESIST_NEWS_API_KEY", "TRUTH_DB_PASSWORD")}
     env.update({
@@ -74,6 +90,10 @@ def run(cfg, ws: Workspace, *, code: str, prompt: str, corpus_path: Path) -> Ses
             log.warning(json.dumps({"event": "graph_skill_failed", "code": code, "reason": f"{type(error).__name__}: {str(error)[:200]}"},
                                    ensure_ascii=False))
     cmd = command(cfg, prompt, graph=graph, system=system)
+    text = (system or PROMPTS / "system.md").read_text(encoding="utf-8")
+    # 모델이 받은 지시를 실행 로그만으로 확인한다(스킬이 빠지거나 잘리면 도구를 엉뚱하게 쓴다)
+    log.info(json.dumps({"event": "session_start", "code": code, "graph": graph, "skill": "# 사건 그래프 스킬" in text,
+                         "systemChars": len(text), "tools": cmd[cmd.index("--tools") + 1].split(",")}, ensure_ascii=False))
     proc = subprocess.Popen(cmd, cwd=ws.root, env=_env(cfg, ws, corpus_path, graph),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=os.name == "posix")
     try:
@@ -88,6 +108,8 @@ def run(cfg, ws: Workspace, *, code: str, prompt: str, corpus_path: Path) -> Ses
         stdout, _ = proc.communicate()
         result.error = f"{cfg.session_timeout}초 안에 끝나지 않아 멈췄습니다."
     _read_events(stdout, result)
+    with open(ws.root / TRANSCRIPT, "ab") as f:  # 전제 검증 세션은 같은 작업 폴더에 이어 쓴다
+        f.write(_kept(stdout or b""))
     state = ws.state
     result.done, result.summary = bool(state["done"]), state.get("summary", "")
     log.info(json.dumps({"event": "session_end", "code": code, "done": result.done, "error": result.error,
