@@ -32,6 +32,17 @@ def _norm(text: str) -> str:
     return re.sub(r"[\W_]+", "", text or "")
 
 
+def parse_corp_codes(xml: str) -> dict[str, str]:
+    """corpCode.xml → {종목코드: 고유번호}. 항목(<list>)마다 따로 읽는다 — 비상장사는 종목코드가 빈칸이라, 항목을 넘나드는
+    한 번의 정규식은 상장사 종목코드를 바로 앞 비상장사 고유번호에 붙인다(다른 회사의 공시를 읽게 된다)."""
+    table = {}
+    for block in re.findall(r"<list>(.*?)</list>", xml, re.S):
+        corp, stock = re.search(r"<corp_code>(\d+)</corp_code>", block), re.search(r"<stock_code>\s*(\w{6})\s*</stock_code>", block)
+        if corp and stock:
+            table[stock.group(1)] = corp.group(1)
+    return table
+
+
 def match(items: list[dict], title: str, submitter: str) -> str | None:
     """DART 목록에서 KIND 공시와 같은 건의 접수번호. DART 제목은 잘려 올 수 있어 앞부분이 맞으면 같다고 본다.
     같은 날 같은 제목이 여럿이면 제출인으로 가르고, 그래도 여럿이면 고르지 않는다(엉뚱한 원문을 읽지 않게)."""
@@ -67,7 +78,7 @@ class Dart:
         except (OSError, ValueError):
             with zipfile.ZipFile(io.BytesIO(self._get("corpCode.xml"))) as z:
                 xml = z.read(z.namelist()[0]).decode("utf-8", "replace")
-            table = {s: c for c, s in re.findall(r"<corp_code>(\d+)</corp_code>.*?<stock_code>\s*(\w{6})\s*</stock_code>", xml, re.S)}
+            table = parse_corp_codes(xml)
             self.cache.write_text(json.dumps(table), encoding="utf-8")
         return table.get(stock_code)
 

@@ -30,6 +30,13 @@ def test_match_uses_the_filer_for_same_day_same_title_and_refuses_to_guess_other
     assert dart.match(items, "주요사항보고서(유상증자결정)", "홍길동") is None
 
 
+def test_corp_codes_never_borrow_the_code_of_an_unlisted_corp_listed_before():
+    # 비상장사(종목코드 빈칸) 뒤의 상장사가 앞 회사 고유번호를 받으면 다른 회사의 공시 목록을 읽는다
+    xml = ("<result><list><corp_code>00000001</corp_code><corp_name>비상장</corp_name><stock_code> </stock_code></list>"
+           "<list><corp_code>00000002</corp_code><corp_name>상장</corp_name><stock_code>123456</stock_code></list></result>")
+    assert dart.parse_corp_codes(xml) == {"123456": "00000002"}
+
+
 def _zip(html: str) -> bytes:
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w") as z:
