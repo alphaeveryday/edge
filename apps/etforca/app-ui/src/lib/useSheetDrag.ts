@@ -50,9 +50,13 @@ const overscroll = (x: number, d: number) => {
 // 경계 밖에서 경계로 돌아오는 튕김. 임계 감쇠라 넘침 없이 복귀
 const BOUNCE = { stiffness: 100, damping: 20, mass: 1 };
 // 지수 감속 구간의 진행률. 길이 전체의 감속 지수 a 에 맞춘 0~1
-const decayEase = (a: number) => (t: number) => {
+// UI 스레드의 fling 이 호출하므로 바깥 함수도 워크릿이어야 함
+const decayEase = (a: number) => {
   'worklet';
-  return (1 - Math.exp(-a * t)) / (1 - Math.exp(-a));
+  return (t: number) => {
+    'worklet';
+    return (1 - Math.exp(-a * t)) / (1 - Math.exp(-a));
+  };
 };
 
 // 손을 뗀 위치와 속도(px/s)에서 이어지는 iOS 스크롤과 같은 움직임과 최종 정지 위치
@@ -132,6 +136,8 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   // 직접 스크롤 위치와 그 관성 진행 여부
   const manualY = useSharedValue(0);
   const driving = useSharedValue(false);
+  // 직접 스크롤 동안의 경계 밖 위치 허용. RN 의 scrollTo 명령은 이 값이 꺼져 있으면 경계 안으로 자름(iOS)
+  const [overflow, setOverflow] = useState(false);
   // 끌기 시작 시점의 높이와 이동량
   const start = useSharedValue(0);
   const startTy = useSharedValue(0);
@@ -228,6 +234,7 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
         if (driving.value) {
           cancelAnimation(manualY);
           driving.value = false;
+          runOnJS(setOverflow)(false);
         }
       })
       .onFinalize(() => {
@@ -277,6 +284,7 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
             } else {
               start.value = manualY.value;
               mode.value = 2;
+              runOnJS(setOverflow)(true);
             }
           }
           if (mode.value === 1) {
@@ -296,11 +304,12 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
             const f = fling(manualY.value, -e.velocityY, box.value.max, () => {
               'worklet';
               driving.value = false;
+              runOnJS(setOverflow)(false);
             });
             if (f) {
               driving.value = true;
               manualY.value = f.anim;
-            }
+            } else runOnJS(setOverflow)(false);
             if ((f ? f.end : manualY.value) > 0.5) {
               lockedSV.value = false;
               runOnJS(setLocked)(false);
@@ -329,7 +338,7 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   const onLayout = tall ? undefined : (h: number) => setFit(Math.round(h));
   // 시트 안 배경·뒤로가기 닫힘의 즉시 출발
   const closeNow = () => shown.current && !instant && dismiss(CLOSE_MS);
-  return { mounted, grip, body, native, scrollY, box, scrollRef, locked, backdrop, sheet, onLayout, closeNow };
+  return { mounted, grip, body, native, scrollY, box, scrollRef, locked, overflow, backdrop, sheet, onLayout, closeNow };
 }
 
 // 본문 목록의 스크롤 위치를 시트에 보고하고 통계용 콜백을 JS 에서 호출
