@@ -32,7 +32,7 @@ const FLING_MIN_MS = 80;
 // 세로 이동으로 판정하는 거리
 const SLOP = 6;
 // 본문 끌기의 시트·스크롤 판정 거리. 처음 몇 px 의 흔들림 무시
-const DECIDE = 10;
+const DECIDE = 20;
 // RN Animated.spring 의 speed·bounciness 를 같은 물리 모델의 stiffness·damping 으로 환산한 값
 // 열기 14·0, 스냅·fit 높이 맞춤 16·0
 // Reanimated 기본 mass 가 4 라 RN 과 같은 1 명시
@@ -170,8 +170,8 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
       .onUpdate((e) => {
         if (mode.value === 0) {
           // 활성화 직후 이벤트의 이동량이 0 인 경우가 있어 판정 거리는 직접 확인
-          if (Math.abs(e.translationY) < DECIDE && Math.abs(e.translationX) < DECIDE) return;
-          if (!(atTop.value && e.translationY > 0 && e.translationY >= Math.abs(e.translationX))) {
+          if (Math.abs(e.translationY) < DECIDE) return;
+          if (!(atTop.value && e.translationY > 0)) {
             mode.value = 2;
             return;
           }
