@@ -297,13 +297,15 @@ async def test_return_only_fallback_cannot_replace_actual_close_cache(isolated_d
     async def adjusted_only(*args, **kwargs):
         return {**record((999., 999.)), 'provider': 'FinanceDataReader:NAVER:adjusted', 'return_basis': 'total_return'}
     serve(monkeypatch, adjusted_only)
-    returns, _ = await work.records_for(['KR:069500'], date(2026, 10, 18), session=PriceSession())
+    with store.connect() as db:  # Past the dashboard's one-minute reuse, so the next read fetches again.
+        db.execute("""UPDATE portfolio_dashboard_prices SET payload=jsonb_set(payload,'{fetched_at}','"2000-01-01T00:00:00+00:00"')""")
+    returns, _ = await work.records_for(['KR:069500'], date(2026, 10, 18), valuation_since={'KR:069500': date(2026, 10, 18)}, session=PriceSession())
     assert returns['KR:069500']['provider'].startswith('FinanceDataReader:NAVER:')
     dashboard.save('other', dashboard.Save(version=0, workbook=dashboard.Workbook(assets=[asset()])))
     assert work.tracking('other')['market']['payload']['assets'][0]['value'] == 1100, 'Adjusted history must not evict actual closes needed by every owner'
 
 
-async def test_a_slow_old_backtest_cannot_overwrite_newer_split_observations(isolated_db, monkeypatch):
+async def test_a_slow_older_fetch_cannot_overwrite_newer_split_observations(isolated_db, monkeypatch):
     started, release = asyncio.Event(), asyncio.Event()
     calls = 0
     async def fetch(*args, **kwargs):
@@ -315,7 +317,7 @@ async def test_a_slow_old_backtest_cannot_overwrite_newer_split_observations(iso
             return record()
         return {**record(), 'pending_splits': ['2026-10-19']}
     serve(monkeypatch, fetch)
-    older = asyncio.create_task(work.records_for(['KR:069500'], date(2026, 10, 18), session=PriceSession()))
+    older = asyncio.create_task(work.records_for(['KR:069500'], date(2026, 10, 18), valuation_since={'KR:069500': date(2026, 10, 18)}, session=PriceSession()))
     await started.wait()
     try:
         await work.records_for(['KR:069500'], date(2026, 10, 18), valuation_since={'KR:069500': date(2026, 10, 18)}, session=PriceSession())
@@ -338,7 +340,9 @@ async def test_new_fetch_cannot_move_fx_observation_backwards(isolated_db, monke
     async def stale(*args, **kwargs):
         return record((1300., 1320.))
     serve(monkeypatch, stale)
-    await work.records_for(['FX'], date(2026, 10, 20), session=PriceSession())
+    with store.connect() as db:  # Past the dashboard's one-minute reuse, so the next read fetches again.
+        db.execute("""UPDATE portfolio_dashboard_prices SET payload=jsonb_set(payload,'{fetched_at}','"2000-01-01T00:00:00+00:00"')""")
+    await work.records_for(['FX'], date(2026, 10, 20), valuation_since={'FX': date(2026, 10, 20)}, session=PriceSession())
     with store.connect() as db:
         payload = db.execute("SELECT payload FROM portfolio_dashboard_prices WHERE instrument='FX'").fetchone()['payload']
     assert payload['observed_on'] == '2026-10-19' and payload['frame'][-1]['Close'] == 1450
