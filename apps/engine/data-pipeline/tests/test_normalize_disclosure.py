@@ -175,7 +175,7 @@ def test_real_fixture_parses_and_lands_in_canonical(tmp_path):
     assert row["amount_krw"] == 17_899_464_000
     assert row["ratio_pct"] == 92.33
     assert row["report_date"] == "2026-06-23"
-    assert row["parser_version"] == "supply-v1"
+    assert row["parser_version"] == "supply-v2"
     assert row["source_vendor"] == "dart"  # provenance 컬럼(파티션 아님) — 감사·다소스 대비
     assert row["counterparty_withheld"] is False
 
@@ -243,6 +243,31 @@ def test_correction_and_original_both_project_as_per_filing_facts(tmp_path):
     assert [r["rcept_no"] for r in _canonical_rows(storage, "2026-06-24")] == ["20260624800021"]
     log = _quality_log(storage)
     assert log["records_routed_supply"] == 2
+
+
+def test_correction_fact_carries_the_original_filing_date(tmp_path):
+    # WHY: 정정공시를 새 계약으로 세지 않으려면 다운스트림(계보 해소)이 정정 여부와 원공시 제출일을
+    #      알아야 한다. 그 단서는 본문 정정 머리표에만 있어 정제 단계에서 실어 보낸다.
+    storage = LocalStorage(tmp_path / "lake")
+    header = """<table><tr><td>정정일자</td><td>2026-06-24</td></tr>
+      <tr><td>2. 정정관련 공시서류제출일</td><td>2026-06-23</td></tr>
+      <tr><td>3. 정정사유</td><td>계약금액 변경</td></tr></table>"""
+    correction = _supply_record("20260624800021", report_nm="[기재정정]단일판매ㆍ공급계약체결",
+                                rcept_dt="20260624", fetched_at="2026-06-24T00:00:00+00:00")
+    original = _supply_record("20260623800020")
+    _write_run(storage, [(original, _doc_zip(_supply_html(), "20260623800020"))], run_id="R1")
+    _write_run(storage, [(correction, _doc_zip(_supply_html().replace("<body>", "<body>" + header),
+                                               "20260624800021"))],
+               run_id="R2", ingest_date="2026-06-24")
+
+    assert normalize_disclosure.run(storage, "D1") == 0
+    (orig,) = _canonical_rows(storage, "2026-06-23")
+    (corr,) = _canonical_rows(storage, "2026-06-24")
+    assert (orig["is_correction"], orig["correction_target_filed_date"]) == (False, None)
+    assert corr["is_correction"] is True
+    assert corr["correction_target_filed_date"] == "2026-06-23"
+    assert corr["correction_reason"] == "계약금액 변경"
+    assert corr["report_nm"] == "[기재정정]단일판매ㆍ공급계약체결"
 
 
 def test_gijae_jeongjeong_prefix_still_routes_as_supply(tmp_path):

@@ -285,3 +285,60 @@ def test_extract_document_html_non_zip_raises_valueerror() -> None:
 def test_extract_document_html_empty_zip_raises_valueerror() -> None:
     with pytest.raises(ValueError):
         PS.extract_document_html(_zip_with_multi({}))
+
+
+# ── 정정공시 머리표(계약 계보) ─────────────────────────────
+_CORRECTION_HTML = """
+<html><head><title>한전KPS/단일판매ㆍ공급계약체결</title></head><body>
+<table>
+  <tr><td>정정일자</td><td>2026-10-23</td></tr>
+  <tr><td>1. 정정관련 공시서류</td><td>단일판매ㆍ공급계약 체결</td></tr>
+  <tr><td>2. 정정관련 공시서류제출일</td><td>2013-08-09</td></tr>
+  <tr><td>3. 정정사유</td><td>설계변경 사항 반영(비목별 계약금액 조정)</td></tr>
+</table>
+<table>
+  <tr><td>정정항목</td><td>정정전</td><td>정정후</td></tr>
+  <tr><td>2. 계약내역(계약금액(원))</td><td>467,531,980,000</td><td>452,344,826,000</td></tr>
+</table>
+<table>
+  <tr><td>체결계약명</td><td>BNPP 1,2,3,4호기 시운전정비공사</td></tr>
+  <tr><td>계약금액(원)</td><td>452,344,826,000</td></tr>
+  <tr><td>최근매출액(원)</td><td>1,006,609,423,499</td></tr>
+  <tr><td>매출액대비(%)</td><td>44.9</td></tr>
+  <tr><td>계약상대</td><td>한국수력원자력(주)</td></tr>
+  <tr><td>시작일</td><td>2013-09-01</td></tr>
+  <tr><td>종료일</td><td>2026-12-31</td></tr>
+  <tr><td>7. 계약(수주)일자</td><td>2013-08-08</td></tr>
+</table></body></html>
+"""
+
+
+def test_correction_header_gives_the_original_filing_date() -> None:
+    """WHY: DART 는 정정공시에 새 접수번호를 주고 원공시 접수번호를 알려 주지 않는다. 머리표의
+    원공시 제출일을 못 읽으면 2013년 계약의 금액 조정이 2026년 새 계약 체결로 세어진다."""
+    correction = PS.parse_correction(_CORRECTION_HTML)
+
+    assert correction == {"target_filed_date": date(2013, 8, 9),
+                          "reason": "설계변경 사항 반영(비목별 계약금액 조정)",
+                          "corrected_on": date(2026, 10, 23)}
+    parsed = PS.parse_supply(_CORRECTION_HTML)
+    assert parsed["amount_krw"] == 452_344_826_000  # 정정 후 본문 값
+    assert parsed["contract_date"] == date(2013, 8, 8)
+
+
+def test_real_dart_correction_bodies_give_their_target_date() -> None:
+    """실제 DART 정정본(픽스처 3건은 모두 정정신고다)의 머리표 표 구조에서도 원공시 제출일을 읽는다."""
+    expected = {"fiber": date(2024, 4, 30)}
+    for key, target in expected.items():
+        html = REAL_FIXTURES[key]["path"].read_text(encoding="utf-8")
+        assert PS.parse_correction(html)["target_filed_date"] == target
+    for key in ("taeyoung", "namkwang"):
+        html = REAL_FIXTURES[key]["path"].read_text(encoding="utf-8")
+        assert PS.parse_correction(html)["target_filed_date"] is not None
+
+
+def test_original_filing_has_no_correction_header() -> None:
+    """원공시를 정정으로 읽으면 진짜 새 계약이 계보에서 빠진다."""
+    original = _CORRECTION_HTML.split("</table>", 2)[2]  # 정정 머리표·정정사항 표를 뺀 본문
+
+    assert PS.parse_correction("<html><body>" + original) is None

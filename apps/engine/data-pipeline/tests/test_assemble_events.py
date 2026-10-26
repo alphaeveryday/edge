@@ -1079,6 +1079,45 @@ def test_falsy_identity_value_is_treated_as_missing(monkeypatch):
     assert _batch(conn, "event_thread") == []
 
 
+def test_disclosure_lineage_threads_without_counterparty_identity(monkeypatch):
+    """WHY: 공급계약 공시의 상대방은 대부분 익명·비상장이라(2026-10 dev: CUSTOMER actor 연결 12/292)
+    identity 역할 키로는 96% 가 UNKNOWN 이었다. 조립 스텝이 준 계보(원공시 접수번호)로 묶고,
+    정정공시는 원공시가 DB 에 없어도(prior=0) 첫 보도가 아니라 CORRECTION 이다."""
+    conn = _FakeConn()
+    rv = {"SUPPLIER": "inst_SUP", "CONTRACT_OBJECT": "concept_hbm"}   # CUSTOMER 없음
+    original = _multi_role_event("evt_o", rv, "2026-08-09T09:00:00+09:00", source_class="DISCLOSURE")
+    original["thread_identity"] = "rcept=R1"
+    correction = _multi_role_event("evt_c", rv, "2026-10-23T09:00:00+09:00", source_class="DISCLOSURE")
+    correction.update(thread_identity="rcept=R1", is_correction=True)
+    orphan = _multi_role_event("evt_x", rv, "2026-10-23T10:00:00+09:00", source_class="DISCLOSURE")
+    orphan.update(thread_identity="external=a|2013-08-09|2013-08-08|x", is_correction=True)
+    assemble_events.thread_events(conn, [correction, orphan, original])
+
+    links = {r[0]: (r[1], r[3]) for r in _batch(conn, "event_thread_link")}
+    assert links["evt_o"][1] == "FIRST_IN_THREAD"
+    assert links["evt_c"] == (links["evt_o"][0], "CORRECTION")
+    assert links["evt_x"][1] == "CORRECTION" and links["evt_x"][0] != links["evt_o"][0]
+    keys = {t[1] for t in _batch(conn, "event_thread")}
+    assert keys == {"event_type_id=COMPANY.CONTRACT.SIGNING||lineage=rcept=R1",
+                    "event_type_id=COMPANY.CONTRACT.SIGNING||lineage=external=a|2013-08-09|2013-08-08|x"}
+
+
+def test_lineage_root_stays_first_when_its_correction_was_threaded_earlier(monkeypatch):
+    """WHY(리뷰 지적): 1분 레인이 정정을 먼저 스레드하고 원공시가 나중 백필로 들어오면, prior 수로만 판정해
+    원공시가 재보도(DUPLICATE_REBROADCAST)가 되고 그 계보에 첫 보도가 없어진다."""
+    key = "event_type_id=COMPANY.CONTRACT.SIGNING||lineage=rcept=R1"
+    tid = _stable_id("thr", key)
+    conn = _FakeConn(prior_thread_counts={tid: 1})
+    rv = {"SUPPLIER": "inst_SUP", "CONTRACT_OBJECT": "concept_hbm"}
+    original = _multi_role_event("evt_o", rv, "2026-08-09T09:00:00+09:00", source_class="DISCLOSURE",
+                                 stage="DEFINITIVE_SIGNED")
+    original.update(thread_identity="rcept=R1", is_lineage_root=True)
+    assemble_events.thread_events(conn, [original])
+
+    [link] = _batch(conn, "event_thread_link")
+    assert link[3] == "FIRST_IN_THREAD"
+
+
 def test_news_without_any_company_emits_unknown(monkeypatch):
     """WHY: 뉴스 스레드는 회사가 축이다 — 해소된 참여자가 하나도 없으면(None·빈값 포함) 억지 스레드를
     세우지 않고 UNKNOWN 으로 사유를 남긴다. 그런 이벤트를 한 키로 접으면 무관한 기사가 한 계보가 된다."""

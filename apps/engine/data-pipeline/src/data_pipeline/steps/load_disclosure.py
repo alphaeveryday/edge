@@ -817,7 +817,7 @@ def _fact_inserts(rcept_no, document_id, doc, supply, segments, seen_fact_ids):
         cols, vals = cols_vals
         # 정정본 재수집·파서 재실행으로 canonical 값이 바뀌면 DB 도 갱신한다(다른 canonical→DB
         # 로더와 같은 규약, ALPHA-406·411 계열). WHERE … IS DISTINCT FROM … 가 같은 값 재적재를
-        # 걸러 no-op 로 만든다. 다른 rcept_no 정정본 supersession 은 범위 밖(정체성 해소 문제).
+        # 걸러 no-op 로 만든다. 다른 rcept_no 정정본과 원공시를 잇는 계보는 공시 이벤트 조립이 정정 열로 푼다.
         header = ("INSERT INTO disclosure_fact (fact_id, document_id, fact_type, available_at)"
                   " VALUES (%s, %s, %s, %s) ON CONFLICT (fact_id) DO UPDATE SET"
                   " available_at = EXCLUDED.available_at, is_current = TRUE"
@@ -858,11 +858,20 @@ def _supply_child(row):
         return "bad_date_format", None  # 비-ISO 는 사전순 비교·DB DATE 캐스팅을 깬다
     if start and end and end < start:
         return "reversed_period", None  # CHECK: 종료일 >= 시작일 (둘 다 유효 ISO 라 안전)
+    contract_date, target = row.get("contract_date"), row.get("correction_target_filed_date")
+    if not _valid_iso_date(contract_date) or not _valid_iso_date(target):
+        return "bad_date_format", None
     cols = ("counterparty_actor_id", "counterparty_raw_name", "counterparty_withheld",
             "contract_object_concept_id", "contract_amount_krw", "revenue_ratio_pct",
-            "contract_start_date", "contract_end_date")
+            "contract_start_date", "contract_end_date", "report_name", "is_correction",
+            "correction_target_filed_date", "correction_reason", "contract_date")
+    # supply-v1 canonical 행에는 정정 열·보고서명이 없어 is_correction 은 False 로 들어간다. 그런 fact 는
+    # 공시 이벤트 조립이 parser_version 으로 걸러 계보에 넣지 않는다(supply-v2 재정제 뒤에 조립).
+    report_name = row.get("report_nm")
+    is_correction = bool(row.get("is_correction"))
     vals = (row.get("_counterparty_actor_id"), raw_name, withheld,
-            row.get("_contract_object_concept_id"), amount, ratio, start, end)
+            row.get("_contract_object_concept_id"), amount, ratio, start, end,
+            report_name, is_correction, target, row.get("correction_reason"), contract_date)
     return None, (cols, vals)
 
 

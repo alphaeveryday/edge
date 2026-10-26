@@ -1392,6 +1392,11 @@ Table "supply_contract_fact" {
   "contract_end_date" date
   "late_disclosure" boolean [not null]
   "completeness_status" varchar(20)
+  "report_name" text
+  "is_correction" boolean [not null]
+  "correction_target_filed_date" date
+  "correction_reason" text
+  "contract_date" date
 }
 
 Table "tenant" {
