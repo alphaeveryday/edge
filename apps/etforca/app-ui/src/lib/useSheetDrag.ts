@@ -31,8 +31,6 @@ const CLOSE_MS = 180;
 const FLING_MIN_MS = 80;
 // 세로 이동으로 판정하는 거리
 const SLOP = 6;
-// 본문 끌기의 시트·스크롤 판정 거리. 처음 몇 px 의 흔들림 무시
-const DECIDE = 20;
 // RN Animated.spring 의 speed·bounciness 를 같은 물리 모델의 stiffness·damping 으로 환산한 값
 // 열기 14·0, 스냅·fit 높이 맞춤 16·0
 // Reanimated 기본 mass 가 4 라 RN 과 같은 1 명시
@@ -78,7 +76,7 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   // 끌기 시작 시점의 높이와 이동량
   const start = useSharedValue(0);
   const startTy = useSharedValue(0);
-  // 터치 시작 때 목록이 맨 위였는지와 이번 터치의 본문 끌기 모드(0 미정·1 시트·2 스크롤)
+  // 끌기 활성화 때 본문이 최상단이었는지와 이번 터치의 본문 끌기 모드(0 첫 이동 전·1 시트·2 스크롤)
   const atTop = useSharedValue(false);
   const mode = useSharedValue(0);
   // 시트 모드 동안의 목록 스크롤 잠금
@@ -157,20 +155,20 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
       })
       .onEnd((e) => release(e.velocityY))
       .onFinalize((_, ok) => { if (!ok) snap(stops.value.low); });
-    // 본문: 판정 거리를 넘는 순간의 누적 방향으로 이번 터치의 모드를 정하고 손을 뗄 때까지 유지
+    // 본문: 끌기 활성화 순간 최상단이고 아래로 끌면 시트, 그 밖은 스크롤. 손을 뗄 때까지 유지
     // 시트 모드는 손잡이처럼 시트가 손가락을 따르고 목록은 맨 위에 고정
     // 스크롤 모드는 시트를 건드리지 않아 맨 위 너머로 끌면 목록 위쪽 여백만 드러남
     const body = Gesture.Pan()
       .activeOffsetY([-SLOP, SLOP])
       .simultaneousWithExternalGesture(native)
-      .onBegin(() => {
+      .onStart(() => {
         atTop.value = scrollY.value <= 0;
         mode.value = 0;
       })
       .onUpdate((e) => {
         if (mode.value === 0) {
-          // 활성화 직후 이벤트의 이동량이 0 인 경우가 있어 판정 거리는 직접 확인
-          if (Math.abs(e.translationY) < DECIDE) return;
+          // iOS 는 활성화 순간 이동량을 0 으로 되돌려 방향은 활성화 뒤 첫 이동으로 판정
+          if (e.translationY === 0) return;
           if (!(atTop.value && e.translationY > 0)) {
             mode.value = 2;
             return;
