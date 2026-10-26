@@ -3,6 +3,8 @@ import json
 import sys
 from datetime import date
 
+import pandas as pd
+
 from .market_data import load_prices, positive_price, price_failure, price_status, with_actual_prices
 
 
@@ -44,8 +46,10 @@ def load_preload_prices(symbol, end, start, on_raw, repair_since=None, failure=N
         raise
     if captured:
         record = with_actual_prices(record, captured)
+    elif start:
+        record = {**record, 'frame': record['frame'].loc[record['frame'].index >= pd.Timestamp(start)]}  # Its series starts in 1970.
     return {**record, 'pending_splits': sorted(set(record.get('pending_splits', [])) | set(pending)),
-            'primary_failure': failure, 'history_complete': False}
+            'primary_failure': failure, 'history_start': str(start) if start else None}
 
 
 def serialize(record):

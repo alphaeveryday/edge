@@ -1,7 +1,6 @@
 """Daily dashboard valuation on the existing worker."""
 import asyncio
 import logging
-import math
 from datetime import date, datetime, timedelta
 from functools import lru_cache
 from zoneinfo import ZoneInfo
@@ -93,76 +92,25 @@ def held_history_missing(key, record, since, end):
     return bool(len(expected_sessions(key, min(since, end), end).difference(frame.index[frame['Close'].map(positive_price)])))
 
 
+def price_window(end, since=None):
+    """First day the collector stores: a year of daily bars (analysis needs seven months), or the oldest holding's
+    basis date when that is earlier, since a valuation checks splits from there."""
+    return min(end - timedelta(days=380), since or end)
+
+
 def publish_prices(db, key, end, record, *, collector_lease=None):
-    from .market_data import decode_prices, positive_price
+    from .market_data import positive_price
     from .price_fetch import serialize
     observed_on = last_close(record)[1]
     if collector_lease is not None and not db.execute('SELECT 1 FROM portfolio_quote_refresh WHERE instrument=%s AND lease_until=%s FOR UPDATE', (key, collector_lease)).fetchone():
         return False
-    # Serialize read/merge/write; a partial daily update must retain the archive.
+    # Each fetch is a whole window (a year, or from the oldest holding): it replaces the stored record, never merges.
     db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', ('portfolio-price:' + key,))
-    # Stored prices are read as text and parsed once: a jsonb dict tree of a whole archive (KO 3 MB) is ~10x its size.
-    old = db.execute('SELECT payload::text AS payload FROM portfolio_dashboard_prices WHERE instrument=%s', (key,)).fetchone()
-    saved = decode_prices(old['payload']) if old else None
-    if saved:
-        record = {**record, 'pending_splits': sorted(set(record.get('pending_splits', [])) |
-            {day for day in saved.get('pending_splits', []) if day >= str(end)})}
-    if saved and record.get('history_complete') is False:
-        overlap = saved['frame'].index.intersection(record['frame'].index)
-        # Changed adjustment/split basis needs a fresh archive, never a mixed-basis chart.
-        compatible = (saved['currency'] == record['currency'] and len(overlap) >= 2
-            and saved.get('return_basis') != 'price' and not saved.get('provider', '').startswith('FinanceDataReader:NAVER:'))
-        if compatible:
-            pairs = [(a, b) for a, b in zip(saved['frame'].loc[overlap, 'Close'], record['frame'].loc[overlap, 'Close'])
-                     if positive_price(a) and positive_price(b)]
-            if not pairs:
-                raise ValueError('PRICE_OVERLAP_UNAVAILABLE')
-            compatible = all(math.isclose(a, b, rel_tol=1e-6) for a, b in pairs)
-        if compatible:
-            priced = overlap[saved['frame'].loc[overlap, 'Close'].map(positive_price) | record['frame'].loc[overlap, 'Close'].map(positive_price)]
-            ratios = [b / a for a, b in zip(saved['frame'].loc[priced, 'Adj Close'], record['frame'].loc[priced, 'Adj Close'])
-                      if positive_price(a) and positive_price(b)]
-            anchored = len(ratios) == len(priced) and len(ratios) >= 2
-            anchored = anchored and record.get('return_basis') != 'price' and all(math.isclose(ratio, ratios[0], rel_tol=1e-6) for ratio in ratios)
-            action_dates = record['frame'].index[(record['frame'].index >= saved['frame'].index.min()) &
-                                                (record['frame'].index <= saved['frame'].index.max())]
-            for column in ('Dividends', 'Stock Splits'):
-                if column in record['frame']:
-                    previous = saved['frame'].get(column, pd.Series(dtype=float)).reindex(action_dates).fillna(0)
-                    incoming = record['frame'].loc[action_dates, column].fillna(previous)
-                    anchored = anchored and bool((incoming == previous).all())
-            if anchored:
-                # A new cash distribution rebases earlier adjusted closes by one factor.
-                saved['frame']['Adj Close'] *= ratios[0]
-            else:
-                # Keep actual prices/actions usable, but never invent an adjustment basis.
-                saved['frame']['Adj Close'] = float('nan')
-                record = {**record, 'frame': record['frame'].copy()}
-                record['frame']['Adj Close'] = float('nan')
-                saved['history_complete'] = False
-        if compatible:
-            record = {**record, 'frame': record['frame'].copy()}
-            if not record['frame'].loc[record['frame']['Close'].map(positive_price), 'Adj Close'].map(positive_price).all():
-                saved['history_complete'] = False
-            for column in ('Close', 'Adj Close'):
-                missing = overlap[~record['frame'].loc[overlap, column].map(positive_price)]
-                record['frame'].loc[missing, column] = saved['frame'].loc[missing, column]
-            for column in ('Dividends', 'Stock Splits'):
-                if column in saved['frame']:
-                    if column not in record['frame']:
-                        record['frame'][column] = saved['frame'][column].reindex(record['frame'].index)
-                    else:
-                        known = saved['frame'][column].reindex(record['frame'].index)
-                        missing = ~record['frame'][column].map(positive_price) & known.map(positive_price)
-                        record['frame'].loc[missing, column] = known.loc[missing]
-            record = {**record, 'frame': pd.concat([saved['frame'].drop(record['frame'].index, errors='ignore'), record['frame']]).sort_index(),
-                      'history_complete': saved.get('history_complete', True),
-                      'repair_since': min(saved.get('repair_since', str(end)), record.get('repair_since', str(end)))}
-            for metadata in ('return_basis', 'return_source_url', 'whole_history'):
-                if metadata in saved and metadata not in record:
-                    record[metadata] = saved[metadata]
-            if saved.get('price_recovery', {}).get('status') in ('partial', 'unavailable', 'rejected'):
-                record['price_recovery'] = saved['price_recovery']
+    # A split announced for a coming session stays flagged even if a later response omits it (the split is unproven
+    # until its session closes); only this list is read from the stored record.
+    old = db.execute("SELECT payload->'pending_splits' AS pending FROM portfolio_dashboard_prices WHERE instrument=%s", (key,)).fetchone()
+    if old and old['pending']:
+        record = {**record, 'pending_splits': sorted(set(record.get('pending_splits', [])) | {day for day in old['pending'] if day >= str(end)})}
     priced = record['frame']['Close'].map(positive_price)
     actions_complete = key == 'FX' or ({'Dividends', 'Stock Splits'} <= set(record['frame'].columns) and not any(
         record['frame'].loc[priced, column].isna().any()
@@ -180,9 +128,9 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
     return bool(updated)
 
 
-async def records_for(ids, day, *, session, valuation_since=None, include_fx=True, collector_lease=None):
+async def records_for(ids, day, *, session, valuation_since, include_fx=True, collector_lease=None):
     """`session`: the collector's warm price process (market_preload.PriceSession), shared with the preload."""
-    from .market_data import decode_prices, positive_price, year_before
+    from .market_data import decode_prices, year_before
     records, failures = {}, []
     keys = set(ids) - {'CASH:KRW', None}
     if include_fx and any(k.startswith('US:') for k in keys):
@@ -191,29 +139,18 @@ async def records_for(ids, day, *, session, valuation_since=None, include_fx=Tru
     try:
         async with asyncio.timeout(210):
             for key in sorted(keys):
-                since = (valuation_since or {}).get(key)
+                since = valuation_since.get(key)
                 end = price_end(key, day)
                 with store.connect() as db:
                     cached = db.execute('SELECT payload::text AS payload FROM portfolio_dashboard_prices WHERE instrument=%s AND day=%s', (key, end)).fetchone()
                 try:
                     if cached:
                         saved = decode_prices(cached['payload'])
-                        needed_since = since or (end - timedelta(days=35) if valuation_since is not None else year_before(end, 2))
+                        needed_since = since or end - timedelta(days=35)
                         incomplete = date.fromisoformat(saved.get('repair_since', year_before(end, 2).isoformat())) > needed_since
-                        if valuation_since is not None:
-                            incomplete |= saved.get('actions_checked_on') != str(day)
-                            expired = not saved.get('fetched_at') or datetime.fromisoformat(saved['fetched_at']) < datetime.now(ZoneInfo('UTC')) - timedelta(minutes=1)
-                            incomplete |= expired
-                        else:
-                            incomplete |= saved.get('history_complete') is False
-                            adjusted = saved['frame']['Adj Close'].map(positive_price)
-                            incomplete |= saved.get('provider', '').startswith('FinanceDataReader:NAVER:') or saved.get('price_recovery', {}).get('status') in ('unavailable', 'partial')
-                            incomplete |= key != 'FX' and (saved.get('return_basis') == 'price' or adjusted.sum() < 2)
-                            incomplete |= last_close(saved)[1] != str(end - timedelta(days=1))
-                            incomplete |= saved.get('actions_checked_on') != str(day)
+                        incomplete |= saved.get('actions_checked_on') != str(day)
+                        incomplete |= not saved.get('fetched_at') or datetime.fromisoformat(saved['fetched_at']) < datetime.now(ZoneInfo('UTC')) - timedelta(minutes=1)
                         if incomplete:
-                            if valuation_since is None and saved.get('history_complete') is not False:
-                                records[key] = saved
                             cached = None  # Retain usable observations while retrying missing data.
                     if cached:
                         record = saved
@@ -222,8 +159,8 @@ async def records_for(ids, day, *, session, valuation_since=None, include_fx=Tru
                         symbol = price_symbol(key)
                         expected = 'KRW' if key == 'FX' or key.startswith('KR:') else 'USD'
                         # On a provider deadline the session returns the unrepaired history it already has.
-                        record = await session.fetch(symbol, end, (min(since or end, end - timedelta(days=35) if key == 'FX' else year_before(end) - timedelta(days=7))
-                                                                   if valuation_since is not None else None), repair_since=since)
+                        # The collector's own window: a shorter fetch here would replace the year analysis reads.
+                        record = await session.fetch(symbol, end, price_window(end, since), repair_since=since)
                         record = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat(), 'requested_at': requested_at}
                         if record['currency'] != expected:
                             raise ValueError('UNSUPPORTED_CURRENCY')
@@ -242,7 +179,7 @@ async def records_for(ids, day, *, session, valuation_since=None, include_fx=Tru
         if key == 'FX':
             continue
         # A missing held session may contain a split; a failed cache upgrade cannot assume none.
-        if held_history_missing(key, record, (valuation_since or {}).get(key), price_end(key, day) - timedelta(days=1)):
+        if held_history_missing(key, record, valuation_since.get(key), price_end(key, day) - timedelta(days=1)):
             del records[key]
             if key not in failures:
                 failures.append(key)
@@ -250,16 +187,17 @@ async def records_for(ids, day, *, session, valuation_since=None, include_fx=Tru
 
 
 def analysis_archive(key, payload, as_of, *, fetched_since=None):
-    """`payload`: the stored record as text. The collector's stored record cut like a fetch for `as_of`. Analysis never fetches, so anything the collector
-    would have published from a fetch is usable; only a recent-quotes-only or out-of-date record is not.
+    """`payload`: the stored record as text. The collector's stored record cut like a fetch for `as_of`. Analysis never
+    fetches, so anything the collector would have published from a fetch is usable; only a short or out-of-date record is not.
     `fetched_since`: a record whose own fetch started at or after this time is as current as a fetch can be,
     so it need not reach the last finished session (price_status still bounds its age)."""
     from .market_data import decode_prices, expected_sessions, positive_price, price_status
     record = decode_prices(payload)
-    # A whole-history fetch stored as incomplete (Yahoo closes with fallback returns) is incomplete only so the
-    # collector retries Yahoo; the fallback provider always returns its whole series (load_fallback_prices reads from 1970).
-    if (record.get('history_complete') is not True and not record.get('whole_history')
-            and not record.get('provider', '').startswith('FinanceDataReader:')):
+    # Seven months of daily bars are enough for a comparison. A younger instrument is usable once fetched from its
+    # listing: the fetch asked for a year and its first bar came later.
+    first = record['frame'].index[0].date() if len(record['frame']) else None
+    listed_late = first and record.get('history_start') and first > date.fromisoformat(record['history_start']) + timedelta(days=14)
+    if first is None or (first > (pd.Timestamp(as_of) - pd.DateOffset(months=7)).date() and not listed_late):
         raise ValueError('PRICE_HISTORY_INCOMPLETE')
     frame = record['frame'].loc[record['frame'].index < pd.Timestamp(as_of)]
     closes = frame.index[frame['Close'].map(positive_price)]

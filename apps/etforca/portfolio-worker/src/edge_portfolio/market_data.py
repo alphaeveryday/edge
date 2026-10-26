@@ -145,7 +145,7 @@ def load_prices(symbol, as_of, *, on_raw=None, repair_since=None, history_start=
     if history_start:
         repair_since = repair_start = max(history_start, repair_start)
     original = {'frame': frame, 'currency': metadata.get('currency'), 'symbol': symbol, 'repair_since': repair_since.isoformat(),
-                'history_complete': history_start is None,
+                'history_start': history_start.isoformat() if history_start else None,
                 'pending_splits': pending_splits,
                 'source_url': f'https://finance.yahoo.com/quote/{quote(symbol, safe="")}/history/'}
     if on_raw:

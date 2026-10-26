@@ -246,7 +246,7 @@ async def test_collection_deadline_keeps_completed_prices(isolated_db, monkeypat
             await asyncio.sleep(10)
         return record()
     serve(monkeypatch, fetch)
-    records, failures = await work.records_for(['KR:069500', 'KR:360750'], date(2026, 10, 18), session=PriceSession())
+    records, failures = await work.records_for(['KR:069500', 'KR:360750'], date(2026, 10, 18), valuation_since={}, session=PriceSession())
     assert set(records) == {'KR:069500'}
     assert failures == ['KR:360750']
 
@@ -268,7 +268,7 @@ async def test_interrupted_optional_repair_keeps_valid_raw_prices_only(isolated_
         # What the warm session returns when its deadline interrupts the repair: the raw history it already had.
         return {**record(currency=currency), 'price_recovery': {'status': 'unavailable', 'reason': 'PRICE_PROVIDER_TIMEOUT', 'dates': []}}
     serve(monkeypatch, fetch)
-    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), session=PriceSession())
+    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), valuation_since={}, session=PriceSession())
     assert list(records) == (['KR:069500'] if currency == 'KRW' else [])
     assert failures == ([] if currency == 'KRW' else ['KR:069500'])
 
@@ -341,20 +341,6 @@ def test_first_automatic_quote_uses_a_known_legacy_snapshot_date_for_splits():
     assert result['assets'][0]['profit'] == 300
 
 
-async def test_adjusted_only_cached_prices_do_not_block_actual_close_recovery(isolated_db, monkeypatch):
-    calls = []
-    async def fetch(symbol, day, **kwargs):
-        calls.append(symbol)
-        return {**record(), **({'provider': 'FinanceDataReader:NAVER:069500'} if len(calls) == 1 else {})}
-    serve(monkeypatch, fetch)
-    await work.records_for(['KR:069500'], date(2026, 10, 18), session=PriceSession())
-    recovered, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), session=PriceSession())
-    assert len(calls) == 2
-    assert failures == []
-    result = work.valuation({'assets': [asset()]}, recovered, None, date(2026, 10, 18))
-    assert result['assets'][0]['value'] == 1100
-
-
 async def test_resolving_a_legacy_symbol_does_not_rebase_unchanged_split_inputs(isolated_db):
     from psycopg.types.json import Jsonb
     a = {**asset(), 'instrument_id': None, 'price_date': '2026-10-15'}
@@ -392,25 +378,6 @@ def test_manually_linking_a_legacy_alias_keeps_snapshot_but_replacing_a_known_fu
     saved['workbook']['assets'][0]['instrument_id'] = 'KR:360750'
     replaced = dashboard.save('owner', dashboard.Save.model_validate(saved))
     assert replaced['workbook']['assets'][0]['quantity_as_of'] != '2026-10-15'
-
-
-async def test_incomplete_cached_returns_are_retried_without_losing_actual_closes(isolated_db, monkeypatch):
-    from psycopg.types.json import Jsonb
-    from edge_portfolio.price_fetch import serialize
-    import json
-    r = record()
-    r['frame']['Adj Close'] = float('nan')
-    with store.connect() as db:
-        db.execute('INSERT INTO portfolio_dashboard_prices VALUES (%s,%s,%s)', ('KR:069500', work.price_end('KR:069500', date(2026, 10, 18)), Jsonb(json.loads(serialize(r)))))
-    calls = []
-    async def fetch(symbol, day, **kwargs):
-        calls.append(symbol)
-        return record()
-    serve(monkeypatch, fetch)
-    records, failures = await work.records_for(['KR:069500'], date(2026, 10, 18), session=PriceSession())
-    assert calls == ['069500.KS']
-    assert failures == []
-    assert records['KR:069500']['frame']['Adj Close'].notna().all()
 
 
 def test_annual_distribution_this_month_is_preserved_in_the_next_twelve_months():
@@ -512,7 +479,7 @@ def test_a_failed_refresh_cannot_make_an_old_current_month_dividend_look_fresh()
     assert again['forecasts'] == [], 'Crossing a month cannot revive an estimate from an earlier observation'
 
 
-async def test_valuation_skips_old_price_repairs_but_backtest_upgrades_its_cache(isolated_db, monkeypatch):
+async def test_valuation_skips_old_price_repairs_until_an_older_holding_needs_them(isolated_db, monkeypatch):
     repairs = []
     async def fetch(symbol, day, **kwargs):
         repair = kwargs['repair_since']
@@ -523,10 +490,8 @@ async def test_valuation_skips_old_price_repairs_but_backtest_upgrades_its_cache
     await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': day}, session=PriceSession())
     await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': day}, session=PriceSession())
     assert repairs == [day], 'A current dashboard quote is reusable without repairing historical gaps'
-    await work.records_for(['KR:069500'], day, session=PriceSession())
-    assert repairs == [day, None], 'A later backtest must still request the historical repair pass'
     await work.records_for(['KR:069500'], day, valuation_since={'KR:069500': date(2023, 10, 1)}, session=PriceSession())
-    assert repairs == [day, None, date(2023, 10, 1)], 'An unmarked old backtest cache only covers two years, not a longer-held split basis'
+    assert repairs == [day, date(2023, 10, 1)], 'A cache repaired for two years does not cover a longer-held split basis'
 
 
 async def test_failed_earlier_basis_upgrade_cannot_publish_a_missing_held_split(isolated_db, monkeypatch):
@@ -619,38 +584,39 @@ def test_analyses_keep_the_global_admission_limit_without_backtests(isolated_db)
     assert store.submit('analysis-owner', 'analysis-key', {'holdings': []})['id']
 
 
-def test_analysis_uses_a_stored_archive_only_when_it_is_whole_and_current():
-    # ALPHA-1437: analysis reads only the collector's store. A record must equal what a fetch would
-    # return for as_of, otherwise the analysis would silently compare an older or shorter window.
+def test_analysis_uses_a_stored_year_when_it_covers_seven_months_and_is_current():
+    # ALPHA-1437: analysis reads only the collector's store, which keeps a year of daily bars. Seven months are enough
+    # for a comparison; a shorter record is usable only when the fetch reached back past the listing.
     from edge_portfolio.price_fetch import serialize
     as_of = date(2026, 10, 16)
     def saved(days, **extra):  # The stored payload as the text saved_prices reads (payload::text).
         prices = [100. + i for i in range(len(days))]
         frame = pd.DataFrame({'Close': prices, 'Adj Close': prices}, index=pd.to_datetime(days))
-        return serialize({'frame': frame, 'currency': 'KRW', 'source_url': 'https://example.com', 'history_complete': True, **extra})
+        return serialize({'frame': frame, 'currency': 'KRW', 'source_url': 'https://example.com', **extra})
     def rejected(payload):
         with pytest.raises(ValueError) as error:
             work.analysis_archive('KR:069500', payload, as_of)
         return str(error.value)
-    current = work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15', '2026-10-16']), as_of)
-    assert [str(d.date()) for d in current['frame'].index] == ['2026-10-14', '2026-10-15'], 'The as_of session is cut like a fetch'
-    assert rejected(saved(['2026-10-13', '2026-10-14'])) == 'PRICE_STALE', 'Missing the last finished session'
+    year = ['2025-10-16', '2026-10-14', '2026-10-15', '2026-10-16']
+    current = work.analysis_archive('KR:069500', saved(year), as_of)
+    assert [str(d.date()) for d in current['frame'].index][-1] == '2026-10-15', 'The as_of session is cut like a fetch'
+    assert rejected(saved(['2025-10-16', '2026-10-13', '2026-10-14'])) == 'PRICE_STALE', 'Missing the last finished session'
     # Fetched after the analysis asked: as current as the provider allows, so a week's age (price_status) is the bound.
     from datetime import timezone
     asked = datetime(2026, 10, 16, 1, tzinfo=timezone.utc)
     after, before = '2026-10-16T01:00:05+00:00', '2026-10-16T00:59:00+00:00'
-    assert work.analysis_archive('KR:069500', saved(['2026-10-13', '2026-10-14'], requested_at=after), as_of, fetched_since=asked)
+    assert work.analysis_archive('KR:069500', saved(['2025-10-16', '2026-10-13', '2026-10-14'], requested_at=after), as_of, fetched_since=asked)
     with pytest.raises(ValueError, match='PRICE_STALE'):
-        work.analysis_archive('KR:069500', saved(['2026-10-13', '2026-10-14'], requested_at=before), as_of, fetched_since=asked)
+        work.analysis_archive('KR:069500', saved(['2025-10-16', '2026-10-13', '2026-10-14'], requested_at=before), as_of, fetched_since=asked)
     with pytest.raises(ValueError, match='PRICE_STALE'):
-        work.analysis_archive('KR:069500', saved(['2026-10-01', '2026-10-02'], requested_at=after), as_of, fetched_since=asked)
-    # Yahoo closes with fallback returns from a whole-history fetch are stored incomplete only so the collector retries Yahoo.
-    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], history_complete=False, whole_history=True), as_of)
-    assert rejected(saved(['2026-10-14', '2026-10-15'], history_complete=False)) == 'PRICE_HISTORY_INCOMPLETE', 'Recent quotes only'
+        work.analysis_archive('KR:069500', saved(['2025-10-16', '2026-10-01', '2026-10-02'], requested_at=after), as_of, fetched_since=asked)
+    assert work.analysis_archive('KR:069500', saved(['2026-03-13', '2026-10-14', '2026-10-15']), as_of), 'Seven months suffice'
+    assert rejected(saved(['2026-09-14', '2026-10-14', '2026-10-15'])) == 'PRICE_HISTORY_INCOMPLETE', 'Recent quotes only'
+    assert rejected(saved(['2026-09-14', '2026-10-14', '2026-10-15'], history_start='2026-09-10')) == 'PRICE_HISTORY_INCOMPLETE'
+    assert work.analysis_archive('KR:069500', saved(['2026-09-14', '2026-10-14', '2026-10-15'], history_start='2025-10-01'), as_of),         'Listed after the fetch start: all the history there is'
     # What a fetch would have returned is usable as-is: the analysis has no better source to wait for.
-    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], return_basis='price'), as_of)
-    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], history_complete=False,
-                                                     provider='FinanceDataReader:NAVER:069500'), as_of)
-    assert work.analysis_archive('KR:069500', saved(['2026-10-14', '2026-10-15'], price_recovery={'status': 'partial'}), as_of)
+    assert work.analysis_archive('KR:069500', saved(year, return_basis='price'), as_of)
+    assert work.analysis_archive('KR:069500', saved(year, provider='FinanceDataReader:NAVER:069500'), as_of)
+    assert work.analysis_archive('KR:069500', saved(year, price_recovery={'status': 'partial'}), as_of)
 
 

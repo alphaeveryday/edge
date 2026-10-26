@@ -1,4 +1,4 @@
-"""Catalogue-wide daily quotes first, then archives, using the existing worker."""
+"""Catalogue-wide daily bars (a year per instrument, once a day after its close), using the existing worker."""
 import asyncio
 import json
 import logging
@@ -197,7 +197,8 @@ def next_quote(key, now):
 
 
 async def collect_one(stopping=None, *, session, now=None, urgent=False):
-    """One scheduled instrument, or with `urgent` one an analysis waits for (any hour, even beside customer work)."""
+    """One scheduled instrument, or with `urgent` one an analysis waits for (any hour, even beside customer work).
+    Every fetch is the instrument's whole stored window (dashboard_work.price_window), once a day after its close."""
     from . import dashboard_work as work, market_data
     now = now or datetime.now(KST)
     if not urgent and not in_window(now) or stopping and stopping.is_set():
@@ -211,18 +212,10 @@ async def collect_one(stopping=None, *, session, now=None, urgent=False):
         if db.execute("""SELECT 1 FROM portfolio_market_preload WHERE last_error='PRICE_PROVIDER_RATE_LIMIT'
                 AND failed_at>now()-interval '15 minutes' LIMIT 1""").fetchone():
             return False
-        if urgent:
-            # The whole archive: an analysis compares from each instrument's first listed day.
-            job = db.execute('''SELECT q.*,false AS quote FROM portfolio_market_preload q
-                WHERE q.urgent_at IS NOT NULL AND (q.lease_until IS NULL OR q.lease_until<now())
-                ORDER BY q.urgent_at FOR UPDATE SKIP LOCKED LIMIT 1''').fetchone()
-        else:
-            job = db.execute('''SELECT q.*,q.quote_after<=now() AS quote FROM portfolio_market_preload q
-                WHERE (q.lease_until IS NULL OR q.lease_until<now())
-                    AND (q.quote_after<=now() OR q.history_after<=now())
-                ORDER BY (q.quote_after<=now()) DESC, (q.instrument='FX') DESC,
-                    least(q.quote_after,q.history_after),q.instrument
-                FOR UPDATE SKIP LOCKED LIMIT 1''').fetchone()
+        job = db.execute(f'''SELECT q.*,r.since FROM portfolio_market_preload q LEFT JOIN portfolio_quote_refresh r USING(instrument)
+            WHERE (q.lease_until IS NULL OR q.lease_until<now()) AND {"q.urgent_at IS NOT NULL" if urgent else "q.quote_after<=now()"}
+            ORDER BY {"q.urgent_at" if urgent else "(q.instrument='FX') DESC,q.quote_after,q.instrument"}
+            FOR UPDATE OF q SKIP LOCKED LIMIT 1''').fetchone()
         if not job:
             return False
         job['lease_until'] = db.execute("""UPDATE portfolio_market_preload SET lease_until=now()+interval '5 minutes'
@@ -234,43 +227,30 @@ async def collect_one(stopping=None, *, session, now=None, urgent=False):
         end = work.price_end(key, now.date())
         from .catalog import price_symbol
         symbol = price_symbol(key)
-        requested_at = started.isoformat()
-        # Recent quotes are available before an instrument's long archive is collected.
         # No outer deadline: the session bounds the fetch itself (Yahoo 30s, then the fallback 15s), and an outer one
         # would also count the slot wait for newsletter quotes and replace a known rate limit with a timeout.
-        record = await session.fetch(symbol, end, end - timedelta(days=35) if job['quote'] else None)
+        record = await session.fetch(symbol, end, work.price_window(end, job['since']), repair_since=job['since'])
         if record['currency'] != ('USD' if key.startswith('US:') else 'KRW'):
             raise ValueError('UNSUPPORTED_CURRENCY')
         _, observed = work.last_close(record)
         if not 0 <= (end - datetime.fromisoformat(observed).date()).days <= 7:
             raise ValueError('PRICE_STALE')
-        record.update(actions_checked_on=str(now.date()), requested_at=requested_at,
+        record.update(actions_checked_on=str(now.date()), requested_at=started.isoformat(),
                       fetched_at=datetime.now(ZoneInfo('UTC')).isoformat())
-        if not job['quote']:
-            record['whole_history'] = True  # Fetched from the first listed day, whatever history_complete says.
+        limited = 'PRICE_PROVIDER_RATE_LIMIT' in (record.get('price_recovery', {}).get('reason'), record.get('primary_failure'))
+        error = 'PRICE_PROVIDER_RATE_LIMIT' if limited else None
         with store.connect() as db:
             if not db.execute('SELECT 1 FROM portfolio_market_preload WHERE instrument=%s AND lease_until=%s FOR UPDATE',
                               (key, job['lease_until'])).fetchone():
                 return True
-            published = work.publish_prices(db, key, end, record)
-            saved = db.execute("SELECT day,payload->>'actions_checked_on' AS checked,payload->>'history_complete' AS complete,payload->>'actions_complete' AS actions_complete,payload->'price_recovery'->>'status' AS recovery FROM portfolio_dashboard_prices WHERE instrument=%s", (key,)).fetchone()
-            limited = 'PRICE_PROVIDER_RATE_LIMIT' in (record.get('price_recovery', {}).get('reason'), record.get('primary_failure'))
-            if not published and (not saved or saved['complete'] != 'true' or saved['day'] != end or saved['checked'] != str(now.date())):
-                # A whole-history fetch that did not land is a failure for the analysis waiting on it.
-                db.execute("""UPDATE portfolio_market_preload SET lease_until=NULL,urgent_at=CASE WHEN %s OR urgent_at>%s THEN urgent_at END,served_at=CASE WHEN %s THEN served_at ELSE %s END,history_after=now()+interval '1 minute',
-                    quote_after=greatest(quote_after,now()+interval '1 minute'),
-                    last_error=%s,failed_at=CASE WHEN %s OR NOT %s THEN now() ELSE failed_at END WHERE instrument=%s""",
-                    (job['quote'], started, job['quote'], started,
-                     'PRICE_PROVIDER_RATE_LIMIT' if limited else 'PRICE_PUBLICATION_SUPERSEDED', limited, job['quote'], key))
-                log.info('market preload instrument=%s result=superseded; archive retry scheduled', key)
-                return True
-            if limited:
-                error = 'PRICE_PROVIDER_RATE_LIMIT'
-            db.execute('''UPDATE portfolio_market_preload SET lease_until=NULL,urgent_at=CASE WHEN %s OR urgent_at>%s THEN urgent_at END,served_at=CASE WHEN %s THEN served_at ELSE %s END,failures=0,last_error=%s,
-                failed_at=CASE WHEN %s THEN now() ELSE failed_at END,
-                quote_after=%s,history_after=CASE WHEN %s THEN NULL WHEN %s THEN coalesce(history_after,now()) ELSE now()+interval '1 day' END
-                WHERE instrument=%s''', (job['quote'], started, job['quote'], started, error, limited, next_quote(key, now) if job['quote'] else job['quote_after'],
-                                       saved and saved['complete'] == 'true' and saved['actions_complete'] == 'true' and saved['recovery'] not in ('partial','unavailable','rejected'), job['quote'], key))
+            # A rejected write is fine only when a record for this session is stored (a later fetch won); otherwise
+            # (e.g. a fallback that may not replace Yahoo's closes) the stored record is stale and the fetch is retried.
+            if not work.publish_prices(db, key, end, record) and not db.execute(
+                    'SELECT 1 FROM portfolio_dashboard_prices WHERE instrument=%s AND day=%s', (key, end)).fetchone():
+                raise ValueError(error or 'PRICE_STALE')  # A rate limit stays the reason, pausing the bulk source.
+            db.execute('''UPDATE portfolio_market_preload SET lease_until=NULL,urgent_at=CASE WHEN urgent_at>%s THEN urgent_at END,
+                served_at=%s,failures=0,last_error=%s,failed_at=CASE WHEN %s THEN now() ELSE failed_at END,quote_after=%s
+                WHERE instrument=%s''', (started, started, error, limited, next_quote(key, now), key))
         # Quotes are committed before workbook locks, matching the interactive collector.
         with store.connect() as db:
             db.execute('''UPDATE portfolio_workbooks w SET refresh_after=least(refresh_after,now())
@@ -285,10 +265,8 @@ async def collect_one(stopping=None, *, session, now=None, urgent=False):
         error = market_data.price_failure(failure)
         with store.connect() as db:
             retry = now + timedelta(minutes=min(360, 15 * 2 ** min(job['failures'], 5)))
-            db.execute('''UPDATE portfolio_market_preload SET lease_until=NULL,urgent_at=CASE WHEN %s OR urgent_at>%s THEN urgent_at END,served_at=CASE WHEN %s THEN served_at ELSE %s END,failures=failures+1,last_error=%s,failed_at=now(),
-                quote_after=CASE WHEN %s THEN %s ELSE quote_after END,
-                history_after=CASE WHEN history_after IS NOT NULL THEN greatest(history_after,%s) ELSE NULL END
-                WHERE instrument=%s AND lease_until=%s''',
-                (job['quote'], started, job['quote'], started, error, job['quote'], retry, retry, key, job['lease_until']))
-    log.info('market preload instrument=%s stage=%s result=%s', key, 'quote' if job['quote'] else 'history', error or 'ready')
+            db.execute('''UPDATE portfolio_market_preload SET lease_until=NULL,urgent_at=CASE WHEN urgent_at>%s THEN urgent_at END,
+                served_at=%s,failures=failures+1,last_error=%s,failed_at=now(),quote_after=%s
+                WHERE instrument=%s AND lease_until=%s''', (started, started, error, retry, key, job['lease_until']))
+    log.info('market preload instrument=%s result=%s', key, error or 'ready')
     return True
