@@ -354,3 +354,28 @@ async def test_quote_notification_preserves_the_oldest_waiting_workbook(isolated
     await quotes.collect_once()
     with store.connect() as db:
         assert db.execute('SELECT refresh_after FROM portfolio_workbooks').fetchone()['refresh_after'] == previous
+
+
+def test_valuation_reads_only_the_window_it_uses_and_values_the_same(isolated_db, monkeypatch):
+    # 2026-10-25 OOM loop: every valuation parsed whole archives (decades of days) several times a second.
+    # The database now cuts each archive to the window a valuation reads; the result must not change.
+    import pandas as pd
+    from edge_portfolio.price_fetch import serialize
+    day, end = date(2026, 10, 18), date(2026, 10, 17)
+    monkeypatch.setattr(work, 'price_end', lambda *args: end)
+    sessions = market_data.expected_sessions('KR:069500', pd.Timestamp('2023-01-02'), pd.Timestamp('2026-10-16'))
+    frame = pd.DataFrame({'Close': 100., 'Adj Close': 100., 'Dividends': 0., 'Stock Splits': 0.}, index=sessions)
+    frame.loc[frame.index.day <= 3, 'Dividends'] = 1.  # Monthly distributions, so the 12-month window is visible.
+    frame.loc[sessions[10], 'Stock Splits'] = 2.  # An old split outside the holding must stay outside.
+    full = {'frame': frame, 'currency': 'KRW', 'source_url': 'https://example.com', 'history_complete': True,
+            'actions_checked_on': str(day)}
+    with store.connect() as db:
+        db.execute('INSERT INTO portfolio_dashboard_prices VALUES (%s,%s,%s::jsonb)', ('KR:069500', end, serialize(full)))
+    holding = {**asset(), 'quantity_as_of': '2026-10-01', 'average_as_of': '2026-10-01'}
+    since = {'KR:069500': date(2026, 10, 1)}
+    with store.connect() as db:
+        windowed = quotes.cached(db, since, day)['KR:069500']
+    assert windowed['frame'].index[0] >= pd.Timestamp('2025-10-03'), 'Only about a year is read, not the whole archive'
+    workbook = {'assets': [holding]}
+    assert work.valuation(workbook, {'KR:069500': windowed}, None, day) == work.valuation(workbook, {'KR:069500': full}, None, day)
+    assert work.valuation(workbook, {'KR:069500': windowed}, None, day)['assets'][0]['dividend_yield_pct'], 'The 12-month dividend window survives'
