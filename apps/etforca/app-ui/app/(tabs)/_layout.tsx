@@ -15,6 +15,8 @@ export default function TabsLayout() {
       // iOS 는 배경색 지정 시 유리 효과가 사라져 Android 만 지정
       backgroundColor={Platform.OS === 'android' ? colors.bg : undefined}
       indicatorColor={colors.surface}
+      // Android 기본값은 탭 4개 이상에서 선택 탭만 이름 표시
+      labelVisibilityMode="labeled"
     >
       <NativeTabs.Trigger name="home">
         <NativeTabs.Trigger.Icon sf={{ default: 'house', selected: 'house.fill' }} md="home" />

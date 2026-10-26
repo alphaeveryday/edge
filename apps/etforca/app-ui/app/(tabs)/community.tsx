@@ -2,7 +2,7 @@ import { useRouter, useScrollToTop } from 'expo-router';
 import { useRef, useState } from 'react';
 import { ScrollView, Text, View } from 'react-native';
 import { TopBar } from '@/components/TopBar';
-import { Chip, IconButton, PageTitle, SectorIcon } from '@/components/ui';
+import { Chip, IconButton, PageTitle, SectorIcon, TabBarLine } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
 import { VoteCard } from '@/features/community/VoteCard';
 import { useFeed, useVoteStat } from '@/features/community/queries';
@@ -57,6 +57,7 @@ export default function Community() {
       <View style={[styles.fab, { bottom: 18 + tabOverlap }]}>
         <IconButton icon="plus" size={56} fab onPress={() => requireLogin('글쓰기', () => router.push('/community/write'))} />
       </View>
+      <TabBarLine />
     </View>
   );
 }
