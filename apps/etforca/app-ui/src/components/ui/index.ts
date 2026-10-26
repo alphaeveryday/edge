@@ -19,5 +19,6 @@ export { SectionHead } from './SectionHead';
 export { SectorIcon } from './SectorIcon';
 export { SheetHead } from './SheetHead';
 export { Sticker } from './Sticker';
+export { TabBarLine } from './TabBarLine';
 export { TabItem } from './TabItem';
 export { ToggleRow } from './ToggleRow';

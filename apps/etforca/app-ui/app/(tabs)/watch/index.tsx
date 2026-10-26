@@ -2,7 +2,7 @@ import { useRouter, useScrollToTop } from 'expo-router';
 import { useRef, useState } from 'react';
 import { Animated, ScrollView, Text, View } from 'react-native';
 import { TopBar } from '@/components/TopBar';
-import { PageTitle } from '@/components/ui';
+import { PageTitle, TabBarLine } from '@/components/ui';
 import { EtfRow } from '@/features/etf/EtfRow';
 import { MarketTicker } from '@/features/home/MarketTicker';
 import { useIndices } from '@/features/home/queries';
@@ -48,6 +48,7 @@ export default function Watch() {
         </Animated.View>
       </ScrollView>
       <NewGroupSheet open={newOpen} onClose={() => setNewOpen(false)} />
+      <TabBarLine />
     </View>
   );
 }
