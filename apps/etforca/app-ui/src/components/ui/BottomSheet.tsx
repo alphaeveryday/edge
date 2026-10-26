@@ -1,36 +1,53 @@
 import { createContext, useContext, useEffect, useRef, type ReactNode, type Ref } from 'react';
-import { Animated, KeyboardAvoidingView, Modal, type NativeScrollEvent, type NativeSyntheticEvent, Pressable, ScrollView, type ScrollViewProps, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Pressable, type ScrollView, type ScrollViewProps, StyleSheet, View } from 'react-native';
+import { Gesture, GestureDetector, GestureHandlerRootView, type NativeGesture } from 'react-native-gesture-handler';
+import Animated, { type AnimatedRef } from 'react-native-reanimated';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { useSheetDrag } from '@/lib/useSheetDrag';
+import { useSheetDrag, useSheetScroll } from '@/lib/useSheetDrag';
 import { createStyles } from '@/theme/theme';
 import { radius, shadow } from '@/theme/tokens';
 import { useBottomGap } from './BottomBar';
 
-const SheetScroll = createContext<{ onScroll?: ScrollViewProps['onScroll']; onSeen: (pct: number) => void }>({ onSeen: () => {} });
+interface SheetScrollCtx {
+  native: NativeGesture;
+  scrollY: { value: number };
+  box: { value: { max: number; view: number } };
+  scrollRef?: AnimatedRef<Animated.ScrollView>;
+  locked: boolean;
+  overflow: boolean;
+  onSeen: (pct: number) => void;
+}
+const SheetScroll = createContext<SheetScrollCtx>({ native: Gesture.Native(), scrollY: { value: 0 }, box: { value: { max: 0, view: 0 } }, locked: false, overflow: false, onSeen: () => {} });
 
-// 맨 위에서 아래로 끌면 시트가 내려가는 시트 안 목록
+// 맨 위에서 아래로 끌면 시트가 내려가는 시트 안 목록. 스크롤하다 맨 위에 닿은 뒤의 끌어내림은 위쪽 여백만 드러냄
 // 본 만큼의 비율을 시트에 보고
 export function SheetScrollView({ ref, ...props }: ScrollViewProps & { ref?: Ref<ScrollView> }) {
-  const { onScroll, onSeen } = useContext(SheetScroll);
+  const { native, scrollY, box, scrollRef, locked, overflow, onSeen } = useContext(SheetScroll);
   const m = useRef({ y: 0, view: 0, content: 0 });
+  const measure = () => { box.value = { max: Math.max(0, m.current.content - m.current.view), view: m.current.view }; };
+  // 시트의 애니메이션 ref 와 호출부 ref 를 함께 연결
+  const setRef = (r: Animated.ScrollView | null) => {
+    scrollRef?.(r);
+    if (typeof ref === 'function') ref(r as unknown as ScrollView);
+    else if (ref) ref.current = r as unknown as ScrollView;
+  };
   const report = () => m.current.content > 0 && m.current.view > 0 && onSeen(Math.min(100, Math.round(((m.current.y + m.current.view) / m.current.content) * 100)));
+  const onScroll = useSheetScroll(scrollY, (y) => { m.current.y = y; report(); });
   return (
-    <ScrollView
-      ref={ref}
-      onScroll={(e: NativeSyntheticEvent<NativeScrollEvent>) => {
-        onScroll?.(e);
-        m.current.y = e.nativeEvent.contentOffset.y;
-        report();
-      }}
-      onLayout={(e) => { m.current.view = e.nativeEvent.layout.height; report(); }}
-      onContentSizeChange={(_, h) => { m.current.content = h; report(); }}
-      scrollEventThrottle={16}
-      // iOS 관성 스크롤 중 손잡이·버튼 터치를 빼앗는 응답자 재협상 차단
-      disableScrollViewPanResponder
-      bounces={false}
-      showsVerticalScrollIndicator={false}
-      {...props}
-    />
+    <GestureDetector gesture={native}>
+      <Animated.ScrollView
+        ref={setRef}
+        onScroll={onScroll}
+        onLayout={(e) => { m.current.view = e.nativeEvent.layout.height; measure(); report(); }}
+        onContentSizeChange={(_, h) => { m.current.content = h; measure(); report(); }}
+        scrollEventThrottle={16}
+        scrollEnabled={!locked}
+        scrollToOverflowEnabled={overflow}
+        overScrollMode="never"
+        showsVerticalScrollIndicator={false}
+        {...props}
+      />
+    </GestureDetector>
   );
 }
 
@@ -73,27 +90,34 @@ export function BottomSheet({ open, onClose, children, head, tall, padded = true
   return (
     <Modal visible={drag.mounted} transparent animationType="none" onRequestClose={() => closeNow('back')}>
       {/* 탭 화면의 탭바 높이가 섞이지 않는 창 기준 하단 여백 */}
-      <SafeAreaProvider>
-        <KeyboardAvoidingView behavior="padding" style={styles.root}>
-          <Animated.View style={[styles.backdrop, drag.backdrop]}>
-            <Pressable style={StyleSheet.absoluteFill} onPress={() => closeNow('backdrop')} />
-          </Animated.View>
-          <Animated.View
-            onLayout={(e) => drag.onLayout?.(e.nativeEvent.layout.height)}
-            style={[styles.sheet, !tall && styles.fit, padded && styles.padded, drag.sheet]}
-          >
-            <View {...drag.handlers} style={[styles.grip, padded && styles.gripPadded, !!head && styles.gripHead]}>
-              <View style={[styles.handle, !!head && styles.handleHead]} />
-              {last.current.head}
-            </View>
-            <View {...drag.body} style={tall && styles.body}>
-              <SheetScroll.Provider value={{ onScroll: drag.onScroll, onSeen: stats.onSeen }}>{last.current.children}</SheetScroll.Provider>
-            </View>
-            <SheetGap />
-            <View style={styles.under} />
-          </Animated.View>
-        </KeyboardAvoidingView>
-      </SafeAreaProvider>
+      {/* 모달은 별도 창이라 제스처 루트가 다시 필요 */}
+      <GestureHandlerRootView style={styles.root}>
+        <SafeAreaProvider>
+          <KeyboardAvoidingView behavior="padding" style={styles.root}>
+            <Animated.View style={[styles.backdrop, drag.backdrop]}>
+              <Pressable style={StyleSheet.absoluteFill} onPress={() => closeNow('backdrop')} />
+            </Animated.View>
+            <Animated.View
+              onLayout={(e) => drag.onLayout?.(e.nativeEvent.layout.height)}
+              style={[styles.sheet, !tall && styles.fit, padded && styles.padded, drag.sheet]}
+            >
+              <GestureDetector gesture={drag.grip}>
+                <View style={[styles.grip, padded && styles.gripPadded, !!head && styles.gripHead]}>
+                  <View style={[styles.handle, !!head && styles.handleHead]} />
+                  {last.current.head}
+                </View>
+              </GestureDetector>
+              <GestureDetector gesture={drag.body}>
+                <View style={tall && styles.body}>
+                  <SheetScroll.Provider value={{ native: drag.native, scrollY: drag.scrollY, box: drag.box, scrollRef: drag.scrollRef, locked: drag.locked, overflow: drag.overflow, onSeen: stats.onSeen }}>{last.current.children}</SheetScroll.Provider>
+                </View>
+              </GestureDetector>
+              <SheetGap />
+              <View style={styles.under} />
+            </Animated.View>
+          </KeyboardAvoidingView>
+        </SafeAreaProvider>
+      </GestureHandlerRootView>
     </Modal>
   );
 }
