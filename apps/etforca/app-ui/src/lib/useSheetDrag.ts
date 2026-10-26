@@ -13,6 +13,7 @@ import {
   useAnimatedScrollHandler,
   useAnimatedStyle,
   useSharedValue,
+  withSequence,
   withSpring,
   withTiming,
 } from 'react-native-reanimated';
@@ -40,20 +41,48 @@ const DECEL = 0.998;
 const OPEN_SPRING = { stiffness: 385, damping: 39, mass: 1, overshootClamping: true };
 const SNAP_SPRING = { stiffness: 427, damping: 41, mass: 1, overshootClamping: true };
 
-// 손을 뗀 속도(px/s)로 출발해 iOS 스크롤처럼 지수 감속하는 관성의 도착 위치와 길이
-// Reanimated withDecay 는 프레임마다 감속이 누적돼 끝에서 급정지하므로 직접 계산
-// 본문 끝에 닿는 관성은 출발 속도를 유지한 채 끝에서 멈추도록 감속을 키움
-const glide = (from: number, velocity: number, max: number) => {
+// 직접 스크롤의 경계 밖 저항. UIScrollView 와 같은 곡선(계수 0.55, 기준 길이=본문 높이)
+const overscroll = (x: number, d: number) => {
   'worklet';
+  const h = Math.max(d, 1);
+  return (1 - 1 / ((x * 0.55) / h + 1)) * h;
+};
+// 경계 밖에서 경계로 돌아오는 튕김. 임계 감쇠라 넘침 없이 복귀
+const BOUNCE = { stiffness: 100, damping: 20, mass: 1 };
+// 지수 감속 구간의 진행률. 길이 전체의 감속 지수 a 에 맞춘 0~1
+const decayEase = (a: number) => (t: number) => {
+  'worklet';
+  return (1 - Math.exp(-a * t)) / (1 - Math.exp(-a));
+};
+
+// 손을 뗀 위치와 속도(px/s)에서 이어지는 iOS 스크롤과 같은 움직임과 최종 정지 위치
+// 경계 안은 ms 당 0.998 지수 감속. 경계에 닿으면 그 순간 속도로 경계 밖에 넘었다 튕겨 돌아옴
+// 경계 밖에서 놓으면 놓은 속도로 경계에 튕겨 돌아옴
+// Reanimated withDecay 는 프레임마다 감속이 누적돼 끝에서 급정지하므로 직접 계산
+const fling = (from: number, velocity: number, max: number, done: () => void) => {
+  'worklet';
+  const k = -Math.log(DECEL);
   const v = velocity / 1000;
-  const to = Math.min(max, Math.max(0, from + v / -Math.log(DECEL)));
-  const dist = to - from;
-  if (Math.abs(dist) < 1 || Math.abs(v) < 0.05) return null;
-  const k = v / dist;
-  // 속도가 0.02px/ms 아래로 떨어지는 시점까지
-  const ms = Math.log(Math.abs(v) / 0.02) / k;
-  const a = k * ms;
-  return { to, ms, ease: (t: number) => { 'worklet'; return (1 - Math.exp(-a * t)) / (1 - Math.exp(-a)); } };
+  if (from < 0 || from > max) {
+    const edge = from < 0 ? 0 : max;
+    return { anim: withSpring(edge, { ...BOUNCE, velocity }, done), end: edge };
+  }
+  if (Math.abs(v) < 0.05) return null;
+  const reach = v / k;
+  const edge = v > 0 ? max : 0;
+  const gap = edge - from;
+  if (Math.abs(reach) < Math.abs(gap)) {
+    // 속도가 0.02px/ms 아래로 떨어지는 시점까지
+    const ms = Math.log(Math.abs(v) / 0.02) / k;
+    const a = k * ms;
+    const to = from + reach * (1 - Math.exp(-a));
+    return { anim: withTiming(to, { duration: ms, easing: decayEase(a) }, done), end: to };
+  }
+  const hit = v * (1 - gap / reach);
+  const bounce = withSpring(edge, { ...BOUNCE, velocity: hit * 1000 }, done);
+  if (Math.abs(gap) < 0.5) return { anim: bounce, end: edge };
+  const ms = -Math.log(1 - gap / reach) / k;
+  return { anim: withSequence(withTiming(edge, { duration: ms, easing: decayEase(k * ms) }), bounce), end: edge };
 };
 
 // 끝 지점 너머의 끌림이 점점 무거워지는 고무줄 저항
@@ -91,9 +120,9 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   const closing = useRef(false);
   const close = useRef(onClose);
   close.current = onClose;
-  // 본문의 스크롤 위치와 최대 스크롤 위치
+  // 본문의 스크롤 위치와 본문 크기(최대 스크롤 위치·보이는 높이)
   const scrollY = useSharedValue(0);
-  const maxY = useSharedValue(0);
+  const box = useSharedValue({ max: 0, view: 0 });
   const scrollRef = useAnimatedRef<Animated.ScrollView>();
   // 최상단에서 멈춘 상태의 잠금. 네이티브 스크롤을 끄고 본문 끌기를 켬
   const [locked, setLocked] = useState(true);
@@ -121,7 +150,7 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   // 잠금 중 본문 끌기 밖의 이유로 스크롤 위치가 생기면 해제
   // 다른 화면에 다녀오거나 접기로 내용이 바뀌어 최상단이 아닌 채로 다시 열린 경우
   useAnimatedReaction(
-    () => lockedSV.value && mode.value === 0 && Math.abs(scrollY.value) >= 0.5,
+    () => lockedSV.value && mode.value === 0 && !driving.value && Math.abs(scrollY.value) >= 0.5,
     (moved, prev) => {
       if (moved && !prev) {
         lockedSV.value = false;
@@ -229,6 +258,11 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
         .activeOffsetY([-SLOP, SLOP])
         .onStart((e) => {
           mode.value = 0;
+          // 직접 스크롤의 튕김 중 새 터치는 그 위치에서 이어받고, 아니면 현재 스크롤 위치에서 출발
+          if (driving.value) {
+            cancelAnimation(manualY);
+            driving.value = false;
+          } else manualY.value = scrollY.value;
           // iOS 는 활성화 순간 이동량이 0 으로 되돌아가고 웹은 활성화 거리가 남음
           startTy.value = e.translationY;
         })
@@ -236,13 +270,12 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
           const dy = e.translationY - startTy.value;
           if (mode.value === 0) {
             if (dy === 0) return;
-            if (dy > 0) {
+            if (dy > 0 && manualY.value >= 0) {
               cancelAnimation(pos);
               start.value = pos.value;
               mode.value = 1;
             } else {
-              manualY.value = scrollY.value;
-              start.value = scrollY.value;
+              start.value = manualY.value;
               mode.value = 2;
             }
           }
@@ -251,29 +284,34 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
             const raw = start.value - dy;
             pos.value = raw > high ? high + rubber(raw - high) : Math.max(0, raw);
           } else {
-            manualY.value = Math.min(maxY.value, Math.max(0, start.value - dy));
+            const { max, view } = box.value;
+            const raw = start.value - dy;
+            manualY.value = raw < 0 ? -overscroll(-raw, view) : raw > max ? max + overscroll(raw - max, view) : raw;
           }
         })
         .onEnd((e) => {
           if (mode.value === 1) release(e.velocityY);
-          else if (mode.value === 2 && manualY.value > 0) {
-            // 손을 뗀 속도로 이어지는 관성. 그동안 네이티브 스크롤을 풀어 다음 터치가 이어받음
-            const g = glide(manualY.value, -e.velocityY, maxY.value);
-            if (g) {
+          else if (mode.value === 2) {
+            // 손을 뗀 속도로 이어지는 관성·튕김. 최상단이 아닌 곳에 멈추면 잠금을 풀어 다음 터치는 네이티브 스크롤
+            const f = fling(manualY.value, -e.velocityY, box.value.max, () => {
+              'worklet';
+              driving.value = false;
+            });
+            if (f) {
               driving.value = true;
-              manualY.value = withTiming(g.to, { duration: g.ms, easing: g.ease }, () => {
-                driving.value = false;
-              });
+              manualY.value = f.anim;
             }
-            lockedSV.value = false;
-            runOnJS(setLocked)(false);
+            if ((f ? f.end : manualY.value) > 0.5) {
+              lockedSV.value = false;
+              runOnJS(setLocked)(false);
+            }
           }
         })
         .onFinalize((_, ok) => {
           if (mode.value === 1 && !ok) snap(stops.value.low);
           mode.value = 0;
         }),
-    [locked, release, snap, pos, stops, start, startTy, mode, scrollY, maxY, manualY, driving, lockedSV],
+    [locked, release, snap, pos, stops, start, startTy, mode, box, scrollY, manualY, driving, lockedSV],
   );
 
   const backdrop = useAnimatedStyle(() => ({
@@ -291,7 +329,7 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   const onLayout = tall ? undefined : (h: number) => setFit(Math.round(h));
   // 시트 안 배경·뒤로가기 닫힘의 즉시 출발
   const closeNow = () => shown.current && !instant && dismiss(CLOSE_MS);
-  return { mounted, grip, body, native, scrollY, maxY, scrollRef, locked, backdrop, sheet, onLayout, closeNow };
+  return { mounted, grip, body, native, scrollY, box, scrollRef, locked, backdrop, sheet, onLayout, closeNow };
 }
 
 // 본문 목록의 스크롤 위치를 시트에 보고하고 통계용 콜백을 JS 에서 호출
