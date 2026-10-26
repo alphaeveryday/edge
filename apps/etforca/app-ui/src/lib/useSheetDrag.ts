@@ -8,6 +8,7 @@ import {
   interpolate,
   runOnJS,
   scrollTo,
+  useAnimatedReaction,
   useAnimatedRef,
   useAnimatedScrollHandler,
   useAnimatedStyle,
@@ -31,11 +32,29 @@ const CLOSE_MS = 180;
 const FLING_MIN_MS = 80;
 // 세로 이동으로 판정하는 거리
 const SLOP = 6;
+// iOS 스크롤 기본 감속(UIScrollView.DecelerationRate.normal, ms 당 속도 비율)
+const DECEL = 0.998;
 // RN Animated.spring 의 speed·bounciness 를 같은 물리 모델의 stiffness·damping 으로 환산한 값
 // 열기 14·0, 스냅·fit 높이 맞춤 16·0
 // Reanimated 기본 mass 가 4 라 RN 과 같은 1 명시
 const OPEN_SPRING = { stiffness: 385, damping: 39, mass: 1, overshootClamping: true };
 const SNAP_SPRING = { stiffness: 427, damping: 41, mass: 1, overshootClamping: true };
+
+// 손을 뗀 속도(px/s)로 출발해 iOS 스크롤처럼 지수 감속하는 관성의 도착 위치와 길이
+// Reanimated withDecay 는 프레임마다 감속이 누적돼 끝에서 급정지하므로 직접 계산
+// 본문 끝에 닿는 관성은 출발 속도를 유지한 채 끝에서 멈추도록 감속을 키움
+const glide = (from: number, velocity: number, max: number) => {
+  'worklet';
+  const v = velocity / 1000;
+  const to = Math.min(max, Math.max(0, from + v / -Math.log(DECEL)));
+  const dist = to - from;
+  if (Math.abs(dist) < 1 || Math.abs(v) < 0.05) return null;
+  const k = v / dist;
+  // 속도가 0.02px/ms 아래로 떨어지는 시점까지
+  const ms = Math.log(Math.abs(v) / 0.02) / k;
+  const a = k * ms;
+  return { to, ms, ease: (t: number) => { 'worklet'; return (1 - Math.exp(-a * t)) / (1 - Math.exp(-a)); } };
+};
 
 // 끝 지점 너머의 끌림이 점점 무거워지는 고무줄 저항
 const rubber = (over: number) => {
@@ -52,7 +71,9 @@ interface Options {
 
 // 시트의 보이는 높이 하나로 열기·닫기·끌기와 배경 투명도를 함께 움직임
 // tall 시트는 화면 70%에서 시작해 95%까지 확장
-// 본문 끌기는 터치 하나에 시트·스크롤 중 하나. 맨 위에서 아래로 출발하면 시트, 그 밖은 스크롤
+// 본문이 최상단에서 멈춰 있으면 네이티브 스크롤을 잠가 본문 끌기가 터치를 모두 받음
+// 그 상태에서 아래로 끌면 시트, 위로 밀면 그 터치만 직접 스크롤하고 손을 떼면 잠금 해제
+// iOS 에서 Gesture Handler 의 스크롤 제스처 관계 설정(동시 인식·대기)이 적용되지 않아 먼저 활성화된 쪽이 터치를 가져가기 때문
 export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   const { height: screen } = useWindowDimensions();
   const { top } = useSafeAreaInsets();
@@ -70,17 +91,46 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   const closing = useRef(false);
   const close = useRef(onClose);
   close.current = onClose;
-  // 본문 목록의 스크롤 위치
+  // 본문의 스크롤 위치와 최대 스크롤 위치
   const scrollY = useSharedValue(0);
+  const maxY = useSharedValue(0);
   const scrollRef = useAnimatedRef<Animated.ScrollView>();
+  // 최상단에서 멈춘 상태의 잠금. 네이티브 스크롤을 끄고 본문 끌기를 켬
+  const [locked, setLocked] = useState(true);
+  const lockedSV = useSharedValue(true);
+  // 네이티브 스크롤 터치 중 여부
+  const touching = useSharedValue(false);
+  // 직접 스크롤 위치와 그 관성 진행 여부
+  const manualY = useSharedValue(0);
+  const driving = useSharedValue(false);
   // 끌기 시작 시점의 높이와 이동량
   const start = useSharedValue(0);
   const startTy = useSharedValue(0);
-  // 끌기 활성화 때 본문이 최상단이었는지와 이번 터치의 본문 끌기 모드(0 첫 이동 전·1 시트·2 스크롤)
-  const atTop = useSharedValue(false);
+  // 본문 끌기 모드(0 첫 이동 전·1 시트·2 직접 스크롤)
   const mode = useSharedValue(0);
-  // 시트 모드 동안의 목록 스크롤 잠금
-  const [locked, setLocked] = useState(false);
+  // 터치·관성 없이 최상단에 멈추면 잠금
+  useAnimatedReaction(
+    () => !lockedSV.value && !touching.value && !driving.value && Math.abs(scrollY.value) < 0.5,
+    (idle, prev) => {
+      if (idle && !prev) {
+        lockedSV.value = true;
+        runOnJS(setLocked)(true);
+      }
+    },
+  );
+  // 잠금 중 본문 끌기 밖의 이유로 스크롤 위치가 생기면 해제
+  // 다른 화면에 다녀오거나 접기로 내용이 바뀌어 최상단이 아닌 채로 다시 열린 경우
+  useAnimatedReaction(
+    () => lockedSV.value && mode.value === 0 && Math.abs(scrollY.value) >= 0.5,
+    (moved, prev) => {
+      if (moved && !prev) {
+        lockedSV.value = false;
+        runOnJS(setLocked)(false);
+      }
+    },
+  );
+  // 직접 스크롤의 본문 반영
+  useAnimatedReaction(() => manualY.value, (y) => { if (driving.value || mode.value === 2) scrollTo(scrollRef, 0, y, false); });
 
   // 처음부터 빠르게 출발해 끝에서 감속하는 닫힘
   const dismiss = useRef((ms: number) => {
@@ -99,6 +149,8 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
       if (!ready || shown.current) return;
       shown.current = true;
       scrollY.value = 0;
+      lockedSV.value = true;
+      setLocked(true);
       if (instant) pos.value = low;
       else pos.value = withSpring(low, OPEN_SPRING);
     } else if (shown.current) {
@@ -119,7 +171,7 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
     if (!tall && shown.current) pos.value = withSpring(low, SNAP_SPRING);
   }, [tall, low, pos]);
 
-  const { grip, body, native } = useMemo(() => {
+  const { grip, native, release, snap } = useMemo(() => {
     // 손을 뗀 속도(px/s)를 이어받는 스냅
     const snap = (to: number, velocityY = 0) => {
       'worklet';
@@ -140,7 +192,18 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
       else if (vy < -FLING) snap(high, velocityY);
       else snap(Math.abs(cur - low) <= Math.abs(cur - high) ? low : high, velocityY);
     };
-    const native = Gesture.Native().shouldCancelWhenOutside(false);
+    const native = Gesture.Native().shouldCancelWhenOutside(false)
+      .onBegin(() => {
+        touching.value = true;
+        // 직접 스크롤의 관성 중 새 터치는 네이티브 스크롤이 이어받음
+        if (driving.value) {
+          cancelAnimation(manualY);
+          driving.value = false;
+        }
+      })
+      .onFinalize(() => {
+        touching.value = false;
+      });
     // 손잡이·헤더: 세로 이동이면 버튼 위에서도 끌기
     const grip = Gesture.Pan()
       .activeOffsetY([-SLOP, SLOP])
@@ -155,50 +218,63 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
       })
       .onEnd((e) => release(e.velocityY))
       .onFinalize((_, ok) => { if (!ok) snap(stops.value.low); });
-    // 본문: 끌기 활성화 순간 최상단이고 아래로 끌면 시트, 그 밖은 스크롤. 손을 뗄 때까지 유지
-    // 시트 모드는 손잡이처럼 시트가 손가락을 따르고 목록은 맨 위에 고정
-    // 스크롤 모드는 시트를 건드리지 않아 맨 위 너머로 끌면 목록 위쪽 여백만 드러남
-    const body = Gesture.Pan()
-      .activeOffsetY([-SLOP, SLOP])
-      .simultaneousWithExternalGesture(native)
-      .onStart(() => {
-        atTop.value = scrollY.value <= 0;
-        mode.value = 0;
-      })
-      .onUpdate((e) => {
-        if (mode.value === 0) {
-          // iOS 는 활성화 순간 이동량을 0 으로 되돌려 방향은 활성화 뒤 첫 이동으로 판정
-          if (e.translationY === 0) return;
-          if (!(atTop.value && e.translationY > 0)) {
-            mode.value = 2;
-            return;
-          }
-          cancelAnimation(pos);
-          mode.value = 1;
-          start.value = pos.value;
+    return { grip, native, release, snap };
+  }, [pos, stops, start, touching, driving, manualY, dismiss]);
+
+  // 본문: 잠금 상태에서만 켜짐. 활성화 뒤 첫 이동이 아래면 시트, 위면 직접 스크롤
+  const body = useMemo(
+    () =>
+      Gesture.Pan()
+        .enabled(locked)
+        .activeOffsetY([-SLOP, SLOP])
+        .onStart((e) => {
+          mode.value = 0;
+          // iOS 는 활성화 순간 이동량이 0 으로 되돌아가고 웹은 활성화 거리가 남음
           startTy.value = e.translationY;
-          runOnJS(setLocked)(true);
-        }
-        if (mode.value !== 1) return;
-        const { high } = stops.value;
-        const raw = start.value - (e.translationY - startTy.value);
-        pos.value = raw > high ? high + rubber(raw - high) : Math.max(0, raw);
-        // 스크롤 잠금이 반영되기 전 프레임의 목록 고정
-        scrollTo(scrollRef, 0, 0, false);
-      })
-      .onEnd((e) => {
-        if (mode.value === 1) release(e.velocityY);
-      })
-      .onFinalize((_, ok) => {
-        if (mode.value !== 1) return;
-        mode.value = 0;
-        if (!ok) snap(stops.value.low);
-        runOnJS(setLocked)(false);
-      });
-    // 스크롤 쪽에도 선언해야 스크롤된 상태에서 시작한 끌기가 활성화됨(웹 실측)
-    native.simultaneousWithExternalGesture(body);
-    return { grip, body, native };
-  }, [pos, stops, start, startTy, atTop, mode, scrollY, scrollRef, dismiss]);
+        })
+        .onUpdate((e) => {
+          const dy = e.translationY - startTy.value;
+          if (mode.value === 0) {
+            if (dy === 0) return;
+            if (dy > 0) {
+              cancelAnimation(pos);
+              start.value = pos.value;
+              mode.value = 1;
+            } else {
+              manualY.value = scrollY.value;
+              start.value = scrollY.value;
+              mode.value = 2;
+            }
+          }
+          if (mode.value === 1) {
+            const { high } = stops.value;
+            const raw = start.value - dy;
+            pos.value = raw > high ? high + rubber(raw - high) : Math.max(0, raw);
+          } else {
+            manualY.value = Math.min(maxY.value, Math.max(0, start.value - dy));
+          }
+        })
+        .onEnd((e) => {
+          if (mode.value === 1) release(e.velocityY);
+          else if (mode.value === 2 && manualY.value > 0) {
+            // 손을 뗀 속도로 이어지는 관성. 그동안 네이티브 스크롤을 풀어 다음 터치가 이어받음
+            const g = glide(manualY.value, -e.velocityY, maxY.value);
+            if (g) {
+              driving.value = true;
+              manualY.value = withTiming(g.to, { duration: g.ms, easing: g.ease }, () => {
+                driving.value = false;
+              });
+            }
+            lockedSV.value = false;
+            runOnJS(setLocked)(false);
+          }
+        })
+        .onFinalize((_, ok) => {
+          if (mode.value === 1 && !ok) snap(stops.value.low);
+          mode.value = 0;
+        }),
+    [locked, release, snap, pos, stops, start, startTy, mode, scrollY, maxY, manualY, driving, lockedSV],
+  );
 
   const backdrop = useAnimatedStyle(() => ({
     opacity: interpolate(pos.value, [0, Math.max(stops.value.low, 1)], [0, 1], Extrapolation.CLAMP),
@@ -215,7 +291,7 @@ export function useSheetDrag({ open, onClose, tall, instant }: Options) {
   const onLayout = tall ? undefined : (h: number) => setFit(Math.round(h));
   // 시트 안 배경·뒤로가기 닫힘의 즉시 출발
   const closeNow = () => shown.current && !instant && dismiss(CLOSE_MS);
-  return { mounted, grip, body, native, scrollRef, scrollY, locked, backdrop, sheet, onLayout, closeNow };
+  return { mounted, grip, body, native, scrollY, maxY, scrollRef, locked, backdrop, sheet, onLayout, closeNow };
 }
 
 // 본문 목록의 스크롤 위치를 시트에 보고하고 통계용 콜백을 JS 에서 호출

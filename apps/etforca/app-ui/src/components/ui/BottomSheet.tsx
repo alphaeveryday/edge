@@ -10,33 +10,35 @@ import { useBottomGap } from './BottomBar';
 
 interface SheetScrollCtx {
   native: NativeGesture;
-  scrollRef?: AnimatedRef<Animated.ScrollView>;
   scrollY: { value: number };
+  maxY: { value: number };
+  scrollRef?: AnimatedRef<Animated.ScrollView>;
   locked: boolean;
   onSeen: (pct: number) => void;
 }
-const SheetScroll = createContext<SheetScrollCtx>({ native: Gesture.Native(), scrollY: { value: 0 }, locked: false, onSeen: () => {} });
+const SheetScroll = createContext<SheetScrollCtx>({ native: Gesture.Native(), scrollY: { value: 0 }, maxY: { value: 0 }, locked: false, onSeen: () => {} });
 
 // 맨 위에서 아래로 끌면 시트가 내려가는 시트 안 목록. 스크롤하다 맨 위에 닿은 뒤의 끌어내림은 위쪽 여백만 드러냄
 // 본 만큼의 비율을 시트에 보고
 export function SheetScrollView({ ref, ...props }: ScrollViewProps & { ref?: Ref<ScrollView> }) {
-  const { native, scrollRef, scrollY, locked, onSeen } = useContext(SheetScroll);
+  const { native, scrollY, maxY, scrollRef, locked, onSeen } = useContext(SheetScroll);
   const m = useRef({ y: 0, view: 0, content: 0 });
-  const report = () => m.current.content > 0 && m.current.view > 0 && onSeen(Math.min(100, Math.round(((m.current.y + m.current.view) / m.current.content) * 100)));
-  const onScroll = useSheetScroll(scrollY, (y) => { m.current.y = y; report(); });
+  const measure = () => { maxY.value = Math.max(0, m.current.content - m.current.view); };
   // 시트의 애니메이션 ref 와 호출부 ref 를 함께 연결
   const setRef = (r: Animated.ScrollView | null) => {
     scrollRef?.(r);
     if (typeof ref === 'function') ref(r as unknown as ScrollView);
     else if (ref) ref.current = r as unknown as ScrollView;
   };
+  const report = () => m.current.content > 0 && m.current.view > 0 && onSeen(Math.min(100, Math.round(((m.current.y + m.current.view) / m.current.content) * 100)));
+  const onScroll = useSheetScroll(scrollY, (y) => { m.current.y = y; report(); });
   return (
     <GestureDetector gesture={native}>
       <Animated.ScrollView
         ref={setRef}
         onScroll={onScroll}
-        onLayout={(e) => { m.current.view = e.nativeEvent.layout.height; report(); }}
-        onContentSizeChange={(_, h) => { m.current.content = h; report(); }}
+        onLayout={(e) => { m.current.view = e.nativeEvent.layout.height; measure(); report(); }}
+        onContentSizeChange={(_, h) => { m.current.content = h; measure(); report(); }}
         scrollEventThrottle={16}
         scrollEnabled={!locked}
         overScrollMode="never"
@@ -105,7 +107,7 @@ export function BottomSheet({ open, onClose, children, head, tall, padded = true
               </GestureDetector>
               <GestureDetector gesture={drag.body}>
                 <View style={tall && styles.body}>
-                  <SheetScroll.Provider value={{ native: drag.native, scrollRef: drag.scrollRef, scrollY: drag.scrollY, locked: drag.locked, onSeen: stats.onSeen }}>{last.current.children}</SheetScroll.Provider>
+                  <SheetScroll.Provider value={{ native: drag.native, scrollY: drag.scrollY, maxY: drag.maxY, scrollRef: drag.scrollRef, locked: drag.locked, onSeen: stats.onSeen }}>{last.current.children}</SheetScroll.Provider>
                 </View>
               </GestureDetector>
               <SheetGap />
