@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import PostHog from 'posthog-react-native';
 import { create } from 'zustand';
+import { setAdsCollection } from '@/lib/ads';
 import { useSession } from '@/store/session';
 
 type Props = Record<string, string | number | boolean>;
@@ -34,6 +35,12 @@ export const useAnalyticsOn = create<{ on: boolean; setOn: (on: boolean) => void
   setOn: (on) => {
     set({ on });
     if (on) client?.optIn(); else client?.optOut();
+    setAdsCollection(on);
   },
 }));
-client?.ready().then(() => useAnalyticsOn.setState({ on: !client.optedOut }));
+// 이전 버전에서 꺼 둔 설정을 광고 SDK 에도 적용
+client?.ready().then(() => {
+  const on = !client.optedOut;
+  useAnalyticsOn.setState({ on });
+  if (!on) setAdsCollection(on);
+});
