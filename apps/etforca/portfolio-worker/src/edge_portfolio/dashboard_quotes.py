@@ -42,16 +42,20 @@ def enqueue(db, since):
 
 def cached(db, since, day):
     from .dashboard_work import price_end, held_history_missing
-    from .market_data import decode_prices
+    from .market_data import decode_prices, year_before
     records = {}
     if not since:
         return records
-    # Only current rows, read as text and parsed one at a time: holding every whole archive (KO 3 MB) as jsonb dict
-    # trees at once took the worker past its 768 MB limit (2026-10-25 OOM loop).
+    # A valuation reads the last close, splits since the holding's basis dates, and 12 months of dividends
+    # (dividend_observation needs a row within a week of a year back). The database cuts each archive to that window:
+    # parsing whole archives (KO 3 MB, decades of days) for every valuation, several a second, took the worker past
+    # its 768 MB limit (2026-10-25 OOM loop).
     ends = {key: price_end(key, day) for key in since}
-    for row in db.execute('''SELECT instrument,payload::text AS payload FROM portfolio_dashboard_prices p
-            JOIN unnest(%s::text[],%s::date[]) c(instrument,day) USING(instrument,day)
-            WHERE p.payload->>'actions_checked_on'=%s''', (list(ends), list(ends.values()), str(day))):
+    cuts = [str(min(since[key], year_before(end)) - timedelta(days=14)) for key, end in ends.items()]
+    for row in db.execute('''SELECT instrument,jsonb_set(payload,'{frame}',coalesce((SELECT jsonb_agg(e ORDER BY n)
+                FROM jsonb_array_elements(payload->'frame') WITH ORDINALITY f(e,n) WHERE e->>'date'>=c.cut),'[]'))::text AS payload
+            FROM portfolio_dashboard_prices p JOIN unnest(%s::text[],%s::date[],%s::text[]) c(instrument,day,cut) USING(instrument,day)
+            WHERE p.payload->>'actions_checked_on'=%s''', (list(ends), list(ends.values()), cuts, str(day))):
         key = row['instrument']
         end = ends[key]
         record = decode_prices(row['payload'])
