@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+import re
+import unicodedata
 from datetime import date
 from datetime import datetime, timezone
 
@@ -25,8 +27,13 @@ _FACT_COLUMNS = (
     "fact_id", "document_id", "rcept_no", "report_date", "available_at",
     "supplier_instrument_id", "customer_instrument_id", "counterparty_raw_name",
     "contract_object_concept_id", "contract_object_name", "contract_amount_krw",
-    "contract_start_date", "contract_end_date",
+    "contract_start_date", "contract_end_date", "issuer_actor_id", "is_correction",
+    "correction_target_filed_date", "contract_date", "parser_version",
 )
+
+# 정정 열(is_correction·원공시 제출일)은 supply-v2 정제부터 생긴다. 그 전 판본 fact 는 정정공시도
+# is_correction=FALSE 라, 그대로 조립하면 정정이 새 계약의 첫 보도로 스레드에 고정된다.
+_LINEAGE_PARSERS = frozenset({"supply-v2"})
 
 
 def _date_text(value) -> str | None:
@@ -52,7 +59,9 @@ def fetch_facts(conn, *, from_date: str | None = None,
             "SELECT sc.fact_id, df.document_id, d.source_document_id, dd.report_date,"
             " df.available_at, supplier.instrument_id, customer.instrument_id,"
             " sc.counterparty_raw_name, sc.contract_object_concept_id, ce.display_name,"
-            " sc.contract_amount_krw, sc.contract_start_date, sc.contract_end_date"
+            " sc.contract_amount_krw, sc.contract_start_date, sc.contract_end_date,"
+            " dd.issuer_actor_id, sc.is_correction, sc.correction_target_filed_date,"
+            " sc.contract_date, dd.parser_version"
             " FROM supply_contract_fact sc"
             " JOIN disclosure_fact df ON df.fact_id = sc.fact_id"
             " JOIN disclosure_document dd ON dd.document_id = df.document_id"
@@ -68,6 +77,121 @@ def fetch_facts(conn, *, from_date: str | None = None,
             tuple(params),
         )
         return [dict(zip(_FACT_COLUMNS, row)) for row in cur.fetchall()]
+
+
+def _norm_name(value) -> str:
+    """상대방·계약명 비교용 — 공백·괄호·법인 표기를 지운다."""
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    text = re.sub(r"\(주\)|㈜|주식회사|\(株\)", "", text)
+    return re.sub(r"[\s()\[\],.·ㆍ]", "", text).lower()
+
+
+_MAX_CORRECTION_HOPS = 5
+
+
+def _filings_on(conn, targets: set[tuple]) -> dict[tuple, list[dict]]:
+    """(발행사, 제출일) 쌍마다 그날 제출된 공급계약 공시(원공시·정정 모두)를 읽는다."""
+    found: dict[tuple, list[dict]] = {}
+    if not targets:
+        return found
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT dd.issuer_actor_id, dd.report_date, d.source_document_id, sc.contract_date,"
+            " sc.counterparty_raw_name, ce.display_name, sc.is_correction,"
+            " sc.correction_target_filed_date"
+            " FROM supply_contract_fact sc"
+            " JOIN disclosure_fact df ON df.fact_id = sc.fact_id AND df.is_current"
+            " JOIN disclosure_document dd ON dd.document_id = df.document_id"
+            " JOIN document d ON d.document_id = df.document_id"
+            " LEFT JOIN entity ce ON ce.entity_id = sc.contract_object_concept_id"
+            " WHERE (dd.issuer_actor_id, dd.report_date)"
+            " IN (SELECT * FROM unnest(%s::text[], %s::date[]))",
+            ([t[0] for t in targets], [t[1] for t in targets]),
+        )
+        for (issuer, report_date, rcept_no, contract_date, counterparty, object_name,
+             is_correction, target) in cur.fetchall():
+            found.setdefault((issuer, _date_text(report_date)), []).append({
+                "rcept_no": rcept_no, "contract_date": _date_text(contract_date),
+                "counterparty": _norm_name(counterparty), "object": _norm_name(object_name),
+                "is_correction": bool(is_correction), "target": _date_text(target)})
+    return found
+
+
+def _pick(candidates: list[dict], fact: dict) -> dict | None:
+    """같은 날 공시 여럿 중 정정 대상 하나를 계약일·상대방·계약명으로 고른다. 못 고르면 None."""
+    for field, value in (("contract_date", _date_text(fact.get("contract_date"))),
+                         ("counterparty", _norm_name(fact.get("counterparty_raw_name"))),
+                         ("object", _norm_name(fact.get("contract_object_name")))):
+        if len(candidates) <= 1:
+            break
+        narrowed = [c for c in candidates if value and c[field] == value]
+        candidates = narrowed or candidates
+    if len(candidates) > 1:
+        # 같은 계약의 원공시와 앞선 정정이 같은 날 함께 있으면 원공시가 계보의 뿌리다
+        originals = [c for c in candidates if not c["is_correction"]]
+        candidates = originals if len(originals) == 1 else candidates
+    if len(candidates) != 1:
+        return None
+    chosen = candidates[0]
+    # 후보가 하나뿐이어도 같은 계약이라는 근거가 있어야 붙인다 — 그날 다른 계약만 DB 에 있으면(정정 대상
+    # 원공시가 게이트에서 빠진 경우 등) 엉뚱한 계약에 붙는다. 비교할 값이 양쪽에 있는 항목 중 하나라도
+    # 맞아야 하고, 비교할 값이 하나도 없으면 받아들인다.
+    comparable = [(field, value) for field, value in (
+        ("contract_date", _date_text(fact.get("contract_date"))),
+        ("counterparty", _norm_name(fact.get("counterparty_raw_name"))),
+        ("object", _norm_name(fact.get("contract_object_name")))) if value and chosen[field]]
+    if comparable and not any(chosen[field] == value for field, value in comparable):
+        return None
+    return chosen
+
+
+def _external_lineage(issuer, target, fact) -> str:
+    """원공시를 DB 에서 못 찾은 정정의 계보 키 — 발행사·원공시 제출일·계약(수주)일자.
+
+    상대방은 넣지 않는다. 공시유보 해제 정정은 익명 상대방을 실명으로 바꾸므로, 상대방을 넣으면 같은
+    원계약의 정정이 둘로 갈라진다. 대신 같은 날 같은 계약일로 공시한 서로 다른 계약의 정정은 합쳐질 수
+    있다(실측: 원공시 175건 중 같은 발행사·제출일·계약일 쌍 5건). 둘 다 새 계약으로 세지 않는다는
+    점은 같다.
+    """
+    return "external={}|{}|{}".format(issuer, target, _date_text(fact.get("contract_date")))
+
+
+def resolve_lineage(conn, facts: list[dict]) -> None:
+    """fact 마다 계약 계보 정체성(`lineage`)을 단다 — 원공시는 자기 접수번호, 정정공시는 원공시 접수번호.
+
+    DART 는 정정공시에 새 접수번호를 주고 원공시 접수번호를 알려 주지 않는다. 단서는 정정공시 머리표의
+    '정정관련 공시서류제출일'뿐인데, 이 날짜는 원공시가 아니라 **바로 앞 정정**의 제출일일 때도 있다
+    (실측: 2026-08~10 raw 정정 중 대상일 공시가 또 정정인 경우 26건). 그래서 같은 발행사·같은 제출일의
+    공시를 찾고, 그것이 정정이면 그 정정의 대상일로 다시 거슬러 올라간다(최대 5단계). 같은 날 공시가
+    여럿이면 계약일·상대방·계약명으로 좁히고, 하나가 남아도 그 셋 중 하나는 맞아야 붙인다. 원공시까지
+    못 가면(수집 전 공시, 수집 누락, 판별 불가) 외부 계보 키(`_external_lineage`)를 쓴다 — 같은 원계약의
+    정정끼리는 묶이고 새 계약 체결로 세지 않는다. 원공시가 나중에 백필돼도 이미 연결된 외부 키를 옮기지는
+    않는다.
+    """
+    pending = []
+    for fact in facts:
+        if fact.get("is_correction"):
+            pending.append((fact, fact.get("issuer_actor_id"),
+                            _date_text(fact.get("correction_target_filed_date")), {fact.get("rcept_no")}))
+        else:
+            fact["lineage"] = f"rcept={fact['rcept_no']}"
+    for _hop in range(_MAX_CORRECTION_HOPS):
+        if not pending:
+            break
+        found = _filings_on(conn, {(issuer, target) for _f, issuer, target, _seen in pending if target})
+        still = []
+        for fact, issuer, target, seen in pending:
+            candidates = [c for c in found.get((issuer, target), []) if c["rcept_no"] not in seen]
+            chosen = _pick(candidates, fact) if target else None
+            if chosen is None:
+                fact["lineage"] = _external_lineage(issuer, target, fact)
+            elif not chosen["is_correction"]:
+                fact["lineage"] = f"rcept={chosen['rcept_no']}"
+            else:
+                still.append((fact, issuer, chosen["target"], seen | {chosen["rcept_no"]}))
+        pending = still
+    for fact, issuer, target, _seen in pending:
+        fact["lineage"] = _external_lineage(issuer, target, fact)
 
 
 def to_canonical_event(fact: dict) -> dict:
@@ -135,6 +259,14 @@ def to_canonical_event(fact: dict) -> dict:
         "available_at": str(fact["available_at"]), "entity_id": supplier,
         "document_id": fact["document_id"], "rcept_no": rcept_no,
         "arguments": arguments, "measures": measures, "role_values": role_values,
+        # 공시 계약 스레드는 상대방 actor 가 아니라 계보로 묶는다 — 상대방은 익명·비상장이 대부분이라
+        # (2026-10 dev: CUSTOMER actor 연결 12/292) identity 역할 키로는 스레드가 서지 않는다.
+        "thread_identity": fact.get("lineage") or f"rcept={rcept_no}",
+        "is_correction": bool(fact.get("is_correction")),
+        # 계보의 뿌리(원공시 자신)는 처리 순서와 무관하게 그 계보의 첫 보도다 — 정정이 먼저 스레드돼도
+        # 원공시가 재보도로 밀리지 않게.
+        "is_lineage_root": not fact.get("is_correction")
+        and (fact.get("lineage") or f"rcept={rcept_no}") == f"rcept={rcept_no}",
     }
 
 
@@ -160,6 +292,9 @@ def persist_facts(conn, facts: list[dict],
     """
     events = []
     skipped_required = 0
+    awaiting = [f for f in facts if f.get("parser_version") not in _LINEAGE_PARSERS]
+    facts = [f for f in facts if f.get("parser_version") in _LINEAGE_PARSERS]
+    resolve_lineage(conn, facts)
     for fact in facts:
         try:
             events.append(to_canonical_event(fact))
@@ -174,17 +309,21 @@ def persist_facts(conn, facts: list[dict],
                 })
     if not events:
         return {"created": 0, "already": 0, "rethreaded": 0, "unknown_thread": 0,
-                "skipped_required": skipped_required}
+                "skipped_required": skipped_required, "awaiting_reparse": len(awaiting)}
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT se.source_event_id, etl.novelty_status FROM source_event se"
+            "SELECT se.source_event_id, etl.novelty_status, et.thread_key FROM source_event se"
             " LEFT JOIN event_thread_link etl ON etl.source_event_id = se.source_event_id"
+            " LEFT JOIN event_thread et ON et.thread_id = etl.thread_id"
             " WHERE se.source_event_id = ANY(%s)",
                     ([event["source_event_id"] for event in events],))
-        existing = {str(row[0]): row[1] for row in cur.fetchall()}
+        existing = {str(row[0]): (row[1], row[2]) for row in cur.fetchall()}
     pending = [event for event in events if event["source_event_id"] not in existing]
-    rethread = [event for event in events
-                if existing.get(event["source_event_id"]) == "UNKNOWN"]
+    # UNKNOWN 과 함께, 계보 키 도입 전 identity 역할 키로 묶인 사건도 다시 묶는다 — 남겨 두면 그 원공시의
+    # 정정만 계보 스레드로 가서 같은 계약이 두 스레드로 갈라진다.
+    rethread = [event for event in events if event["source_event_id"] in existing
+                and (existing[event["source_event_id"]][0] == "UNKNOWN"
+                     or "||lineage=" not in (existing[event["source_event_id"]][1] or ""))]
     if not pending:
         grounded = [
             (event["source_event_id"], argument["role_code"], argument["entity_id"],
@@ -214,7 +353,7 @@ def persist_facts(conn, facts: list[dict],
         unknown = thread_events(conn, rethread) if rethread else 0
         return {"created": 0, "already": len(events), "rethreaded": len(rethread),
                 "unknown_thread": unknown,
-                "skipped_required": skipped_required}
+                "skipped_required": skipped_required, "awaiting_reparse": len(awaiting)}
 
     with conn.cursor() as cur:
         cur.executemany(
@@ -302,7 +441,7 @@ def persist_facts(conn, facts: list[dict],
     unknown = thread_events(conn, pending + rethread)
     return {"created": len(pending), "already": len(events) - len(pending),
             "rethreaded": len(rethread), "unknown_thread": unknown,
-            "skipped_required": skipped_required}
+            "skipped_required": skipped_required, "awaiting_reparse": len(awaiting)}
 
 
 def run(storage: Storage, run_id: str, *, db: DbConfig,
@@ -318,7 +457,7 @@ def run(storage: Storage, run_id: str, *, db: DbConfig,
     started_at = datetime.now(timezone.utc)
     facts_read = 0
     result = {"created": 0, "already": 0, "rethreaded": 0, "unknown_thread": 0,
-              "skipped_required": 0}
+              "skipped_required": 0, "awaiting_reparse": 0}
     failures = []
     skipped_facts: list[dict] = []
     try:

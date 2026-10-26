@@ -1062,3 +1062,23 @@ def test_run_log_records_what_happened(tmp_path, monkeypatch):
     assert log["documents_created"] == 2
     assert log["facts_written"] == 2
     assert log["created_rows_sample"][0]["rcept_no"] in {"R1", "R2"}
+
+
+def test_supply_child_carries_correction_lineage_columns():
+    """WHY: 정정공시가 원공시 계보에 붙으려면 정정 여부·원공시 제출일이 DB fact 까지 와야 한다.
+    supply-v1 canonical 행(정정 열 없음)은 False 로 들어가고, 계보 조립은 그 판본을 미룬다."""
+    from data_pipeline.steps.load_disclosure import _supply_child
+    base = {"counterparty_raw": "고객사", "amount_krw": 1, "ratio_pct": 1.0,
+            "contract_start": "2026-01-01", "contract_end": "2026-12-31"}
+
+    reason, (cols, vals) = _supply_child({**base, "report_nm": "[기재정정]단일판매ㆍ공급계약체결",
+                                          "is_correction": True, "correction_target_filed_date": "2026-08-09",
+                                          "correction_reason": "계약금액 변경", "contract_date": "2026-08-08"})
+    row = dict(zip(cols, vals))
+    assert reason is None
+    assert (row["is_correction"], row["correction_target_filed_date"], row["contract_date"]) == (
+        True, "2026-08-09", "2026-08-08")
+
+    _, (cols, vals) = _supply_child(base)   # supply-v1 행: 정정 열·보고서명 없음 → 조립이 parser_version 으로 미룬다
+    assert dict(zip(cols, vals))["is_correction"] is False
+    assert _supply_child({**base, "contract_date": "2026/08/08"})[0] == "bad_date_format"

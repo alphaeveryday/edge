@@ -1354,6 +1354,12 @@ def _novelty(event: dict, prior: int, thread_stage: str | None,
     진행을 구분 못 했다(ALPHA-545). `gap`(뉴스만 — 같은 스레드 직전 보도와의 간격)이 하루를
     넘으면 단계 정보가 없어도 FOLLOW_UP_STAGE 다(ALPHA-508).
     """
+    if event.get("is_correction"):
+        # 정정공시는 원공시가 DB 에 없어도(prior=0) 새 사건의 첫 보도가 아니다.
+        return "CORRECTION"
+    if event.get("is_lineage_root"):
+        # 계보의 뿌리 공시(원공시)는 정정이 먼저 스레드됐어도(prior>0) 첫 보도다.
+        return "FIRST_IN_THREAD"
     if prior == 0:
         return "FIRST_IN_THREAD"
     predicate = str(event.get("predicate_code") or "").upper()
@@ -1434,6 +1440,10 @@ def thread_events(conn, events: list[dict]) -> int:
             (unknown.append((event, [_NO_COMPANY])) if base is None
              else news_keyed.append((event, base)))
             continue
+        if event.get("thread_identity"):
+            # 조립 스텝이 계보를 직접 준 공시(공급계약: 원공시 접수번호)는 identity 역할 대신 그 계보로 묶는다.
+            keyed.append((event, f"event_type_id={event['event_type_code']}||lineage={event['thread_identity']}"))
+            continue
         thread_key, missing = _thread_key(event["event_type_code"], values)
         (unknown.append((event, missing)) if thread_key is None
          else keyed.append((event, thread_key)))
@@ -1498,7 +1508,8 @@ def thread_events(conn, events: list[dict]) -> int:
                       event.get("source_class", "NEWS"), novelty,
                       event.get("link_type", "TITLE_EVENT"),
                       evaluated_at, None))
-        snapshots.append((event["source_event_id"], thread_id, prior, None, prior == 0,
+        snapshots.append((event["source_event_id"], thread_id, prior, None,
+                          novelty == "FIRST_IN_THREAD",
                           None, evaluated_at))
 
     for event, missing in unknown:
