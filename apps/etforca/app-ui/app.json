@@ -55,10 +55,12 @@
             "extraMavenRepos": ["https://devrepo.kakao.com/nexus/content/groups/public/"]
           },
           "ios": {
-            "useFrameworks": "static"
+            "useFrameworks": "dynamic",
+            "buildReactNativeFromSource": true
           }
         }
       ],
+      "./plugins/withKakaoAuthUrl.js",
       [
         "@react-native-seoul/kakao-login",
         {}
