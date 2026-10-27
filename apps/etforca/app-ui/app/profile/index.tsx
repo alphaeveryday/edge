@@ -4,14 +4,12 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { isCancelledError, useMutation } from '@tanstack/react-query';
 import { api } from '@/api';
 import { Avatar, Chevron, Dialog, ListRow, NavBar, PageScroll, ToggleRow } from '@/components/ui';
 import { useMe } from '@/features/community/queries';
-import { useOnboarding } from '@/store/onboarding';
 import { track } from '@/lib/analytics';
 import { useSession } from '@/store/session';
-import { useWatchGroup } from '@/store/watch';
 import { openPrivacy, openTerms } from '@/lib/links';
 import { useToast } from '@/store/toast';
 import { createStyles, useColors } from '@/theme/theme';
@@ -25,19 +23,21 @@ export default function Profile() {
   const router = useRouter();
   const { top } = useSafeAreaInsets();
   const { data: me } = useMe();
-  const qc = useQueryClient();
   const logout = useSession((s) => s.logout);
-  const resetOnboarding = useOnboarding((s) => s.reset);
   const toast = useToast((s) => s.show);
   // 로그아웃은 비회원 홈, 탈퇴는 온보딩 복귀
-  const leave = (msg: string, restart: boolean) => { qc.resetQueries(); logout(restart); resetOnboarding(); useWatchGroup.getState().setGroup('base');
+  const leave = (msg: string, restart: boolean) => { logout(restart);
     if (router.canDismiss()) router.dismissAll();
     router.replace(restart ? '/onboarding/intro' : '/(tabs)/home'); toast(msg); };
   // 회원 토큰의 홈 재조회를 막는 토큰 폐기 뒤 이동
-  const signOut = async () => { await api.auth.logout().catch(() => undefined); leave('로그아웃했어요', false); };
+  const signOut = async () => {
+    try { await api.auth.logout(); } catch (e) { if (isCancelledError(e)) return; }
+    leave('로그아웃했어요', false);
+  };
   const [notif, setNotif] = useState(true);
   const [delOpen, setDelOpen] = useState(false);
   const del = useMutation({
+    meta: { sessionTransition: true },
     mutationFn: () => api.member.deleteAccount(),
     onSuccess: () => { track('account_deleted'); setDelOpen(false); leave('계정을 지웠어요', true); },
   });

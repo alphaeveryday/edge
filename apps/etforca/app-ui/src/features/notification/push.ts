@@ -13,6 +13,8 @@ Notifications.setNotificationHandler({
 });
 
 const enabled = process.env.EXPO_PUBLIC_API_MODE === 'http';
+// 이전 계정의 서버 쓰기가 끝난 뒤 현재 계정의 기기 연결을 등록한다.
+let registering: Promise<void> = Promise.resolve();
 
 // ask 가 거짓이면 권한이 이미 있을 때만 등록
 // 실패는 알림함이 기록이라 조용히 무시
@@ -28,7 +30,8 @@ export async function registerPush(ask: boolean) {
     }
     const projectId = Constants.expoConfig?.extra?.eas?.projectId as string | undefined;
     const { data } = await Notifications.getExpoPushTokenAsync({ projectId });
-    await api.notification.pushToken(data);
+    registering = registering.catch(() => undefined).then(() => api.notification.pushToken(data));
+    await registering;
   } catch (e) {
     console.warn('push register failed', e);
   }
@@ -39,9 +42,10 @@ export async function registerPush(ask: boolean) {
 export function usePush() {
   const restored = useSession((s) => s.restored);
   const loggedIn = useSession((s) => s.loggedIn);
+  const revision = useSession((s) => s.revision);
   const response = Notifications.useLastNotificationResponse();
   const handled = useRef<string | null>(null);
-  useEffect(() => { if (restored) registerPush(false); }, [restored, loggedIn]);
+  useEffect(() => { if (restored) registerPush(false); }, [restored, loggedIn, revision]);
   useEffect(() => {
     if (!restored || !response) return;
     const id = response.notification.request.identifier;

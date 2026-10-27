@@ -7,7 +7,7 @@ import * as m from './map';
 import { tokens } from './storage';
 
 interface WireAuth { accessToken: string; refreshToken: string; me: m.WireMe; guestMapped?: boolean; newMember?: boolean }
-const signIn = async (r: WireAuth) => { await tokens.save(r.accessToken, r.refreshToken); return m.me(r.me); };
+const signIn = async (r: WireAuth, version: number) => { await tokens.replace(r.accessToken, r.refreshToken, 'login', version); return m.me(r.me); };
 
 // 서버에 없는 최근 본 ETF의 메모리 보관
 let recent: EtfSummary[] = [];
@@ -121,7 +121,9 @@ export const httpClient: ApiClient = {
     block: (handle) => request<void>('PUT', `/blocks/${encodeURIComponent(handle)}`),
     // 현재 좋아요 여부 조회 후 추가와 취소 분기
     toggleLike: async (id) => {
+      const version = tokens.version();
       const cur = await request<m.WirePost>('GET', `/posts/${id}`);
+      tokens.assertCurrent(version);
       return post(await request<m.WirePost>(cur.liked ? 'DELETE' : 'PUT', `/posts/${id}/like`));
     },
     voteStat: async (code) => {
@@ -142,20 +144,30 @@ export const httpClient: ApiClient = {
     me: async () => m.me(await request<m.WireMe>('GET', '/me')),
     update: async (patch) => m.me(await request<m.WireMe>('PATCH', '/me', { body: { nick: patch.nick } })),
     acceptDisclaimer: async () => m.me(await request<m.WireMe>('POST', '/me/disclaimer')),
-    deleteAccount: async () => { await request<void>('DELETE', '/me'); await tokens.clear(); },
+    deleteAccount: async () => { const version = tokens.version(); await request<void>('DELETE', '/me'); await tokens.clear('logout', version); },
   },
   auth: {
-    login: async (email, password) => signIn(await request<WireAuth>('POST', '/auth/login', { body: { email, password }, auth: 'device' })),
+    login: async (email, password) => {
+      const version = tokens.version();
+      return signIn(await request<WireAuth>('POST', '/auth/login', { body: { email, password }, auth: 'device' }), version);
+    },
     sendSignupCode: (email) => request<void>('POST', '/auth/signup/code', { body: { email }, auth: false }),
-    signup: async (input) => signIn(await request<WireAuth>('POST', '/auth/signup', { body: input, auth: 'device' })),
+    signup: async (input) => {
+      const version = tokens.version();
+      return signIn(await request<WireAuth>('POST', '/auth/signup', { body: input, auth: 'device' }), version);
+    },
     social: async (input) => {
+      const version = tokens.version();
       const r = await request<WireAuth>('POST', '/auth/social', { body: input, auth: 'device' });
-      return { me: await signIn(r), newMember: !!r.newMember };
+      return { me: await signIn(r, version), newMember: !!r.newMember };
     },
     requestPasswordReset: (email) => request<void>('POST', '/auth/password-reset', { body: { email }, auth: false }),
     confirmPasswordReset: (email, code, newPassword) => request<void>('POST', '/auth/password-reset/confirm', { body: { email, code, newPassword }, auth: false }),
     logout: async () => {
-      try { await request<void>('POST', '/auth/logout'); } finally { await tokens.clear(); }
+      const version = tokens.version();
+      try { await request<void>('POST', '/auth/logout'); } finally {
+        if (tokens.version() === version) await tokens.clear('logout', version);
+      }
     },
   },
   notification: {

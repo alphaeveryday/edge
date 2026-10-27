@@ -16,7 +16,13 @@ import { NOTICE_LINES, NOTICE_SUB } from './copy';
 export function DisclaimerSheet() {
   const qc = useQueryClient();
   const { data: me } = useMe();
-  const accept = useMutation({ mutationFn: () => api.member.acceptDisclaimer(), onSuccess: (m) => qc.setQueryData(['member', 'me'], m) });
+  const accept = useMutation({
+    onMutate: () => useSession.getState().revision,
+    mutationFn: () => api.member.acceptDisclaimer(),
+    onSuccess: (m, _variables, revision) => {
+      if (revision === useSession.getState().revision) qc.setQueryData(['member', 'me'], m);
+    },
+  });
   const { loggedIn, restored, guestDisclaimed, acceptGuestDisclaimer } = useSession();
   const [dismissed, setDismissed] = useState(false);
   // 탭처럼 띄워 둔 화면의 재진입 시 다시 표시
