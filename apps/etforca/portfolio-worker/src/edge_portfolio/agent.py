@@ -230,12 +230,17 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     execution_feasible = set()
     accepted_report = {}
     accepted_final = None
+    accepted_checks = []
     accepted_search = None
     recommendation_reconciled = False
     reconciliation_draft = None
     retained_prior_text = False
     answer_repairs = 0
     termination_reason = 'COMPLETED'
+    output_failure = None
+
+    def keeps_accepted_report():
+        return role == 'opinion' and accepted_final and accepted_final.recommendation and optimizer.result == accepted_search
 
     def checkpoint():
         if on_checkpoint:
@@ -317,18 +322,21 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                 elif finalizing:
                     messages.append({'role': 'user', 'content': '현재 역할의 JSON을 확보한 자료로 완성하세요. 이 역할의 추가 도구 호출은 종료합니다. 최종 의견 역할이라면 고객 제약을 통과한 추천과 명료한 결론을 우선 내고 확인하지 못한 부가 수치만 비워 두세요. 검증에 실패한 후보나 수치를 만들어 내지 마세요.'})
                 context_bytes = len(json.dumps(messages, ensure_ascii=False).encode('utf8'))
-                limit_reason = 'MODEL_CALL_BUDGET' if calls > MAX_MODEL_CALLS else 'MODEL_CONTEXT_BUDGET' if context_bytes > MAX_CONTEXT_BYTES else None
+                # A recovery round that cannot produce valid output ends like an exhausted budget: the accepted report stands.
+                limit_reason = output_failure or ('MODEL_CALL_BUDGET' if calls > MAX_MODEL_CALLS else 'MODEL_CONTEXT_BUDGET' if context_bytes > MAX_CONTEXT_BYTES else None)
                 if limit_reason:
                     calls -= 1
-                    emit('limit_reached', budget='model_calls' if limit_reason == 'MODEL_CALL_BUDGET' else 'context_bytes',
-                         used=calls if limit_reason == 'MODEL_CALL_BUDGET' else context_bytes,
-                         limit=MAX_MODEL_CALLS if limit_reason == 'MODEL_CALL_BUDGET' else MAX_CONTEXT_BYTES)
-                    if role == 'opinion' and accepted_final and accepted_final.recommendation and optimizer.result == accepted_search:
+                    if not output_failure:
+                        emit('limit_reached', budget='model_calls' if limit_reason == 'MODEL_CALL_BUDGET' else 'context_bytes',
+                             used=calls if limit_reason == 'MODEL_CALL_BUDGET' else context_bytes,
+                             limit=MAX_MODEL_CALLS if limit_reason == 'MODEL_CALL_BUDGET' else MAX_CONTEXT_BYTES)
+                    if keeps_accepted_report():
                         published = deepcopy(accepted_report)
                         sections = published['sections']
                         if scenario_result is not None:
                             published['scenarios'] = deepcopy(scenario_result)
                         final = accepted_final
+                        checks = deepcopy(accepted_checks)
                         if reconciliation_draft is not None:
                             from .completion import retain_research
                             try:
@@ -369,7 +377,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     structured_repairs += 1
                     emit('validation_failed', role=role, attempt=structured_repairs, code=str(error))
                     if structured_repairs > 2:
-                        raise
+                        if not keeps_accepted_report():
+                            raise
+                        output_failure = str(error)
+                        continue
                     structured_retry = True
                     messages.append({'role': 'user', 'content':
                         '아직 필요한 계산·조사를 허용된 도구로 수행하세요. 보고서 제출은 그다음에 합니다.' if required_tools else
@@ -388,7 +399,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                     structured_retry = True
                     emit('validation_failed', role=role, attempt=structured_repairs, code='MODEL_TRUNCATED')
                     if structured_repairs > 2:
-                        raise ValueError("MODEL_TRUNCATED")
+                        if not keeps_accepted_report():
+                            raise ValueError("MODEL_TRUNCATED")
+                        output_failure = 'MODEL_TRUNCATED'
+                        continue
                     messages.append({'role': 'user', 'content': '응답이 길이 한도로 잘렸습니다. 이미 성공한 도구 결과는 유지하고 필수 답변만 짧은 JSON으로 다시 작성하세요.'})
                     continue
                 message = choice["message"]
@@ -650,6 +664,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             published['completion']['reasons'].append(published['optimization']['reason'])
                         accepted_report = deepcopy({**published, 'sections': sections})
                         accepted_final = final.model_copy(deep=True)
+                        accepted_checks = deepcopy(checks)
                         reconciliation_draft = None
                         accepted_search = deepcopy(optimizer.result)
                         completion = published['completion']
@@ -731,7 +746,10 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                          code='OUTPUT_JSON' if isinstance(error, json.JSONDecodeError) else 'OUTPUT_SCHEMA' if isinstance(error, ValidationError) else 'OUTPUT_CONTRACT',
                          **(json_error_location(error, schema) if isinstance(error, json.JSONDecodeError) else {}))
                     if attempt > limit:
-                        raise ValueError("OUTPUT_INVALID: " + str(error)[:500]) from error
+                        if not keeps_accepted_report():
+                            raise ValueError("OUTPUT_INVALID: " + str(error)[:500]) from error
+                        output_failure = 'OUTPUT_INVALID'
+                        continue
                     low, high = LIMITS[role]
                     messages.append({"role": "user", "content": f"출력 검증 실패: {str(error)[:400]}. 현재 역할의 JSON을 한 번 수정하세요. 본문은 {(low + high) // 2}자 목표, 최대 {high}자. 근거는 실제 도구가 준 source_id와 passage_id를 고르세요. 등록 근거가 없는 질문 해석 단계는 evidence: []로 고치세요."})
                     if validation_step == 'execution_feasibility' and execution_rejection:
