@@ -215,3 +215,58 @@ async def test_research_limits_leave_a_valid_recommendation_publishable(monkeypa
         assert 'RECOMMENDATION_TEXT_RETAINED' in result['completion']['reasons']
     if exhaustion in {'invalid_draft_context', 'oversized_draft_context'}:
         assert any(event['event'] == 'research_draft_rejected' for event in result['diagnostics']['events'])
+
+
+@pytest.mark.parametrize('failure', ['broken_json', 'truncated', 'constraint_violation', 'no_accepted_report'])
+async def test_failed_recovery_round_keeps_the_accepted_report(monkeypatch, failure):
+    # Production 901d0f9d/37149f49: a validated report was accepted, the optional research recovery round then
+    # submitted broken JSON three times, and the whole analysis failed. The customer must get the accepted report.
+    import json
+    from edge_portfolio.agent import run_analysis
+    from edge_portfolio.contracts import AnalysisInput
+    from test_agent import Evidence
+    class CandidateSearch:
+        def __init__(self, *_):
+            self.result = {'status': 'available', 'candidates': [{'candidate_id': 'candidate-1'}]}
+            self.batches = {'first', 'alternative'}
+        def validate(self, final):
+            return self.result['candidates'][0] if final.recommendation else None
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', CandidateSearch)
+    async def enrich(*_): pass
+    monkeypatch.setattr('edge_portfolio.agent.enrich_report', enrich)
+    stages, opinion_calls, events = [], [], []
+    def constraint_checks(*_):
+        # Recovery drafts break a mandatory constraint; the published checks must stay those of the accepted report.
+        status = 'pass' if len(opinion_calls) == 1 or failure != 'constraint_violation' else 'fail'
+        return [{'constraint': 1, 'kind': 'no_sell', 'source': '매도 없이', 'status': status, 'reason': None}]
+    monkeypatch.setattr('edge_portfolio.agent.check_constraints', constraint_checks)
+    async def model(payload):
+        role = stages[-1]
+        content = final_payload() if role == 'opinion' else final_payload()[role]
+        if role == 'question':
+            content['decision'] = {}
+        if role != 'opinion':
+            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+        opinion_calls.append(1)
+        content['selected_candidate_id'] = 'candidate-1'
+        if (len(opinion_calls) == 1 and failure != 'no_accepted_report') or failure == 'constraint_violation':
+            return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)}}]}
+        if failure == 'truncated':
+            return {'choices': [{'finish_reason': 'length', 'message': {'role': 'assistant', 'content': '{"opinion":'}}]}
+        return {'choices': [{'message': {'role': 'assistant', 'content': json.dumps(content)[:-40]}}]}
+    run = run_analysis(AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 100}], horizon='10년 이상'),
+                       'test', stages.append, model_call=model, evidence=Evidence(), on_event=events.append)
+    if failure == 'no_accepted_report':
+        # Without a validated report there is nothing truthful to publish; the failure stays visible.
+        with pytest.raises(ValueError, match='OUTPUT_INVALID'):
+            await run
+        return
+    result = await run
+    assert any(event['event'] == 'research_recovery' for event in events)
+    assert result['recommendation'] is not None
+    assert result['sections']['opinion']
+    assert result['completion']['status'] == 'partial'
+    assert result['diagnostics']['termination_reason'] == ('MODEL_TRUNCATED' if failure == 'truncated' else 'OUTPUT_INVALID') + '_WITH_REPORT'
+    assert result['recommendation']['allocations'] and len(opinion_calls) == 4
+    assert not any(event['event'] == 'limit_reached' for event in events)
+    assert [check['status'] for check in result['customer_constraint_checks']] == ['pass']
