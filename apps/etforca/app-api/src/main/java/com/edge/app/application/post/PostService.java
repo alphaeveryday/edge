@@ -95,6 +95,16 @@ public class PostService implements PostFinder, PostModifier {
     }
 
     @Override
+    @Transactional(readOnly = true)
+    public PageResponse<PostView> authored(long memberId, Cursor cursor, int size) {
+        memberRepository.findByIdAndDeletedAtIsNull(memberId)
+                .orElseThrow(() -> new GeneralException(ErrorStatus._UNAUTHORIZED));
+        Cursor from = cursor == null ? FEED_START : cursor;
+        List<Post> posts = postRepository.authored(memberId, from.createdAt(), from.id(), Limit.of(size + 1));
+        return page(posts, size, p -> new Cursor(p.getCreatedAt(), p.getId()), list -> responses(list, memberId));
+    }
+
+    @Override
     @Transactional
     public PostView create(long memberId, PostCreateRequest request) {
         List<String> tags = new ArrayList<>(new LinkedHashSet<>(request.tags()));

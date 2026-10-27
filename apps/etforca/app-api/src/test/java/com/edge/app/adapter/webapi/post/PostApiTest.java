@@ -221,6 +221,66 @@ record PostApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTempl
         assertThat(count.get("buys")).as("남은 표가 없는 ETF 의 캐시 교체").isEqualTo(0);
     }
 
+    @Test
+    void authoredPostsIgnoreWatchChangesAndExcludeOtherAuthorsAndDeletedPosts() {
+        String a = member("my-posts-a@example.com", "Author", List.of("069500", "305720"));
+        String b = member("my-posts-b@example.com", "Other", List.of("069500"));
+        String own = (String) post(a, "keep after unwatch", List.of("305720")).get("id");
+        String deleted = (String) post(a, "deleted", List.of("069500")).get("id");
+        String other = (String) post(b, "other author", List.of("069500")).get("id");
+        assertThat(call(HttpMethod.DELETE, "/api/v1/posts/" + deleted, null, a)).hasStatusOk();
+        assertThat(call(HttpMethod.PUT, "/api/v1/watch-groups/base/etfs", Map.of("codes", List.of("069500")), a)).hasStatusOk();
+
+        Map<String, Object> page = result(call(HttpMethod.GET, "/api/v1/me/posts", null, a));
+        assertThat(ids(page)).as("작성자 기준이며 관심 해제·타인 글·삭제 글의 영향을 받지 않음").containsExactly(own);
+        assertThat(page.get("nextCursor")).isNull();
+        Map<String, Object> item = items(page).getFirst();
+        assertThat(item.get("mine")).isEqualTo(true);
+        assertThat(item.get("views")).as("목록 조회는 조회수를 올리지 않음").isEqualTo(0);
+        assertThat(item.get("liked")).isEqualTo(false);
+        assertThat(((Map<?, ?>) item.get("author")).get("name")).isEqualTo("Author");
+        assertThat(((Map<?, ?>) item.get("etf")).get("code")).isEqualTo("305720");
+        assertThat(ids(result(call(HttpMethod.GET, "/api/v1/me/posts", null, b)))).containsExactly(other);
+        assertThat(ids(result(call(HttpMethod.GET, "/api/v1/posts?scope=mine", null, a))))
+                .as("기존 mine은 여전히 관심 ETF 글").contains(other).doesNotContain(own, deleted);
+    }
+
+    @Test
+    void authoredPostsPageByTimeAndIdWithoutMixingAuthors() {
+        String a = member("my-page-a@example.com", "PageA", List.of("069500"));
+        String b = member("my-page-b@example.com", "PageB", List.of("069500"));
+        String first = (String) post(a, "first", List.of("069500")).get("id");
+        String second = (String) post(a, "second", List.of("069500")).get("id");
+        post(b, "interleaved", List.of("069500"));
+        String third = (String) post(a, "third", List.of("069500")).get("id");
+        for (String id : List.of(first, second, third)) {
+            jdbc.update("update post set created_at = timestamptz '2026-10-01 00:00:00+00' where id = ?", Long.parseLong(id));
+        }
+        Map<String, Object> page = result(call(HttpMethod.GET, "/api/v1/me/posts?size=2", null, a));
+        assertThat(ids(page)).as("같은 작성 시각은 ID 역순").containsExactly(third, second);
+        assertThat(page.get("nextCursor")).isNotNull();
+        Map<String, Object> next = result(call(HttpMethod.GET, "/api/v1/me/posts?size=2&cursor=" + page.get("nextCursor"), null, a));
+        assertThat(ids(next)).as("중복·누락 없는 본인 글의 다음 페이지").containsExactly(first);
+        assertThat(next.get("nextCursor")).isNull();
+    }
+
+    @Test
+    void authoredPostsRequireAMemberAndValidatePaging() {
+        String member = member("my-empty@example.com", "Empty", List.of());
+        assertThat(call(HttpMethod.GET, "/api/v1/me/posts", null, null)).hasStatus(401);
+        assertThat(call(HttpMethod.GET, "/api/v1/me/posts", null, "dev:my-posts-guest")).hasStatus(401);
+        assertThat(call(HttpMethod.GET, "/api/v1/me/posts", null, "invalid-token")).hasStatus(401);
+        Map<String, Object> page = result(call(HttpMethod.GET, "/api/v1/me/posts", null, member));
+        assertThat(items(page)).isEmpty();
+        assertThat(page.get("nextCursor")).isNull();
+        for (String query : List.of("size=0", "size=101", "cursor=not-a-cursor")) {
+            assertThat(call(HttpMethod.GET, "/api/v1/me/posts?" + query, null, member)).hasStatus(400);
+        }
+        assertThat(call(HttpMethod.DELETE, "/api/v1/me", null, member)).hasStatusOk();
+        assertThat(call(HttpMethod.GET, "/api/v1/me/posts", null, member))
+                .as("탈퇴 전 발급된 토큰으로 본인 전용 목록을 조회할 수 없음").hasStatus(401);
+    }
+
     private MvcTestResult call(HttpMethod method, String uri, Object body, String auth) {
         MockMvcRequestBuilder request = mvcTester.method(method).uri(uri);
         if (auth != null) {

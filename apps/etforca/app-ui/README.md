@@ -26,6 +26,6 @@ design/         Claude Design 원본 사본 (참고용)
 npm install
 npm start          # 메트로
 npm run typecheck
-npm test          # 인증 전환 회귀 테스트
+npm test          # 인증 전환·본인 글 조회 회귀 테스트
 npm run doctor
 ```
