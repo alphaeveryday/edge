@@ -1,13 +1,13 @@
-import { focusManager, MutationCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { focusManager, QueryClientProvider } from '@tanstack/react-query';
 import { useFonts } from 'expo-font';
-import { DarkTheme, DefaultTheme, router, Stack, ThemeProvider, usePathname } from 'expo-router';
+import { DarkTheme, DefaultTheme, Stack, ThemeProvider, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import * as SystemUI from 'expo-system-ui';
 import { useEffect } from 'react';
 import { AppState } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { isApiError } from '@/api';
+import { queryClient } from '@/lib/queryClient';
 import { Toast } from '@/components/Toast';
 import { usePush } from '@/features/notification/push';
 import { startAds } from '@/lib/ads';
@@ -24,19 +24,6 @@ focusManager.setEventListener((onFocus) => {
 });
 // 시작 화면 최소 노출 1초
 const splashMin = new Promise((r) => setTimeout(r, 1000));
-// 로그인 중 쓰기 요청 401 시 세션 해제와 로그인 화면 이동
-// 로그인 실패 401 은 폼 소관
-const queryClient = new QueryClient({
-  mutationCache: new MutationCache({
-    onError: (e) => {
-      const s = useSession.getState();
-      if (!isApiError(e, 'UNAUTHORIZED') || !s.loggedIn) return;
-      s.expire();
-      router.push({ pathname: '/login', params: { reason: '만료' } });
-    },
-  }),
-});
-
 export default function RootLayout() {
   const colors = useColors();
   const [loaded, error] = useFonts(fontAssets);

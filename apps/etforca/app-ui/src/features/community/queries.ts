@@ -7,7 +7,13 @@ import { useRequireLogin, useSession } from '@/store/session';
 export const useMyPosts = () => usePages(['community', 'mine'], (c) => api.community.mine(c));
 export const useUpdateMe = () => {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: (patch: Partial<Me>) => api.member.update(patch), onSuccess: (me) => qc.setQueryData(['member', 'me'], me) });
+  return useMutation({
+    onMutate: () => useSession.getState().revision,
+    mutationFn: (patch: Partial<Me>) => api.member.update(patch),
+    onSuccess: (me, _patch, revision) => {
+      if (revision === useSession.getState().revision) qc.setQueryData(['member', 'me'], me);
+    },
+  });
 };
 export const useMe = () => {
   const loggedIn = useSession((s) => s.loggedIn);
@@ -31,8 +37,10 @@ export const useToggleLike = () => {
   const qc = useQueryClient();
   const requireLogin = useRequireLogin();
   const m = useMutation({
+    onMutate: () => useSession.getState().revision,
     mutationFn: (id: string) => api.community.toggleLike(id),
-    onSuccess: (updated) => {
+    onSuccess: (updated, _id, revision) => {
+      if (revision !== useSession.getState().revision) return;
       const swap = (p: Post) => (p.id === updated.id ? updated : p);
       // 인기글 배열과 이어 받는 목록 모두 교체
       qc.setQueriesData<Post[] | InfiniteData<Page<Post>>>({ queryKey: ['community'], predicate: (q) => q.queryKey[1] !== 'comments' }, (old) => {
@@ -50,8 +58,11 @@ export const useVote = (code: string) => {
   const qc = useQueryClient();
   return useMutation({
     // null 선택의 철회 요청
+    onMutate: () => useSession.getState().revision,
     mutationFn: (choice: VoteChoice | null) => (choice ? api.community.vote(code, choice) : api.community.unvote(code)),
-    onSuccess: (stat) => qc.setQueryData<VoteStat>(['community', 'voteStat', code], stat),
+    onSuccess: (stat, _choice, revision) => {
+      if (revision === useSession.getState().revision) qc.setQueryData<VoteStat>(['community', 'voteStat', code], stat);
+    },
   });
 };
 
