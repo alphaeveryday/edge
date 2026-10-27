@@ -4,7 +4,10 @@ import type { Me, Page, VoteStat, VoteChoice, Post, ReportReason } from '@/api';
 import { usePages } from '@/lib/usePages';
 import { useRequireLogin, useSession } from '@/store/session';
 
-export const useMyPosts = () => usePages(['community', 'mine'], (c) => api.community.mine(c));
+export const useMyPosts = () => {
+  const loggedIn = useSession((s) => s.loggedIn);
+  return usePages(['community', 'mine'], (c) => api.community.mine(c), loggedIn);
+};
 export const useUpdateMe = () => {
   const qc = useQueryClient();
   return useMutation({
@@ -27,6 +30,7 @@ export const useComments = (id: string) => usePages(['community', 'comments', id
 export const useVoteStat = (code: string, enabled = true) => useQuery({ queryKey: ['community', 'voteStat', code], queryFn: () => api.community.voteStat(code), enabled });
 
 const invalidateLists = (qc: ReturnType<typeof useQueryClient>) => {
+  qc.invalidateQueries({ queryKey: ['community', 'mine'] });
   qc.invalidateQueries({ queryKey: ['community', 'feed'] });
   qc.invalidateQueries({ queryKey: ['community', 'posts'] });
   qc.invalidateQueries({ queryKey: ['community', 'hot'] });

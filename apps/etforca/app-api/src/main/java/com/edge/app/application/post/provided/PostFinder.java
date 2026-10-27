@@ -12,6 +12,8 @@ import com.edge.app.support.cursor.PageResponse;
 public interface PostFinder {
     PageResponse<PostView> feed(AppPrincipal principal, PostScope scope, String code, Cursor cursor, int size);
 
+    PageResponse<PostView> authored(long memberId, Cursor cursor, int size);
+
     PostView get(String id, AppPrincipal principal);
 
     PageResponse<CommentView> comments(String id, AppPrincipal principal, Cursor cursor, int size);

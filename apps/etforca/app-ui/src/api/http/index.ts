@@ -105,7 +105,7 @@ export const httpClient: ApiClient = {
     hot: async () => posts((await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope: 'hot' } })).items),
     posts: async (code, cursor) => postPage(await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { code, cursor } })),
     feed: async (scope, cursor) => postPage(await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope, cursor } })),
-    mine: async (cursor) => postPage(await request<m.WirePage<m.WirePost>>('GET', '/posts', { query: { scope: 'mine', cursor } })),
+    mine: async (cursor) => postPage(await request<m.WirePage<m.WirePost>>('GET', '/me/posts', { query: { cursor } })),
     // 내 좋아요와 내 글 판정용 요청자 동봉
     get: async (id) => post(await request<m.WirePost>('GET', `/posts/${id}`)),
     // 차단한 작성자 제외용 요청자 동봉

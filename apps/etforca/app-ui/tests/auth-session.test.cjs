@@ -51,8 +51,8 @@ function fixture(t, { native = false, beforeWrite = async () => {} } = {}) {
           return placeholder;
         } };
         if (filename.endsWith('/home/queries.ts') && name === 'react') return { useEffect: (effect) => effect() };
-        if (filename.endsWith('/queries.ts') && name === '@tanstack/react-query') return {
-          ...query, useQuery: (options) => options, useMutation: (options) => options, useQueryClient: () => queryClient,
+        if ((filename.endsWith('/queries.ts') || filename.endsWith('/usePages.ts')) && name === '@tanstack/react-query') return {
+          ...query, useInfiniteQuery: (options) => options, useQuery: (options) => options, useMutation: (options) => options, useQueryClient: () => queryClient,
         };
         if (name === 'react-native') return { Platform: { OS: native ? 'ios' : 'web' } };
         if (name === 'expo-secure-store') return {
@@ -89,6 +89,9 @@ function fixture(t, { native = false, beforeWrite = async () => {} } = {}) {
     tokens, queryClient, request, api, useSession, useWatchGroup, routes, calls, memory,
     registerPush: () => load('src/features/notification/push.ts').registerPush(false),
     prefetchHome: (groups) => load('src/features/home/queries.ts').usePrefetchBriefs(groups),
+    myPostsOptions: () => load('src/features/community/queries.ts').useMyPosts(),
+    createPostOptions: () => load('src/features/community/queries.ts').useCreatePost(),
+    deletePostOptions: () => load('src/features/community/queries.ts').useDeletePost(),
     updateMeOptions: () => load('src/features/community/queries.ts').useUpdateMe(),
     voteOptions: () => load('src/features/community/queries.ts').useVote('123'),
     likeOptions: () => load('src/features/community/queries.ts').useToggleLike(),
@@ -591,4 +594,51 @@ for (const next of ['member-b', 'guest']) test(`push registration finishes A bef
   assert.equal(inFlight, 1, 'new association must wait for the in-flight server write');
   assert.equal(deviceMember, next === 'guest' ? 'guest' : `Bearer ${next}`);
   assert.equal(f.calls.length, 2, 'stale response cancellation must not block the latest registration');
+});
+
+// 본인 작성 글은 관심 피드와 별도이며 회원 상태와 함께 조회 수명이 바뀐다.
+test('my posts use the member endpoint and preserve the cursor, while the watched feed stays unchanged', async (t) => {
+  const f = fixture(t); await f.member();
+  f.respond(() => success({ items: [], nextCursor: 'next-cursor' }));
+  const page = await f.api.community.mine('older+cursor=');
+  const own = new URL(f.calls.at(-1).url);
+  assert.equal(own.pathname, '/api/v1/me/posts');
+  assert.equal(own.searchParams.get('cursor'), 'older+cursor=');
+  assert.equal(own.searchParams.has('scope'), false);
+  assert.equal(f.calls.at(-1).headers.Authorization, 'Bearer member-a');
+  assert.equal(page.next, 'next-cursor');
+  await f.api.community.feed('mine');
+  const feed = new URL(f.calls.at(-1).url);
+  assert.equal(feed.pathname, '/api/v1/posts');
+  assert.equal(feed.searchParams.get('scope'), 'mine');
+});
+
+test('my posts do not query as a guest and start querying when a member logs in', async (t) => {
+  const f = fixture(t);
+  f.respond((_url, init) => init.headers.Authorization ? success({ items: [], nextCursor: null }) : failure());
+  const observer = new query.InfiniteQueryObserver(f.queryClient, f.myPostsOptions());
+  const unsubscribe = observer.subscribe(() => {}); t.after(unsubscribe);
+  await tick();
+  assert.equal(f.calls.length, 0);
+  await f.member(); observer.setOptions(f.myPostsOptions()); await tick();
+  assert.equal(f.calls.length, 1);
+  assert.equal(new URL(f.calls[0].url).pathname, '/api/v1/me/posts');
+  await f.tokens.clear(); observer.setOptions(f.myPostsOptions()); await tick();
+  assert.equal(observer.options.enabled, false);
+  assert.equal(observer.getCurrentResult().data, undefined);
+});
+
+for (const kind of ['create', 'delete']) test(`${kind} post refreshes the cached own-post list immediately`, async (t) => {
+  const f = fixture(t); await f.member();
+  const key = ['community', 'mine'];
+  let reads = 0;
+  const observer = new query.InfiniteQueryObserver(f.queryClient, {
+    queryKey: key, initialPageParam: undefined, getNextPageParam: () => undefined,
+    queryFn: async () => ({ items: [++reads], next: undefined }), staleTime: Infinity,
+  });
+  const unsubscribe = observer.subscribe(() => {}); t.after(unsubscribe); await tick();
+  const options = kind === 'create' ? f.createPostOptions() : f.deletePostOptions();
+  await options.onSuccess(); await tick();
+  assert.equal(reads, 2, 'returning to the profile must not show the pre-write list');
+  assert.equal(observer.getCurrentResult().data.pages[0].items[0], 2);
 });
