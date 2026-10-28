@@ -386,6 +386,8 @@ PK `(etf_code, trade_date)`. 원천 `price_daily` 에는 close·volume 만 있�
 
 `UNIQUE(etf_code, as_of)`. 조립: summary_card=`{title: summary_title, summary}`, detail=`{title: detail_title, items[]: outlook_items(detail){title_keyword, sentences: bullets}, updates.items[]: outlook_items(update).title_keyword}`, conclusion=`{title, sentence, change_condition, supports[], burdens[]}`(conclusion_keywords), factors[]=`{axis, sticker, summary: sentence}`. 매핑: `dates`=조회한 as_of 가 속한 주의 월~일 7칸(`hasDaily`=그날 as_of 행 존재), `prevWeek`·`nextWeek`=그 주 앞·뒤로 가장 가까운 as_of 가 속한 주의 월요일, `now`=signal, `prev`=직전 as_of 행의 signal, `headTitle`=as_of 가 오늘(KST)이면 "오늘 발행", 아니면 "M월 d일 발행", `question`=summary_card.title, `dateline`=published_at, `synth`=summary_card.summary, `axes`=factors(sticker→Dir, `hasPage`=`etf_analysis_axis` 행 존재), `title`=detail.title, `args`=detail.items(`no` 순번, `claim`=title_keyword, `body`=sentences[].sentence), `todayDate`·`today`=detail.updates, `closingTitle`=conclusion.title, `pos`=supports[].label, `neg`=burdens[].label, `close`=conclusion.sentence(+change_condition). `id`·`tool_run_ids`·`is_updated`·`reason` 은 앱에 내려가지 않는다. 최신 signal 은 `EtfSummary.signal`·`HomeBrief.band`·`IssueDetail.affected[].prev` 에도 쓴다.
 
+요인·지표 상세 API는 `date`가 있으면 해당 `as_of`의 발행본을 조회하고, 생략하거나 빈 값이면 최신본을 조회한다. 지정 날짜의 발행본이나 축이 없으면 `ANALYSIS4001`을 반환하며 다른 날짜로 대체하지 않는다. 앱은 주차 이동 후에도 화면에 표시된 `DailyAnalysis.date`를 상세 화면·요청·캐시 키에 전달한다.
+
 ### etf_analysis_axis (5요인 상세)
 | 컬럼 | 타입 | 비고 |
 |---|---|---|

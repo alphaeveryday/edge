@@ -72,7 +72,7 @@ export function DailySheet({ code, daily: d, open, onClose, entry, withVote, lin
     ended.current = s.close_method === 'navigate';
     track('analysis_detail_closed', { etf: s.session ?? code, duration_sec: s.duration_sec, scroll_pct: s.scroll_pct, close_method: s.close_method });
   };
-  const goMetric = (axis: string) => leave(() => router.push(axisHref(code, axis)));
+  const goMetric = (axis: string) => leave(() => router.push(axisHref(code, axis, d?.date)));
   // 복귀 표시 직후 즉시 전환 해제
   useEffect(() => {
     if (shown && instant) setInstant(false);

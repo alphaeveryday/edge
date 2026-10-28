@@ -602,6 +602,13 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/EtfCode' }
         - { $ref: '#/components/parameters/Axis' }
+        - name: date
+          in: query
+          description: 선택한 분석의 발행일. 생략하거나 빈 값이면 최신본. 해당 발행일이나 축이 없으면 ANALYSIS4001이며 최신본으로 대체하지 않는다.
+          schema:
+            anyOf:
+              - { type: string, format: date }
+              - { type: string, enum: [''] }
       responses:
         '200':
           description: 요인 상세
@@ -612,6 +619,7 @@ paths:
                   - $ref: '#/components/schemas/ApiResponse'
                   - properties:
                       result: { $ref: '#/components/schemas/FactorPage' }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400 잘못된 날짜·축
         '404': { $ref: '#/components/responses/Error' }   # ANALYSIS4001
   /etfs/{code}/analysis/metrics/{axis}:
     get:
@@ -622,6 +630,13 @@ paths:
       parameters:
         - { $ref: '#/components/parameters/EtfCode' }
         - { $ref: '#/components/parameters/Axis' }
+        - name: date
+          in: query
+          description: 선택한 분석의 발행일. 생략하거나 빈 값이면 최신본. 해당 발행일이나 축이 없으면 ANALYSIS4001이며 최신본으로 대체하지 않는다.
+          schema:
+            anyOf:
+              - { type: string, format: date }
+              - { type: string, enum: [''] }
       responses:
         '200':
           description: 지표 페이지
@@ -632,6 +647,7 @@ paths:
                   - $ref: '#/components/schemas/ApiResponse'
                   - properties:
                       result: { $ref: '#/components/schemas/MetricPage' }
+        '400': { $ref: '#/components/responses/Error' }   # COMMON400 잘못된 날짜·축
         '404': { $ref: '#/components/responses/Error' }   # ANALYSIS4001
 
   # ── community ────────────────────────────────────────

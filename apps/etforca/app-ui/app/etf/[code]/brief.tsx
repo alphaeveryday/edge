@@ -1,7 +1,6 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
-import type { Axis } from '@/api';
 import { IconButton, LinkRow, PageScroll, Sticker } from '@/components/ui';
 import { track } from '@/lib/analytics';
 import { DailySheet } from '@/features/analysis/DailySheet';
@@ -27,7 +26,6 @@ export default function EtfBrief() {
   const [open, setOpen] = useState(false);
   const q = useDaily(code, pick);
   const today = kstToday();
-  const openMetric = (axis: Axis) => router.push(axisHref(code, axis));
   const pull = usePullRefresh();
   return (
     <QueryState query={q} rows={3} pending={{ title: '오늘 분석은 08:30에 올라와요', sub: '발행되면 여기에서 바로 볼 수 있어요' }}>
@@ -79,7 +77,7 @@ export default function EtfBrief() {
             <Text style={styles.synth}>{d.synth}</Text>
             <View style={styles.axes}>
               {d.axes.map((a) => (
-                <Pressable key={a.axis} onPress={() => a.hasPage && openMetric(a.axis)} style={styles.axis}>
+                <Pressable key={a.axis} onPress={() => a.hasPage && router.push(axisHref(code, a.axis, d.date))} style={styles.axis}>
                   <Sticker signal={dirSignal[a.dir]} showLabel={false} />
                   <Text style={styles.axisLabel}>{a.axis}</Text>
                 </Pressable>
