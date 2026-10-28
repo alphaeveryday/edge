@@ -8,4 +8,6 @@ import com.edge.app.domain.member.Member;
  */
 public interface MemberFinder {
     Member find(long memberId);
+
+    boolean isActive(long memberId);
 }

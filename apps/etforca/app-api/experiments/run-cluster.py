@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+from members import iterations, seed_members
 
 scenario = sys.argv[1] if len(sys.argv) > 1 else 'C3'
 if scenario not in {'C1', 'C2', 'C3', 'C4'}:
@@ -66,6 +67,7 @@ for _ in range(180):
     except Exception: pass
     time.sleep(1)
 else: raise SystemExit('App did not become ready')
+seed_members(sql, iterations(env.get('RATE', '50'), env.get('DURATION', '180s')))
 
 # 서비스별 myself 줄에서 읽은 슬롯 시작 오름차순의 샤드 번호
 # 페일오버로 노드가 바뀌어도 유지되는 슬롯 범위 기준

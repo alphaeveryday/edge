@@ -278,6 +278,8 @@ HOT=failed FAULT=kill python3 run-cluster.py C4    # Cluster: C1~C4 (docker-comp
 - 종료 후 데이터 확인을 위해 컨테이너를 남긴다. 출력된 down 명령으로 정리한다.
 - 결과는 `experiments/runs`에 기록한다.
 - `token.js`가 compose와 같은 `APP_JWT_SECRET`으로 회원별 액세스 JWT를 서명해 투표한다.
+- 러너가 부하 시작 전에 `members.py`로 해당 ID의 활동 회원을 로컬 DB에 준비한다. k6를 직접 실행할 때도 같은 회원 준비가 필요하다.
+- 현재 인증에는 요청마다 회원 상태 DB 조회가 추가된다. 기존 실험 결과를 현재 코드의 성능 측정값으로 사용하지 않는다.
 
 **판정**
 - 수집: k6 samples의 응답 코드·투표 지연, threads.json의 최대 busy, fault.json과 sentinel.log의 +switch-master 차이, DB와 Redis의 선택지별 차이, app.log의 재조정 delta·duration.
@@ -346,7 +348,7 @@ app-api/
 ### 계약과 공통 규칙
 
 - **계약.** API 계약의 기준은 [openapi.yaml](openapi.yaml)이다(ADR-0056). springdoc의 `/v3/api-docs`는 yaml과 대조하는 검증용으로만 쓴다.
-- **인증.** 회원은 `Authorization: Bearer` 액세스 JWT와 DB 저장 리프레시, 게스트는 `X-Device-Id`다. 둘 다 있으면 토큰이 우선한다. `adapter/security`의 `AuthFilter`가 해석하고 리졸버가 인자 타입으로 넘긴다. 필터는 DB를 보지 않는다.
+- **인증.** 회원은 `Authorization: Bearer` 액세스 JWT와 DB 저장 리프레시, 게스트는 `X-Device-Id`다. 둘 다 있으면 토큰이 우선한다. `adapter/security`의 `AuthFilter`가 서명·만료를 검증하고 `MemberFinder`를 통해 DB의 활동 회원 여부를 확인한다. 없거나 탈퇴한 회원은 COMMON401이며 게스트로 전환하지 않는다. DB 조회 실패는 인증 거절로 바꾸지 않고 서버 오류로 전파한다. 게스트·익명 요청은 회원 상태를 조회하지 않는다.
 - **principal.** `MemberPrincipal`은 회원만, `AppPrincipal`은 회원 또는 게스트를 받는다. 익명이면 COMMON401이다.
 - **에러 코드.** `AppErrorStatus`가 도메인 코드를 소유하고 openapi.yaml의 `x-error-codes`와 1:1이다. 형식은 `{도메인}{HTTP}{일련}`(예 `ETF4001`, `ANALYSIS4001`)이다. 앱은 이 code 값을 그대로 보고 분기한다.
 - **구현 순서.** 계약의 operation 전부를 controller·DTO로 먼저 만들고 서비스는 고정 예시를 반환한다. 도메인을 구현하면 그 서비스 본문을 교체한다. 앱 쪽 mock 클라이언트가 이미 모든 도메인을 다루고 있어서 서버에는 mock 모드를 두지 않는다.

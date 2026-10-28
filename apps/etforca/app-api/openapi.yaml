@@ -272,7 +272,7 @@ paths:
       tags: [member]
       operationId: memberDeleteAccount
       summary: 회원 탈퇴
-      description: 리프레시 토큰은 즉시 폐기. 이미 발급된 액세스 토큰은 만료까지 서명 검증만으로 통과하며 회원 조회가 있는 엔드포인트만 COMMON401
+      description: 리프레시 토큰은 즉시 폐기. 탈퇴 커밋 이후 인증을 검사하는 요청은 기존 액세스 토큰이 만료되지 않았어도 COMMON401. 이미 인증을 통과한 진행 중 요청은 취소하지 않는다.
       security: [{ bearerAuth: [] }]
       responses:
         '200': { $ref: '#/components/responses/Empty' }
@@ -980,6 +980,7 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: 서명·만료 검증 뒤 DB에서 활동 회원 여부를 확인한다. 없거나 탈퇴한 회원은 COMMON401이며 X-Device-Id가 함께 있어도 게스트로 전환하지 않는다.
     deviceId:
       type: apiKey
       in: header

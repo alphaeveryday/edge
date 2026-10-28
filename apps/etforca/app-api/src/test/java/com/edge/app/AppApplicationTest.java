@@ -10,10 +10,16 @@ import com.edge.app.application.vote.required.VoteRepository;
 import com.edge.app.application.vote.VoteService;
 import com.edge.app.support.stereotype.WebApiAdapterTest;
 import com.zaxxer.hikari.HikariDataSource;
+import io.github.resilience4j.circuitbreaker.CircuitBreaker;
+import io.github.resilience4j.circuitbreaker.CircuitBreakerRegistry;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
@@ -39,7 +45,19 @@ import static org.mockito.Mockito.doAnswer;
 @MockitoSpyBean(types = VoteCountRepository.class)
 record AppApplicationTest(MockMvcTester mvcTester, ObjectMapper objectMapper, VoteService voteService,
         VoteCountRepository voteCountRepository, VoteRepository voteRepository, StringRedisTemplate redis, AccessTokens tokens,
-        DataSource dataSource, @Qualifier("redis") GenericContainer<?> redisContainer) {
+        DataSource dataSource, @Qualifier("redis") GenericContainer<?> redisContainer, CircuitBreakerRegistry circuits) {
+    @BeforeAll
+    static void members(@Autowired JdbcTemplate jdbc) {
+        jdbc.update("insert into member(id, provider, nick, handle) values "
+                + "(1, 'email', '투표 회원 1', '@vote-test-1'), (2, 'email', '투표 회원 2', '@vote-test-2')");
+    }
+
+    @BeforeEach
+    void resetCircuits() {
+        // 장애 주입 테스트의 열린 서킷이 다음 테스트로 넘어가지 않도록 격리한다.
+        circuits.getAllCircuitBreakers().forEach(CircuitBreaker::reset);
+    }
+
     @Test
     void voteIsCommittedAndConnectionReleasedBeforeRedisIsCalled() throws Exception {
         String etf = "000011";
