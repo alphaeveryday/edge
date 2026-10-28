@@ -34,8 +34,8 @@ export interface OnboardingApi {
 
 export interface AnalysisApi {
   daily(code: EtfCode, date?: string, week?: string): Promise<DailyAnalysis>;
-  factor(code: EtfCode, axis: Axis): Promise<FactorPage>;
-  metric(code: EtfCode, axis: Axis): Promise<MetricPage>;
+  factor(code: EtfCode, axis: Axis, date?: string): Promise<FactorPage>;
+  metric(code: EtfCode, axis: Axis, date?: string): Promise<MetricPage>;
   hint(key: string): Promise<Hint>;
 }
 

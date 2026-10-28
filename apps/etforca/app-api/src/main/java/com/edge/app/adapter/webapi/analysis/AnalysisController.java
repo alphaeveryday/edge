@@ -28,12 +28,14 @@ public class AnalysisController {
     }
 
     @GetMapping("/factors/{axis}")
-    public ApiResponse<FactorPageResponse> analysisFactor(@PathVariable String code, @PathVariable Axis axis) {
-        return ApiResponse.onSuccess(analysisFinder.factor(code, axis));
+    public ApiResponse<FactorPageResponse> analysisFactor(@PathVariable String code, @PathVariable Axis axis,
+            @RequestParam(required = false) LocalDate date) {
+        return ApiResponse.onSuccess(analysisFinder.factor(code, axis, date));
     }
 
     @GetMapping("/metrics/{axis}")
-    public ApiResponse<MetricPageResponse> analysisMetric(@PathVariable String code, @PathVariable Axis axis) {
-        return ApiResponse.onSuccess(analysisFinder.metric(code, axis));
+    public ApiResponse<MetricPageResponse> analysisMetric(@PathVariable String code, @PathVariable Axis axis,
+            @RequestParam(required = false) LocalDate date) {
+        return ApiResponse.onSuccess(analysisFinder.metric(code, axis, date));
     }
 }

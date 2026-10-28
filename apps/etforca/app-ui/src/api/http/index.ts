@@ -80,12 +80,12 @@ export const httpClient: ApiClient = {
       const d = await request<Omit<DailyAnalysis, 'axes'> & { axes: { axis: string; dir: DailyAnalysis['axes'][number]['dir']; summary: string; hasPage: boolean }[] }>('GET', `/etfs/${code}/analysis`, { query: { date, week }, auth: false });
       return { ...d, axes: d.axes.map((a) => ({ ...a, axis: m.axisLabel(a.axis) })) };
     },
-    factor: async (code, axis) => {
-      const f = await request<Omit<FactorPage, 'axis'> & { axis: string }>('GET', `/etfs/${code}/analysis/factors/${m.axisCode(axis)}`, { auth: false });
+    factor: async (code, axis, date) => {
+      const f = await request<Omit<FactorPage, 'axis'> & { axis: string }>('GET', `/etfs/${code}/analysis/factors/${m.axisCode(axis)}`, { query: { date }, auth: false });
       return { ...f, axis: m.axisLabel(f.axis) };
     },
-    metric: async (code, axis) => {
-      const p = await request<Omit<MetricPage, 'axis'> & { axis: string }>('GET', `/etfs/${code}/analysis/metrics/${m.axisCode(axis)}`, { auth: false });
+    metric: async (code, axis, date) => {
+      const p = await request<Omit<MetricPage, 'axis'> & { axis: string }>('GET', `/etfs/${code}/analysis/metrics/${m.axisCode(axis)}`, { query: { date }, auth: false });
       return { ...p, axis: m.axisLabel(p.axis) };
     },
     hint: async (key) => {

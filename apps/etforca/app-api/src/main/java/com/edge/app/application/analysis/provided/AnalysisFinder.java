@@ -10,7 +10,7 @@ import java.time.LocalDate;
 public interface AnalysisFinder {
     DailyAnalysisResponse daily(String code, LocalDate date, LocalDate week);
 
-    FactorPageResponse factor(String code, Axis axis);
+    FactorPageResponse factor(String code, Axis axis, LocalDate date);
 
-    MetricPageResponse metric(String code, Axis axis);
+    MetricPageResponse metric(String code, Axis axis, LocalDate date);
 }

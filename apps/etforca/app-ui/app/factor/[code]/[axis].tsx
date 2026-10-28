@@ -14,9 +14,9 @@ import { usePullRefresh } from '@/lib/usePullRefresh';
 export default function FactorPage() {
   const styles = useStyles();
   const SIG = useSignal();
-  const { code, axis } = useLocalSearchParams<{ code: string; axis: Axis }>();
+  const { code, axis, date } = useLocalSearchParams<{ code: string; axis: Axis; date?: string }>();
   const { top } = useSafeAreaInsets();
-  const q = useFactor(code, axis);
+  const q = useFactor(code, axis, date);
   const f = q.data;
   const pull = usePullRefresh();
   return (

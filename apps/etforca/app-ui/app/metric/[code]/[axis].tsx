@@ -20,10 +20,10 @@ export default function MetricPage() {
     neutral: { bg: colors.card, border: colors.line, c: colors.text },
     none: { bg: colors.card, border: colors.line, c: colors.text },
   };
-  const { code, axis } = useLocalSearchParams<{ code: string; axis: Axis }>();
+  const { code, axis, date } = useLocalSearchParams<{ code: string; axis: Axis; date?: string }>();
   const router = useRouter();
   const { top } = useSafeAreaInsets();
-  const q = useMetric(code, axis);
+  const q = useMetric(code, axis, date);
   const pull = usePullRefresh();
   return (
     <View style={[styles.root, { paddingTop: top + 8 }]}>
@@ -53,7 +53,7 @@ export default function MetricPage() {
             })}
           </View>
           {m.hasDetail && (
-            <Pressable onPress={() => router.push(`/factor/${code}/${axis}`)} style={styles.detail}>
+            <Pressable onPress={() => router.push({ pathname: '/factor/[code]/[axis]', params: { code, axis, ...(date ? { date } : {}) } })} style={styles.detail}>
               <Text style={styles.detailText}>요인 상세 보기</Text>
               <Chevron size={14} color={colors.textDisabled} />
             </Pressable>
