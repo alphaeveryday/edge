@@ -85,6 +85,7 @@
 | 2′ | 컨테이너가 안 떴다: `stopCode=TaskFailedToStart` · 업무 미시작: exit 75 | Airflow 재시도. 다음 시도가 그 태스크를 보고 새로 띄운다 | 다음 시도 |
 | 3 | 제출 여부 불명: `RunTask` 응답 유실(연결 끊김·타임아웃·5xx), Throttling(boto가 먼저 보낸 같은 토큰 요청이 태스크를 만들었을 수 있다) | 다시 제출하지 않는다. `startedBy`로 앞서 없던 태스크를 찾아(3회) 붙는다. 못 찾으면 **보류(ECS_STATE_UNKNOWN)** | 없음 |
 | 3′ | 앞 시도가 있었는데(try≥2) ECS에 아무것도 안 보임 · 둘째 시도부터의 조회 실패 · 살아 있는 태스크가 둘 이상 | **보류(ECS_STATE_UNKNOWN).** 빈 조회는 "제출하지 않았다"는 증거가 아니다(조회 지연·기록 만료와 구분 불가) | 없음 |
+| 3″ | 같은 run의 **자동 재시도**인데 ECS에 아무것도 안 보이고, run 시작 뒤 50분(`ECS_VISIBLE_SECONDS`, 멈춘 태스크 조회 창 약 1시간 안)이 안 됐다 | 앞 시도가 제출 전에 죽은 것으로 보고 새로 띄운다(예: 큐 대기 중 작업 토큰 만료 → 시작 직후 강제 종료, ALPHA-1473). 앞 시도가 띄운 태스크라면 이 창 안에서는 보였어야 한다. 같은 작업이 다른 곳에서 돌면 컨테이너의 원장 게이트가 막는다. clear 뒤 첫 시도·run 시작 시각 불명은 3′ 그대로 | 있음 |
 | 4 | 실행 중 태스크 확인: `lastStatus≠STOPPED`(종료 중 포함) | 재접속해 끝날 때까지 기다린다. 대기가 실패하면 태스크는 두고 재시도해 다시 붙는다. 마지막 시도에서도 끝을 못 보면 **보류(ECS_STATE_UNKNOWN)** — 도는 태스크를 두고 "실패"로 닫지 않는다 | 없음 |
 | 5 | 종료·업무 결과 확인: exit 0 / 부분 2 / 그 밖 비0(컨테이너가 스스로 종료) | 이 시도의 태스크면 그 결과로 끝낸다(0·2는 성공 처리, 비0은 재시도 없는 실패). 앞 시도의 태스크면 요청 종류로 가른다. **자동 재시도**(판정 조회 실패·대기 오류·worker 중단 뒤)는 그 결과를 쓴다 — 끝난 업무를 반복하지 않는다. **clear 뒤 첫 시도**(다시 돌리려는 요청)는 수집의 성공만 재사용하고(외부 재호출 없음), 나머지는 종료가 확인됐으므로 새로 띄운다 — 옛 결과를 쓰면 바뀐 입력(재수집 raw·보고할 보류)이 반영되지 않는다. 둘은 `try_number == max_tries - retries + 1`로 가른다(clear가 `max_tries`를 다시 잡는다, 3.3.2 코드 확인). 단 **실행 중인 task를 clear**하면 Airflow가 `max_tries`를 다시 잡지 않아 자동 재시도로 다뤄진다(끝난 결과를 재사용 — 안전 쪽). 다시 돌리려면 끝난 뒤 clear한다 | 자동 재시도: 없음. clear: 수집 성공 재사용 외에는 새로 |
 | 6 | 종료됐지만 결과 불명: exit 없음, 외부 종료(StopTask·호스트 중단·Spot)의 비0 | **보류(RESULT_UNKNOWN).** 업무 도중 끊겼을 수 있다 | 없음 |
@@ -153,7 +154,7 @@
       WHERE dedupe_key = :'dedupe_key' AND status = 'OPEN';
      ```
    - 그다음 5에서 정한 run을 trigger한다. 같은 task instance의 clear로는 풀리지 않는다(ECS 기록이 결과 미상이거나 없으면 다시 보류한다).
-- **clear를 쓸 수 있는 경우.** 앞 시도의 ECS 태스크가 아직 조회될 때(멈춘 뒤 약 1시간)만 clear가 그 결과를 보고 판단한다. 첫 시도가 **제출 전에** 실패한 경우(ECS 조회 실패·RunTask 4xx·배치 거부 반복)나 기록이 만료된 뒤에 clear하면, 둘째 시도는 아무것도 안 보여 ECS_STATE_UNKNOWN으로 보류하고 그 스텝을 레인 전체에서 막는다. 선행 스텝 결말 미확인으로 **skip된** 스텝을 clear해도 같다(그 스텝은 제출한 적이 없다). 이런 복구는 clear가 아니라 새 run(정제·적재는 재처리 run)으로 한다.
+- **clear를 쓸 수 있는 경우.** 앞 시도의 ECS 태스크가 아직 조회될 때(멈춘 뒤 약 1시간)만 clear가 그 결과를 보고 판단한다. 첫 시도가 **제출 전에** 실패한 경우(ECS 조회 실패·RunTask 4xx·배치 거부 반복)나 기록이 만료된 뒤에 clear하면(자동 재시도의 예외는 위 표 3″), 둘째 시도는 아무것도 안 보여 ECS_STATE_UNKNOWN으로 보류하고 그 스텝을 레인 전체에서 막는다. 선행 스텝 결말 미확인으로 **skip된** 스텝을 clear해도 같다(그 스텝은 제출한 적이 없다). 이런 복구는 clear가 아니라 새 run(정제·적재는 재처리 run)으로 한다.
 7. **정상 스케줄 재개.** DAG unpause. 다음 cron 슬롯부터 돈다(지난 슬롯을 돌리지 않는다).
 
 금지: 잠금 행·원장 행을 **삭제**해 실행 가능하게 만들기, DAG pause를 기존 ECS 종료 확인으로 대신하기, 상태를 확인할 수 없는데 "충분히 기다렸다"는 이유로 재실행하기, 과거 슬롯을 다시 수집하기.
@@ -224,7 +225,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 | 호스트 | **t4g.small**(arm64, 2 vCPU·2 GiB) 1대, ASG `host_count`(1/0) | micro 는 로컬 사양 검증과 실제 EC2 검증 모두에서 불가였다(아래 "사양 검증"·"실제 AWS 단기 검증 결과"). medium 은 small 이 모자란 근거가 없다 |
 | AMI | ECS 최적화 AL2023 arm64 **고정**(`ami_id`) | SSM recommended 를 data 로 읽으면 사람이 고르지 않은 시각(머지 = apply)에 교체가 준비된다 |
 | 서비스 | 서비스 1개·태스크 1개 안에 `api-server`·`scheduler`·`dag-processor`(awsvpc) | 세 컨테이너가 localhost 를 공유한다. LocalExecutor 의 task 프로세스가 Execution API 를 `http://localhost:8080/execution/` 로 부른다. 별도 서비스로 나누면 서비스 간 이름 해석(Service Connect 등)이 필요하다 |
-| Executor | LocalExecutor, `parallelism=1`, DAG 파싱 프로세스 1 | 장중 수급은 직렬이다(`max_active_runs=1`). LocalExecutor 는 parallelism 만큼 워커를 미리 띄운다(4 면 약 120MiB). 검증 DAG 와 겹치면 차례로 돈다. Celery·Redis·Kubernetes 를 쓸 근거가 없다 |
+| Executor | LocalExecutor, `parallelism=1`, DAG 파싱 프로세스 1, `task_queued_timeout=3600` | 장중 수급은 직렬이다(`max_active_runs=1`). LocalExecutor 는 parallelism 만큼 워커를 미리 띄운다(4 면 약 120MiB). 검증 DAG 와 겹치면 차례로 돈다. Celery·Redis·Kubernetes 를 쓸 근거가 없다. 큐에 넣을 때 발급하는 작업 토큰의 수명이 `task_queued_timeout` 이라, 기본 600초면 앞 작업이 10분을 넘길 때 뒤 작업이 시작 순간 인증에 실패한다(ALPHA-1473). LocalExecutor 는 `revoke_task` 가 없어 대기 초과 재큐잉은 일어나지 않는다 |
 | Triggerer | 없음 | `EdgeStep` 이 `deferrable=False` 로 고정돼 있다(defer 하면 재개가 provider 의 `execute_complete` 로 가서 판정을 건너뛴다). 다른 deferrable operator 도 없다 |
 | 버전 | Airflow 3.3.2 · amazon provider 9.36.0 (CI 와 같은 다이제스트) | 로컬·CI 에서 검증한 조합 그대로 |
 | 메타DB | **기존 업무 RDS(`edge-dev`) 안의 전용 DB `airflow`·역할 `airflow_meta`** | 아래 "메타DB"·"실제 AWS 단기 검증". 2026-10-02 상시 운영 구성으로 정했다("첫 운영 전환 실행안"의 "확정한 결정") |
