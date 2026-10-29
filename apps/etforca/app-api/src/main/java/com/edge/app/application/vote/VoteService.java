@@ -1,6 +1,5 @@
 package com.edge.app.application.vote;
 
-import com.edge.app.application.etf.required.EtfRepository;
 import com.edge.app.application.vote.provided.VoteCountResponse;
 import com.edge.app.application.vote.provided.VoteFinder;
 import com.edge.app.application.vote.required.VoteCountStore;
@@ -25,17 +24,15 @@ import java.util.Optional;
 @Service
 @RequiredArgsConstructor
 public class VoteService implements VoteFinder {
-    private final EtfRepository etfRepository;
     private final VoteRepository voteRepository;
     private final VoteCountStore voteCountStore;
     private final MeterRegistry meterRegistry;
 
     @Transactional
     public void vote(String etfCode, Long memberId, VoteChoice choice) {
-        if (!etfRepository.existsById(etfCode)) {
+        if (voteRepository.upsert(etfCode, memberId, choice.value()) == 0) {
             throw new GeneralException(AppErrorStatus.ETF_NOT_FOUND);
         }
-        voteRepository.upsert(etfCode, memberId, choice.value());
     }
 
     // 트랜잭션 없는 Redis 반영

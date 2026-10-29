@@ -32,14 +32,15 @@ public interface VoteRepository extends JpaRepository<Vote, Long> {
             """)
     List<ReconcileRow> findReconcileRows();
 
-    // DB 원자 upsert 기반의 신규와 변경 판정
-    // 동시 요청 레이스가 있는 SELECT 선검사 회피
+    // ETF 존재 확인과 upsert를 한 문장으로 처리한다.
+    // 커밋까지 ETF 삭제를 막되 다른 회원의 투표는 허용하는 KEY SHARE 잠금.
     @Modifying
     @Query(value = """
-            insert into vote(etf_code, member_id, choice) values (:etf, :member, :choice)
+            insert into vote(etf_code, member_id, choice)
+            select e.code, :member, :choice from etf e where e.code = :etf for key share of e
             on conflict (etf_code, member_id) do update set choice = excluded.choice
             """, nativeQuery = true)
-    void upsert(@Param("etf") String etfCode, @Param("member") Long memberId, @Param("choice") String choice);
+    int upsert(@Param("etf") String etfCode, @Param("member") Long memberId, @Param("choice") String choice);
 
     @Query("""
             select v.choice as choice, count(v) as total from Vote v
