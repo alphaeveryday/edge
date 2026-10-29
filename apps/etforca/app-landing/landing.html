@@ -1135,10 +1135,10 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
               <li class="pf__ai" style="--d:.21s;--t:.51s"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 20V10l6 3.5V10l6 3.5V5h4v15zM3 20h18"/></svg><b>산업 분석</b><small>실려 있는 산업</small><span class="pf__st"><em>분석 중</em><em>완료</em></span><i class="pf__prog"></i></li>
               <li class="pf__ai" style="--d:.33s;--t:.72s"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-17 0a8.5 8.5 0 1 1 17 0M3.5 12h17M12 3.5c3 3 3 14 0 17M12 3.5c-3 3-3 14 0 17"/></svg><b>경제 분석</b><small>나라와 통화</small><span class="pf__st"><em>분석 중</em><em>완료</em></span><i class="pf__prog"></i></li>
             </ul>
-            <p class="pf__hand" style="--c:1.68s"><span>분석 결과 전달</span></p>
-            <p class="pf__role pf__ai" style="--d:1.74s;--t:1.86s"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v8.5h8.5A8.5 8.5 0 1 1 12 3.5zM15 3.9A8.5 8.5 0 0 1 20.1 9H15z"/></svg><b>포트폴리오 매니저</b><small>세 분석을 모아 결론을 내요</small><span class="pf__st"><em>결론 정리 중</em><em>완료</em></span><i class="pf__prog"></i></p>
-            <p class="pf__hand pf__hand--one" style="--c:2.82s"><span>결론 전달</span></p>
-            <p class="pf__role pf__ai" style="--d:2.88s;--t:3s"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.6-3 8-7.5 9.5-4.5-1.5-7.5-4.9-7.5-9.5V6zM8.8 12l2.3 2.3 4.2-4.4"/></svg><b>리스크 매니저</b><small>결론에 반대 의견을 내고 흠을 찾아요</small><span class="pf__st"><em>반대 의견 검토 중</em><em>검토 끝</em></span><i class="pf__prog"></i></p>
+            <p class="pf__hand" style="--c:1.72s"><span>분석 결과 전달</span></p>
+            <p class="pf__role pf__ai" style="--d:1.76s;--t:1.86s"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3.5v8.5h8.5A8.5 8.5 0 1 1 12 3.5zM15 3.9A8.5 8.5 0 0 1 20.1 9H15z"/></svg><b>포트폴리오 매니저</b><small>세 분석을 모아 결론을 내요</small><span class="pf__st"><em>결론 정리 중</em><em>완료</em></span><i class="pf__prog"></i></p>
+            <p class="pf__hand pf__hand--one" style="--c:2.86s"><span>결론 전달</span></p>
+            <p class="pf__role pf__ai" style="--d:2.9s;--t:3s"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l7.5 3v5.5c0 4.6-3 8-7.5 9.5-4.5-1.5-7.5-4.9-7.5-9.5V6zM8.8 12l2.3 2.3 4.2-4.4"/></svg><b>리스크 매니저</b><small>결론에 반대 의견을 내고 흠을 찾아요</small><span class="pf__st"><em>반대 의견 검토 중</em><em>검토 끝</em></span><i class="pf__prog"></i></p>
           </div>
           <!-- 3단계: /portfolio/ 결과 화면(ReportView.tsx)의 앞부분을 줄여 옮겼다. 종합 점수(5점) → 지금·제안 구성 → 예상 1년 수익률·배당률 → 과거 성과(백테스트) → 바꿀 것. 숫자는 예시다 -->
           <div class="pf__pane pf__result" data-pane="3">
@@ -2231,7 +2231,7 @@ body:has(.find__in:focus) .cta-bar{transform:translateY(140%);opacity:0;pointer-
     GP.forEach((p, a) => GP.map((q, b) => [Math.hypot(p[0] - q[0], p[1] - q[1], p[2] - q[2]), b]).sort((x, z) => x[0] - z[0]).slice(1, 4)
       .forEach(([, b]) => { if (!gnb[a].includes(b)) { gnb[a].push(b); gnb[b].push(a); GE.push([a, b]); } })); }
   const heat = new Float32Array(GP.length), eheat = new Float32Array(GE.length);
-  const NOW = [[0, '자료를 모으는 중'], [.3, '종목·산업·경제를 보는 중'], [1.74, '결론을 정리하는 중'], [2.88, '반대 의견을 검토하는 중'], [4, '분석 끝']];
+  const NOW = [[0, '자료를 모으는 중'], [.3, '종목·산업·경제를 보는 중'], [1.76, '결론을 정리하는 중'], [2.9, '반대 의견을 검토하는 중'], [4, '분석 끝']];
   let gAt = 0, gFrom = 0, gHop = 0, gRot = 0, gRaf = 0, gLast = 0, pfT0 = 0;
   function graph(now) {
     gRaf = 0;
