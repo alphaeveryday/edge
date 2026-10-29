@@ -1,25 +1,31 @@
 import { Platform } from 'react-native';
+import { requireNativeModule } from 'expo-modules-core';
 
-// 설치 광고 측정: Firebase 애널리틱스 first_open 과 Meta 앱 이벤트
-// 웹 빌드는 네이티브 모듈이 없어 제외
+type AdsConsent = {
+  getInitialPreference(): boolean | null;
+  setCollectionEnabled(on: boolean, persist: boolean): Promise<void>;
+  setTrackingAllowed(allowed: boolean): Promise<void>;
+};
 const native = Platform.OS !== 'web';
+const consent = native ? requireNativeModule<AdsConsent>('AdsConsent') : undefined;
+export const initialAdsPreference = consent?.getInitialPreference() ?? null;
+let updates: Promise<void> = Promise.resolve();
+let permission: Promise<void> | undefined;
 
-// iOS 추적 허용 결과를 Meta SDK 에 전달한 뒤 초기화
-export async function startAds() {
-  if (!native) return;
+// Collection is restored in native startup. JS only requests/updates ATT after the splash.
+export function startAds() {
+  if (Platform.OS !== 'ios') return Promise.resolve();
+  return permission ??= requestTracking().catch((error) => { permission = undefined; throw error; });
+}
+async function requestTracking() {
   const { requestTrackingPermissionsAsync } = await import('expo-tracking-transparency');
-  const { Settings } = await import('react-native-fbsdk-next');
   const { status } = await requestTrackingPermissionsAsync();
-  if (Platform.OS === 'ios') await Settings.setAdvertiserTrackingEnabled(status === 'granted');
-  Settings.initializeSDK();
+  await consent?.setTrackingAllowed(status === 'granted');
 }
 
-// 이용 통계 토글과 연동, 두 SDK 모두 설정값을 저장소에 보관
-export async function setAdsCollection(on: boolean) {
-  if (!native) return;
-  const { getAnalytics, setAnalyticsCollectionEnabled } = await import('@react-native-firebase/analytics');
-  const { Settings } = await import('react-native-fbsdk-next');
-  await setAnalyticsCollectionEnabled(getAnalytics(), on);
-  Settings.setAutoLogAppEventsEnabled(on);
-  Settings.setAdvertiserIDCollectionEnabled(on);
+export function setAdsCollection(on: boolean, persist = false) {
+  updates = updates.catch(() => {}).then(async () => {
+    await consent?.setCollectionEnabled(on, persist);
+  });
+  return updates;
 }

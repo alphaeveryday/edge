@@ -1,46 +1,55 @@
 import { Platform } from 'react-native';
 import PostHog from 'posthog-react-native';
 import { create } from 'zustand';
-import { setAdsCollection } from '@/lib/ads';
+import { initialAdsPreference, setAdsCollection } from '@/lib/ads';
 import { useSession } from '@/store/session';
 
 type Props = Record<string, string | number | boolean>;
-
-// 토큰이 있는 실서버 모드에서만 수집
-// 웹 검증용 메모리 저장
 const key = process.env.EXPO_PUBLIC_POSTHOG_KEY;
-const client = key && process.env.EXPO_PUBLIC_API_MODE === 'http'
-  ? new PostHog(key, {
+const hasPostHog = !!key && process.env.EXPO_PUBLIC_API_MODE === 'http';
+let client: PostHog | undefined;
+let preferenceChanged = false;
+
+function getClient() {
+  if (!hasPostHog) return;
+  if (!client) {
+    client = new PostHog(key!, {
       host: 'https://us.i.posthog.com',
       captureAppLifecycleEvents: true,
       enableSessionReplay: false,
       persistence: Platform.OS === 'web' ? 'memory' : 'file',
-    })
-  : null;
-
-// 모든 이벤트의 로그인 여부
-if (client) {
-  client.register({ logged_in: useSession.getState().loggedIn });
-  useSession.subscribe((s, p) => {
-    if (s.loggedIn !== p.loggedIn) client.register({ logged_in: s.loggedIn });
-  });
+    });
+    client.register({ logged_in: useSession.getState().loggedIn });
+  }
+  return client;
 }
+// A failed native read resolves to false; do not let PostHog's empty-store fallback re-enable it.
+if (Platform.OS === 'web' || initialAdsPreference === true) getClient();
+useSession.subscribe((s, p) => {
+  if (s.loggedIn !== p.loggedIn) client?.register({ logged_in: s.loggedIn });
+});
+export const track = (event: string, props?: Props) => {
+  if (useAnalyticsOn.getState().on) client?.capture(event, props);
+};
+export const trackScreen = (name: string) => {
+  if (useAnalyticsOn.getState().on) client?.screen(name);
+};
 
-export const track = (event: string, props?: Props) => { client?.capture(event, props); };
-export const trackScreen = (name: string) => { client?.screen(name); };
-
-// 이용 통계 끄기, 설정값은 SDK 저장소에 보관
 export const useAnalyticsOn = create<{ on: boolean; setOn: (on: boolean) => void }>((set) => ({
-  on: true,
+  on: initialAdsPreference ?? true,
   setOn: (on) => {
+    preferenceChanged = true;
     set({ on });
-    if (on) client?.optIn(); else client?.optOut();
-    setAdsCollection(on);
+    // Keep runtime toggles immediate; neither restoration nor an ATT dialog delays revocation.
+    const update = on ? getClient()?.optIn() : client?.optOut();
+    void update?.catch((error) => console.warn('PostHog preference update failed', error));
+    // With no PostHog client, the native bridge writes the same existing preference file.
+    void setAdsCollection(on, !hasPostHog).catch((error) => console.warn('Ads collection update failed', error));
   },
 }));
-// 이전 버전에서 꺼 둔 설정을 광고 SDK 에도 적용
-client?.ready().then(() => {
-  const on = !client.optedOut;
-  useAnalyticsOn.setState({ on });
-  if (!on) setAdsCollection(on);
-});
+// Native already restored the preference before React started. Only web needs JS restoration.
+if (Platform.OS === 'web') {
+  void client?.ready().then(() => {
+    if (!preferenceChanged) useAnalyticsOn.setState({ on: !client!.optedOut });
+  }).catch((error) => console.warn('Analytics preference restore failed', error));
+}

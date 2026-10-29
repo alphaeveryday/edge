@@ -30,6 +30,7 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
+      "./plugins/withAdsConsent.js",
       "expo-router",
       "expo-dev-client",
       [
@@ -87,8 +88,8 @@
           "clientToken": "",
           "displayName": "etf orca",
           "scheme": "",
-          "advertiserIDCollectionEnabled": true,
-          "autoLogAppEventsEnabled": true,
+          "advertiserIDCollectionEnabled": false,
+          "autoLogAppEventsEnabled": false,
           "isAutoInitEnabled": false
         }
       ]
