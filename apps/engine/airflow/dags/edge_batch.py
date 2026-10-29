@@ -230,9 +230,12 @@ class EdgeStep(EcsRunTaskOperator):
        살아 있는 태스크가 하나면 재접속, 둘 이상이면 보류. 끝난 태스크가 있으면 가장 최근 것의 판정을 따른다 —
        업무 미시작(75·기동 실패·76)이면 새로 띄우고, 결과 미상이면 보류한다. 끝난 성공·실패는 자동 재시도면 그
        결과를 쓰고(업무를 반복하지 않는다), clear 뒤 첫 시도면 수집의 성공만 재사용하고 나머지는 새로 띄운다.
-       아무것도 안 보이는데 첫 시도가 아니면 보류한다 — 빈 조회는 "제출하지 않았다"는 증거가 아니다.
+       아무것도 안 보이는데 첫 시도가 아니면 보류한다 — 빈 조회는 "제출하지 않았다"는 증거가 아니다. 단 같은 run 의
+       자동 재시도이고 run 이 ECS 조회 창(ECS_VISIBLE_SECONDS)보다 젊으면 기록 만료는 아니므로 첫 시도의 토큰으로
+       제출한다 — 첫 시도가 만든 태스크가 있으면 거기 붙고, 없을 때만 새로 뜬다.
        조회 실패(일시 오류 재시도 뒤)도 보류다.
-    2. 제출: clientToken(시도별)을 붙인다. ECS 가 배치 거부를 확정한 경우(failures·Throttling)만 같은 시도
+    2. 제출: clientToken(시도별, 1 의 미제출 재시도는 첫 시도 것)을 붙인다. 토큰 충돌(ConflictException)이면 그
+       토큰이 만든 태스크에 붙는다. ECS 가 배치 거부를 확정한 경우(failures·Throttling)만 같은 시도
        안에서 다시 제출한다. 응답을 잃으면(연결·타임아웃·5xx) 다시 제출하지 않고 startedBy 로 새 태스크를
        찾아 붙는다 — 못 찾으면 보류.
     3. 종료 판정: `ecs_verdict`. 0·부분 실패는 성공(부분은 XCom exit_code 로 verdict 가 런 실패로 마감),
@@ -254,6 +257,8 @@ class EdgeStep(EcsRunTaskOperator):
     READS = 3
     SUBMITS = 3
     PAUSE_SECONDS = 10.0
+    # ECS 는 멈춘 태스크를 최소 약 1시간 조회해 준다. run 이 이보다 젊으면 이 task instance 가 띄운 태스크는 전부 보인다.
+    ECS_VISIBLE_SECONDS = 3000
 
     def __init__(self, *, taskdef_key: str, command: list[str], env: dict[str, str] | None = None,
                  partial_exit_codes: tuple[int, ...] = (), same_day_only: bool = False,
@@ -298,9 +303,11 @@ class EdgeStep(EcsRunTaskOperator):
         self.reprocess_env = reprocess_env or {}
         self.stop_on_upstream_hold = stop_on_upstream_hold
         self._try_number = 1
+        self._token_try = 1           # clientToken 의 시도 번호 — 미제출로 본 재시도는 첫 시도 것을 쓴다
         self._submission = 0
         self._known_arns: set[str] = set()
         self._ti = None
+        self._run_started_at: datetime | None = None
         self._new_request = True
 
     @cached_property
@@ -309,7 +316,7 @@ class EdgeStep(EcsRunTaskOperator):
 
     def _client_token(self) -> str:
         """시도·제출별 멱등 토큰(ECS 최대 64자). 같은 제출의 boto 재전송은 같은 토큰이다."""
-        material = f"{self._started_by}/{self._try_number}/{self._submission}"
+        material = f"{self._started_by}/{self._token_try}/{self._submission}"
         return hashlib.sha256(material.encode("utf-8")).hexdigest()[:64]
 
     def execute(self, context):
@@ -324,7 +331,8 @@ class EdgeStep(EcsRunTaskOperator):
 
     def _execute(self, context):
         ti = self._ti = context["ti"]
-        self._try_number = ti.try_number
+        self._run_started_at = getattr(context.get("dag_run"), "start_date", None)
+        self._try_number = self._token_try = ti.try_number
         # clear 는 max_tries 를 "마지막 try + retries" 로 다시 잡는다(3.3.2 models/taskinstance.py) — 그래서 요청(최초
         # 실행·clear)의 첫 시도는 try_number == max_tries - retries + 1 이고, 그 밖의 try 는 자동 재시도다.
         max_tries = getattr(ti, "max_tries", None)
@@ -480,9 +488,26 @@ class EdgeStep(EcsRunTaskOperator):
             self._trace("ecs_reused_arn")
             return
         if self._try_number > 1:
+            if not self._new_request and self._run_is_young():
+                # 같은 run 안의 자동 재시도인데 run 이 ECS 조회 창보다 젊다 — 기록 만료는 아니다. 앞 시도는 대개 제출 전에
+                # 죽었다(큐 대기 중 작업 토큰 만료 등, ALPHA-1473). 다만 제출 직후 죽었는데 조회에 아직 안 보이는 경우를
+                # 가릴 수 없으므로 **첫 시도의 clientToken 으로** 제출한다 — 첫 시도가 만든 태스크가 있으면 ECS 가 그
+                # 태스크를 돌려주거나(같은 요청) ConflictException 으로 ARN 을 알려 주고(요청이 다름), 없을 때만 새로 뜬다.
+                # 앞 시도의 미제출이 아니라 이번 run 의 다른 시도가 새 토큰으로 띄운 태스크는 비어 있는 조회와 모순이다.
+                self._token_try = 1
+                self.log.warning("시도 %d: 앞 시도의 ECS 태스크가 안 보인다(run 시작 %s) — 첫 시도의 토큰으로 제출한다",
+                                 self._try_number, self._run_started_at)
+                return
             raise HoldExecution(HOLD_ECS_STATE_UNKNOWN,
                                 f"시도 {self._try_number}: 앞선 시도의 ECS 태스크가 조회되지 않는다 — 제출하지 "
                                 "않았는지, 조회에 아직 안 보이는지, 기록이 만료됐는지 가릴 수 없다")
+
+    def _run_is_young(self) -> bool:
+        """run 시작 시각을 알고, 그 뒤 ECS 조회 창 안이면 참. 모르면 거짓(보류 쪽)."""
+        started = self._run_started_at
+        if not isinstance(started, datetime) or started.tzinfo is None:
+            return False
+        return (datetime.now(timezone.utc) - started).total_seconds() < self.ECS_VISIBLE_SECONDS
 
     def _no_task(self) -> None:
         """이 task instance 에 살아 있는 ECS 태스크가 없다(제출하지 않았거나 모두 업무 미시작으로 끝남)는 표시 —
@@ -518,6 +543,8 @@ class EdgeStep(EcsRunTaskOperator):
                 status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") or 0
                 if self.arn:
                     raise                           # 생성은 됐다(뒤 조회 실패) — 판정은 종료 뒤에
+                if error == "ConflictException":
+                    return self._attach_token_owner(exc)
                 if error == "ThrottlingException":
                     # 마지막 응답만 거부다 — boto 가 먼저 보낸 같은 토큰 요청이 태스크를 만들었을 수 있다.
                     return self._track_submission(exc)
@@ -533,6 +560,15 @@ class EdgeStep(EcsRunTaskOperator):
             self.log.warning("ECS 기동 거부 %d/%d: %s", n + 1, self.SUBMITS, refusal)
         self._no_task()
         raise AirflowFailException(f"ECS 기동 거부 반복 — 태스크 없음: {refusal}")
+
+    def _attach_token_owner(self, exc: ClientError) -> None:
+        """이 토큰이 이미 다른 요청(앞 시도)의 태스크를 만들었다 — 다시 띄우지 않고 그 태스크에 붙는다."""
+        arns = exc.response.get("resourceIds") or []
+        if len(arns) != 1:
+            raise HoldExecution(HOLD_ECS_STATE_UNKNOWN, f"clientToken 충돌인데 기존 태스크가 {arns}: {exc}")
+        self.arn = arns[0]
+        self.log.warning("앞 시도가 같은 토큰으로 띄운 태스크에 붙는다(새 업무 시도 없음): %s", self.arn)
+        self._trace("ecs_reattached_arn")
 
     def _track_submission(self, exc: Exception) -> None:
         """제출 응답을 잃었다. 다시 제출하지 않고 이 시도가 만든 태스크(앞서 보이지 않던 ARN)를 찾아 붙는다."""

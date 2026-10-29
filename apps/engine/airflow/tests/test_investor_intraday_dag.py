@@ -433,6 +433,66 @@ def test_unknown_previous_state_holds_without_starting_a_task(prior, try_number,
     assert ctx["ti"].pushed["hold"]["kind"] == kind          # report 가 원장에 옮길 재료
 
 
+@pytest.mark.parametrize("run_age, max_tries, expected_calls", [
+    # ALPHA-1473: 앞 시도가 큐 대기 중 토큰 만료로 제출 전에 죽었다. 젊은 run 의 자동 재시도에서 빈 조회 = 미제출이므로
+    # 보류하면 거짓 보류가 원장에 남아 이후 모든 run 의 같은 작업을 막는다 → 새로 띄운다.
+    (timedelta(minutes=20), 2, 1),
+    # run 이 ECS 조회 창(약 1시간)보다 늙었으면 앞 시도의 태스크 기록이 만료됐을 수 있다 → 보류 유지.
+    (timedelta(hours=2), 2, 0),
+    # clear 뒤 첫 시도(max_tries = try + retries)는 언제 누른 clear 인지 모른다 → 보류 유지(README "clear를 쓸 수 있는 경우").
+    (timedelta(minutes=20), 3, 0),
+])
+def test_empty_lookup_on_young_run_retry_is_treated_as_never_submitted(run_age, max_tries, expected_calls):
+    from edge_batch import HoldExecution
+    ecs = FakeEcs(tasks=[], on_run=[{"exit": 0}])
+    ctx = _context(NOW, try_number=2)
+    ctx["ti"].max_tries = max_tries
+    ctx["dag_run"].start_date = datetime.now(timezone.utc) - run_age
+    op = _op(ecs, retries=2)
+    if expected_calls:
+        assert op.execute(ctx) is None
+    else:
+        with pytest.raises(HoldExecution) as held:
+            op.execute(ctx)
+        assert held.value.kind == "ECS_STATE_UNKNOWN"
+    assert len(ecs.run_calls) == expected_calls
+
+
+def test_empty_lookup_retry_submits_with_first_try_token_and_attaches_to_its_hidden_task():
+    # 첫 시도가 제출 직후 죽었고 그 태스크가 조회에 아직 안 보인다(ECS 결과 지연). 둘째 시도가 새 토큰으로 띄우면 같은
+    # 업무가 두 번 돈다 → 첫 시도의 토큰으로 제출해 ECS 가 기존 태스크를 알려 주게 하고, 그 태스크에 붙는다.
+    from botocore.exceptions import ClientError
+    first = FakeEcs(on_run=[{"exit": 0}])
+    _op(first).execute(_context(NOW, try_number=1))
+    first_token = first.run_calls[0]["clientToken"]
+
+    hidden = _task("arn:first", exit_code=0)
+    conflict = ClientError({"Error": {"Code": "ConflictException"}, "resourceIds": ["arn:first"],
+                            "ResponseMetadata": {"HTTPStatusCode": 400}}, "RunTask")
+    ecs = FakeEcs(tasks=[hidden], on_run=[conflict])
+    ecs.hidden.add("arn:first")
+    ctx = _context(NOW, try_number=2)
+    ctx["dag_run"].start_date = datetime.now(timezone.utc) - timedelta(minutes=5)
+    assert _op(ecs, retries=2).execute(ctx) is None
+    assert [c["clientToken"] for c in ecs.run_calls] == [first_token]
+    assert ctx["ti"].pushed["exit_code"] == 0 and len(ecs.tasks) == 1     # 새 태스크 없이 첫 시도 것으로 판정
+
+
+@pytest.mark.parametrize("resource_ids", [[], ["arn:a", "arn:b"]])
+def test_token_conflict_without_a_single_owner_holds(resource_ids):
+    # 충돌인데 붙을 태스크를 하나로 못 정한다 — 새로 띄우면 중복, 아무거나 고르면 남의 결과로 판정한다 → 보류.
+    from botocore.exceptions import ClientError
+    from edge_batch import HoldExecution
+    conflict = ClientError({"Error": {"Code": "ConflictException"}, "resourceIds": resource_ids,
+                            "ResponseMetadata": {"HTTPStatusCode": 400}}, "RunTask")
+    ecs = FakeEcs(on_run=[conflict])
+    ctx = _context(NOW, try_number=2)
+    ctx["dag_run"].start_date = datetime.now(timezone.utc) - timedelta(minutes=5)
+    with pytest.raises(HoldExecution) as held:
+        _op(ecs, retries=2).execute(ctx)
+    assert held.value.kind == "ECS_STATE_UNKNOWN" and len(ecs.run_calls) == 1
+
+
 def test_hold_is_not_retried_by_airflow():
     from airflow.sdk.exceptions import AirflowFailException
     from edge_batch import HoldExecution
