@@ -28,8 +28,10 @@ flowchart LR
 
 ## 투표 흐름
 
-DB에 먼저 저장하고, 커밋이 끝난 뒤 Redis 집계를 갱신한다.
-둘이 어긋나면 재조정이 DB 기준으로 맞춘다.
+ETF 존재 확인과 투표 저장을 한 SQL로 처리하고, 커밋이 끝난 뒤 Redis 집계를 갱신한다.
+없는 ETF의 투표·재투표는 `404 / ETF4001`로 거절한다.
+선별 목록에서 제거된 ETF의 기존 투표는 보존하며 조회·철회가 가능하다.
+DB와 Redis가 어긋나면 재조정이 DB 기준으로 맞춘다.
 
 | API | 동작 |
 |---|---|
@@ -40,7 +42,7 @@ DB에 먼저 저장하고, 커밋이 끝난 뒤 Redis 집계를 갱신한다.
 | `POST /api/v1/admin/votes/reconcile` | 수동 재조정 (`X-Admin-Token`) |
 
 ```
-PUT ─▶ VoteFacade ─▶ VoteService.vote()          @Transactional upsert
+PUT ─▶ VoteFacade ─▶ VoteService.vote()          @Transactional ETF 존재 확인·upsert
                 │       (커밋·커넥션 반납)
                 └──▶ VoteCountRepository.vote()   vote.lua, 실패는 로그만 남기고 응답은 성공
 
@@ -50,6 +52,7 @@ GET count ─▶ VoteService.counts()   Redis 집계, 실패하면 DB 집계 (so
 ```
 
 - **원본.** 사용자당 1행은 `UNIQUE(etf_code, member_id)` 제약이 강제한다. 신규·변경 판정은 `INSERT ... ON CONFLICT DO UPDATE` 한 문장으로 한다.
+- **ETF 삭제 경합.** `FOR KEY SHARE`로 ETF 행을 커밋까지 보호한다. 삭제가 먼저 잠금을 얻어 커밋하면 투표를 거절하고, 투표가 먼저 잠금을 얻으면 삭제가 투표 커밋을 기다린다. 서로 다른 회원의 투표는 이 잠금을 공유한다.
 - **멱등 Lua.** `vote.lua`는 이전 선택과 같으면 아무것도 하지 않는다. 다르면 이전 카운터를 빼고 새 카운터를 더한다.
 - **응답에 집계 없음.** 쓰기 응답은 집계를 담지 않는다. 앱은 투표가 성공하면 집계를 따로 조회한다. 쓰기 요청 하나가 Redis를 한 번만 호출하게 하려는 것이다.
 - **재조정 대상.** 등록 ETF에 투표를 LEFT JOIN하고, ETF 행이 없는 기존 투표도 UNION ALL로 포함한 단일 스냅샷을 ETF별로 묶는다. 투표가 0건인 ETF도 집계를 0으로 교체하고 회원별 선택 기록을 비운다.
@@ -279,6 +282,7 @@ HOT=failed FAULT=kill python3 run-cluster.py C4    # Cluster: C1~C4 (docker-comp
 - 종료 후 데이터 확인을 위해 컨테이너를 남긴다. 출력된 down 명령으로 정리한다.
 - 결과는 `experiments/runs`에 기록한다.
 - `token.js`가 compose와 같은 `APP_JWT_SECRET`으로 회원별 액세스 JWT를 서명해 투표한다.
+- 실험 러너가 부하 실행 전에 대상 ETF를 로컬 DB에 등록한다.
 - 러너가 부하 시작 전에 `members.py`로 해당 ID의 활동 회원을 로컬 DB에 준비한다. k6를 직접 실행할 때도 같은 회원 준비가 필요하다.
 - 현재 인증에는 요청마다 회원 상태 DB 조회가 추가된다. 기존 실험 결과를 현재 코드의 성능 측정값으로 사용하지 않는다.
 

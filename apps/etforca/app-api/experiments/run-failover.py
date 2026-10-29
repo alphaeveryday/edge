@@ -11,6 +11,7 @@ import sys
 import time
 import urllib.request
 from members import seed_members
+from etfs import seed_etfs
 
 scenario = sys.argv[1] if len(sys.argv) > 1 else 'S2'
 if scenario not in {'S1', 'S2', 'S3', 'S4', 'S5'}:
@@ -54,6 +55,7 @@ else: raise SystemExit('App did not become ready')
 seed_members(sql, min(user_pool, 9000) if user_pool else 9000, os.environ.get('USER_OFFSET', '1'))
 master = dc('ps', '-q', 'redis-master').strip()
 etf = str(int(time.time()))[-6:]
+seed_etfs(sql, [etf])
 env.update(ETF_ID=etf, SCENARIO=scenario, SUMMARY_PATH=str(out / 'summary.json'))
 threads = []
 start = time.monotonic()

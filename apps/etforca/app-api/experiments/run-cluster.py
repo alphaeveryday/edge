@@ -15,6 +15,7 @@ import sys
 import time
 import urllib.request
 from members import iterations, seed_members
+from etfs import cluster_etfs, seed_etfs
 
 scenario = sys.argv[1] if len(sys.argv) > 1 else 'C3'
 if scenario not in {'C1', 'C2', 'C3', 'C4'}:
@@ -85,6 +86,7 @@ hot_shard = fail_shard if hot == 'failed' else (fail_shard + 1) % len(shards)
 
 base = str(int(time.time())) + '000'
 env.update(FORECAST_BASE=base, HOT_SHARD=str(hot_shard), SLOT_RANGES=slot_ranges, SUMMARY_PATH=str(out / 'summary.json'))
+seed_etfs(sql, cluster_etfs(base, slot_ranges, env.get('FORECASTS_PER_SHARD', '10')))
 metric_names = ['tomcat.threads.busy', 'hikaricp.connections.active', 'hikaricp.connections.pending',
                 'vote.redis.write.failures', 'vote.redis.read.failures']
 samples = []

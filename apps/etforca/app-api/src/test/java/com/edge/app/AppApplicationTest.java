@@ -26,6 +26,8 @@ import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
 import org.springframework.test.web.servlet.assertj.MvcTestResult;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.testcontainers.containers.GenericContainer;
 import tools.jackson.databind.ObjectMapper;
 
@@ -36,6 +38,7 @@ import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static com.edge.app.support.JsonResults.result;
@@ -47,7 +50,8 @@ import static org.mockito.Mockito.doAnswer;
 @MockitoSpyBean(types = VoteCountRepository.class)
 record AppApplicationTest(MockMvcTester mvcTester, ObjectMapper objectMapper, VoteService voteService,
         VoteCountRepository voteCountRepository, VoteRepository voteRepository, StringRedisTemplate redis, AccessTokens tokens,
-        DataSource dataSource, @Qualifier("redis") GenericContainer<?> redisContainer, CircuitBreakerRegistry circuits, VoteReconciler reconciler) {
+        DataSource dataSource, @Qualifier("redis") GenericContainer<?> redisContainer, CircuitBreakerRegistry circuits, VoteReconciler reconciler,
+        PlatformTransactionManager transactionManager) {
     @BeforeAll
     static void fixtures(@Autowired JdbcTemplate jdbc) {
         jdbc.update("insert into member(id, provider, nick, handle) values "
@@ -107,6 +111,119 @@ record AppApplicationTest(MockMvcTester mvcTester, ObjectMapper objectMapper, Vo
         assertThat(withdraw(etf, 1)).isEqualTo(200);
         assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(0, 0, 1));
         assertThat(mvcTester.delete().uri("/api/v1/etfs/" + etf + "/vote").exchange()).hasStatus(401);
+    }
+
+    @Test
+    void unknownEtfVoteIsRejectedWithoutCreatingDbOrRedisRecords() {
+        String etf = "949984";
+        var jdbc = new JdbcTemplate(dataSource);
+        assertThat(jdbc.queryForObject("select count(*) from etf where code = ?", Long.class, etf)).isZero();
+        var response = mvcTester.put().uri("/api/v1/etfs/" + etf + "/vote").header("Authorization", bearer(1))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"choice\":\"buy\"}").exchange();
+        assertThat(response).hasStatus(404).bodyJson().extractingPath("$.code").isEqualTo("ETF4001");
+        assertThat(votes(etf)).isEmpty();
+        assertThat(redis.hasKey("vote:{" + etf + "}:count")).isFalse();
+        assertThat(redis.hasKey("vote:{" + etf + "}:choices")).isFalse();
+    }
+
+    @Test
+    void removedEtfRejectsRevoteButPreservesExistingVoteUntilWithdrawal() {
+        String etf = "000101";
+        var jdbc = new JdbcTemplate(dataSource);
+        jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key, hot) values (?, ?, 'XKRX', '투표 테스트', 'semicon', false)",
+                etf, "e-" + etf);
+        assertThat(vote(etf, 1, "buy")).isEqualTo(200);
+        jdbc.update("delete from etf where code = ?", etf);
+
+        var response = mvcTester.put().uri("/api/v1/etfs/" + etf + "/vote").header("Authorization", bearer(1))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"choice\":\"sell\"}").exchange();
+        assertThat(response).hasStatus(404).bodyJson().extractingPath("$.code").isEqualTo("ETF4001");
+        assertThat(votes(etf)).singleElement().extracting(Vote::getChoice).isEqualTo(VoteChoice.BUY);
+        assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(1, 0, 0));
+        assertThat(redis.opsForHash().entries("vote:{" + etf + "}:choices"))
+                .containsExactlyInAnyOrderEntriesOf(Map.of("1", "buy"));
+
+        assertThat(withdraw(etf, 1)).isEqualTo(200);
+        assertThat(votes(etf)).isEmpty();
+        assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(0, 0, 0));
+        assertThat(redis.hasKey("vote:{" + etf + "}:choices")).isFalse();
+    }
+
+    @Test
+    void voteWaitsForConcurrentEtfDeletionAndRejectsAfterItCommits() throws Exception {
+        String etf = "000102";
+        var jdbc = new JdbcTemplate(dataSource);
+        jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key, hot) values (?, ?, 'XKRX', '투표 테스트', 'semicon', false)",
+                etf, "e-" + etf);
+        try (var pool = Executors.newSingleThreadExecutor(); var deletion = dataSource.getConnection()) {
+            deletion.setAutoCommit(false);
+            try {
+                int blocker;
+                try (var statement = deletion.createStatement(); var result = statement.executeQuery("select pg_backend_pid()")) {
+                    result.next();
+                    blocker = result.getInt(1);
+                }
+                try (var statement = deletion.prepareStatement("delete from etf where code = ?")) {
+                    statement.setString(1, etf);
+                    assertThat(statement.executeUpdate()).isEqualTo(1);
+                }
+                var request = pool.submit(() -> mvcTester.put().uri("/api/v1/etfs/" + etf + "/vote")
+                        .header("Authorization", bearer(1)).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"choice\":\"buy\"}").exchange());
+                assertBlockedBy(blocker, request);
+                deletion.commit();
+                assertThat(request.get(5, TimeUnit.SECONDS)).hasStatus(404)
+                        .bodyJson().extractingPath("$.code").isEqualTo("ETF4001");
+            } finally {
+                deletion.rollback();
+            }
+        }
+        assertThat(votes(etf)).isEmpty();
+        assertThat(redis.hasKey("vote:{" + etf + "}:count")).isFalse();
+        assertThat(redis.hasKey("vote:{" + etf + "}:choices")).isFalse();
+    }
+
+    @Test
+    void voteHoldsEtfUntilCommitWithoutBlockingAnotherMembersVote() throws Exception {
+        String etf = "000103";
+        var jdbc = new JdbcTemplate(dataSource);
+        jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key, hot) values (?, ?, 'XKRX', '투표 테스트', 'semicon', false)",
+                etf, "e-" + etf);
+        var blocker = new CompletableFuture<Integer>();
+        var commit = new CompletableFuture<Void>();
+        try (var pool = Executors.newFixedThreadPool(2)) {
+            try {
+                var voting = pool.submit(() -> new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
+                    voteService.vote(etf, 1L, VoteChoice.BUY);
+                    blocker.complete(jdbc.queryForObject("select pg_backend_pid()", Integer.class));
+                    commit.orTimeout(10, TimeUnit.SECONDS).join();
+                }));
+                int pid = blocker.get(5, TimeUnit.SECONDS);
+                // 서로 다른 회원의 투표는 같은 ETF의 삭제 방지 잠금을 공유한다.
+                pool.submit(() -> voteService.vote(etf, 2L, VoteChoice.SELL)).get(5, TimeUnit.SECONDS);
+                var deletion = pool.submit(() -> jdbc.update("delete from etf where code = ?", etf));
+                assertBlockedBy(pid, deletion);
+                commit.complete(null);
+                voting.get(5, TimeUnit.SECONDS);
+                assertThat(deletion.get(5, TimeUnit.SECONDS)).isEqualTo(1);
+            } finally {
+                commit.complete(null);
+            }
+        }
+        assertThat(votes(etf)).hasSize(2);
+    }
+
+    private void assertBlockedBy(int pid, Future<?> operation) throws Exception {
+        var jdbc = new JdbcTemplate(dataSource);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline && !operation.isDone()) {
+            if (Boolean.TRUE.equals(jdbc.queryForObject(
+                    "select exists (select 1 from pg_stat_activity where ? = any(pg_blocking_pids(pid)))", Boolean.class, pid))) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        throw new AssertionError("ETF deletion and vote must wait for the other transaction to commit");
     }
 
     @Test

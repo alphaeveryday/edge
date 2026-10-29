@@ -7,6 +7,8 @@ import com.edge.app.application.vote.required.VoteRepository;
 import com.edge.app.domain.vote.Vote;
 import com.edge.app.domain.vote.VoteChoice;
 import com.edge.app.domain.vote.VoteCounts;
+import com.edge.app.support.exception.AppErrorStatus;
+import com.edge.common.exception.GeneralException;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
@@ -28,7 +30,9 @@ public class VoteService implements VoteFinder {
 
     @Transactional
     public void vote(String etfCode, Long memberId, VoteChoice choice) {
-        voteRepository.upsert(etfCode, memberId, choice.value());
+        if (voteRepository.upsert(etfCode, memberId, choice.value()) == 0) {
+            throw new GeneralException(AppErrorStatus.ETF_NOT_FOUND);
+        }
     }
 
     // 트랜잭션 없는 Redis 반영
