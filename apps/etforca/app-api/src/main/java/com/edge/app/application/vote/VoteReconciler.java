@@ -12,17 +12,22 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
+import net.javacrumbs.shedlock.core.DefaultLockingTaskExecutor;
+import net.javacrumbs.shedlock.core.LockConfiguration;
+import net.javacrumbs.shedlock.core.LockProvider;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -36,6 +41,7 @@ public class VoteReconciler implements VoteReconcileRequester {
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final AtomicBoolean running = new AtomicBoolean();
     private final ClientResources clientResources;
+    private final LockProvider lockProvider;
     private Disposable subscription;
 
     @PostConstruct
@@ -46,7 +52,6 @@ public class VoteReconciler implements VoteReconcileRequester {
     }
 
     @Scheduled(fixedDelayString = "${vote.reconcile.interval:PT5M}", initialDelayString = "${vote.reconcile.initial-delay:PT1S}")
-    @SchedulerLock(name = "vote-reconcile", lockAtMostFor = "PT4M")
     public void scheduled() {
         request();
     }
@@ -58,11 +63,29 @@ public class VoteReconciler implements VoteReconcileRequester {
         if (!running.compareAndSet(false, true)) {
             return false;
         }
-        executor.submit(this::reconcile);
+        try {
+            executor.submit(this::reconcile);
+        } catch (RejectedExecutionException ex) {
+            running.set(false);
+            throw ex;
+        }
         return true;
     }
 
     private void reconcile() {
+        try {
+            // 모든 트리거의 DB 조회와 Redis 교체를 작업 스레드에서 함께 잠근다.
+            new DefaultLockingTaskExecutor(lockProvider).executeWithLock((Runnable) this::replaceCounts,
+                    new LockConfiguration(Instant.now(), "vote-reconcile", Duration.ofMinutes(4), Duration.ZERO));
+        } catch (Exception ex) {
+            meterRegistry.counter("vote.reconcile.failures").increment();
+            log.warn("Reconciliation lock failed; next trigger will retry", ex);
+        } finally {
+            running.set(false);
+        }
+    }
+
+    private void replaceCounts() {
         long start = System.nanoTime();
         try {
             // 등록 ETF와 잔존 투표를 한 번에 읽어 0건 ETF까지 교체한다.
@@ -99,7 +122,6 @@ public class VoteReconciler implements VoteReconcileRequester {
             long elapsed = System.nanoTime() - start;
             meterRegistry.timer("vote.reconcile.duration").record(elapsed, TimeUnit.NANOSECONDS);
             log.info("Reconciliation finished elapsedMs={}", elapsed / 1_000_000);
-            running.set(false);
         }
     }
 
