@@ -28,8 +28,10 @@ flowchart LR
 
 ## 투표 흐름
 
-DB에 먼저 저장하고, 커밋이 끝난 뒤 Redis 집계를 갱신한다.
-둘이 어긋나면 재조정이 DB 기준으로 맞춘다.
+ETF 존재를 확인한 뒤 DB에 저장하고, 커밋이 끝난 뒤 Redis 집계를 갱신한다.
+없는 ETF의 투표·재투표는 `404 / ETF4001`로 거절한다.
+선별 목록에서 제거된 ETF의 기존 투표는 보존하며 조회·철회가 가능하다.
+DB와 Redis가 어긋나면 재조정이 DB 기준으로 맞춘다.
 
 | API | 동작 |
 |---|---|
@@ -40,7 +42,7 @@ DB에 먼저 저장하고, 커밋이 끝난 뒤 Redis 집계를 갱신한다.
 | `POST /api/v1/admin/votes/reconcile` | 수동 재조정 (`X-Admin-Token`) |
 
 ```
-PUT ─▶ VoteFacade ─▶ VoteService.vote()          @Transactional upsert
+PUT ─▶ VoteFacade ─▶ VoteService.vote()          @Transactional ETF 존재 확인·upsert
                 │       (커밋·커넥션 반납)
                 └──▶ VoteCountRepository.vote()   vote.lua, 실패는 로그만 남기고 응답은 성공
 
@@ -279,6 +281,7 @@ HOT=failed FAULT=kill python3 run-cluster.py C4    # Cluster: C1~C4 (docker-comp
 - 종료 후 데이터 확인을 위해 컨테이너를 남긴다. 출력된 down 명령으로 정리한다.
 - 결과는 `experiments/runs`에 기록한다.
 - `token.js`가 compose와 같은 `APP_JWT_SECRET`으로 회원별 액세스 JWT를 서명해 투표한다.
+- 실험 러너가 부하 실행 전에 대상 ETF를 로컬 DB에 등록한다.
 - 러너가 부하 시작 전에 `members.py`로 해당 ID의 활동 회원을 로컬 DB에 준비한다. k6를 직접 실행할 때도 같은 회원 준비가 필요하다.
 - 현재 인증에는 요청마다 회원 상태 DB 조회가 추가된다. 기존 실험 결과를 현재 코드의 성능 측정값으로 사용하지 않는다.
 

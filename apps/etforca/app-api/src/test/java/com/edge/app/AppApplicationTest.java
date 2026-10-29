@@ -110,6 +110,42 @@ record AppApplicationTest(MockMvcTester mvcTester, ObjectMapper objectMapper, Vo
     }
 
     @Test
+    void unknownEtfVoteIsRejectedWithoutCreatingDbOrRedisRecords() {
+        String etf = "949984";
+        var jdbc = new JdbcTemplate(dataSource);
+        assertThat(jdbc.queryForObject("select count(*) from etf where code = ?", Long.class, etf)).isZero();
+        var response = mvcTester.put().uri("/api/v1/etfs/" + etf + "/vote").header("Authorization", bearer(1))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"choice\":\"buy\"}").exchange();
+        assertThat(response).hasStatus(404).bodyJson().extractingPath("$.code").isEqualTo("ETF4001");
+        assertThat(votes(etf)).isEmpty();
+        assertThat(redis.hasKey("vote:{" + etf + "}:count")).isFalse();
+        assertThat(redis.hasKey("vote:{" + etf + "}:choices")).isFalse();
+    }
+
+    @Test
+    void removedEtfRejectsRevoteButPreservesExistingVoteUntilWithdrawal() {
+        String etf = "000101";
+        var jdbc = new JdbcTemplate(dataSource);
+        jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key, hot) values (?, ?, 'XKRX', '투표 테스트', 'semicon', false)",
+                etf, "e-" + etf);
+        assertThat(vote(etf, 1, "buy")).isEqualTo(200);
+        jdbc.update("delete from etf where code = ?", etf);
+
+        var response = mvcTester.put().uri("/api/v1/etfs/" + etf + "/vote").header("Authorization", bearer(1))
+                .contentType(MediaType.APPLICATION_JSON).content("{\"choice\":\"sell\"}").exchange();
+        assertThat(response).hasStatus(404).bodyJson().extractingPath("$.code").isEqualTo("ETF4001");
+        assertThat(votes(etf)).singleElement().extracting(Vote::getChoice).isEqualTo(VoteChoice.BUY);
+        assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(1, 0, 0));
+        assertThat(redis.opsForHash().entries("vote:{" + etf + "}:choices"))
+                .containsExactlyInAnyOrderEntriesOf(Map.of("1", "buy"));
+
+        assertThat(withdraw(etf, 1)).isEqualTo(200);
+        assertThat(votes(etf)).isEmpty();
+        assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(0, 0, 0));
+        assertThat(redis.hasKey("vote:{" + etf + "}:choices")).isFalse();
+    }
+
+    @Test
     void numericChoiceIsRejected() {
         assertThat(vote("000012", 1, 0)).isEqualTo(400);
         assertThat(votes("000012")).isEmpty();

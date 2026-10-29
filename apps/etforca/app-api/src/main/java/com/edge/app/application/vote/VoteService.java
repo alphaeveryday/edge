@@ -1,5 +1,6 @@
 package com.edge.app.application.vote;
 
+import com.edge.app.application.etf.required.EtfRepository;
 import com.edge.app.application.vote.provided.VoteCountResponse;
 import com.edge.app.application.vote.provided.VoteFinder;
 import com.edge.app.application.vote.required.VoteCountStore;
@@ -7,6 +8,8 @@ import com.edge.app.application.vote.required.VoteRepository;
 import com.edge.app.domain.vote.Vote;
 import com.edge.app.domain.vote.VoteChoice;
 import com.edge.app.domain.vote.VoteCounts;
+import com.edge.app.support.exception.AppErrorStatus;
+import com.edge.common.exception.GeneralException;
 
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
@@ -22,12 +25,16 @@ import java.util.Optional;
 @Service
 @RequiredArgsConstructor
 public class VoteService implements VoteFinder {
+    private final EtfRepository etfRepository;
     private final VoteRepository voteRepository;
     private final VoteCountStore voteCountStore;
     private final MeterRegistry meterRegistry;
 
     @Transactional
     public void vote(String etfCode, Long memberId, VoteChoice choice) {
+        if (!etfRepository.existsById(etfCode)) {
+            throw new GeneralException(AppErrorStatus.ETF_NOT_FOUND);
+        }
         voteRepository.upsert(etfCode, memberId, choice.value());
     }
 
