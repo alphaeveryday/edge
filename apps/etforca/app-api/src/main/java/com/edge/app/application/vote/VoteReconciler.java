@@ -17,13 +17,14 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Component
@@ -64,9 +65,14 @@ public class VoteReconciler implements VoteReconcileRequester {
     private void reconcile() {
         long start = System.nanoTime();
         try {
-            // 목록 조회와 전망별 조회의 시차를 없애는 단일 findAll 스냅샷 기준 교체
-            Map<String, List<Vote>> byEtf = voteRepository.findAll().stream()
-                    .collect(Collectors.groupingBy(Vote::getEtfCode));
+            // 등록 ETF와 잔존 투표를 한 번에 읽어 0건 ETF까지 교체한다.
+            Map<String, List<Vote>> byEtf = new HashMap<>();
+            for (var row : voteRepository.findReconcileRows()) {
+                var votes = byEtf.computeIfAbsent(row.getEtfCode(), ignored -> new ArrayList<>());
+                if (row.getVote() != null) {
+                    votes.add(row.getVote());
+                }
+            }
             // 전망 단위 격리
             // Cluster 부분 장애에서 한 샤드 실패의 정상 샤드 전망 복구 차단 방지
             int failed = 0;

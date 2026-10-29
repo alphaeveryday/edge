@@ -8,6 +8,7 @@ import com.edge.app.adapter.persistence.vote.VoteCountRepository;
 import com.edge.app.domain.vote.VoteCounts;
 import com.edge.app.application.vote.required.VoteRepository;
 import com.edge.app.application.vote.VoteService;
+import com.edge.app.application.vote.VoteReconciler;
 import com.edge.app.support.stereotype.WebApiAdapterTest;
 import com.zaxxer.hikari.HikariDataSource;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
@@ -21,6 +22,7 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
 import org.springframework.test.web.servlet.assertj.MvcTestResult;
@@ -45,11 +47,15 @@ import static org.mockito.Mockito.doAnswer;
 @MockitoSpyBean(types = VoteCountRepository.class)
 record AppApplicationTest(MockMvcTester mvcTester, ObjectMapper objectMapper, VoteService voteService,
         VoteCountRepository voteCountRepository, VoteRepository voteRepository, StringRedisTemplate redis, AccessTokens tokens,
-        DataSource dataSource, @Qualifier("redis") GenericContainer<?> redisContainer, CircuitBreakerRegistry circuits) {
+        DataSource dataSource, @Qualifier("redis") GenericContainer<?> redisContainer, CircuitBreakerRegistry circuits, VoteReconciler reconciler) {
     @BeforeAll
-    static void members(@Autowired JdbcTemplate jdbc) {
+    static void fixtures(@Autowired JdbcTemplate jdbc) {
         jdbc.update("insert into member(id, provider, nick, handle) values "
                 + "(1, 'email', '투표 회원 1', '@vote-test-1'), (2, 'email', '투표 회원 2', '@vote-test-2')");
+        for (String code : List.of("000011", "000022", "000033", "000044", "000066", "000077", "000088", "000099")) {
+            jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key, hot) values (?, ?, 'XKRX', '투표 테스트', 'semicon', false)",
+                    code, "e-" + code);
+        }
     }
 
     @BeforeEach
@@ -192,6 +198,63 @@ record AppApplicationTest(MockMvcTester mvcTester, ObjectMapper objectMapper, Vo
             Thread.sleep(50);
         }
         assertThat(voteCountRepository.counts(etf).buys()).isEqualTo(1);
+    }
+
+    @Test
+    void reconcileClearsLastWithdrawnVoteAfterRedisWriteWasBlocked() {
+        String etf = "000088";
+        assertThat(vote(etf, 1, "buy")).isEqualTo(200);
+        circuits.circuitBreaker("redis").transitionToForcedOpenState();
+        try {
+            assertThat(withdraw(etf, 1)).isEqualTo(200);
+            assertThat(votes(etf)).isEmpty();
+            assertThat(redis.opsForHash().get("vote:{" + etf + "}:count", "buy")).isEqualTo("1");
+            assertThat(redis.opsForHash().get("vote:{" + etf + "}:choices", "1")).isEqualTo("buy");
+            // 재조정은 열린 쓰기 서킷과 무관하게 DB의 0건을 반영해야 한다.
+            ReflectionTestUtils.invokeMethod(reconciler, "reconcile");
+            assertThat(redis.opsForHash().entries("vote:{" + etf + "}:count"))
+                    .containsExactlyInAnyOrderEntriesOf(Map.of("buy", "0", "wait", "0", "sell", "0"));
+            assertThat(redis.hasKey("vote:{" + etf + "}:choices")).isFalse();
+        } finally {
+            circuits.circuitBreaker("redis").reset();
+        }
+        // 같은 회원이 다시 투표할 때 옛 선택 때문에 카운터가 음수가 되면 안 된다.
+        assertThat(vote(etf, 1, "sell")).isEqualTo(200);
+        assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(0, 0, 1));
+        ReflectionTestUtils.invokeMethod(reconciler, "reconcile");
+        assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(0, 0, 1));
+    }
+
+    @Test
+    void reconcileClearsAllStaleChoicesForAnEtfWithoutDbVotes() {
+        String etf = "000099";
+        assertThat(votes(etf)).isEmpty();
+        voteCountRepository.vote(etf, 1L, VoteChoice.BUY);
+        voteCountRepository.vote(etf, 2L, VoteChoice.WAIT);
+        voteCountRepository.vote(etf, 3L, VoteChoice.SELL);
+        for (int attempt = 0; attempt < 2; attempt++) {
+            ReflectionTestUtils.invokeMethod(reconciler, "reconcile");
+            assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(0, 0, 0));
+            assertThat(redis.hasKey("vote:{" + etf + "}:choices")).isFalse();
+        }
+    }
+
+    @Test
+    void reconcilePreservesVotesAfterEtfLeavesTheCuratedList() {
+        String etf = "000100";
+        var jdbc = new JdbcTemplate(dataSource);
+        jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key, hot) values (?, ?, 'XKRX', '투표 테스트', 'semicon', false)",
+                etf, "e-" + etf);
+        assertThat(vote(etf, 1, "buy")).isEqualTo(200);
+        assertThat(vote(etf, 2, "sell")).isEqualTo(200);
+        // 선별 목록에서 제외될 때 동기화 데이터는 삭제돼도 회원 투표는 남는다.
+        jdbc.update("delete from etf where code = ?", etf);
+        assertThat(votes(etf)).hasSize(2);
+        redis.delete(List.of("vote:{" + etf + "}:count", "vote:{" + etf + "}:choices"));
+        ReflectionTestUtils.invokeMethod(reconciler, "reconcile");
+        assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(1, 0, 1));
+        assertThat(redis.opsForHash().entries("vote:{" + etf + "}:choices"))
+                .containsExactlyInAnyOrderEntriesOf(Map.of("1", "buy", "2", "sell"));
     }
 
     private List<Vote> votes(String etf) {
