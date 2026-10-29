@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -318,7 +319,7 @@ record AppApplicationTest(MockMvcTester mvcTester, ObjectMapper objectMapper, Vo
     }
 
     @Test
-    void reconcileClearsLastWithdrawnVoteAfterRedisWriteWasBlocked() {
+    void reconcileClearsLastWithdrawnVoteAfterRedisWriteWasBlocked() throws Exception {
         String etf = "000088";
         assertThat(vote(etf, 1, "buy")).isEqualTo(200);
         circuits.circuitBreaker("redis").transitionToForcedOpenState();
@@ -328,7 +329,7 @@ record AppApplicationTest(MockMvcTester mvcTester, ObjectMapper objectMapper, Vo
             assertThat(redis.opsForHash().get("vote:{" + etf + "}:count", "buy")).isEqualTo("1");
             assertThat(redis.opsForHash().get("vote:{" + etf + "}:choices", "1")).isEqualTo("buy");
             // 재조정은 열린 쓰기 서킷과 무관하게 DB의 0건을 반영해야 한다.
-            ReflectionTestUtils.invokeMethod(reconciler, "reconcile");
+            reconcileAndWait();
             assertThat(redis.opsForHash().entries("vote:{" + etf + "}:count"))
                     .containsExactlyInAnyOrderEntriesOf(Map.of("buy", "0", "wait", "0", "sell", "0"));
             assertThat(redis.hasKey("vote:{" + etf + "}:choices")).isFalse();
@@ -338,26 +339,26 @@ record AppApplicationTest(MockMvcTester mvcTester, ObjectMapper objectMapper, Vo
         // 같은 회원이 다시 투표할 때 옛 선택 때문에 카운터가 음수가 되면 안 된다.
         assertThat(vote(etf, 1, "sell")).isEqualTo(200);
         assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(0, 0, 1));
-        ReflectionTestUtils.invokeMethod(reconciler, "reconcile");
+        reconcileAndWait();
         assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(0, 0, 1));
     }
 
     @Test
-    void reconcileClearsAllStaleChoicesForAnEtfWithoutDbVotes() {
+    void reconcileClearsAllStaleChoicesForAnEtfWithoutDbVotes() throws Exception {
         String etf = "000099";
         assertThat(votes(etf)).isEmpty();
         voteCountRepository.vote(etf, 1L, VoteChoice.BUY);
         voteCountRepository.vote(etf, 2L, VoteChoice.WAIT);
         voteCountRepository.vote(etf, 3L, VoteChoice.SELL);
         for (int attempt = 0; attempt < 2; attempt++) {
-            ReflectionTestUtils.invokeMethod(reconciler, "reconcile");
+            reconcileAndWait();
             assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(0, 0, 0));
             assertThat(redis.hasKey("vote:{" + etf + "}:choices")).isFalse();
         }
     }
 
     @Test
-    void reconcilePreservesVotesAfterEtfLeavesTheCuratedList() {
+    void reconcilePreservesVotesAfterEtfLeavesTheCuratedList() throws Exception {
         String etf = "000100";
         var jdbc = new JdbcTemplate(dataSource);
         jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key, hot) values (?, ?, 'XKRX', '투표 테스트', 'semicon', false)",
@@ -368,10 +369,22 @@ record AppApplicationTest(MockMvcTester mvcTester, ObjectMapper objectMapper, Vo
         jdbc.update("delete from etf where code = ?", etf);
         assertThat(votes(etf)).hasSize(2);
         redis.delete(List.of("vote:{" + etf + "}:count", "vote:{" + etf + "}:choices"));
-        ReflectionTestUtils.invokeMethod(reconciler, "reconcile");
+        reconcileAndWait();
         assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(1, 0, 1));
         assertThat(redis.opsForHash().entries("vote:{" + etf + "}:choices"))
                 .containsExactlyInAnyOrderEntriesOf(Map.of("1", "buy", "2", "sell"));
+    }
+
+    private void reconcileAndWait() throws Exception {
+        var worker = (ExecutorService) ReflectionTestUtils.getField(reconciler, "executor");
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        do {
+            boolean accepted = reconciler.request();
+            worker.submit(() -> {}).get(5, TimeUnit.SECONDS);
+            if (accepted) return;
+            // 재연결 작업에 병합됐다면 그 작업이 끝난 뒤 새 스냅샷으로 다시 요청한다.
+        } while (System.nanoTime() < deadline);
+        throw new AssertionError("Reconciliation request was not accepted");
     }
 
     private List<Vote> votes(String etf) {
