@@ -17,6 +17,18 @@ public interface VoteRepository extends JpaRepository<Vote, Long> {
         long getTotal();
     }
 
+    interface ReconcileRow {
+        String getEtfCode();
+        Vote getVote();
+    }
+
+    // 투표가 0건인 ETF도 같은 조회 스냅샷에 포함한다.
+    @Query("""
+            select e.code as etfCode, v as vote from Etf e
+            left join Vote v on v.etfCode = e.code
+            """)
+    List<ReconcileRow> findReconcileRows();
+
     // DB 원자 upsert 기반의 신규와 변경 판정
     // 동시 요청 레이스가 있는 SELECT 선검사 회피
     @Modifying
