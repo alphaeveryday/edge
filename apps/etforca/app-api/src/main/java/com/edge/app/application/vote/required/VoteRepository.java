@@ -22,10 +22,13 @@ public interface VoteRepository extends JpaRepository<Vote, Long> {
         Vote getVote();
     }
 
-    // 투표가 0건인 ETF도 같은 조회 스냅샷에 포함한다.
+    // 투표 0건의 등록 ETF와 선별 목록에서 제외된 ETF의 잔존 투표를 함께 읽는다.
     @Query("""
             select e.code as etfCode, v as vote from Etf e
             left join Vote v on v.etfCode = e.code
+            union all
+            select v.etfCode as etfCode, v as vote from Vote v
+            where not exists (select e.code from Etf e where e.code = v.etfCode)
             """)
     List<ReconcileRow> findReconcileRows();
 

@@ -239,6 +239,24 @@ record AppApplicationTest(MockMvcTester mvcTester, ObjectMapper objectMapper, Vo
         }
     }
 
+    @Test
+    void reconcilePreservesVotesAfterEtfLeavesTheCuratedList() {
+        String etf = "000100";
+        var jdbc = new JdbcTemplate(dataSource);
+        jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key, hot) values (?, ?, 'XKRX', '투표 테스트', 'semicon', false)",
+                etf, "e-" + etf);
+        assertThat(vote(etf, 1, "buy")).isEqualTo(200);
+        assertThat(vote(etf, 2, "sell")).isEqualTo(200);
+        // 선별 목록에서 제외될 때 동기화 데이터는 삭제돼도 회원 투표는 남는다.
+        jdbc.update("delete from etf where code = ?", etf);
+        assertThat(votes(etf)).hasSize(2);
+        redis.delete(List.of("vote:{" + etf + "}:count", "vote:{" + etf + "}:choices"));
+        ReflectionTestUtils.invokeMethod(reconciler, "reconcile");
+        assertThat(voteCountRepository.counts(etf)).isEqualTo(new VoteCounts(1, 0, 1));
+        assertThat(redis.opsForHash().entries("vote:{" + etf + "}:choices"))
+                .containsExactlyInAnyOrderEntriesOf(Map.of("1", "buy", "2", "sell"));
+    }
+
     private List<Vote> votes(String etf) {
         return voteRepository.findAll().stream().filter(v -> v.getEtfCode().equals(etf)).toList();
     }

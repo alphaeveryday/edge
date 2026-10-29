@@ -65,7 +65,7 @@ public class VoteReconciler implements VoteReconcileRequester {
     private void reconcile() {
         long start = System.nanoTime();
         try {
-            // 등록 ETF와 회원별 투표를 한 번에 읽어 0건 ETF까지 교체한다.
+            // 등록 ETF와 잔존 투표를 한 번에 읽어 0건 ETF까지 교체한다.
             Map<String, List<Vote>> byEtf = new HashMap<>();
             for (var row : voteRepository.findReconcileRows()) {
                 var votes = byEtf.computeIfAbsent(row.getEtfCode(), ignored -> new ArrayList<>());
