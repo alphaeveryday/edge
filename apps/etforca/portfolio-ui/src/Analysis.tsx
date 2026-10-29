@@ -5,6 +5,7 @@ import { inputDraftKey, readInputDraft, restoreInputDraft } from './inputDraft';
 import { InputForm } from './InputForm';
 import { ReportView } from './ReportView';
 import { FailedView, ResultView } from './ResultView';
+import { InputSave } from './InputSave';
 import { Followup } from './Followup';
 import { ProgressView } from './ProgressView';
 import { Start } from './Start';
@@ -158,7 +159,7 @@ export function Analysis({ embedded = false, active = true }: { embedded?: boole
         : entered ? <InputForm key={begin.key} onSubmit={submit} busy={busy} initialInput={rejectedInput ?? begin.input} start={begin.start} // 거절된 입력은 한 번만 되살린다. 처음 화면에 다녀오면 그동안 고친 초안을 이어 쓴다.
           onExit={embedded ? undefined : () => { setEntered(false); setRejectedInput(null); }} />
         : <Start draft={readInputDraft()} onBegin={input => { setBegin({ input, key: begin.key + 1 }); setEntered(true); }} onFresh={() => { setBegin({ start: 'fresh', key: begin.key + 1 }); setEntered(true); }} onImport={() => { setBegin({ start: 'import', key: begin.key + 1 }); setEntered(true); }} onOpen={open} />
-      : result ? <><ResultView report={job.result!} jobId={jobId} input={job.input} active={active} /><Button variant="secondary" className="secondary" onClick={reset}>새 포트폴리오 분석하기</Button></>
+      : result ? <><ResultView report={job.result!} jobId={jobId} input={job.input} active={active} /><InputSave key={jobId} jobId={jobId} screen="result" active={active} /><Button variant="secondary" className="secondary" onClick={reset}>새 포트폴리오 분석하기</Button></>
       : job?.state === 'failed' ? <>
         {job.failure === 'SEARCH_RATE_LIMIT' ? <RateScreen job={job} busy={busy} onRetry={retry} onEdit={reset} />
           : <FailedView failure={job.failure} partial={job.result?.partial_report} canRetry={!!job.input} busy={busy} onRetry={retry} onEdit={reset}>
@@ -166,6 +167,7 @@ export function Analysis({ embedded = false, active = true }: { embedded?: boole
               completion: { tasks: [], missing_research: [], ...job.result.partial_report.completion, status: 'partial',
                 missing_inputs: [...(job.result.partial_report.completion?.missing_inputs || []), '분석이 중단되어 최종 검토가 끝나지 않았어요.'] } }} />}
           </FailedView>}
+        <InputSave key={jobId} jobId={jobId} screen="failed" active={active} />
         <Followup jobId={jobId} />
       </>
       : <><ProgressView job={job} elapsed={elapsed} offline={offline} />{error && <Button variant="secondary" className="secondary" onClick={reset}>입력 화면으로</Button>}</>}

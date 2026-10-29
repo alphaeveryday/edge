@@ -53,7 +53,15 @@ export async function previewRequest<T>(path: string, init?: RequestInit): Promi
     const saved: Saved & { archives?: Tracking['archives'] } = JSON.parse(localStorage.getItem(workbookKey) || 'null') ?? { version: 0, workbook: null };
     if (body) { if (body.version !== saved.version) throw new Error('다른 탭에서 수정했어요. 저장된 내용을 다시 불러와 주세요.'); const archives = saved.archives ?? []; if (saved.workbook && ['dividends', 'months'].some(key => JSON.stringify(saved.workbook![key as 'dividends' | 'months']) !== JSON.stringify(body.workbook[key]))) archives.unshift({ version: saved.version, payload: saved.workbook }); result = { version: saved.version + 1, workbook: body.workbook, archives }; localStorage.setItem(workbookKey, JSON.stringify(result)); }
     else result = saved.workbook ? saved : { version: 0, workbook: preview === 'empty' ? null : sample };
-  } else if (path.endsWith('/workbook')) result = sample;
+  } else if (path.endsWith('/workbook')) {
+    const input: Input = JSON.parse(localStorage.getItem('edge-preview-input') || 'null') ?? { holdings: [{ name: '미국시장 ETF 예시', instrument_id: 'KR:360750', account: 'ISA', amount_krw: '1000000' }], horizon: '10년 이상' };
+    result = { title: '내 포트폴리오', fx: null, dividends: [], months: [], assets: input.holdings.map((item, i) => ({
+      id: `preview-input-${i}`, instrument_id: item.instrument_id, name: item.name, account: item.account, category: item.kind === 'cash' ? '현금' : '기타', currency: item.instrument_id?.startsWith('US:') ? 'USD' : 'KRW',
+      quantity: null, average: null, price: null, cost_fx: null, target: null, fee: 0, price_date: null,
+      amount: input.input_mode !== 'percent' && item.amount_krw !== null ? Number(item.amount_krw) : null,
+      weight: input.input_mode === 'percent' && item.amount_krw !== null ? Number(item.amount_krw) : null,
+    })) } satisfies Workbook;
+  }
   else if (path.endsWith('/report-request')) result = { status: 'received', delivery_status: 'not_scheduled' };
   else if (path.endsWith('/chats')) result = { limit: 5, items: previewChats };
   else if (path.endsWith('/chat') || path.startsWith('/analyses/preview-chat-')) {

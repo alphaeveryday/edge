@@ -6,9 +6,10 @@ import { ensureVisitorSession } from './api';
 export type Screen = 'start' | 'input_holdings' | 'input_plan' | 'input_ask' | 'limit' | 'lost' | 'loading' | 'queued' | 'running' | 'result' | 'failed' | 'dashboard_overview' | 'dashboard_dividends' | 'dashboard_returns';
 // 8차 결과 측정 이벤트(계획 '측정' 절). 어느 칸을 읽었는지는 data-analytics-section 으로 따로 남는다.
 export type ResultEvent = 'result_shown' | 'survey_shown' | 'survey_answered' | 'evidence_opened' | 'ask_suggested_clicked' | 'recommendation_saved'
+  | 'input_save_shown' | 'input_save_clicked' | 'input_save_succeeded' | 'input_save_failed'
   | 'app_alert_clicked' | 'store_link_clicked' | 'type_card_shared' | 'result_mail_requested' | 'result_link_copied';
 const resultEvents: ResultEvent[] = ['result_shown', 'survey_shown', 'survey_answered', 'evidence_opened', 'ask_suggested_clicked', 'recommendation_saved',
-  'app_alert_clicked', 'store_link_clicked', 'type_card_shared', 'result_mail_requested', 'result_link_copied'];
+  'input_save_shown', 'input_save_clicked', 'input_save_succeeded', 'input_save_failed', 'app_alert_clicked', 'store_link_clicked', 'type_card_shared', 'result_mail_requested', 'result_link_copied'];
 const events = new Set(['$pageview', '$pageleave', 'portfolio_screen_engagement', 'portfolio_scroll_pause', 'portfolio_action', ...resultEvents]);
 const campaignKeys = ['utm_source', 'utm_medium', 'utm_campaign', 'utm_content'];
 const properties = new Set(['token', 'distinct_id', '$lib', '$lib_version', '$device_type', '$browser', '$os', '$viewport_height', '$viewport_width', '$screen_height', '$screen_width', '$process_person_profile', '$cookieless_mode', 'screen', 'section', 'visible_seconds', 'pause_seconds', 'scroll_y', 'scroll_depth_pct', 'max_scroll_depth_pct', 'action', 'analysis_id', 'question', 'answer', 'text', 'method', ...campaignKeys]);
