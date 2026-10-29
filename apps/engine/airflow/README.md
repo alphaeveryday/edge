@@ -76,7 +76,7 @@
 - `RunTask`에 멱등 토큰을 붙이지 않는다. 그래서 boto의 자동 재전송(연결 끊김·5xx)이 태스크를 하나 더 만들 수 있다.
 - 대기 오류(`WaiterError`)가 나면 기본값(`stop_task_on_failure=True`)으로 **도는 태스크를 StopTask로 죽인다.** `on_kill`(run failed 표시·dagrun_timeout)도 StopTask를 부른다. StopTask는 종료 요청일 뿐 종료 확인이 아니다.
 
-`EdgeStep`은 이 경로를 다음처럼 바꿨다. 재접속·조회는 `_try_reattach_task`에서, 제출은 `_start_task`에서, 판정은 `execute`에서 한다. `stop_task_on_failure=False`로 두고 `on_kill`도 StopTask를 부르지 않게 바꿨다(Airflow가 task를 끝내도 업무 컨테이너는 끝까지 돈다). `RunTask`에는 시도·제출별 `clientToken`을 붙인다.
+`EdgeStep`은 이 경로를 다음처럼 바꿨다. 재접속·조회는 `_try_reattach_task`에서, 제출은 `_start_task`에서, 판정은 `execute`에서 한다. `stop_task_on_failure=False`로 두고 `on_kill`도 StopTask를 부르지 않게 바꿨다(Airflow가 task를 끝내도 업무 컨테이너는 끝까지 돈다). `RunTask`에는 시도·제출별 `clientToken`을 붙인다(아래 표 3″의 재시도는 첫 시도의 토큰을 다시 쓴다).
 
 | # | 경우(판별 근거) | 처리 | 새 ECS 태스크 |
 |---|---|---|---|
