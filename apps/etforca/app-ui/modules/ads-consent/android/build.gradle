@@ -1,0 +1,13 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+group = 'com.alphaeveryday.adsconsent'
+version = '1.0.0'
+android {
+  namespace 'com.alphaeveryday.adsconsent'
+}
+dependencies {
+  implementation 'com.google.firebase:firebase-analytics:24.0.0'
+  implementation 'com.facebook.android:facebook-core:19.0.0'
+}
