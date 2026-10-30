@@ -852,7 +852,7 @@ def test_news_thread_is_company_and_type_within_the_window(monkeypatch):
     sup = {"SUPPLIER": "inst_SUP"}
     e1 = _multi_role_event("evt_1", {**sup, "CUSTOMER": "inst_CUST1"}, "2026-07-01T09:00:00+09:00")
     e2 = _multi_role_event("evt_2", sup, "2026-07-01T15:00:00+09:00")           # 같은 날
-    e3 = _multi_role_event("evt_3", {**sup, "CUSTOMER": "inst_CUST2"}, "2026-07-20T09:00:00+09:00")
+    e3 = _multi_role_event("evt_3", {**sup, "CUSTOMER": "inst_CUST2"}, "2026-07-06T09:00:00+09:00")  # 5일 뒤
     other = _multi_role_event("evt_o", {"SUPPLIER": "inst_OTHER"}, "2026-07-01T10:00:00+09:00")
     assemble_events.thread_events(conn, [e3, other, e2, e1])  # 순서 뒤섞기 — 시각 정렬이 판정 축
 
@@ -866,17 +866,22 @@ def test_news_thread_is_company_and_type_within_the_window(monkeypatch):
 
 
 def test_news_thread_opens_a_new_segment_after_the_window(monkeypatch):
-    """WHY: 창(6개월)보다 오래 끊긴 같은 회사·타입 보도는 다른 사건이다 — 시간 제한 없이 묶으면
-    한 회사의 같은 타입이 반년 넘게 한 스레드가 되는 메가 스레드가 된다(진단 D1)."""
+    """WHY(ALPHA-1474): 창(7일)보다 오래 끊긴 같은 회사·타입 보도는 다른 사건으로 본다 — 길게 묶으면
+    같은 회사의 다른 계약·다른 분기 실적이 한 스레드가 된다(진단 D1). 최대 6개월 구간 정답에서
+    끊긴 뒤 다시 나온 보도가 같은 사건인 비율은 3~7일 약 2/3, 30일을 넘으면 약 1/5이었다(ADR-0064
+    "스레드 창 재측정"). 경계는 창과 같은 공백까지 잇고, 그보다 1분이라도 길면 새 스레드다."""
     conn = _FakeConn()
     rv = {"SUPPLIER": "inst_SUP"}
-    old = _multi_role_event("evt_old", rv, "2026-01-02T09:00:00+09:00")
-    new = _multi_role_event("evt_new", rv, "2026-07-20T09:00:00+09:00")   # 199일 뒤
-    assemble_events.thread_events(conn, [new, old])
+    old = _multi_role_event("evt_old", rv, "2026-07-01T09:00:00+09:00")
+    edge = _multi_role_event("evt_edge", rv, "2026-07-08T09:00:00+09:00")   # 정확히 7일 뒤 → 이어짐
+    new = _multi_role_event("evt_new", rv, "2026-07-15T09:01:00+09:00")     # 7일 1분 뒤 → 새 스레드
+    assemble_events.thread_events(conn, [new, edge, old])
 
     links = {r[0]: r for r in _batch(conn, "event_thread_link")}
+    assert links["evt_edge"][1] == links["evt_old"][1]
+    assert links["evt_edge"][3] == "FOLLOW_UP_STAGE"
     assert links["evt_new"][1] == _stable_id(
-        "thr", _news_key("inst_SUP", "2026-07-20T09:00:00+09:00", _CONTRACT))
+        "thr", _news_key("inst_SUP", "2026-07-15T09:01:00+09:00", _CONTRACT))
     assert links["evt_old"][1] != links["evt_new"][1]
     assert links["evt_old"][3] == links["evt_new"][3] == "FIRST_IN_THREAD"
 
@@ -917,13 +922,13 @@ def test_late_past_report_joins_its_own_segment_not_the_latest(monkeypatch):
             (ts("2027-03-01T09:00:00+09:00"), ts("2027-03-05T09:00:00+09:00"), k2, t2)]
     conn = _FakeConn(news_segments=segs, prior_thread_counts={t1: 2, t2: 2})
     mid = _multi_role_event("evt_mid", rv, "2026-07-25T09:00:00+09:00")      # 7월 구간 안
-    early = _multi_role_event("evt_early", rv, "2026-06-01T09:00:00+09:00")  # 첫 구간 앞, 창 안
+    early = _multi_role_event("evt_early", rv, "2026-06-26T09:00:00+09:00")  # 첫 구간 5일 앞, 창 안
     assemble_events.thread_events(conn, [mid, early])
 
     links = {r[0]: r[1] for r in _batch(conn, "event_thread_link")}
     assert links == {"evt_mid": t1, "evt_early": t1}
     [header] = [r for r in _batch(conn, "event_thread") if r[0] == t1]
-    assert str(header[4]).startswith("2026-06-01")      # 시작이 앞당겨진 건 7월 구간이다
+    assert str(header[4]).startswith("2026-06-26")      # 시작이 앞당겨진 건 7월 구간이다
 
 
 def test_late_report_inside_a_segment_uses_the_gap_to_its_previous_report(monkeypatch):
