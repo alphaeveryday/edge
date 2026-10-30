@@ -493,7 +493,7 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # (ALPHA-1449 — quality_log `tagger_reused`). 없거나 본문이 바뀐 기사만 모델을 돌린다. 캐시를 못 읽으면
 # 재추론으로 진행하고 `tagger_cache_errors` 로 센다(느려질 수 있다).
 # 뉴스 스레드(ALPHA-508, ADR-0064): 키는 타입 + 주체 회사(증권사 리포트는 증권사 원문까지)이고, 같은
-# 키의 마지막 보도에서 183일 넘게 끊기면 새 스레드(thread_key 끝 `||since=<UTC 시각>`), 스레드 안에서
+# 키의 마지막 보도에서 7일 넘게 끊기면 새 스레드(thread_key 끝 `||since=<UTC 시각>`), 스레드 안에서
 # 하루 넘게 끊겼다 다시 나온 보도는 FOLLOW_UP_STAGE 다. 회사가 없을 때만 UNKNOWN. 공시는 identity 키
 # 그대로. 키 전환 전에 identity 키로 묶인 뉴스 스레드는 이어받지 않는다(새 보도부터 새 키).
 LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
