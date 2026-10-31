@@ -887,14 +887,14 @@ def _age(db, arn, started):
 
 
 def test_unfinished_attempt_past_dag_lifetime_is_recorded_and_released_by_ecs_evidence():
-    # DAG 시간 초과로 report 가 돌지 못했다 — 끝나지 않은 시도가 수명(1800초)을 넘으면 원장이 스스로 보류로 남기고,
+    # DAG 시간 초과로 report 가 돌지 못했다 — 끝나지 않은 시도가 수명(3000초)을 넘으면 원장이 스스로 보류로 남기고,
     # ECS 종료 증거로 닫히면 그 기록도 닫는다(시간이 지났다고 닫지 않는다).
     db = FakeOpsDB()
     result = _plan_airflow(db)
     run_id = result.pipeline_run_id
     _start_only(db, run_id, _NORMALIZE, "arn:ecs/n")
     _age(db, "arn:ecs/n", _SLOT)
-    kw = dict(run_key=result.run_key, sfn_client=_NoSfn(), now=_SLOT + timedelta(minutes=40))
+    kw = dict(run_key=result.run_key, sfn_client=_NoSfn(), now=_SLOT + timedelta(minutes=60))
     ecs = _SweepEcs({"arn:ecs/n": {"lastStatus": "RUNNING"}})
     reconcile_run(_ledger(db), ecs_client=ecs, **kw)
     [issue] = db.open_issues(states.ISSUE_EXECUTION_HOLD)
@@ -928,7 +928,7 @@ def test_killed_attempt_is_recorded_once_as_result_unknown(ecs_task):
     ecs = _SweepEcs({"arn:ecs/n": ecs_task})
     for _ in range(2):
         reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), ecs_client=ecs,
-                      now=_SLOT + timedelta(minutes=40))
+                      now=_SLOT + timedelta(minutes=60))
     [issue] = db.open_issues(states.ISSUE_EXECUTION_HOLD)
     assert issue["evidence"]["kind"] == states.HOLD_RESULT_UNKNOWN and issue["occurrence_count"] == 1
     assert db.attempts[-1]["exit_code"] == ecs_task.get("exitCode")
@@ -940,7 +940,7 @@ def test_sweep_finds_an_untracked_ecs_task_after_the_dag_is_gone_and_the_gate_ho
     db = FakeOpsDB()
     result = _plan_airflow(db)
     run_id = result.pipeline_run_id
-    now = _SLOT + timedelta(minutes=45)
+    now = _SLOT + timedelta(minutes=65)
     cmd = ["normalize-investor-estimate", "--run-id", run_id, "--input-run-id", run_id]
     ecs = _SweepEcs({
         "arn:ecs/orphan": {"lastStatus": "PENDING", "command": cmd, "createdAt": _SLOT},
@@ -1035,7 +1035,7 @@ def test_a_later_hold_of_another_kind_does_not_lift_the_gate(monkeypatch):
     cmd = ["normalize-investor-estimate", "--run-id", run_id]
     _rec.sweep_airflow_runs(_ledger(db), sfn_client=_NoSfn(), ecs=_SweepEcs({"arn:ecs/o": {"lastStatus": "PENDING", "command": cmd,
                                                                       "createdAt": _SLOT}}),
-                            cluster_arn="c", now=_SLOT + timedelta(minutes=45))
+                            cluster_arn="c", now=_SLOT + timedelta(minutes=65))
     _rec.record_execution_holds(_ledger(db), run_key=result.run_key, holds={
         _NORMALIZE: {"kind": states.HOLD_RESULT_UNKNOWN, "reason": "killed"}})
     kinds = sorted(i["evidence"]["kind"] for i in db.open_issues(states.ISSUE_EXECUTION_HOLD))
@@ -1050,7 +1050,7 @@ def test_report_and_reconciler_record_one_result_unknown_for_one_killed_containe
     _start_only(db, result.pipeline_run_id, _NORMALIZE, "arn:ecs/n")
     _rec.record_execution_holds(_ledger(db), run_key=result.run_key, holds={
         _NORMALIZE: {"kind": states.HOLD_RESULT_UNKNOWN, "reason": "killed"}})
-    reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), now=_SLOT + timedelta(minutes=40),
+    reconcile_run(_ledger(db), run_key=result.run_key, sfn_client=_NoSfn(), now=_SLOT + timedelta(minutes=60),
                   ecs_client=_SweepEcs({"arn:ecs/n": {"lastStatus": "STOPPED", "exitCode": 137}}))
     assert len(db.open_issues(states.ISSUE_EXECUTION_HOLD)) == 1
 
@@ -1063,7 +1063,7 @@ def test_unfinished_record_is_closed_even_when_the_attempt_ended_by_itself():
     _start_only(db, result.pipeline_run_id, _NORMALIZE, "arn:ecs/n")
     _age(db, "arn:ecs/n", _SLOT)
     ecs = _SweepEcs({"arn:ecs/n": {"lastStatus": "RUNNING"}})
-    _rec.sweep_airflow_runs(_ledger(db), sfn_client=_NoSfn(), ecs=ecs, cluster_arn=None, now=_SLOT + timedelta(minutes=40))
+    _rec.sweep_airflow_runs(_ledger(db), sfn_client=_NoSfn(), ecs=ecs, cluster_arn=None, now=_SLOT + timedelta(minutes=60))
     assert db.open_issues(states.ISSUE_EXECUTION_HOLD)
     a = db.attempts[-1]
     a["status"], a["exit_code"] = states.EXEC_SUCCEEDED, 0          # wrapper 가 스스로 끝을 기록

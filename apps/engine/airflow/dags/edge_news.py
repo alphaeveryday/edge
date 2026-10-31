@@ -16,8 +16,11 @@ FMP 수집(CollectFmpNews)은 `us_fmp_enabled` 일 때만 SFN 에 들어간다 �
   켜지 않는다 — 앞 스텝을 clear 해 정제 입력이 바뀌어도 이전 성공 태스크에 재접속해 새 기사를 태깅하지 않는다.
   tag-news 는 미태깅 기사만 고르므로(버전·지문 skip) 다시 돌려도 이미 태깅한 기사엔 LLM 을 부르지 않는다.
 - SFN 은 태깅·문서 적재를 병렬로 돌렸다. 여기선 PARALLELISM=1 이라 한 줄로 돈다 — 그만큼 길어진다.
-- 시간 상한: SFN 2400초 → dagrun_timeout 1700초. Reconciler 수명(1800초)보다 짧아야 해서 SFN 값을 못 쓴다.
-  실측(SFN 최근 40회, 병렬 실행) p50 477초·최대 1099초. 직렬로 늘어난 뒤의 값은 전환 전에 잰다(README).
+  문서 적재가 먼저 돈다(priority_weight) — 태깅 결과를 쓰지 않는 10초 남짓 스텝이라, 긴 태깅 뒤에 두면 run 이 시간
+  상한에 잘릴 때 06:00 전망이 읽는 기사까지 빠진다(ALPHA-1475).
+- 시간 상한: dagrun_timeout 2700초. Reconciler 수명(3000초)보다 짧아야 하고, 08:10 run 이 09:00 분 격자 전에
+  끝나야 한다(상한 08:55). 로컬 RoBERTa 태거(태깅 대상 전 기사) 뒤 00:10 태깅이 835~1,205초, 스텝마다 ECS 기동·종료
+  감지가 약 75초라 1700초로는 평일 밤마다 잘렸다(ALPHA-1475, 실측 README).
 - 통보: 부분 실패 즉시 통보 대신 run 실패 때 SNS 한 통(dagrun_timeout 포함).
 - 재처리 run(conf `reprocess_slot`)은 오늘 슬롯만 받는다(SFN 엔 재처리 경로가 없었다) — 조립 창이 실행 시각 기준이라
   지난 날 슬롯은 그 기사를 안 읽고 성공한다(`_planned_slot`).
@@ -116,8 +119,8 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
         is_paused_upon_creation=True,
         catchup=False,
         max_active_runs=1,
-        # Reconciler 수명(1800초)보다 짧아야 죽은 run 을 놓치지 않는다 — 그 안에서 가장 긴 값(SFN 은 2400초).
-        dagrun_timeout=timedelta(seconds=int(os.environ.get("EDGE_LAB_DAGRUN_TIMEOUT_SECONDS", "1700"))),
+        # Reconciler 수명(3000초)보다 짧아야 죽은 run 을 놓치지 않는다. 08:10 run 은 09:00 분 격자 전에 끝나야 한다.
+        dagrun_timeout=timedelta(seconds=int(os.environ.get("EDGE_LAB_DAGRUN_TIMEOUT_SECONDS", "2700"))),
         params={"reprocess_slot": Param("", type="string", description=(
             "비우면 일반 run. 오늘(KST)의 기존 슬롯 ISO 시각(예 2026-10-20T08:10:00+09:00)을 주면 그 슬롯의 raw 를 "
             "다시 정제·태깅·적재·조립한다(수집 안 함, 성공 스텝 가드 해제). 지난 날 슬롯은 plan 이 거부한다."))},
@@ -159,8 +162,9 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
             command=["tag-news", "--run-id", rid, "--input-run-id", rid,
                      "--limit", "{{ edge_lane_arg('tag_news_limit') }}"],
         )
+        # 태깅보다 먼저(같은 하류라 가중치 동률이면 태깅이 먼저 잡혔다) — 06:00 전망이 읽는 기사가 태깅 시간에 안 묶인다.
         load_documents = step(
-            **ecs_target, task_id="load_documents", taskdef_key="rds",
+            **ecs_target, task_id="load_documents", taskdef_key="rds", priority_weight=2,
             command=["load-documents", "--run-id", rid, "--input-run-id", rid],
         )
         load_assertions = step(

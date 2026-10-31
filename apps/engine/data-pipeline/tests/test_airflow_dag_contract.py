@@ -105,7 +105,7 @@ def test_reconciler_reads_ecs_stop_evidence_like_airflow():
 
 
 def test_dag_run_timeout_is_shorter_than_the_reconciler_lifetime():
-    # Reconciler 는 수명(1800초)을 넘긴 미확정 실행만 보류로 올린다 — DAG 시간 초과가 더 길면 살아 있는 run 을
+    # Reconciler 는 수명(3000초)을 넘긴 미확정 실행만 보류로 올린다 — DAG 시간 초과가 더 길면 살아 있는 run 을
     # 보류로, 더 짧아야 죽은 run 을 놓치지 않는다.
     from data_pipeline.ops import reconciler
     for source in (DAG, *((DAGS / f).read_text(encoding="utf-8") for f in ("edge_disclosure.py", "edge_premarket.py", "edge_news.py"))):
