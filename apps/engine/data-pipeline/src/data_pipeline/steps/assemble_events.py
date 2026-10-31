@@ -1331,6 +1331,12 @@ def reject_irrelevant(conn, events: list[dict], judge) -> tuple[list[dict], int]
     if len(judged) < len(candidates):
         logger.warning("관련성 판정 생략 %d건 — 회사명 또는 기사 제목 없음", len(candidates) - len(judged))
     scores = judge.score([(name, e["event_type_code"], title, lead) for e, name, (title, lead) in judged])
+    # 기준값·확률이 [0, 1] 밖(NaN·무한대 포함)이면 실패시킨다 — NaN 은 `p < 기준값` 이 늘 거짓이라 전부 통과,
+    # 무한대 기준값은 전부 거절이 된다. 통과한 이벤트는 스레드에 붙고 거른 이벤트는 REJECTED 라 둘 다 다시
+    # 판정되지 않는다. 여기서 실패하면 이 날짜(배치)·이 기사(1분)가 롤백돼 미연결로 남고 재실행이 다시 판정한다.
+    bad = [p for p in [judge.threshold, *scores] if p is not None and not 0.0 <= p <= 1.0]
+    if bad or not 0.0 < judge.threshold < 1.0:
+        raise ValueError(f"관련성 판정 값이 범위 밖: 기준값={judge.threshold!r} 확률={bad[:5]!r}")
     rejected = {e["source_event_id"]: (e, p) for (e, _n, _t), p in zip(judged, scores)
                 if p is not None and p < judge.threshold}
     if rejected:

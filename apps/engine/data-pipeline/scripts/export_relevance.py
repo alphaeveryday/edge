@@ -50,6 +50,8 @@ def main() -> None:
         ap.add_argument(name, required=True)
     args = ap.parse_args()
     out = pathlib.Path(args.out)
+    if not 0.0 < float(args.threshold) < 1.0:
+        raise SystemExit(f"--threshold 는 (0, 1) 안이어야 한다: {args.threshold}")
 
     config = AutoConfig.from_pretrained(args.base)
     model = RelevanceHead(AutoModel.from_config(config))

@@ -64,6 +64,9 @@ class RelevanceJudge:
         meta = json.loads((root / "meta.json").read_text(encoding="utf-8"))
         self.version: str = meta["version"]
         self.threshold: float = float(meta["threshold"])
+        if not 0.0 < self.threshold < 1.0:
+            # NaN·무한대·0·1 은 필터를 끄거나 전부 숨긴다 — 잘못 만든 묶음은 기동 때 막는다.
+            raise ValueError(f"관련성 기준값이 (0, 1) 밖: {meta['threshold']!r}")
         self._max_length: int = meta["max_length"]
         self._types: dict[str, list[str]] = meta["types"]
         torch.set_num_threads(threads or _cpu_threads())

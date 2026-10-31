@@ -6,6 +6,8 @@
 열(주체 회사의 entity.display_name, 제목, news_document.lead_text)이어야 한다. 모델(torch)은 여기서 읽지 않는다.
 """
 
+import pytest
+
 from data_pipeline.steps import assemble_events
 from data_pipeline.steps.assemble_events import RELEVANCE_REJECTED_REASON, reject_irrelevant
 
@@ -77,6 +79,9 @@ class _Conn:
     def links(self):
         return [r for sql, rows in self.batches if sql.startswith("INSERT INTO event_thread_link") for r in rows]
 
+    def link_sql(self):
+        return [sql for sql, _rows in self.batches if sql.startswith("INSERT INTO event_thread_link")]
+
 
 def _event(sid, role_values, etype=_CONTRACT, source_class="NEWS"):
     return {"source_event_id": sid, "event_type_code": etype, "available_at": "2026-10-30T09:00:00+09:00",
@@ -105,6 +110,12 @@ def test_irrelevant_news_event_is_rejected_and_kept_out_of_threading():
     [link] = conn.links()
     sid, _link_type, _evaluated_at, reason = link
     assert sid == "evt_sub" and reason == f"{RELEVANCE_REJECTED_REASON} relevance-test p=0.0100"
+    # 링크 형상은 SQL 상수에 있다 — 대역 커서가 해석하지 않으니 문장째 본다. 뉴스(분석 엔진은
+    # source_class='NEWS' 로 조인한다)·thread_id NULL·UNKNOWN(DB CHECK 가 NULL 스레드에 허용하는 유일한 상태)이고,
+    # 이미 있던 링크도 같은 형상으로 덮는다.
+    [sql] = conn.link_sql()
+    assert "VALUES (%s, NULL, 'NEWS', 'UNKNOWN', %s, %s, %s)" in sql
+    assert "DO UPDATE SET thread_id = NULL, novelty_status = 'UNKNOWN'," in sql
     # 입력은 스레드 주체 회사(종목이 아니라 발행사 액터)의 표시명 + 제목 + 리드 — 학습 데이터와 같은 열.
     assert sorted(judge.seen) == [("LG에너지솔루션", _CONTRACT, "LG에너지솔루션, GM과 배터리 공급계약", "리드 본문"),
                                   ("SK", _CONTRACT, "SK하이닉스, 1조 장비 발주", None)]
@@ -148,3 +159,18 @@ def test_judged_company_is_the_thread_company():
     event = _event("evt", {"CUSTOMER": "inst_C", "SUPPLIER": "inst_S"})
     assert assemble_events._news_company(event, event["role_values"]) == "inst_S"
     assert assemble_events._news_thread_base(event, event["role_values"]).endswith("company=inst_S")
+
+
+@pytest.mark.parametrize("threshold, prob", [
+    (0.05, float("nan")), (0.05, 1.5), (float("nan"), 0.01), (float("inf"), 0.9), (0.0, 0.01),
+])
+def test_out_of_range_threshold_or_probability_fails_without_writing(threshold, prob):
+    # WHY: NaN 확률은 `p < 기준값` 이 거짓이라 조용히 통과하고, 무한대 기준값은 전부 숨긴다. 통과한 이벤트는
+    # 스레드에 붙고 거른 이벤트는 REJECTED 라 둘 다 다시 판정되지 않는다 — 잘못된 판정이 굳기 전에 실패해야
+    # 그 날짜·기사가 롤백돼 미연결로 남고 재실행이 다시 판정한다.
+    conn = _Conn(names={"inst_A": "A"}, texts={"evt": ("A, 공급계약", None)})
+    judge = _Judge({"A": prob})
+    judge.threshold = threshold
+    with pytest.raises(ValueError, match="범위 밖"):
+        reject_irrelevant(conn, [_event("evt", {"SUPPLIER": "inst_A"})], judge)
+    assert conn.updates() == [] and conn.links() == []
