@@ -496,6 +496,12 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 키의 마지막 보도에서 183일 넘게 끊기면 새 스레드(thread_key 끝 `||since=<UTC 시각>`), 스레드 안에서
 # 하루 넘게 끊겼다 다시 나온 보도는 FOLLOW_UP_STAGE 다. 회사가 없을 때만 UNKNOWN. 공시는 identity 키
 # 그대로. 키 전환 전에 identity 키로 묶인 뉴스 스레드는 이어받지 않는다(새 보도부터 새 키).
+# RELEVANCE_FILTER=on(ALPHA-1476, 기본 off)이면 스레드에 붙기 전에 관련성 판정기(klue/roberta-base fp32,
+# 레이크 models/relevance/<버전>/ 또는 RELEVANCE_MODEL_DIR)가 (주체 회사, 타입, 제목, 리드)로 그 회사의
+# 사건 기사인지 본다. 기준값 미만이면 source_event 를 REJECTED 로 두고 UNKNOWN 링크(unknown_reason
+# `relevance filter <버전> p=…`)만 남긴다 — 분석 엔진은 REJECTED 를 사건 묶음에서 뺀다. 판정 타입은
+# 계약·실적·인수·지분투자·인증·소송·당국조치 7개이고, 그 밖 타입·공시는 거르지 않는다. 1분 단건 조립도
+# 같은 함수를 지난다. quality_log `relevance_rejected` 가 거른 수다. 켜기 전 이미 묶인 기사는 다시 보지 않는다.
 LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run assemble-events
 

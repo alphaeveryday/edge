@@ -434,9 +434,10 @@ as-of·수집 시각·신선도)은 스키마가 이미 그렇게 묶어 두므�
 | `o.asr` | assertion | `document_assertion` | **뉴스+공시** | 〃 | — |
 | `o.evt` | source event | `source_event` | **뉴스+공시** | 〃 | — |
 
-⚠️ **`o.evt` 는 `event_status` 축을 안 거른다**(`ACTIVE`·`REJECTED`). 오늘은 무해하다 —
-프로듀서 둘 다 `ACTIVE` 를 박고 REJECTED 를 쓰는 writer 가 레포에 없다(dev 실측 비-ACTIVE 0건).
-REJECTED 적재가 생기면 이 수의 뜻이 조용히 바뀐다.
+⚠️ **`o.evt` 는 `event_status` 축을 안 거른다**(`ACTIVE`·`REJECTED`). 뉴스 관련성 필터(ALPHA-1476,
+`RELEVANCE_FILTER=on`)가 그 회사의 사건이 아닌 뉴스 이벤트를 REJECTED 로 둔다 — 켜진 환경에서는 이 수에
+거른 이벤트도 들어간다(거른 것은 `event_thread_link.unknown_reason LIKE 'relevance filter%'`). 필터가
+꺼져 있으면 REJECTED 를 쓰는 writer 가 없다.
 
 ⚠️ **`o.asr`·`o.evt` 는 `o.doc` 과 계열이 다르다.** 앞의 둘은 공시도 함께 센다(라벨도 계열을 안
 밝힌다). dev 실측(2026-08-11) 기준 공시 비중은 **주장 0.07%**(63/86,197) · **이벤트 0.16%**(63/38,543)라

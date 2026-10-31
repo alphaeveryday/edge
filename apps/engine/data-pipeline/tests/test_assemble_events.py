@@ -185,6 +185,13 @@ class _FakeCursor:
             tid, at, _self_id = params
             earlier = [x for x in conn.news_report_times.get(tid, []) if x <= at]
             self._rows = [(max(earlier) if earlier else None,)]
+        elif upper.startswith("SELECT ENTITY_ID, DISPLAY_NAME FROM ENTITY"):
+            # 관련성 판정 입력(ALPHA-1476) — 주체 회사 표시명.
+            self._rows = [(e, n) for e, n in getattr(conn, "entity_names", {}).items() if e in params[0]]
+        elif upper.startswith("SELECT DISTINCT ON (EV.SOURCE_EVENT_ID)"):
+            # 관련성 판정 입력 — 이벤트의 근거 기사 (제목, 리드).
+            self._rows = [(sid, t, lead) for sid, (t, lead) in getattr(conn, "event_texts", {}).items()
+                          if sid in params[0]]
         elif upper.startswith("SELECT EM.SOURCE_EVENT_ID"):
             self._rows = list(conn.dart_measures)
         elif upper.startswith("SELECT DD.ISSUER_ACTOR_ID"):
@@ -542,6 +549,42 @@ def test_in_universe_non_kodex_event_is_threaded(tmp_path, monkeypatch):
     assert (link[1], link[3]) == (thread_id, "FIRST_IN_THREAD")
     log = _log(storage)
     assert log["events_created"] == 1 and log["threaded"] == 1
+
+
+class _RejectAll:
+    """관련성 판정기 대역(ALPHA-1476) — 모든 타입을 판정하고 전부 관련 없음."""
+    version = "relevance-test"
+    threshold = 0.05
+
+    def judges(self, event_type_code):
+        return True
+
+    def score(self, items):
+        return [0.0 for _ in items]
+
+
+def test_batch_keeps_irrelevant_events_out_of_threads(tmp_path, monkeypatch):
+    """WHY(ALPHA-1476): 판정기가 거른 이벤트는 스레드를 세우지 않고(REJECTED + 사유 링크) 봉투에 거른 수가
+    남는다 — 숨긴 기사 수가 로그에 없으면 필터가 무엇을 지웠는지 운영에서 볼 수 없다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_news(storage, "ko", "2026-07-15", [_article("a1")])
+    conn = _FakeConn(assertion_rows=_assertion_rows_for("a1"))
+    asrt_id = _assertion_rows_for("a1")[0][3]
+    evt_id = _stable_id("evt", asrt_id, "inst_SAMSUNG")
+    conn.entity_names = {"inst_SAMSUNG": "삼성전자"}
+    conn.event_texts = {evt_id: ("삼성전자 관련 기사", None)}
+    _setup(monkeypatch, conn)
+
+    assert assemble_events.run(storage, "R1", db=_db(), complete_fn=_default_llm("a1"),
+                               relevance=_RejectAll(),
+                               from_date="2026-07-15", to_date="2026-07-15") == 0
+    [link] = _batch(conn, "event_thread_link")
+    assert link[0] == evt_id and link[-1].startswith(assemble_events.RELEVANCE_REJECTED_REASON)
+    assert _batch(conn, "event_thread") == []
+    assert any(sql.startswith("UPDATE source_event SET event_status = 'REJECTED'") for sql, _p in conn.log)
+    log = _log(storage)
+    assert log["relevance_rejected"] == 1 and log["threaded"] == 0
+    assert log["relevance_version"] == "relevance-test"
 
 
 def test_rerun_threads_preexisting_unthreaded_event(tmp_path, monkeypatch):
