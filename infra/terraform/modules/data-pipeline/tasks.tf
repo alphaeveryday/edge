@@ -252,6 +252,9 @@ locals {
   # 뉴스 태거 선택(ALPHA-1449) — 태거를 쓰는 배치(tag-news=deepseek 세트, assemble-events=events 세트)에 싣는다.
   # llm(기본)이면 아무것도 싣지 않는다 — 코드 기본값이 llm 이라, 되돌리면 env·revision 이 이 기능 이전과 같다.
   tagger_env = var.tagger_backend == "roberta" ? { TAGGER_BACKEND = "roberta" } : {}
+  # 관련성 판정기(ALPHA-1476)는 이벤트를 조립하는 쪽(assemble-events 배치·news-consumer)에만 싣는다. 태스크 크기는
+  # 그대로 둔다 — fp32 klue/roberta-base(가중치 약 440MB)를 태거와 같은 프로세스에 올린 피크는 PR 설명에 적은 실측.
+  relevance_env = var.relevance_filter ? { RELEVANCE_FILTER = "on" } : {}
   # roberta 면 태깅 배치만 키운다(나머지는 task_cpu·task_memory 그대로). Fargate 실측(2026-10-24, 기사당):
   # 8 vCPU 0.23초 · 4 vCPU 1.18초 · 1 vCPU(스레드 1) 2.2초, 기동 20~28초, 피크 메모리 2.0~2.2GB.
   # tag-news: 00:10 런 신규 400~800건 → 8 vCPU 로 약 3분(뉴스 SFN 상한 40분, 런 동안만 과금).
@@ -270,7 +273,7 @@ locals {
     # (`normalize_price._pick_winner`)으로 다시 고른다 — 그 규칙의 휴장일 판정이 정제 컨테이너
     # (bigkinds)와 같은 달력을 봐야 두 계층이 갈리지 않는다(ALPHA-1120).
     rds    = merge(local.db_env, { OPS_KR_HOLIDAYS = join(",", var.kr_holidays) })
-    events = merge(local.db_env, lookup(local.batch_tagger_env, "events", local.tagger_env))
+    events = merge(local.db_env, lookup(local.batch_tagger_env, "events", local.tagger_env), local.relevance_env)
     # iNAV(ALPHA-557)는 거래일·개장 이후에만 수집한다 — 응답에 날짜가 없어 거래일을 수집
     # 시각으로 붙이는데 KIS 가 휴장일에도 직전 거래일 값을 주기 때문. 그 판정이 KRX 와 **같은**
     # 휴장일 집합을 봐야 한다. 안 주면 is_trading_day 가 평일 공휴일을 거래일로 보고 가드가

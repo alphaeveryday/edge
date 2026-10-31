@@ -40,6 +40,7 @@ from ..steps.assemble_events import (
     load_entity_index,
     news_analyst_firm,
     persist_normalization,
+    reject_irrelevant,
     thread_events,
 )
 from .models import KST
@@ -52,6 +53,8 @@ class NewsEventAssembler:
     """추출 성공 1건을 event 계보로 조립한다 — news-consumer 의 적재 꼬리."""
 
     db: DbConfig
+    # 관련성 판정기(ALPHA-1476, `tagging.backend.load_relevance`) — None 이면 거르지 않는다. 배치와 같은 함수를 지난다.
+    relevance: object | None = None
 
     def assemble(
         self, *, source_code: str, article_id: str, article: dict, result: dict
@@ -129,6 +132,7 @@ class NewsEventAssembler:
             # 첫 사건이 DUPLICATE_REBROADCAST 로 오염된다.
             seen_events: set[str] = set()
             new_events: list[dict] = []
+            rejected = 0
             for assertion in assertions:
                 cls = to_classification(
                     assertion, article_id=article_id, view=view,
@@ -158,13 +162,15 @@ class NewsEventAssembler:
                 # (fetch_unthreaded_events 의 ORDER BY source_event_id)와 같은 축으로
                 # 정렬해야 두 경로의 판정이 갈리지 않는다.
                 new_events.sort(key=lambda e: e["source_event_id"])
+                new_events, rejected = reject_irrelevant(conn, new_events, self.relevance)
                 thread_events(conn, new_events)
         if unresolved_primary:
             # 해소 실패는 유니버스 밖 기사(정상)와 마스터 결손(결함)이 같은 얼굴이다 —
             # 조용히 접지 않고 남긴다. 하루 단위 판정은 EOD QC 소관.
             logger.info("primary 미해소 assertion %d건 — 조립 생략: (%s, %s)",
                         unresolved_primary, source_code, article_id)
-        return {"assembled": assembled, "unresolved_primary": unresolved_primary}
+        return {"assembled": assembled, "unresolved_primary": unresolved_primary,
+                "relevance_rejected": rejected}
 
 
 def to_classification(

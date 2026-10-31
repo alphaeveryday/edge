@@ -864,6 +864,14 @@ def tagger_model_prefix(version: str) -> str:
     return f"models/tagger/{version}/"
 
 
+def relevance_model_prefix(version: str) -> str:
+    """뉴스 관련성 판정기 모델 묶음(ALPHA-1476)의 키 프리픽스 — 태거 묶음과 같은 규약(버전마다 불변).
+
+    묶음 형식은 `tagging/relevance.py` 독스트링이 정본이다.
+    """
+    return f"models/relevance/{version}/"
+
+
 def quality_log_key(dataset: str, checked_date: str, run_id: str) -> str:
     """정제 품질 로그(검증 실행당 1건) 키.
 

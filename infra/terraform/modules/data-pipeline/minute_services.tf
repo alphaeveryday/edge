@@ -181,7 +181,7 @@ locals {
     # 같은 수명으로 둔다. 장외 redrive 메시지는 retention(7일) 안에서 다음 세션이 집는다.
     news-consumer-realtime = {
       command = ["news-consumer"]
-      environment = merge(local.env, local.db_env, local.minute_tagger_env, {
+      environment = merge(local.env, local.db_env, local.minute_tagger_env, local.relevance_env, {
         DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL = aws_sqs_queue.minute["news-extraction-realtime"].url
       })
       secrets = {
@@ -191,7 +191,7 @@ locals {
     }
     news-consumer-backfill = {
       command = ["news-consumer"]
-      environment = merge(local.env, local.db_env, local.minute_tagger_env, {
+      environment = merge(local.env, local.db_env, local.minute_tagger_env, local.relevance_env, {
         DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL = aws_sqs_queue.minute["news-extraction-backfill"].url
       })
       secrets = {

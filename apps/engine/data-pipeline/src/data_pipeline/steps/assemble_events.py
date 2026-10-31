@@ -1252,6 +1252,21 @@ def _news_thread_base(event: dict, role_values: dict[str, str]) -> str | None:
     사전순, 그 역할의 첫 값(정렬). 증권사는 해소 여부와 무관하게 원문을 정규화해 쓴다 — 해소된
     기사와 안 된 기사가 갈리면 같은 리포트가 두 스레드로 나뉜다.
     """
+    company = _news_company(event, role_values)
+    if company is None:
+        return None
+    base = f"news:event_type_id={event['event_type_code']}||company={company}"
+    firm = event.get("analyst_firm")
+    if event["event_type_code"].startswith(_ANALYST_TYPE_PREFIX) and firm:
+        base += "||analyst=" + _analyst_key(firm)
+    return base
+
+
+def _news_company(event: dict, role_values: dict[str, str]) -> str | None:
+    """뉴스 스레드의 주체 회사 entity_id(`_news_thread_base` 의 회사 축). 없으면 None.
+
+    관련성 판정(`reject_irrelevant`)도 이 회사를 본다 — 기사가 붙을 스레드의 회사가 곧 판정 대상이다.
+    """
     present = {r: v for r, v in role_values.items()
                if v and r not in _EVALUATOR_ROLES and role_entity_kind(r) in _COMPANY_KINDS}
     if not present:
@@ -1259,12 +1274,82 @@ def _news_thread_base(event: dict, role_values: dict[str, str]) -> str | None:
     tv = load_process_registry().get(event["event_type_code"])
     order = (*tv.primary_roles, *tv.required_roles) if tv else ()
     role = next((r for r in order if r in present), None) or min(present)
-    company = sorted(role_entities(present[role]))[0]
-    base = f"news:event_type_id={event['event_type_code']}||company={company}"
-    firm = event.get("analyst_firm")
-    if event["event_type_code"].startswith(_ANALYST_TYPE_PREFIX) and firm:
-        base += "||analyst=" + _analyst_key(firm)
-    return base
+    return sorted(role_entities(present[role]))[0]
+
+
+# 관련성 판정기가 거른 이벤트의 표식(ALPHA-1476) — event_thread_link.unknown_reason 앞부분. 되돌릴 때
+# 이 표식으로 거른 이벤트만 찾는다(REJECTED 를 쓰는 다른 writer 가 생겨도 섞이지 않는다).
+RELEVANCE_REJECTED_REASON = "relevance filter"
+
+
+def reject_irrelevant(conn, events: list[dict], judge) -> tuple[list[dict], int]:
+    """관련성 판정기로 그 회사의 사건이 아닌 뉴스 이벤트를 거른다 → (스레드에 넘길 이벤트, 거른 수) (ALPHA-1476).
+
+    판정 대상은 뉴스 이벤트 중 판정기가 학습한 타입이고 주체 회사(`_news_company`)가 있는 것이다. 입력은
+    (회사 entity.display_name, 타입, 기사 제목, news_document.lead_text) — 학습 데이터가 같은 열에서 나왔다.
+    P < 기준값이면 source_event 를 REJECTED 로 바꾸고 UNKNOWN 링크(thread_id NULL)에 사유·확률을 남긴다.
+    REJECTED 는 분석 엔진이 사건 묶음에서 빼고(그 기사는 '연결 안 된 기사'가 된다) 배치 재스레딩
+    (`fetch_unthreaded_events`, ACTIVE 만)도 다시 집지 않는다.
+
+    `thread_events` **앞에서** 따로 부른다 — 추론(이벤트당 수백 ms)을 threading 직렬화 락 안에서 하면
+    그동안 1분 소비자가 전부 기다린다. judge 가 None(꺼짐)이면 아무것도 하지 않는다. 주체 회사가 없는 이벤트
+    (UNKNOWN 대상)·이름·제목을 못 찾은 이벤트는 판정하지 않고 그대로 넘긴다 — 판정 근거가 없는 기사를
+    숨기지 않는다.
+    """
+    if judge is None or not events:
+        return events, 0
+    issuers = issuer_mapping(conn, (
+        entity for event in events for value in event["role_values"].values() if value
+        for entity in role_entities(value)
+    ))
+    candidates: list[tuple[dict, str]] = []
+    for event in events:
+        if event.get("source_class", "NEWS") != "NEWS" or not judge.judges(event["event_type_code"]):
+            continue
+        company = _news_company(event, actor_role_values(event["role_values"], issuers))
+        if company is not None:
+            candidates.append((event, company))
+    if not candidates:
+        return events, 0
+    with conn.cursor() as cur:
+        cur.execute("SELECT entity_id, display_name FROM entity WHERE entity_id = ANY(%s)",
+                    (sorted({c for _e, c in candidates}),))
+        names = {str(i): n for i, n in cur.fetchall() if n}
+        # 뉴스 이벤트의 근거 기사는 제목 근거 하나다. 혹시 여럿이면 document_id 가 가장 앞선 것(결정적).
+        cur.execute(
+            "SELECT DISTINCT ON (ev.source_event_id) ev.source_event_id, d.title, nd.lead_text"
+            " FROM event_evidence ev JOIN document_assertion a ON a.assertion_id = ev.assertion_id"
+            " JOIN document d ON d.document_id = a.document_id"
+            " LEFT JOIN news_document nd ON nd.document_id = d.document_id"
+            " WHERE ev.source_event_id = ANY(%s) AND d.document_type = 'NEWS'"
+            " ORDER BY ev.source_event_id, d.document_id",
+            ([e["source_event_id"] for e, _c in candidates],),
+        )
+        texts = {str(sid): (title, lead) for sid, title, lead in cur.fetchall() if title}
+    judged = [(e, names[c], texts[e["source_event_id"]]) for e, c in candidates
+              if c in names and e["source_event_id"] in texts]
+    if len(judged) < len(candidates):
+        logger.warning("관련성 판정 생략 %d건 — 회사명 또는 기사 제목 없음", len(candidates) - len(judged))
+    scores = judge.score([(name, e["event_type_code"], title, lead) for e, name, (title, lead) in judged])
+    rejected = {e["source_event_id"]: (e, p) for (e, _n, _t), p in zip(judged, scores)
+                if p is not None and p < judge.threshold}
+    if rejected:
+        evaluated_at = _utcnow_iso()
+        with conn.cursor() as cur:
+            cur.execute("UPDATE source_event SET event_status = 'REJECTED' WHERE source_event_id = ANY(%s)",
+                        (sorted(rejected),))
+            cur.executemany(
+                "INSERT INTO event_thread_link (source_event_id, thread_id, source_class,"
+                " novelty_status, link_type, evaluated_at, unknown_reason)"
+                " VALUES (%s, NULL, 'NEWS', 'UNKNOWN', %s, %s, %s)"
+                " ON CONFLICT (source_event_id) DO UPDATE SET thread_id = NULL,"
+                " novelty_status = 'UNKNOWN', evaluated_at = EXCLUDED.evaluated_at,"
+                " unknown_reason = EXCLUDED.unknown_reason",
+                [(sid, e.get("link_type", "TITLE_EVENT"), evaluated_at,
+                  f"{RELEVANCE_REJECTED_REASON} {judge.version} p={p:.4f}")
+                 for sid, (e, p) in sorted(rejected.items())],
+            )
+    return [e for e in events if e["source_event_id"] not in rejected], len(rejected)
 
 
 def _news_segments(conn, bases: list[str]) -> dict[str, list[list]]:
@@ -1659,6 +1744,7 @@ def run(
     db: DbConfig,
     complete_fn=None,
     tagger=None,
+    relevance=None,
     from_date: str | None = None,
     to_date: str | None = None,
     window_days: int | None = None,
@@ -1686,6 +1772,7 @@ def run(
     started_at = datetime.now(timezone.utc)
     news_read = in_universe_count = already_normalized = assembled_during_classify = 0
     classified = events_created = threaded = unknown_thread = 0
+    relevance_rejected = 0  # 관련성 판정기가 거른 뉴스 이벤트 수(ALPHA-1476)
     tagger_reused = 0  # 로컬 태거 경로에서 tag-news 판정을 재사용한 기사 수(ALPHA-1449)
     tagger_cache_errors = 0  # 그 판정 캐시를 못 읽어 재추론으로 진행한 날짜 수
     stage_rejected = arguments_unresolved = anchorless_events = concepts_minted = 0
@@ -1768,6 +1855,8 @@ def run(
                 # in_universe/entity 해소가 이미 유니버스 필터라 별도 파생이 없다. 대상은
                 # created 가 아니라 그 날짜의 미연결 전체 — 재실행이 과거 미연결분을 self-heal.
                 to_thread = fetch_unthreaded_events(conn, date)
+                # 관련성 판정(ALPHA-1476)은 threading 락 밖에서 — 꺼져 있으면(relevance=None) 그대로다.
+                to_thread, date_rejected = reject_irrelevant(conn, to_thread, relevance)
                 unknown = thread_events(conn, to_thread)
             # 카운터는 날짜 커밋 **뒤에만** 합산한다(Rule 12) — 날짜가 롤백되면 그 날짜
             # 수치는 로그에 잡히지 않아, 봉투가 실제 커밋된 범위만 말한다.
@@ -1814,6 +1903,7 @@ def run(
             # 계약상 스레드가 안 선 사실이 묻힌다(ALPHA-457, Rule 12).
             threaded += len(to_thread) - unknown
             unknown_thread += unknown
+            relevance_rejected += date_rejected
 
         # DART 값 승격(ALPHA-547) — 같은 런의 자체 트랜잭션에서 PARSED 금액을 공시 사실과
         # 대조해 승격한다. event_measure 의 INSERT writer 는 조립뿐이고, 이 호출은
@@ -1865,6 +1955,9 @@ def run(
         "assembled_during_classify": assembled_during_classify,
         "events_created": events_created, "threaded": threaded,
         "unknown_thread": unknown_thread,
+        # 관련성 판정기(ALPHA-1476) — 버전(꺼져 있으면 None)과 그 회사의 사건이 아니라고 거른 이벤트 수.
+        "relevance_version": relevance.version if relevance is not None else None,
+        "relevance_rejected": relevance_rejected,
         # 게이트 드롭 사유별 건수(ALPHA-948) — EVENT 미적재(type_unmatched=탈출로의 정직한
         # 산출·type_invalid=목록 밖 발명·ticker_invalid)와 응답 계약 위반(response_malformed·
         # response_missing·item_malformed·doc_class_invalid). 런당 타입 분포와 함께
@@ -1903,13 +1996,13 @@ def run(
 
     logger.info(
         "assemble_events: read=%d in_universe=%d already=%d raced=%d classified=%d created=%d"
-        " threaded=%d unknown_thread=%d stage_rejected=%d unresolved=%d anchorless=%d"
+        " threaded=%d unknown_thread=%d relevance_rejected=%d stage_rejected=%d unresolved=%d anchorless=%d"
         " concepts=%d type_unmatched=%d gate_drops=%d"
         " dart_matched=%d dart_ambiguous=%d failures=%d",
         news_read, in_universe_count, already_normalized, assembled_during_classify,
         classified, events_created,
-        threaded, unknown_thread, stage_rejected, arguments_unresolved, anchorless_events,
-        concepts_minted, gate_drops.get("type_unmatched", 0), sum(gate_drops.values()),
+        threaded, unknown_thread, relevance_rejected, stage_rejected, arguments_unresolved,
+        anchorless_events, concepts_minted, gate_drops.get("type_unmatched", 0), sum(gate_drops.values()),
         dart_matched, dart_ambiguous, len(failures),
     )
     return exit_code

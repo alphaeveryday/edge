@@ -90,6 +90,15 @@ variable "tagger_backend" {
   }
 }
 
+# 뉴스 관련성 판정기(ALPHA-1476) — 스레드에 붙기 전에 그 회사의 사건이 아닌 기사를 거른다(assemble-events 배치·
+# news-consumer). 켜기 전에 레이크 `models/relevance/<버전>/` 묶음이 먼저 있어야 한다 — 없으면 기동을 거부한다.
+# 되돌리기는 이 값 하나다(false = env 를 싣지 않음 = 코드 기본 off).
+variable "relevance_filter" {
+  description = "뉴스 관련성 판정기를 켤지(RELEVANCE_FILTER=on)."
+  type        = bool
+  default     = false
+}
+
 variable "task_cpu" {
   type    = number
   default = 1024

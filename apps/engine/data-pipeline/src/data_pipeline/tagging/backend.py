@@ -16,12 +16,18 @@ import os
 import tempfile
 from pathlib import Path
 
-from ..lake import tagger_model_prefix
+from ..lake import relevance_model_prefix, tagger_model_prefix
 from .extract import ROBERTA_TAGGER_VERSION, TAGGER_BACKEND
 
 logger = logging.getLogger(__name__)
 
 MODEL_PREFIX = tagger_model_prefix(ROBERTA_TAGGER_VERSION)
+
+# 뉴스 관련성 판정기(ALPHA-1476) — 스레드에 붙기 전에 그 회사의 사건이 아닌 기사를 거른다. 기본은 꺼짐:
+# 모델 묶음 업로드 전에 이 코드가 배포돼도 동작이 바뀌지 않는다. 되돌리기는 env 하나다(off).
+# 버전은 묶음 meta.json 의 version 과 같아야 기동된다.
+RELEVANCE_VERSION = "relevance-klue-base-ep1-fp32"
+RELEVANCE_PREFIX = relevance_model_prefix(RELEVANCE_VERSION)
 
 
 def load_tagger(storage):
@@ -37,6 +43,28 @@ def load_tagger(storage):
         raise RuntimeError(
             f"모델 묶음 버전 불일치: 묶음={tagger.version!r} 코드={ROBERTA_TAGGER_VERSION!r}")
     return tagger
+
+
+def relevance_enabled() -> bool:
+    """RELEVANCE_FILTER env — on|off(기본 off). 그 밖의 값은 기동 거부(오타가 조용히 꺼짐이 되면 안 된다)."""
+    raw = os.environ.get("RELEVANCE_FILTER", "").strip() or "off"
+    if raw not in ("on", "off"):
+        raise RuntimeError(f"RELEVANCE_FILTER 는 on 또는 off 다: {raw!r}")
+    return raw == "on"
+
+
+def load_relevance(storage):
+    """켜져 있으면 관련성 판정기, 꺼져 있으면 None(호출부가 거르지 않는다)."""
+    if not relevance_enabled():
+        return None
+    model_dir = os.environ.get("RELEVANCE_MODEL_DIR", "").strip() or _download(storage, RELEVANCE_PREFIX)
+    from .relevance import RelevanceJudge  # torch 는 켜졌을 때만 읽는다
+
+    judge = RelevanceJudge(model_dir, threads=cpu_threads())
+    if judge.version != RELEVANCE_VERSION:
+        raise RuntimeError(
+            f"관련성 모델 묶음 버전 불일치: 묶음={judge.version!r} 코드={RELEVANCE_VERSION!r}")
+    return judge
 
 
 def cpu_threads() -> int | None:
@@ -55,19 +83,19 @@ def cpu_threads() -> int | None:
     return threads
 
 
-def _download(storage) -> str:
+def _download(storage, prefix: str = MODEL_PREFIX) -> str:
     """레이크의 모델 묶음을 임시 디렉터리로 내려받는다. 비었으면 기동을 거부한다."""
     # 끝이 `/` 인 키는 S3 콘솔이 만드는 폴더 표시(0바이트)라 파일이 아니다.
-    keys = [k for k in storage.list_keys(MODEL_PREFIX) if not k.endswith("/")]
+    keys = [k for k in storage.list_keys(prefix) if not k.endswith("/")]
     if not keys:
-        raise RuntimeError(f"모델 묶음이 없다: {MODEL_PREFIX} — 업로드 후 기동해야 한다")
+        raise RuntimeError(f"모델 묶음이 없다: {prefix} — 업로드 후 기동해야 한다")
     root = Path(tempfile.mkdtemp(prefix="tagger-")).resolve()
     for key in keys:
-        path = (root / key[len(MODEL_PREFIX):]).resolve()
+        path = (root / key[len(prefix):]).resolve()
         if not path.is_relative_to(root):
             # 키에 `..` 가 섞이면 묶음 밖 파일을 덮어쓴다 — 받지 않는다.
             raise RuntimeError(f"모델 묶음 밖을 가리키는 키: {key}")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(storage.get_bytes(key))
-    logger.info("모델 묶음 %d개 파일 내려받음: %s → %s", len(keys), MODEL_PREFIX, root)
+    logger.info("모델 묶음 %d개 파일 내려받음: %s → %s", len(keys), prefix, root)
     return str(root)
