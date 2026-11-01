@@ -73,7 +73,7 @@ related:
 - 값판정 가능 다중스레드: **값 상이(개정/정정) 216 vs 값 동일(재방송/후속) 255** → 현행 어휘로 구분 불가.
 
 ### R5 — same-vs-new 경계 = identity 기반
-> **뉴스는 [ADR-0064](../../../adr/0064-local-roberta-news-tagger.md)로 대체(ALPHA-508).** 뉴스 스레드 키는 타입 + 주체 회사(증권사 리포트는 증권사까지)이고, 6개월 넘게 끊기면 새 스레드, 스레드 안에서 하루 넘게 끊겼다 다시 나오면 후속 단계다. 아래 identity 규칙은 공시 스레드에 그대로 적용된다.
+> **뉴스는 [ADR-0064](../../../adr/0064-local-roberta-news-tagger.md)로 대체(ALPHA-508).** 뉴스 스레드 키는 타입 + 주체 회사(증권사 리포트는 증권사까지)이고, 7일 넘게 끊기면 새 스레드, 스레드 안에서 하루 넘게 끊겼다 다시 나오면 후속 단계다. 아래 identity 규칙은 공시 스레드에 그대로 적용된다.
 - **결정:** 같은 스레드 ⟺ 같은 `(type + identity_roles의 정규화 entity_id)`. **identity 값 변경 = 새 이벤트/스레드**; 비-identity(값·단계·범위·부가역할) 변경 = **같은 스레드 업데이트**.
 - **Gk:** G1(식별) · G2(스레딩).
 - **기준(A):** `thread_key = type + identity entity_id`(정규화, verbatim 아님); identity 결핍 시 강제연결 금지(UNKNOWN link).
