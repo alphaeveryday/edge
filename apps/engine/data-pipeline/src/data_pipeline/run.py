@@ -125,7 +125,7 @@ from .steps import (
 )
 from .sources import dart_fundamental, macro_series
 from .sources.kis_inav import DEFAULT_INTERVAL_SEC
-from .tagging.backend import load_tagger
+from .tagging.backend import load_relevance, load_tagger
 from .tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_complete_fn
 from .ops import entry as ops_entry
 from .quality.disclosure import split_failures
@@ -1253,9 +1253,11 @@ def _dispatch(args, settings, storage, run_id) -> int:
             )
         # 분류 LLM 병렬도도 tag-news 와 같은 LLM_CONCURRENCY env(미지정=기본, 상한은 스텝이 클램프).
         concurrency = int(os.environ.get("LLM_CONCURRENCY", assemble_events.DEFAULT_CLASSIFY_CONCURRENCY))
+        # RELEVANCE_FILTER=on 이면 스레드 전에 관련성 판정기로 무관 기사를 거른다(ALPHA-1476), 꺼져 있으면 None.
+        relevance = load_relevance(storage)
         return assemble_events.run(
             storage, run_id, db=db_config_from_env(settings.db), complete_fn=complete_fn, tagger=tagger,
-            from_date=args.from_date, to_date=args.to_date,
+            relevance=relevance, from_date=args.from_date, to_date=args.to_date,
             window_days=args.window_days, concurrency=concurrency,
         )
 

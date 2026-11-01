@@ -629,7 +629,7 @@ def news_consumer_cli(settings, *, max_ticks: int | None = None) -> int:
             "minute_news_consumer 설정 없음 — 큐 URL 필수"
             "(DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL 주입)"
         )
-    from ..tagging.backend import load_tagger
+    from ..tagging.backend import load_relevance, load_tagger
 
     storage = make_storage(settings.storage)
     # TAGGER_BACKEND=roberta 면 로컬 모델(기동 때 레이크에서 묶음을 받는다), llm 이면 None.
@@ -654,7 +654,8 @@ def news_consumer_cli(settings, *, max_ticks: int | None = None) -> int:
         tagger=tagger,
         article_reader=PgArticleReader(db=settings.db),
         job_identities=JobLedger(db=settings.db),
-        event_assembler=NewsEventAssembler(db=settings.db),
+        # RELEVANCE_FILTER=on 이면 스레드 전에 관련성 판정기로 무관 기사를 거른다(ALPHA-1476).
+        event_assembler=NewsEventAssembler(db=settings.db, relevance=load_relevance(storage)),
     )
     consumer = MinuteConsumer(
         jobs=JobLedger(db=settings.db),
