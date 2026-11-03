@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>ETF Orca 받기</title>
+<!-- 랜딩 데스크톱 QR 창의 QR 이 가리키는 주소(https://etforca.com/get/). 찍은 휴대폰 종류를 보고 스토어로 바로 보낸다 -->
+<script>
+  (() => {
+    const ua = navigator.userAgent;
+    // QR 로 온 설치를 Play Console UTM 채널에서 따로 세도록 utm_content=qr 을 넘긴다(랜딩의 Google Play 링크와 같은 꼬리표)
+    const ref = 'utm_source=etforca.com&utm_medium=landing&utm_campaign=landing&utm_content=qr';
+    const play = 'https://play.google.com/store/apps/details?id=com.alphaeveryday.etforca&hl=ko&referrer=' + encodeURIComponent(ref);
+    const appStore = 'https://apps.apple.com/kr/app/etf-orca/id6816826436';
+    // iPadOS 13+ 사파리는 UA 가 Mac 과 같아 터치 지점 수로 가른다
+    const ios = /iPhone|iPad|iPod/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1);
+    location.replace(/Android/i.test(ua) ? play : ios ? appStore : '/');
+  })();
+</script>
+</head>
+<body>
+<!-- 스크립트가 꺼진 브라우저용 -->
+<p><a href="https://apps.apple.com/kr/app/etf-orca/id6816826436">App Store에서 받기</a></p>
+<p><a href="https://play.google.com/store/apps/details?id=com.alphaeveryday.etforca&amp;hl=ko">Google Play에서 받기</a></p>
+</body>
+</html>

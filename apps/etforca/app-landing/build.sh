@@ -33,3 +33,5 @@ mkdir dist
 cp -R assets dist/assets
 # 검색엔진이 사이트 최상위에서 찾는 파일.
 cp robots.txt sitemap.xml dist/
+# 데스크톱 QR 이 가리키는 주소(/get/). 휴대폰 종류를 보고 스토어로 보낸다.
+cp -R get dist/get
