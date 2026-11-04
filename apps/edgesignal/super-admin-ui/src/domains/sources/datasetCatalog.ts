@@ -116,6 +116,11 @@ export const DATASET_GROUPS: DatasetGroup[] = [
         cadence: daily('원천 일배치 · source-daily'), inOpsGrid: true,
       },
       {
+        id: 'cash_distribution', lane: 'dividend-daily', domain: '시장', label: '배당',
+        taskKeys: ['DIVIDEND_COLLECTION_KIS', 'NORMALIZE_DIVIDEND', 'LOAD_DIVIDEND'],
+        cadence: daily('일 1회 · 03:00 슬롯'), inOpsGrid: true,
+      },
+      {
         id: 'disclosures',
         lane: 'disclosure',
         domain: '시장',

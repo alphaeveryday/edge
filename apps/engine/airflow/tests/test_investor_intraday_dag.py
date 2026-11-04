@@ -774,7 +774,7 @@ def test_report_names_its_dag_run_and_the_run_lifetime_fits_the_reconciler(dag_m
     report = dag_module.dag.get_task("report")
     env = {e["name"]: e["value"] for e in report.overrides["containerOverrides"][0]["environment"]}
     assert env["OPS_REPORT_RUN_REF"] == "{{ dag.dag_id }}/{{ run_id }}"
-    # 운영 기본값. 주기 Reconciler 의 수명 기준(1800초)보다 짧아야 살아 있는 run 을 보류로 올리지 않는다.
+    # 운영 기본값. 주기 Reconciler 의 수명 기준(3000초)보다 짧아야 살아 있는 run 을 보류로 올리지 않는다.
     assert dag_module.dag.dagrun_timeout == timedelta(seconds=1500)
 
 

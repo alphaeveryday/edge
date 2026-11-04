@@ -118,7 +118,8 @@ def test_assembled_actor_event_reaches_v2_news_tools(tmp_path, pg):
                      "confidence": 0.9, "completeness": "complete", "missing_required_roles": []}
         extraction = {"status": "ok", "assertions": [assertion, dict(assertion)]}
         args = dict(source_code="bigkinds", article_id=article_id + "-minute", article=minute_article, result=extraction)
-        assert assembler.assemble(**args) == {"assembled": 1, "unresolved_primary": 0}
+        assert assembler.assemble(**args) == {"assembled": 1, "unresolved_primary": 0,
+                                             "relevance_rejected": 0}
         minute_rows = seed.execute("""SELECT se.source_event_id,a.document_id,l.thread_id,ea.entity_id
             FROM document_assertion a JOIN event_evidence e USING(assertion_id)
             JOIN source_event se USING(source_event_id) JOIN event_thread_link l USING(source_event_id)

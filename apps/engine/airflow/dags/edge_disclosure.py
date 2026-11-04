@@ -11,7 +11,7 @@ tests 가 인자까지 대조), raw 부분 실패여도 정제·적재 계속, �
 - 통보: SFN 은 raw·정제 부분 실패를 그 자리에서 한 통씩, 실패 마감을 또 한 통 보냈다(최상위 TimeoutSeconds 로
   죽으면 Catch 가 안 타서 앞당긴 것). 여기선 run 실패 때 한 통이다 — on_failure_callback 은 dagrun_timeout 으로
   죽은 run 에도 불린다.
-- 시간 상한: SFN 2400초 → dagrun_timeout 1500초(Reconciler 수명 1800초보다 짧아야 한다). 실측 최대 238초.
+- 시간 상한: SFN 2400초 → dagrun_timeout 1500초(Reconciler 수명 3000초보다 짧아야 한다). 실측 최대 238초.
 
 일정·날짜:
 - 슬롯은 envs/dev/main.tf `disclosure_schedule_expressions` 와 같다(모듈 기본 10슬롯이 아니라 dev 값 — tests 대조).
@@ -97,7 +97,7 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
         is_paused_upon_creation=True,
         catchup=False,
         max_active_runs=1,
-        # Reconciler 수명(1800초)보다 짧아야 죽은 run 을 놓치지 않는다(장중 수급 DAG 와 같은 규칙).
+        # Reconciler 수명(3000초)보다 짧아야 죽은 run 을 놓치지 않는다(장중 수급 DAG 와 같은 규칙).
         dagrun_timeout=timedelta(seconds=int(os.environ.get("EDGE_LAB_DAGRUN_TIMEOUT_SECONDS", "1500"))),
         params={"reprocess_slot": Param("", type="string", description=(
             "비우면 일반 run. 기존 슬롯 ISO 시각(예 2026-10-20T19:30:00+09:00)을 주면 그 슬롯의 raw 를 "

@@ -79,10 +79,25 @@ def test_branch_rules_follow_the_sfn(dag_module):
     assert [t.task_id for t in dag.leaves] == ["verdict"]
 
 
+def test_documents_load_before_tagging_and_the_run_ends_before_the_minute_grid(dag_module):
+    # PARALLELISM=1 이라 형제 스텝은 가중치 순으로 하나씩 돈다. 동률이면 태깅(00:10 에 14~20분)이 먼저 잡혀, run 이 시간
+    # 상한에 잘릴 때 06:00 전망이 읽는 기사까지 빠졌다(ALPHA-1475). 문서 적재는 태깅 결과를 쓰지 않는다.
+    dag = dag_module.dag
+
+    def scheduler_weight(task_id):          # 기본 weight_rule(downstream): 자기 + 모든 하류의 priority_weight
+        task = dag.get_task(task_id)
+        assert task.weight_rule == "downstream"
+        return task.priority_weight + sum(dag.get_task(t).priority_weight
+                                          for t in task.get_flat_relative_ids(upstream=False))
+
+    assert scheduler_weight("load_documents") > scheduler_weight("tag")
+    # 상한을 늘려도 08:10 run 은 09:00 뉴스 분 격자 전에 끝나야 한다.
+    assert datetime(2026, 10, 30, 8, 10) + dag.dagrun_timeout <= datetime(2026, 10, 30, 9, 0)
+
 def test_scheduling_guards(dag_module):
     dag = dag_module.dag
     assert dag.is_paused_upon_creation is True and dag.catchup is False and dag.max_active_runs == 1
-    assert dag.dagrun_timeout == timedelta(seconds=1700)
+    assert dag.dagrun_timeout == timedelta(seconds=2700)
     collect = dag.get_task("collect")
     assert collect.same_day_only is True and collect.noop_on_reprocess is True   # 수집 창 = 실행 시각 기준
     # 성공 이력 skip 은 첫 외부 호출 스텝(수집)만 — 하류에 켜면 앞 스텝을 clear 해 입력이 바뀌어도 이전 성공 태스크에

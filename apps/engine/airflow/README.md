@@ -109,7 +109,7 @@
 **미확정 실행을 원장이 스스로 찾는다(DAG 의 마지막 task·callback 이 돌지 않아도).**
 - **결말 없이 끝난 스텝(worker 사망·수동 failed).** 모든 시도는 시작할 때 XCom `edge_started`를 남긴다. 시작했는데 결말(`exit_code`·`hold`·`no_ecs_task`)이 없으면 verdict·report는 그 스텝을 `ECS_STATE_UNKNOWN` 보류로 읽는다. 확정된 업무 실패(exit 1)는 보류가 아니다. report가 원장에 옮긴다.
 - **report 도 못 도는 경우(`dagrun_timeout`).** 주기 Reconciler(EventBridge 15분, 야간·휴장일 포함)가 슬롯 대조와 별개로 `sweep_airflow_runs`를 돈다.
-  - ① 원장에 끝나지 않은 시도가 남은 Airflow 런(과거 슬롯 재처리 포함 — 슬롯 대조는 최근 예정일만 본다)을 대조한다. ECS 종료 증거로 닫고, 수명(`OPS_AIRFLOW_RUN_LIFETIME_SECONDS`, 기본 1800초 > dagrun_timeout)을 넘도록 안 끝난 시도는 `OPEN_ATTEMPT` 보류로 남긴다(종료 증거로 닫히면 자동 해결). 결과 미상으로 닫힌 시도는 `RESULT_UNKNOWN`으로 남긴다.
+  - ① 원장에 끝나지 않은 시도가 남은 Airflow 런(과거 슬롯 재처리 포함 — 슬롯 대조는 최근 예정일만 본다)을 대조한다. ECS 종료 증거로 닫고, 수명(`OPS_AIRFLOW_RUN_LIFETIME_SECONDS`, 기본 3000초 > dagrun_timeout)을 넘도록 안 끝난 시도는 `OPEN_ATTEMPT` 보류로 남긴다(종료 증거로 닫히면 자동 해결). 결과 미상으로 닫힌 시도는 `RESULT_UNKNOWN`으로 남긴다.
   - ② ECS에서 이 레인 명령(`--run-id <Airflow 런>`)으로 수명보다 오래 살아 있는데 원장에 시도가 없는 태스크(시간 초과 당시 PENDING)를 찾아 `ECS_STATE_UNKNOWN` 보류로 남긴다. 그 태스크가 늦게 떠도 게이트에서 자기 보류를 보고 76으로 멈춘다. ECS 조회 실패는 "없음"으로 읽지 않고 기록 없이 드러낸다.
   - 권한: Reconciler 역할에 `ecs:ListTasks`(같은 클러스터 한정)를 더했다.
 - **늦게 도착한 옛 보고.** report는 자기 DAG run(`OPS_REPORT_RUN_REF`)을 함께 넘긴다. 이 런의 최신 업무 시도가 다른 DAG run의 것이면 판정을 기록하지 않는다(보류 기록은 사실이라 남긴다).
@@ -1279,11 +1279,15 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 - terraform 값 인자 `--limit`(`tag_news_limit`)·`--window-days`(`assemble_window_days`)는 장전 레인과 같은 `EDGE_LANE_ARGS` 경로로 받는다. 위 "장전 유니버스 레인"의 배포 순서 주의가 같이 적용된다.
 - FMP 뉴스 수집은 `us_fmp_enabled` 일 때만 SFN 에 들어간다. dev 는 꺼져 있어 DAG 에 없다. 켜려면 DAG 도 함께 고친다(tests 가 막는다).
 - **전환 전 조건 — 소요 실측.** SFN 은 태깅과 문서 적재를 병렬로 돌렸다. Airflow 는 PARALLELISM=1 이라 직렬이다.
-  - dagrun_timeout 은 Reconciler 수명(1800초)보다 짧아야 해서 1700초다. SFN 은 2400초였다.
+  - dagrun_timeout 은 Reconciler 수명(3000초)보다 짧아야 하고 08:10 run 이 09:00 전에 끝나야 해서 2700초다(ALPHA-1475 에서 1700초 → 2700초). SFN 은 2400초였다.
   - SFN 최근 40회: p50 477초, 최대 1099초. 과거에는 25분 상한에 40%가 잘린 기록도 있다(variables.tf `news_state_machine_timeout_seconds`).
-  - 그래서 전환 전에 원장 `ops_task_attempt` 로 스텝별 소요(특히 태깅·문서 적재·조립)를 재고, 합이 1700초 안에 드는지 확인한다.
+  - 그래서 원장 `ops_task_attempt` 로 스텝별 소요(특히 태깅·문서 적재·조립)를 재고, 스텝 사이 대기까지 더한 시작~끝이 상한(2700초) 안에 드는지 확인한다.
   - 08:10 run 은 09:00 뉴스 분 격자 전에 끝나야 한다.
-  - 전환 전 실측(10-24, 원장 최근 40 run): 스텝 소요 합 최대 1031초(10-22 00:10, 수집 911초), 시작~끝 최대 1245초. 08:10 run 은 최대 1044초. Airflow 수동 run(10-21 15:54)은 스텝 합 423초·시작~끝 737초로 SFN 보다 스텝 사이 대기가 약 100초 길었다 — 최대 run 에 더해도 1700초 안이다.
+  - 전환 전 실측(10-24, 원장 최근 40 run): 스텝 소요 합 최대 1031초(10-22 00:10, 수집 911초), 시작~끝 최대 1245초. 08:10 run 은 최대 1044초. Airflow 수동 run(10-21 15:54)은 스텝 합 423초·시작~끝 737초로 SFN 보다 스텝 사이 대기가 약 100초 길었다 — 최대 run 에 더해도 1700초 안이다(당시 상한).
+  - 전환 뒤 실측(ALPHA-1475, 10-26~31 00:10 run): 같은 날 밤 태깅이 로컬 RoBERTa 로 바뀌고(#1568) 태깅 전 종목명 거르기가 빠져(#1577)
+    태깅 대상이 약 800 → 1,791~3,202건, 태깅이 약 200초 → 835~1,205초가 됐다. Airflow 는 스텝마다 ECS 기동 40~50초·종료 감지 30~40초가
+    붙어(8스텝 약 10분) 1700초 상한에 평일 밤마다 잘렸다. 가장 긴 밤(10-30) 추정 시작~끝 약 2,400초 → 상한 2700초. 문서 적재는 태깅
+    결과를 쓰지 않으므로 태깅보다 먼저 돈다(priority_weight) — run 이 잘려도 06:00 전망이 읽는 기사는 들어간다.
 - **전환·롤백.** 위 "운영 전환·롤백 절차(장중 수급)"를 따르되, 아래만 바꿔 읽는다.
   - ①·⑥: `pipeline_type = 'news'`.
   - ②: 작업 키 6개 `NEWS_COLLECTION_BIGKINDS`·`NORMALIZE_NEWS`·`TAG_NEWS`·`LOAD_DOCUMENTS`·`LOAD_ASSERTIONS`·`ASSEMBLE_EVENTS`.
@@ -1523,7 +1527,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
    - **전날 이전 슬롯의 재처리는 주기 대조를 받지 않는다.** 주기 Reconciler는 가장 최근 예정일의 슬롯만 본다(ALPHA-565 사각). 그래서 과거 슬롯 재처리 run이 `report` 전에 죽으면 앞 판정이 남는다. 그 run_key를 `OPS_RUN_KEY`로 지정해 `reconcile`을 한 번 돌려야 한다.
    - **과거 슬롯 재처리 중 R02가 잠깐 켠다.** 새 업무 시도가 결론 나기 전 주기 대조가 돌면 판정이 NULL(미귀결)이 된다. 그 슬롯은 hard deadline이 이미 지났으므로 `report` 전까지 R02 P1이 뜬다. 멈춘 재처리를 숨기지 않기 위한 선택이다. 경보 소음으로 볼지 결정한다.
 4. **결말 없이 끝난 실행의 보류 기록 — 해결(ALPHA-1088 후속, 아래 "미확정 실행을 원장이 스스로 찾는다").** worker 사망·수동 failed·`dagrun_timeout`으로 report·verdict·callback이 돌지 못해도 원장에 보류가 남는다. 남는 경계(탐지 지연)는 그 절에 적었다.
-5. **run 시간 상한.** `dagrun_timeout`(1500초)과 Reconciler 수명 기준(`OPS_AIRFLOW_RUN_LIFETIME_SECONDS`, 기본 1800초)의 관계는 테스트가 고정한다. 실제 스텝 소요를 재고 두 값을 다시 볼지 결정한다(실제 환경 검증 항목).
+5. **run 시간 상한.** `dagrun_timeout`(1500초)과 Reconciler 수명 기준(`OPS_AIRFLOW_RUN_LIFETIME_SECONDS`, 기본 3000초)의 관계는 테스트가 고정한다. 실제 스텝 소요를 재고 두 값을 다시 볼지 결정한다(실제 환경 검증 항목).
 6. **Airflow 실행 환경 — 정함(ALPHA-1119).** ECS on EC2 자체 운영(위 "실행 환경"). `EDGE_ECS_*`·`EDGE_ALARM_TOPIC_ARN`·`aws_default` 는 `modules/airflow` 태스크 정의가 주입하고, DAG 는 이미지로 배포한다. 실제 리소스 생성과 실제 AWS 검증은 끝났다(위 "실제 AWS 단기 검증 결과"·"small·1408 A4·A5 표적 재검증 결과").
 7. **아래 "실제 환경 검증"의 성공 기준 충족.**
 

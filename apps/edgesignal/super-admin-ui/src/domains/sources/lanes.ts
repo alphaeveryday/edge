@@ -23,6 +23,7 @@ export const LANE_LABEL: Record<string, string> = {
   news: '뉴스',
   disclosure: '공시 (배치 보충)',
   'investor-intraday': '수급(장중)',
+  'dividend-daily': '배당(일배치)',
 };
 
 /**

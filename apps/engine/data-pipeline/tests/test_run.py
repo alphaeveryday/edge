@@ -934,10 +934,11 @@ def _spy_assemble(monkeypatch):
 
     captured = {}
 
-    def fake_run(storage, run_id, *, db, complete_fn, tagger, from_date, to_date, window_days,
+    def fake_run(storage, run_id, *, db, complete_fn, tagger, relevance, from_date, to_date, window_days,
                  concurrency):
         captured["window"] = (from_date, to_date, window_days)
         captured["backend"] = ("llm" if complete_fn is not None and tagger is None else "other")
+        captured["relevance"] = relevance
         return 0
 
     monkeypatch.setattr(run_mod, "load_tagger", lambda storage: None)  # 바깥 env 와 무관하게 '태거 없음'
@@ -954,6 +955,15 @@ def test_assemble_window_days_reaches_step(monkeypatch):
     assert main(["assemble-events", "--run-id", "R", "--window-days", "1"]) == 0
     assert captured["window"] == (None, None, 1)
     assert captured["backend"] == "llm"
+
+
+def test_assemble_passes_the_relevance_judge_to_the_step(monkeypatch):
+    # WHY(ALPHA-1476): 판정기를 만들고 스텝에 안 넘기면 RELEVANCE_FILTER=on 배포에서도 필터가 조용히 안 돈다.
+    run_mod, captured = _spy_assemble(monkeypatch)
+    judge = object()
+    monkeypatch.setattr(run_mod, "load_relevance", lambda storage: judge)
+    assert main(["assemble-events", "--run-id", "R"]) == 0
+    assert captured["relevance"] is judge
 
 
 def test_assemble_explicit_window_beats_window_days(monkeypatch):
