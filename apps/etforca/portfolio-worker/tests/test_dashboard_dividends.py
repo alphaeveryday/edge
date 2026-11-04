@@ -1,7 +1,9 @@
 from datetime import date
 import pandas as pd
 import pytest
+from edge_portfolio.market_preload import PriceSession
 from edge_portfolio import dashboard_work as work
+from test_dashboard_work import serve
 
 
 def history(months):
@@ -65,7 +67,7 @@ def test_annual_cash_keeps_original_distributions_instead_of_rounded_yield():
 @pytest.mark.parametrize('key,currency', [('KR:069500', 'KRW'), ('US:SOXL', 'USD')])
 async def test_new_holdings_collect_a_year_of_dividends_without_waiting_a_year(monkeypatch, key, currency):
     from contextlib import contextmanager
-    from edge_portfolio import market_data, store
+    from edge_portfolio import store
     class Database:
         def execute(self, *args):
             return self
@@ -82,9 +84,9 @@ async def test_new_holdings_collect_a_year_of_dividends_without_waiting_a_year(m
         result['currency'] = currency
         result['frame'] = result['frame'].loc[str(kwargs['history_start']):]
         return result
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    serve(monkeypatch, fetch)
     records, failures = await work.records_for([key], date(2026, 10, 18),
-        valuation_since={key: date(2026, 10, 18)}, include_fx=False)
+        valuation_since={key: date(2026, 10, 18)}, include_fx=False, session=PriceSession())
     assert failures == []
     assert work.dividend_details(records[key], key)['annual_dividend_per_share'] == 4
     projected = work.forecast({'id': 'a', 'instrument_id': key}, records[key], 10, 1, date(2026, 10, 18))

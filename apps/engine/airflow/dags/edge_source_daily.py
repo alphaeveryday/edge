@@ -18,7 +18,7 @@ SFN 이 없는 **Airflow 전용 레인**이다. 업무는 기존 `data_pipeline.
 - 백필 run(수동 trigger + params `macro_from/macro_to`·`financial_from/financial_to`): 관측 기간·접수일 기간을
   명시한다. 비우면 정기 창이다. 매크로 `to` 는 어제까지, 재무 `to` 는 오늘까지만 받는다(스텝이 거부) —
   과거 날짜 요청이 오늘 자료를 과거로 라벨하지 않는다. 업종 마스터는 현재값뿐이라 백필 인자가 없다.
-  한 run 은 1500초 안에 끝나야 한다(Reconciler 수명 1800초) — 긴 백필은 1년 단위로 나눠 trigger 한다.
+  한 run 은 1500초 안에 끝나야 한다(Reconciler 수명 3000초) — 긴 백필은 1년 단위로 나눠 trigger 한다.
   run_id 는 슬롯(분 단위)에서 나온다 — 청크는 1분 이상 간격을 두고 trigger 한다. 같은 분에 겹치면 두 번째 run 의
   수집 스텝이 '다른 요청 범위로 이미 수집됐다'로 실패한다(조용히 건너뛰지 않는다).
 - 재처리(conf `reprocess_slot`): 이미 있는 raw 로 정제·적재만 다시 한다(공급자 재호출 없음).
@@ -199,7 +199,7 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
         is_paused_upon_creation=True,
         catchup=False,
         max_active_runs=1,
-        # Reconciler 수명(1800초)보다 짧아야 죽은 run 을 놓치지 않는다(장중 수급 DAG 와 같은 규칙).
+        # Reconciler 수명(3000초)보다 짧아야 죽은 run 을 놓치지 않는다(장중 수급 DAG 와 같은 규칙).
         dagrun_timeout=timedelta(seconds=int(os.environ.get("EDGE_LAB_DAGRUN_TIMEOUT_SECONDS", "1500"))),
         params=params,
         user_defined_macros={

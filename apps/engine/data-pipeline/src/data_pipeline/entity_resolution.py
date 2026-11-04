@@ -1,25 +1,38 @@
-"""엔티티 해소 — assertion argument 텍스트 → instrument entity_id (ALPHA-375).
+"""엔티티 해소 — assertion argument 텍스트 → instrument entity_id (ALPHA-375·850).
 
 tag-news 의 argument `text` 는 기사 원문 표현("삼성전자"·"005930")이고,
 `assertion_argument.entity_id` 는 NOT NULL + FK 라 해소 없이는 한 건도 못 넣는다.
 
-**규칙은 코드가 답한다(Rule 5) — LLM 재호출 금지.** 마스터 축 3개와 실측 별칭 축:
+**규칙은 코드가 답한다(Rule 5) — LLM 재호출 금지.** 마스터 축 3개:
   (a) 티커(6자리, `instrument.ticker`)      → instrument_id
   (b) 회사 정식명(발행사 entity display_name) → 그 회사 보통주 instrument_id
   (c) 종목/ETF display_name                  → instrument_id
+
+완전일치로 못 찾으면, 호출부가 허용할 때(`allow_aliases`) **표기 매칭**으로 한 번 더 찾는다
+(ALPHA-850). 같은 회사를 다르게 쓴 표기만 푼다:
+  - 별칭 명부 `instrument_aliases.tsv` — 정규화로 안 풀리는 같은 회사의 다른 이름(현대자동차→현대차).
+  - 정규화 키 — NFKC, 법인 표기(`(주)`·`㈜`·`주식회사`)·`보통주`·공백·기호 제거, 영문 글자를 한글
+    읽기로(`DB`→`디비`, `&`→`앤`). `DB하이텍`·`디비하이텍`·`DB 하이텍`이 같은 키가 된다.
+  - 괄호 병기 — `한국항공우주산업(KAI)` 은 괄호 밖·안을 각각 찾고, 둘이 다른 종목이면 모호다.
+  - 끝 조사 — 키에서 조사(`은`·`의`·`측` 등) 하나를 뗀 형태가 마스터 키일 때만.
 
 **이 해소기의 결과는 instrument 엔티티다.** 문서의 종목 매칭과 기존 사건 ID 산식이
 이 값을 사용한다. 사건 참여자는 저장 경계에서 `events.participants`가 Equity를
 발행 Actor로 변환한다. 따라서 이 해소 결과를 사건 참여 대상의 최종 ID로 해석하지 않는다.
 
 동명 충돌(한 키가 서로 다른 엔티티 2개)은 **미해소(ambiguous)** 다 — 아무거나 고르면
-그 순간 조용히 틀린다. 별칭은 정상 런에서 확인된 같은 상장사의 정식명 변형만 canonical
-마스터가 실제 존재할 때 붙인다. 유사도·그룹/브랜드 귀속은 하지 않는다.
+그 순간 조용히 틀린다. 정규화 키도 같다: 두 종목이 같은 키가 되면 그 키로는 둘 다 안 푼다.
+부분일치·유사도·그룹/브랜드/자회사 귀속은 하지 않는다 — `삼성전자 노조`·`SK그룹`·`SK온`은
+그 상장사가 아니다(틀린 회사에 붙이는 것보다 미해소가 낫다).
 """
 
 from __future__ import annotations
 
+import functools
+import re
+import unicodedata
 from dataclasses import dataclass, field
+from pathlib import Path
 
 # 충돌 표식 — dict 값이 None 이면 "그 키는 두 엔티티가 다퉜다"는 뜻이다.
 _AMBIGUOUS = None
@@ -29,44 +42,7 @@ ALIAS_RESOLVED = "alias_resolved"
 UNRESOLVED = "unresolved"
 AMBIGUOUS = "ambiguous"
 
-# 2026-09-07·19 dev 정상 런에서 같은 상장사를 가리키는 정식명·상호 표기만 둔다
-# (ALPHA-1067·1080). 그룹명·브랜드·비상장 자회사처럼 상장 instrument 귀속이
-# 해석인 표현(삼성·포스코·CJ온스타일·GS25)은 넣지 않는다.
-_INSTRUMENT_ALIASES = {
-    "IBK기업은행": "기업은행",
-    "중소기업은행": "기업은행",
-    "현대자동차": "현대차",
-    "LS일렉트릭": "LS ELECTRIC",
-    "한국전력공사": "한국전력",
-    "한국항공우주산업(KAI)": "한국항공우주",
-    "KAI(한국항공우주산업)": "한국항공우주",
-    "신세계아이앤씨": "신세계 I&C",
-    "KG모빌리티(KGM)": "KG모빌리티",
-    "KG 모빌리티(KGM)": "KG모빌리티",
-    "한국지역난방공사": "지역난방공사",
-    "한국타이어": "한국타이어앤테크놀로지",
-    "한국타이어(한국타이어앤테크놀로지)": "한국타이어앤테크놀로지",
-    "한국타이어앤테크놀로지(한국타이어)": "한국타이어앤테크놀로지",
-    "디엑스앤브이엑스": "DXVX",
-    "디엑스앤브이엑스(DXVX)": "DXVX",
-    "디엑스앤브이엑스(Dx&Vx)": "DXVX",
-    "삼성SDS": "삼성에스디에스",
-    "㈜두산": "두산",
-    "롯데칠성음료": "롯데칠성",
-    "GC녹십자": "녹십자",
-    "한국전력기술": "한전기술",
-    "기아(주)": "기아",
-    "기아㈜": "기아",
-    "SKT": "SK텔레콤",
-    "SK텔레콤(SKT)": "SK텔레콤",
-    "한화 에어로스페이스": "한화에어로스페이스",
-    "SOOP(옛 아프리카TV)": "SOOP",
-    "엘앤에프(L&F)": "엘앤에프",
-    "KB금융지주": "KB금융",
-    "네이버": "NAVER",
-    "LGU+": "LG유플러스",
-    "㈜GS": "GS",
-}
+_ALIAS_FILE = Path(__file__).with_name("instrument_aliases.tsv")
 
 
 @dataclass(frozen=True)
@@ -77,6 +53,8 @@ class ResolutionIndex:
     by_ticker: dict[str, str] = field(default_factory=dict)
     alias_ticker_by_key: dict[str, str] = field(default_factory=dict)
     alias_keys: frozenset[str] = frozenset()
+    # 표기 매칭 키(`match_key`) → entity_id. 마스터 키와 별칭에서 만든다(ALPHA-850).
+    by_match_key: dict[str, str | None] = field(default_factory=dict)
 
 
 def _normalize(text: str) -> str:
@@ -84,11 +62,84 @@ def _normalize(text: str) -> str:
     return " ".join(text.split())
 
 
-def load_resolution_index(conn) -> ResolutionIndex:
-    """엔티티 마스터 1쿼리로 해소 인덱스를 만든다.
+# ── 표기 매칭(ALPHA-850) ────────────────────────────────────────────────
+# 영문 글자의 한글 읽기. 뉴스는 같은 회사를 `DB하이텍`·`디비하이텍`, `LG`·`엘지`로 섞어 쓴다.
+# 글자 단위라 영단어(`ELECTRIC`)는 뜻 있는 읽기가 안 되지만 양쪽에 같은 변환이 걸려 일관된다 —
+# 영단어 사명의 한글 표기(`LS일렉트릭`)는 별칭 명부가 맡는다.
+_LETTER_READING = {
+    "a": "에이", "b": "비", "c": "씨", "d": "디", "e": "이", "f": "에프", "g": "지", "h": "에이치",
+    "i": "아이", "j": "제이", "k": "케이", "l": "엘", "m": "엠", "n": "엔", "o": "오", "p": "피",
+    "q": "큐", "r": "알", "s": "에스", "t": "티", "u": "유", "v": "브이", "w": "더블유", "x": "엑스",
+    "y": "와이", "z": "제트", "&": "앤", "+": "플러스",
+}
+# NFKC 뒤의 법인 표기(`㈜` 는 NFKC 로 `(주)` 가 된다).
+_LEGAL_FORM = re.compile(r"\(주\)|\(유\)|주식회사")
+_DROP = re.compile(r"[\s·ㆍ・\-_.,'\"‘’“”`]")
+# 표기 끝에 붙어 오는 조사·지시어. 뗀 나머지가 마스터 키일 때만 쓴다(완전일치가 먼저다).
+_PARTICLES = tuple(sorted({
+    "은", "는", "이", "가", "을", "를", "의", "에", "와", "과", "도", "만", "로", "으로", "이나",
+    "랑", "이랑", "까지", "부터", "처럼", "보다", "에서", "에게", "께서", "이며", "이자", "에도", "에는",
+    "와의", "과의", "로는", "으로는", "에서는", "에서도", "측", "측은", "측이", "측의", "측도", "측에",
+    "등", "등이", "등은", "등의", "쪽",
+}, key=len, reverse=True))
+# 사명 끝 글자로도 흔한 조사(마스터 2,918종 중 `…이` 183·`…로` 32·`…가`·`…도` 6). 떼고 남은 키가 짧으면
+# 다른 회사 이름의 앞부분일 수 있다(`레몬도`→`레몬`, 해외 기업). 3글자 이상 남을 때만 뗀다 — 2면 실제 기사
+# 개발셋에서 틀린 연결이 생기고, 4면 `네패스가` 같은 짧은 사명을 놓친다(ALPHA-850 측정).
+_NAME_FINAL_PARTICLES = frozenset({"이", "가", "도", "로", "과", "을"})
+_MIN_STEM_AFTER_NAME_FINAL = 3
+# 끝에 붙은 괄호 병기 하나: `밖(안)` 뒤에는 조사만 올 수 있다 — `KGM(옛 쌍용차)그룹` 처럼 괄호 뒤에
+# 다른 말이 이어지면 그 표기는 괄호 안의 회사가 아니다.
+_PAREN = re.compile(r"^(?P<out>[^()\[\]]+)[(\[](?P<inner>[^()\[\]]+)[)\]](?P<tail>[^()\[\]]*)$")
+# 괄호 안 옛 사명 표시(`SOOP(옛 아프리카TV)`). 띄어 쓴 것만 — `구영테크` 같은 사명 첫 글자를 떼지 않게.
+_FORMER_MARK = re.compile(r"^(옛|구|전)\s+")
 
-    키 공간: instrument.ticker · 발행사 entity.display_name · instrument entity.display_name.
-    같은 키가 서로 다른 instrument_id 로 두 번 오면 충돌 표식으로 바꾼다 — 나중 행이
+
+def _plain(text: str) -> str:
+    """읽기 변환 전 단계 — NFKC, 법인 표기·공백·기호·`보통주` 제거, 영문 소문자."""
+    t = _LEGAL_FORM.sub("", unicodedata.normalize("NFKC", text))
+    return _DROP.sub("", t).casefold().removesuffix("보통주")
+
+
+def _reading(plain: str) -> str:
+    """영문 글자 → 한글 읽기. C 는 `씨`·`시` 둘 다로 읽힌다(ISC → 아이에스씨·아이에스시) — 하나로 접는다."""
+    return "".join(_LETTER_READING.get(ch, ch) for ch in plain).replace("씨", "시")
+
+
+def match_key(text: str) -> str:
+    """표기 매칭 키 — 같은 회사를 다르게 쓴 표기가 같은 문자열이 되게 한다."""
+    return _reading(_plain(text))
+
+
+@functools.lru_cache(maxsize=1)
+def _curated_aliases() -> tuple[tuple[str, str], ...]:
+    """별칭 명부(alias, ticker). 주석·머리행은 건너뛴다."""
+    out = []
+    for line in _ALIAS_FILE.read_text(encoding="utf-8").splitlines():
+        if not line.strip() or line.startswith("#"):
+            continue
+        alias, ticker = line.split("\t")[:2]
+        if alias == "alias":
+            continue
+        out.append((alias.strip(), ticker.strip()))
+    return tuple(out)
+
+
+def _put(table: dict[str, str | None], key: str, entity_id: str | None) -> None:
+    """충돌이면 None 으로 — 나중 행이 조용히 이기지 않게."""
+    if key not in table:
+        table[key] = entity_id
+    elif table[key] != entity_id:
+        table[key] = _AMBIGUOUS
+
+
+def load_resolution_index(conn, aliases=None) -> ResolutionIndex:
+    """엔티티 마스터 1쿼리 + 별칭 명부로 해소 인덱스를 만든다.
+
+    `aliases` 는 (alias, ticker) 목록 — 없으면 `instrument_aliases.tsv`. 명부 생성 스크립트가
+    빈 목록으로 마스터만의 인덱스를 만들어 후보를 검사할 때 쓴다.
+
+    키 공간: instrument.ticker · 발행사 entity.display_name · instrument entity.display_name ·
+    별칭. 같은 키가 서로 다른 instrument_id 로 두 번 오면 충돌 표식으로 바꾼다 — 나중 행이
     조용히 이기게 두면 어느 종목으로 해소됐는지가 적재 순서에 달리게 된다.
     """
     with conn.cursor() as cur:
@@ -113,46 +164,84 @@ def load_resolution_index(conn) -> ResolutionIndex:
             if not raw:
                 continue
             key = _normalize(str(raw))
-            if not key:
-                continue
-            if key not in by_key:
-                by_key[key] = str(instrument_id)
-            elif by_key[key] != str(instrument_id):
-                by_key[key] = _AMBIGUOUS
+            if key:
+                _put(by_key, key, str(instrument_id))
 
     alias_ticker_by_key: dict[str, str] = {}
     alias_keys: set[str] = set()
-    ticker_by_entity = {entity_id: ticker for ticker, entity_id in by_ticker.items()}
-    for raw_alias, raw_target in _INSTRUMENT_ALIASES.items():
-        alias, target = _normalize(raw_alias), _normalize(raw_target)
-        entity_id = by_key.get(target)
-        # 타깃이 없거나 충돌이면 별칭도 미해소다. 정적 별칭 때문에 없는 마스터를 지어내거나
-        # 충돌을 숨기지 않는다.
-        if entity_id is None:
+    for raw_alias, ticker in (_curated_aliases() if aliases is None else aliases):
+        alias, entity_id = _normalize(raw_alias), by_ticker.get(ticker)
+        # 대상 종목이 마스터에 없으면 별칭도 없다 — 정적 명부가 없는 마스터를 지어내지 않는다.
+        if not alias or entity_id is None:
             continue
-        existing = by_key.get(alias)
-        if alias in by_key and existing != entity_id:
+        if alias in by_key and by_key[alias] != entity_id:
+            # 충돌한 표기는 어느 API 로도 한 종목이 되면 안 된다 — 먼저 넣은 역매핑도 지운다.
             by_key[alias] = _AMBIGUOUS
+            alias_ticker_by_key.pop(alias, None)
             continue
+        alias_ticker_by_key[alias] = ticker
         if alias in by_key:
-            # 실제 마스터 이름이면 별칭 전용 경로로 강등하지 않는다. 1분 조립은 기사 종목
-            # 범위를 받지 않아 curated alias를 쓰지 않지만, 마스터 완전일치는 계속 해소해야 한다.
-            # 배치 조립은 기사 허용 ticker를 검증하므로 그 역매핑은 별도로 보존한다.
-            ticker = ticker_by_entity.get(entity_id)
-            if ticker is not None:
-                alias_ticker_by_key[alias] = ticker
+            # 실제 마스터 이름이면 별칭 전용 경로로 강등하지 않는다(완전일치는 기본 경로에서도 푼다).
             continue
         by_key[alias] = entity_id
         alias_keys.add(alias)
-        ticker = ticker_by_entity.get(entity_id)
-        if ticker is not None:
-            alias_ticker_by_key[alias] = ticker
+
+    by_match_key: dict[str, str | None] = {}
+    for key, entity_id in by_key.items():
+        mk = match_key(key)
+        if mk:
+            _put(by_match_key, mk, entity_id)
     return ResolutionIndex(
         by_key=by_key,
         by_ticker=by_ticker,
         alias_ticker_by_key=alias_ticker_by_key,
         alias_keys=frozenset(alias_keys),
+        by_match_key=by_match_key,
     )
+
+
+def _lookup(index: ResolutionIndex, text: str) -> tuple[bool, str | None]:
+    """정규화 키(그대로, 끝 조사 하나 뗀 것) → (찾았나, entity_id | None=충돌)."""
+    plain = _plain(text)
+    key = _reading(plain)
+    if key in index.by_match_key:
+        return True, index.by_match_key[key]
+    # 조사는 읽기 변환 **전** 원문 끝에서만 뗀다 — 영문 E·K·Y 의 읽기(`이`·`케이`·`와이`)가 조사 `이`로 끝나
+    # `SKE`→`에스케이이`→`SK` 처럼 다른 표기가 접히지 않게.
+    # 떼는 방법이 여럿일 수 있다(`액트로는` = `액트로`+`는` 또는 `액트`+`로는`). 맞는 종목이 갈리면 모호다.
+    hits = set()
+    for particle in _PARTICLES:
+        if not plain.endswith(particle):
+            continue
+        stem = _reading(plain[: -len(particle)])
+        min_stem = _MIN_STEM_AFTER_NAME_FINAL if particle in _NAME_FINAL_PARTICLES else 2
+        if len(stem) >= min_stem and stem in index.by_match_key:
+            hits.add(index.by_match_key[stem])
+    if not hits:
+        return False, None
+    return True, hits.pop() if len(hits) == 1 else _AMBIGUOUS
+
+
+def _match(index: ResolutionIndex, text: str) -> tuple[str | None, str]:
+    """표기 매칭 — 전체 표기, 안 되면 끝 괄호 병기의 밖·안.
+
+    괄호 병기는 밖과 안이 **둘 다 같은 종목**으로 풀릴 때만 그 종목이다. 한쪽만 풀리면 병기가 아니라
+    수식일 수 있다(`삼성전자(노조)`·`삼성전자서비스(삼성전자)`) — 연결하지 않는다. 둘이 다른 종목이면 모호.
+    """
+    found, entity_id = _lookup(index, text)
+    if found:
+        return (entity_id, ALIAS_RESOLVED) if entity_id is not _AMBIGUOUS else (None, AMBIGUOUS)
+    paren = _PAREN.match(unicodedata.normalize("NFKC", text).strip())
+    if paren is None or (paren["tail"].strip() and paren["tail"].strip() not in _PARTICLES):
+        return None, UNRESOLVED
+    hits = [_lookup(index, part)
+            for part in (paren["out"], _FORMER_MARK.sub("", paren["inner"].strip()))]
+    ids = {entity_id for found, entity_id in hits if found}
+    if not all(found for found, _ in hits):
+        return (None, AMBIGUOUS) if _AMBIGUOUS in ids else (None, UNRESOLVED)
+    if len(ids) > 1 or _AMBIGUOUS in ids:
+        return None, AMBIGUOUS
+    return ids.pop(), ALIAS_RESOLVED
 
 
 def resolve(
@@ -162,9 +251,8 @@ def resolve(
 
     **이 함수는 역할을 모른다** — 텍스트를 instrument 인덱스에 대볼 뿐이다. 역할별 축
     분기는 `plan_resolution` 이 하고, 배치 적재(`load_assertions`)는 그쪽을 쓴다.
-    curated alias는 호출부가 명시적으로 허용할 때만 쓴다. 1분 실시간 레인은 기사별 허용
-    ticker를 받지 않으므로 기본값(False)을 유지해 다른 종목 기사의 비교 대상을 계보에
-    붙이지 않는다. 배치 조립은 `resolve_alias_ticker`로 허용 ticker를 별도 검증한다.
+    별칭·표기 매칭은 호출부가 허용할 때만(`allow_aliases`) 쓰고, 그 결과는 `alias_resolved` 다.
+    기본값(False)은 마스터 완전일치만 푼다.
 
     사유는 호출부(로더)가 quality log 에 분포로 남긴다(Rule 12 — 미해소는 침묵하지
     않는다). 비문자열·공백뿐 텍스트는 unresolved 다.
@@ -172,21 +260,77 @@ def resolve(
     if not isinstance(text, str):
         return None, UNRESOLVED
     key = _normalize(text)
-    if not key or key not in index.by_key:
+    if not key:
         return None, UNRESOLVED
-    if key in index.alias_keys and not allow_aliases:
+    if key in index.by_key and (allow_aliases or key not in index.alias_keys):
+        entity_id = index.by_key[key]
+        if entity_id is _AMBIGUOUS:
+            return None, AMBIGUOUS
+        return entity_id, ALIAS_RESOLVED if key in index.alias_keys else RESOLVED
+    if not allow_aliases:
         return None, UNRESOLVED
-    entity_id = index.by_key[key]
-    if entity_id is _AMBIGUOUS:
-        return None, AMBIGUOUS
-    return entity_id, ALIAS_RESOLVED if key in index.alias_keys else RESOLVED
+    return _match(index, key)
 
 
 def resolve_alias_ticker(index: ResolutionIndex, text: object) -> str | None:
-    """별칭의 canonical ticker. assemble-events가 기사 허용 ticker 안에서만 쓸 수 있게 분리한다."""
+    """별칭·표기 매칭으로 찾은 종목의 ticker. assemble-events(DeepSeek 경로)가 기사 허용 ticker
+    안에서만 쓸 수 있게 분리한다."""
     if not isinstance(text, str):
         return None
-    return index.alias_ticker_by_key.get(_normalize(text))
+    key = _normalize(text)
+    ticker = index.alias_ticker_by_key.get(key)
+    if ticker is not None or not key:
+        return ticker
+    entity_id, _reason = _match(index, key)
+    if entity_id is None:
+        return None
+    return next((t for t, e in index.by_ticker.items() if e == entity_id), None)
+
+
+def check_alias_candidates(
+    master: ResolutionIndex, candidates,
+) -> tuple[list[tuple[str, str, str]], list[tuple[str, str, str, str]]]:
+    """별칭 후보 검사 — 명부(`instrument_aliases.tsv`)에 넣을 것과 뺄 것을 가른다(ALPHA-850).
+
+    `master` 는 별칭 없이 만든 인덱스(`load_resolution_index(conn, aliases=())`), `candidates` 는
+    (alias, ticker, source) 순서열이다. 판정은 **운영 해소기 그 자체**로 한다:
+      unknown_ticker  마스터에 없는 종목
+      empty           정규화하면 아무것도 안 남는 표기
+      redundant       별칭 없이도 이미 그 종목으로 풀린다(정규화가 맡는다)
+      conflict        다른 종목으로 풀리거나 모호하다 — 넣으면 그 종목의 이름을 망가뜨린다
+      clash           후보끼리 같은 매칭 키에 다른 종목 — 어느 쪽도 넣지 않는다
+    반환: (accepted [(alias, ticker, source)], rejected [(alias, ticker, source, 사유)]).
+    """
+    accepted: dict[str, tuple[str, str, str]] = {}
+    rejected: list[tuple[str, str, str, str]] = []
+    clashed: set[str] = set()
+    for raw, ticker, source in candidates:
+        alias = _normalize(raw)
+        target = master.by_ticker.get(ticker)
+        if not alias or target is None:
+            rejected.append((alias, ticker, source, "unknown_ticker"))
+            continue
+        entity_id, reason = resolve(master, alias, allow_aliases=True)
+        if entity_id == target:
+            rejected.append((alias, ticker, source, "redundant"))
+            continue
+        if reason != UNRESOLVED:
+            rejected.append((alias, ticker, source, "conflict"))
+            continue
+        key = match_key(alias)
+        if not key:
+            # 정규화하면 빈 표기(`.`·`(주)`·`보통주`) — 완전일치로만 남아 무의미한 표기가 종목이 된다.
+            rejected.append((alias, ticker, source, "empty"))
+        elif key in clashed:
+            rejected.append((alias, ticker, source, "clash"))
+        elif key in accepted and accepted[key][1] != ticker:
+            clashed.add(key)
+            rejected.append((alias, ticker, source, "clash"))
+            rejected.append((*accepted.pop(key), "clash"))
+        elif key not in accepted:
+            accepted[key] = (alias, ticker, source)
+        # 같은 키·같은 종목의 두 번째 표기는 정규화가 같은 키로 푼다 — 하나만 둔다.
+    return sorted(accepted.values(), key=lambda r: (r[1], r[0])), rejected
 
 
 # 해소 계획 사유 — quality log 의 축이 된다.

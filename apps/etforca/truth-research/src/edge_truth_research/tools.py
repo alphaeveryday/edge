@@ -8,7 +8,9 @@
 """
 from __future__ import annotations
 
+from datetime import date
 import json
+import os
 from pathlib import Path
 import re
 
@@ -20,7 +22,8 @@ from edge_truth_agent.tools import (SHOW_CHARS, ToolError, _corpus_path, _kst_da
                                     web_fetch, web_search)
 from edge_truth_agent.workspace import Workspace
 
-from . import ach
+from . import ach, graph
+from .dart import Dart, DartError
 from .kind import Kind, KindError, is_market_notice
 from .markets import US, of_exchange
 from .sec import Sec, SecError
@@ -98,6 +101,14 @@ def _mentions(ws: Workspace, text: str) -> bool:
 
 
 # ── 공시 ──
+def _kr_document(ws: Workspace, acpt: str, item: dict) -> str:
+    """국내 공시 원문. 회사 공시는 DART 에서 받는다 — KIND 뷰어는 AWS 출구 IP 를 막는다(ALPHA-1457).
+    거래소 시장조치는 DART 에 없어 KIND 로 받고(AWS 밖에서만 열린다), 인증키가 없는 로컬 실행도 KIND 를 쓴다."""
+    if is_market_notice(item) or not os.environ.get("DART_API_KEY"):
+        return Kind().document(acpt)
+    return Dart().document(_mover(ws).get("code", ""), acpt, item.get("title", ""), item.get("submitter", ""))
+
+
 def read_disclosure(ws: Workspace, args: dict) -> str:
     """첫 메시지 목록의 공시·시장조치 원문을 읽는다. 읽은 공시는 kind-<접수번호>(미국 sec-<접수번호>)로 증거·출처에 쓴다."""
     pre, us = _pre(ws), _us(ws)
@@ -114,8 +125,8 @@ def read_disclosure(ws: Workspace, args: dict) -> str:
             state["disclosureReads"] = state.get("disclosureReads", 0) + 1
             ws.save_state(state)
         try:
-            text = Sec().document(item["url"]) if us else Kind().document(acpt)
-        except (KindError, SecError) as error:
+            text = Sec().document(item["url"]) if us else _kr_document(ws, acpt, item)
+        except (KindError, SecError, DartError) as error:
             raise ToolError(f"{error} 제목과 보도로 판단하세요.") from error
         label = "미국 SEC EDGAR" if us else "한국거래소 KIND"
         ws.save_snapshot(sid, {"id": sid, "url": item["url"], "title": item["title"], "publisher": item["submitter"] or label,
@@ -364,8 +375,68 @@ def finish(ws: Workspace, args: dict) -> str:
     return "완료"
 
 
+def _today(ws: Workspace) -> date:
+    """세션을 연 실행의 장 날짜(작업 폴더에 적힌 today)."""
+    return date.fromisoformat(str(ws.state["today"]))
+
+
+def company_events(ws: Workspace, args: dict) -> str:
+    """국내 세션 전용: 이 종목 회사가 참여한 최근 사건(그래프). 같은 일을 다룬 기사들은 한 줄로 묶는다."""
+    if _us(ws):
+        raise ToolError("국내 종목 세션에서만 쓰는 도구입니다")
+    days = int(args.get("days") or 90)
+    if not 1 <= days <= 365:
+        raise ToolError("days 는 1~365 입니다")
+    try:
+        result = graph.company_events(_mover(ws).get("code", ""), _today(ws), days)
+    except graph.GraphError as error:
+        raise ToolError(str(error)) from None
+    events = result["events"]
+    if not events:
+        return f"최근 {days}일 이 회사가 참여한 사건이 그래프에 없습니다(뉴스·공시에서 뽑힌 사건만 있다 — 없다고 일이 없었다는 뜻은 아니다)."
+    types, labels = graph.registry()
+    lines = [f"최근 {days}일 사건 {len(events)}건(같은 일은 묶음, 최신순). 근거로 쓰려면 기사·공시를 직접 읽는다:"]
+    if result["truncated"]:
+        lines[0] += f" — 보도가 많아 {result['oldest']} 이후만 봤다(그보다 옛 사건이 없다는 뜻이 아니다)"
+    for e in events[:20]:
+        arts = ", ".join(f"news-{a[:16]}" for a in e["articles"]) or "기사 id 없음"
+        stage = f" | 단계 {e['stage']}" if e["stage"] else ""
+        lines.append(f"- {e['date']} | {e['type']} {labels.get(e['type'], '')} {e['predicate'] or ''} | 이 회사 {e['role']} | "
+                     f"{e['what'][:160]} | 보도 {e['reports']}건{stage} | {arts}")
+    if len(events) > 20:
+        lines.append(f"(그보다 옛 사건 {len(events) - 20}건 생략)")
+    return "\n".join(lines)
+
+
+def find_events(ws: Workspace, args: dict) -> str:
+    """국내 세션 전용: 다른 회사의 같은 타입 사건 중 수치 조건에 맞는 선례(그래프)."""
+    if _us(ws):
+        raise ToolError("국내 종목 세션에서만 쓰는 도구입니다")
+    days = int(args.get("days") or 180)
+    if not 1 <= days <= 730:
+        raise ToolError("days 는 1~730 입니다")
+    try:
+        found = graph.similar_events(str(args.get("event_type", "")), str(args.get("metric", "")), str(args.get("op", "")),
+                                     str(args.get("value", "")), str(args.get("unit", "")), str(args.get("basis", "")),
+                                     _today(ws), days, exclude_code=_mover(ws).get("code"))
+    except ValueError as error:
+        raise ToolError(str(error)) from None
+    except graph.GraphError as error:
+        raise ToolError(str(error)) from None
+    head = (f"최근 {found['days']}일 {args.get('event_type')} 중 {args.get('metric')} {args.get('op')} {args.get('value')} "
+            f"{args.get('unit')}({args.get('basis') or '기준 무관'}): 맞음 {len(found['matched'])}건, 모름 {found['unknown']}건"
+            "(같은 일의 여러 보도는 한 건, 이 회사 사건은 뺐다. 모름은 단위·기준이 다르거나 값이 없거나 대략·범위 — 안 맞는다는 뜻이 아니다)")
+    if found["truncated"]:
+        head += f". 후보가 많아 최신 {found['scanned']}행만 봤다 — days 를 줄이면 빠짐이 없다"
+    lines = [head] + [f"- {m['date']} | {', '.join(m['who']) or '회사 미상'} | {m['value']} {m['unit']} {m['basis']} | {m['what'][:140]} | 보도 {m['reports']}건"
+                      for m in found["matched"][:15]]
+    if len(found["matched"]) > 15:
+        lines.append(f"(그 밖 {len(found['matched']) - 15}건 생략)")
+    return "\n".join(lines)
+
+
 TOOLS = {f.__name__: f for f in (view_news, search_news, web_search, web_fetch, read_disclosure, set_hypotheses, add_evidence,
-                                   set_premises, set_verdict, finish)}
+                                   set_premises, set_verdict, finish, company_events, find_events)}
 
 
 def run(name: str, args: dict, root: Path) -> str:

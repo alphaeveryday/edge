@@ -4,9 +4,10 @@ import type { Page } from '@/api';
 
 // 커서 목록의 이어 받기
 // 펼친 배열 형태의 data
-export function usePages<T>(queryKey: QueryKey, fetch: (cursor?: string) => Promise<Page<T>>) {
+export function usePages<T>(queryKey: QueryKey, fetch: (cursor?: string) => Promise<Page<T>>, enabled = true) {
   return useInfiniteQuery({
     queryKey,
+    enabled,
     queryFn: ({ pageParam }) => fetch(pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last) => last.next ?? undefined,

@@ -1,10 +1,15 @@
 package com.edge.app.adapter.security;
 
 import com.edge.app.application.member.provided.AppPrincipal;
+import com.edge.app.application.member.provided.MemberFinder;
 import com.edge.common.apipayload.ApiResponse;
 import com.edge.common.exception.ExceptionAdvice;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import jakarta.servlet.FilterChain;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -14,6 +19,10 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
 
 /** 계약의 security 두 종류를 인자 타입으로 표현하는 인증 필터 */
 class AuthFilterTest {
@@ -37,12 +46,15 @@ class AuthFilterTest {
 
     AccessTokens tokens;
     MockMvcTester mvc;
+    MemberFinder memberFinder;
 
     @BeforeEach
     void setUp() throws Exception {
         tokens = new AccessTokens(new JwtProperties("test-jwt-secret-for-tests-only-32bytes", Duration.ofHours(1)));
+        memberFinder = mock(MemberFinder.class);
+        when(memberFinder.isActive(7L)).thenReturn(true);
         mvc = MockMvcTester.create(MockMvcBuilders.standaloneSetup(new Probe())
-                .addFilters(new AuthFilter(tokens, new ObjectMapper()))
+                .addFilters(new AuthFilter(tokens, new ObjectMapper(), memberFinder))
                 .setCustomArgumentResolvers(new PrincipalArgumentResolver())
                 .setControllerAdvice(new ExceptionAdvice())
                 .build());
@@ -61,6 +73,38 @@ class AuthFilterTest {
                 .hasStatus(401).bodyJson().extractingPath("$.code").isEqualTo("COMMON401");
         assertThat(mvc.get().uri("/public").header("Authorization", "Basic abc"))
                 .hasStatus(401).bodyJson().extractingPath("$.code").isEqualTo("COMMON401");
+        verifyNoInteractions(memberFinder);
+    }
+
+    @Test
+    void memberStateIsCheckedAgainOnEveryRequest() {
+        String bearer = "Bearer " + tokens.issue(7L);
+        assertThat(mvc.get().uri("/member").header("Authorization", bearer)).hasStatusOk();
+        when(memberFinder.isActive(7L)).thenReturn(false);
+        assertThat(mvc.get().uri("/member").header("Authorization", bearer))
+                .hasStatus(401).bodyJson().extractingPath("$.code").isEqualTo("COMMON401");
+        assertThat(mvc.get().uri("/any").header("Authorization", bearer).header("X-Device-Id", "d1"))
+                .hasStatus(401).bodyJson().extractingPath("$.code").isEqualTo("COMMON401");
+        assertThat(mvc.get().uri("/public").header("Authorization", bearer)).hasStatus(401);
+    }
+
+    @Test
+    void signedTokenForMissingMemberIsUnauthorized() {
+        assertThat(mvc.get().uri("/member").header("Authorization", "Bearer " + tokens.issue(99L)))
+                .hasStatus(401).bodyJson().extractingPath("$.code").isEqualTo("COMMON401");
+    }
+
+    @Test
+    void memberLookupFailureIsNotAnAuthenticationRejectionOrGuestFallback() {
+        var failure = new DataAccessResourceFailureException("member database unavailable");
+        when(memberFinder.isActive(7L)).thenThrow(failure);
+        var request = new MockHttpServletRequest("GET", "/any");
+        request.addHeader("Authorization", "Bearer " + tokens.issue(7L));
+        request.addHeader("X-Device-Id", "d1");
+        var chain = mock(FilterChain.class);
+        var filter = new AuthFilter(tokens, new ObjectMapper(), memberFinder);
+        assertThatThrownBy(() -> filter.doFilter(request, new MockHttpServletResponse(), chain)).isSameAs(failure);
+        verifyNoInteractions(chain);
     }
 
     @Test
@@ -80,6 +124,7 @@ class AuthFilterTest {
                 .hasPathSatisfying("$.result.deviceKey", value -> assertThat(value).isEqualTo("d1"));
         assertThat(mvc.get().uri("/member").header("X-Device-Id", "d1"))
                 .hasStatus(401).bodyJson().extractingPath("$.code").isEqualTo("COMMON401");
+        verifyNoInteractions(memberFinder);
     }
 
     @Test
@@ -87,6 +132,7 @@ class AuthFilterTest {
         assertThat(mvc.get().uri("/public")).hasStatusOk();
         assertThat(mvc.get().uri("/any")).hasStatus(401).bodyJson().extractingPath("$.code").isEqualTo("COMMON401");
         assertThat(mvc.get().uri("/member")).hasStatus(401);
+        verifyNoInteractions(memberFinder);
     }
 
     @Test

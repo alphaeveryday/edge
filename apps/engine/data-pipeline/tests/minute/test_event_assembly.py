@@ -17,7 +17,7 @@ _RESOLUTION = {"삼성전자": "inst_SAMSUNG", "한화솔루션": "inst_HANWHA"}
 _ENTITY_INDEX = {"005930": "inst_SAMSUNG", "009830": "inst_HANWHA"}
 
 
-def _fake_resolve(index, text):
+def _fake_resolve(index, text, *, allow_aliases=False):
     entity = _RESOLUTION.get(str(text).strip())
     return (entity, "matched" if entity else "unmatched")
 
@@ -102,12 +102,13 @@ def test_unknown_event_type_is_dropped(monkeypatch):
     }) is None
 
 
-def test_institution_partner_resolves_without_enabling_realtime_instrument_aliases():
-    # WHY: 장중 writer도 기관 ID를 보존하되 기존 별칭 비활성화 정책은 유지한다.
+def test_institution_partner_and_company_alias_resolve_in_minute_lane():
+    # WHY: 장중 writer도 기관 ID를 보존하고, 모델이 참여자로 뽑은 회사의 별칭 표기(현대자동차)를
+    # 그 종목에 붙인다(ALPHA-850) — 예전엔 기사 종목 범위가 없다는 이유로 막아 사건 주체가 버려졌다.
     from data_pipeline.entity_resolution import ResolutionIndex
 
     index = ResolutionIndex(
-        by_key={"삼성전자": "inst_SAMSUNG", "현대차": "inst_HYUNDAI"},
+        by_key={"삼성전자": "inst_SAMSUNG", "현대차": "inst_HYUNDAI", "현대자동차": "inst_HYUNDAI"},
         by_ticker={"005930": "inst_SAMSUNG", "005380": "inst_HYUNDAI"},
         alias_ticker_by_key={"현대자동차": "005380"},
         alias_keys=frozenset({"현대자동차"}),
@@ -130,7 +131,7 @@ def test_institution_partner_resolves_without_enabling_realtime_instrument_alias
     assert cls is not None
     by_mention = {a["mention_text"]: a["entity_id"] for a in cls["arguments"]}
     assert by_mention == {
-        "삼성전자": "inst_SAMSUNG", "금융감독원": "actor_auth_kr_fss", "현대자동차": None,
+        "삼성전자": "inst_SAMSUNG", "금융감독원": "actor_auth_kr_fss", "현대자동차": "inst_HYUNDAI",
     }
     assert cls["primary_ticker"] == "005930"
 

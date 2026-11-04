@@ -3,11 +3,9 @@ import asyncio
 import logging
 import math
 import json
-import sys
-import subprocess
 import tempfile
 from contextlib import asynccontextmanager
-from threading import BoundedSemaphore
+from threading import BoundedSemaphore, Lock
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -25,16 +23,22 @@ from .catalog import analysis_catalog, price_symbol
 log = logging.getLogger(__name__)
 # The analysis process and price libraries share one container memory limit.
 _PRICE_SLOTS = BoundedSemaphore(1)
+# Callers waiting in price_slot (the newsletter's quotes). The collector's warm process holds the slot between
+# fetches and hands it over while this is non-zero.
+_SLOT_WAITERS = 0
+_WAITERS_LOCK = Lock()
 # KRX notice (2026 local election / Constitution Day), absent in calendars 4.13.2:
 # https://stock.mk.co.kr/news/disclosure/template/1029043
 KRX_EXTRA_CLOSURES = pd.DatetimeIndex(['2026-06-03', '2026-07-17'])
 PRICE_FAILURES = {'PRICE_UNAVAILABLE', 'PRICE_STALE', 'PRICE_INVALID', 'PRICE_PROVIDER_UNAVAILABLE',
                   'PRICE_PROVIDER_TIMEOUT', 'PRICE_COLLECTION_TIMEOUT', 'PRICE_QUEUE_TIMEOUT', 'PRICE_PROVIDER_RATE_LIMIT', 'PRICE_RESPONSE_INVALID',
+                  'PRICE_NOT_STORED', 'PRICE_READ_FAILED', 'PRICE_HISTORY_INCOMPLETE',
                   'MISSING_TRADING_SESSIONS', 'MISSING_FX_SESSIONS', 'NO_COMMON_PRICE_HISTORY',
                   'UNSUPPORTED_CURRENCY', 'INSUFFICIENT_COMPARISON_SESSIONS', 'TOTAL_RETURN_UNAVAILABLE'}
 TRANSIENT_PRICE_FAILURES = {'PRICE_UNAVAILABLE', 'PRICE_PROVIDER_UNAVAILABLE', 'PRICE_PROVIDER_TIMEOUT',
                             'PRICE_COLLECTION_TIMEOUT', 'PRICE_QUEUE_TIMEOUT',
-                            'PRICE_PROVIDER_RATE_LIMIT', 'PRICE_RESPONSE_INVALID'}
+                            'PRICE_PROVIDER_RATE_LIMIT', 'PRICE_RESPONSE_INVALID',
+                            'PRICE_NOT_STORED', 'PRICE_READ_FAILED', 'PRICE_HISTORY_INCOMPLETE'}
 
 
 def price_failure(error):
@@ -141,7 +145,7 @@ def load_prices(symbol, as_of, *, on_raw=None, repair_since=None, history_start=
     if history_start:
         repair_since = repair_start = max(history_start, repair_start)
     original = {'frame': frame, 'currency': metadata.get('currency'), 'symbol': symbol, 'repair_since': repair_since.isoformat(),
-                'history_complete': history_start is None,
+                'history_start': history_start.isoformat() if history_start else None,
                 'pending_splits': pending_splits,
                 'source_url': f'https://finance.yahoo.com/quote/{quote(symbol, safe="")}/history/'}
     if on_raw:
@@ -171,79 +175,19 @@ def with_actual_prices(returns, actual):
 @asynccontextmanager
 async def price_slot():
     # Admission is separate from provider timeouts; a busy worker is not a bad source.
-    while not _PRICE_SLOTS.acquire(blocking=False):
-        await asyncio.sleep(.05)
+    global _SLOT_WAITERS
+    with _WAITERS_LOCK:
+        _SLOT_WAITERS += 1
+    try:
+        while not _PRICE_SLOTS.acquire(blocking=False):
+            await asyncio.sleep(.05)
+    finally:
+        with _WAITERS_LOCK:
+            _SLOT_WAITERS -= 1
     try:
         yield
     finally:
         _PRICE_SLOTS.release()
-
-
-async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None, history_start=None):
-    async with price_slot():
-        try:
-            options = {k: v for k, v in {'repair_since': repair_since, 'history_start': history_start}.items() if v is not None}
-            original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, **options), timeout=provider_timeout)
-            if on_primary:
-                on_primary(original)
-            primary_failure = price_status(original, as_of)
-            if primary_failure is None:
-                return original
-        except (ValueError, TimeoutError) as error:
-            primary_failure = price_failure(error)
-        try:
-            record = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback'), timeout=provider_timeout)
-        except (ValueError, TimeoutError) as error:
-            error.primary_failure = primary_failure  # 대체도 실패했을 때도 1차 공급자의 호출 제한이 보이게
-            raise
-        record['primary_failure'] = primary_failure
-        return record
-
-
-async def _fetch_prices(symbol, as_of, *, on_raw=None, provider='yahoo', repair_since=None, history_start=None):
-    with tempfile.TemporaryDirectory(prefix='portfolio-prices-') as directory:
-        options = {k: v for k, v in {'repair_since': repair_since, 'history_start': history_start}.items() if v is not None}
-        return await _fetch_prices_with_checkpoint(symbol, as_of, Path(directory) / 'original.json', on_raw, provider, **options)
-
-
-async def _fetch_prices_with_checkpoint(symbol, as_of, checkpoint, on_raw=None, provider='yahoo', *, repair_since=None, history_start=None):
-    """A cancellable process bounds library calls that can block beyond HTTP timeout."""
-    options = [repair_since.isoformat() if repair_since else '-', history_start.isoformat()] if history_start else ([repair_since.isoformat()] if repair_since else [])
-    process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', symbol, as_of.isoformat(), str(checkpoint), provider, *options,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
-    try:
-        repair_failure = None
-        try:
-            async with asyncio.timeout(25):
-                stdout, _ = await process.communicate()
-        except TimeoutError:
-            if not checkpoint.is_file():
-                raise
-            stdout = checkpoint.read_bytes()
-            repair_failure = 'PRICE_PROVIDER_TIMEOUT'
-        if process.returncode and checkpoint.is_file():
-            stdout = checkpoint.read_bytes()
-            repair_failure = 'PRICE_PROVIDER_UNAVAILABLE'
-        record = decode_prices(stdout)
-        if process.returncode and not repair_failure:
-            raise ValueError('PRICE_PROVIDER_UNAVAILABLE')
-        if repair_failure:
-            record['price_recovery'] = {'status': 'unavailable', 'reason': repair_failure, 'dates': []}
-        return record
-    except asyncio.CancelledError:
-        if on_raw and checkpoint.is_file():
-            try:
-                record = decode_prices(checkpoint.read_bytes())
-                record['price_recovery'] = {'status': 'unavailable', 'reason': 'PRICE_REPAIR_INTERRUPTED', 'dates': []}
-                on_raw(record)
-            except Exception as error:
-                log.warning('Price checkpoint unavailable: %s', type(error).__name__)
-        raise  # Preserve whole-analysis cancellation; the collector may use saved prices.
-    finally:
-        if process.returncode is None:
-            process.kill()
-            await process.wait()
 
 
 def decode_prices(body):
@@ -510,8 +454,6 @@ class MarketData:
         self.results = {}
         self.queried = set()
         self.calls = 0
-        # Repair imports SciPy/sklearn in each child; three leave no usable 512 MiB headroom.
-        self.semaphore = asyncio.Semaphore(2)
         self.catalog = analysis_catalog(request)
         total = sum(h.amount_krw or 0 for h in request.holdings)
         self.total = total if request.input_mode == 'amount' and total else None  # 지난 기간을 원으로 말할 지금 총액
@@ -524,14 +466,20 @@ class MarketData:
             self.current = {'CASH:KRW': 1}
             self.baseline_kind = 'new_cash'
 
-    async def use_saved(self, keys):
-        """Prefill preloaded archives so the provider queue only serves what they lack."""
-        if self.loader is None:  # An injected loader is the whole price source.
-            from .dashboard_work import saved_prices
-            saved = await asyncio.to_thread(saved_prices, [key for key in keys if key not in self.records], self.as_of)
-            self.records.update(saved)
-            for key in saved:
+    async def load(self, needed):
+        """Prices for {instrument: symbol}, in order: the collector's store (never the provider), or an injected loader."""
+        keys = [key for key in needed if key not in self.records]
+        if self.loader is None:
+            from .market_preload import stored_prices
+            await stored_prices(keys, self.as_of, self.records, self.failures)
+            return
+        for key in keys:
+            try:
+                self.records[key] = self.loader(needed[key], self.as_of)
                 self.failures.pop(key, None)
+            except Exception as error:
+                self.failures[key] = price_failure(error)
+                log.warning('Price loader failed for %s: %s', key, self.failures[key])
 
     async def get(self, rows):
         target = weights(rows)
@@ -548,31 +496,19 @@ class MarketData:
         if any(self.catalog[i]['market'] == 'US' for i in ids - {'CASH:KRW'}):
             needed['FX'] = 'KRW=X'
         try:
-            async def fetch(instrument, symbol):
-                if instrument not in self.records:
-                    self.failures.pop(instrument, None)
-                    async with self.semaphore:
-                        try:
-                            self.records[instrument] = self.loader(symbol, self.as_of) if self.loader else await fetch_prices(symbol, self.as_of,
-                                on_raw=lambda record: self.records.__setitem__(instrument, record))
-                            self.failures.pop(instrument, None)
-                        except Exception as error:
-                            self.failures[instrument] = price_failure(error)
-                            log.warning('Price provider failed for %s: %s', instrument, self.failures[instrument])
             primary = set(target) - {'CASH:KRW'}
             if any(self.catalog[i]['market'] == 'US' for i in primary):
                 primary.add('FX')
             try:
                 async with asyncio.timeout(65):
-                    await self.use_saved(needed)
-                    await asyncio.gather(*(fetch(i, needed[i]) for i in sorted(primary)))
-                    await asyncio.gather(*(fetch(i, symbol) for i, symbol in needed.items() if i not in primary))
+                    # The target's own prices are requested first.
+                    await self.load({i: needed[i] for i in sorted(needed, key=lambda i: (i not in primary, i))})
             except TimeoutError:
                 # A slow optional comparison must not discard ready recommendation data.
                 log.warning('Price collection deadline; publishing only complete series')
                 for instrument in needed:
                     if instrument not in self.records:
-                        self.failures.setdefault(instrument, 'PRICE_PROVIDER_TIMEOUT')
+                        self.failures.setdefault(instrument, 'PRICE_QUEUE_TIMEOUT')
             if self.current:
                 try:
                     history = comparison(target, self.current, self.records, self.as_of)

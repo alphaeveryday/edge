@@ -76,7 +76,7 @@
 - `RunTask`에 멱등 토큰을 붙이지 않는다. 그래서 boto의 자동 재전송(연결 끊김·5xx)이 태스크를 하나 더 만들 수 있다.
 - 대기 오류(`WaiterError`)가 나면 기본값(`stop_task_on_failure=True`)으로 **도는 태스크를 StopTask로 죽인다.** `on_kill`(run failed 표시·dagrun_timeout)도 StopTask를 부른다. StopTask는 종료 요청일 뿐 종료 확인이 아니다.
 
-`EdgeStep`은 이 경로를 다음처럼 바꿨다. 재접속·조회는 `_try_reattach_task`에서, 제출은 `_start_task`에서, 판정은 `execute`에서 한다. `stop_task_on_failure=False`로 두고 `on_kill`도 StopTask를 부르지 않게 바꿨다(Airflow가 task를 끝내도 업무 컨테이너는 끝까지 돈다). `RunTask`에는 시도·제출별 `clientToken`을 붙인다.
+`EdgeStep`은 이 경로를 다음처럼 바꿨다. 재접속·조회는 `_try_reattach_task`에서, 제출은 `_start_task`에서, 판정은 `execute`에서 한다. `stop_task_on_failure=False`로 두고 `on_kill`도 StopTask를 부르지 않게 바꿨다(Airflow가 task를 끝내도 업무 컨테이너는 끝까지 돈다). `RunTask`에는 시도·제출별 `clientToken`을 붙인다(아래 표 3″의 재시도는 첫 시도의 토큰을 다시 쓴다).
 
 | # | 경우(판별 근거) | 처리 | 새 ECS 태스크 |
 |---|---|---|---|
@@ -85,6 +85,7 @@
 | 2′ | 컨테이너가 안 떴다: `stopCode=TaskFailedToStart` · 업무 미시작: exit 75 | Airflow 재시도. 다음 시도가 그 태스크를 보고 새로 띄운다 | 다음 시도 |
 | 3 | 제출 여부 불명: `RunTask` 응답 유실(연결 끊김·타임아웃·5xx), Throttling(boto가 먼저 보낸 같은 토큰 요청이 태스크를 만들었을 수 있다) | 다시 제출하지 않는다. `startedBy`로 앞서 없던 태스크를 찾아(3회) 붙는다. 못 찾으면 **보류(ECS_STATE_UNKNOWN)** | 없음 |
 | 3′ | 앞 시도가 있었는데(try≥2) ECS에 아무것도 안 보임 · 둘째 시도부터의 조회 실패 · 살아 있는 태스크가 둘 이상 | **보류(ECS_STATE_UNKNOWN).** 빈 조회는 "제출하지 않았다"는 증거가 아니다(조회 지연·기록 만료와 구분 불가) | 없음 |
+| 3″ | 같은 run의 **자동 재시도**인데 ECS에 아무것도 안 보이고, run 시작 뒤 50분(`ECS_VISIBLE_SECONDS`, 멈춘 태스크 조회 창 약 1시간 안)이 안 됐다 | 기록 만료는 아니므로 앞 시도가 대개 제출 전에 죽은 것이다(예: 큐 대기 중 작업 토큰 만료 → 시작 직후 강제 종료, ALPHA-1473). 다만 제출 직후 죽었는데 조회에 아직 안 보이는 경우와 가릴 수 없어 **첫 시도의 `clientToken`으로** 제출한다. 첫 시도가 만든 태스크가 있으면 ECS가 그 태스크를 돌려주거나 `ConflictException`의 `resourceIds`로 알려 주고 그 태스크에 붙는다(하나로 못 정하면 보류). 없을 때만 새로 뜬다(토큰 수명 최대 24시간). clear 뒤 첫 시도·run 시작 시각 불명은 3′ 그대로 | 첫 시도가 만든 것이 없을 때만 |
 | 4 | 실행 중 태스크 확인: `lastStatus≠STOPPED`(종료 중 포함) | 재접속해 끝날 때까지 기다린다. 대기가 실패하면 태스크는 두고 재시도해 다시 붙는다. 마지막 시도에서도 끝을 못 보면 **보류(ECS_STATE_UNKNOWN)** — 도는 태스크를 두고 "실패"로 닫지 않는다 | 없음 |
 | 5 | 종료·업무 결과 확인: exit 0 / 부분 2 / 그 밖 비0(컨테이너가 스스로 종료) | 이 시도의 태스크면 그 결과로 끝낸다(0·2는 성공 처리, 비0은 재시도 없는 실패). 앞 시도의 태스크면 요청 종류로 가른다. **자동 재시도**(판정 조회 실패·대기 오류·worker 중단 뒤)는 그 결과를 쓴다 — 끝난 업무를 반복하지 않는다. **clear 뒤 첫 시도**(다시 돌리려는 요청)는 수집의 성공만 재사용하고(외부 재호출 없음), 나머지는 종료가 확인됐으므로 새로 띄운다 — 옛 결과를 쓰면 바뀐 입력(재수집 raw·보고할 보류)이 반영되지 않는다. 둘은 `try_number == max_tries - retries + 1`로 가른다(clear가 `max_tries`를 다시 잡는다, 3.3.2 코드 확인). 단 **실행 중인 task를 clear**하면 Airflow가 `max_tries`를 다시 잡지 않아 자동 재시도로 다뤄진다(끝난 결과를 재사용 — 안전 쪽). 다시 돌리려면 끝난 뒤 clear한다 | 자동 재시도: 없음. clear: 수집 성공 재사용 외에는 새로 |
 | 6 | 종료됐지만 결과 불명: exit 없음, 외부 종료(StopTask·호스트 중단·Spot)의 비0 | **보류(RESULT_UNKNOWN).** 업무 도중 끊겼을 수 있다 | 없음 |
@@ -108,7 +109,7 @@
 **미확정 실행을 원장이 스스로 찾는다(DAG 의 마지막 task·callback 이 돌지 않아도).**
 - **결말 없이 끝난 스텝(worker 사망·수동 failed).** 모든 시도는 시작할 때 XCom `edge_started`를 남긴다. 시작했는데 결말(`exit_code`·`hold`·`no_ecs_task`)이 없으면 verdict·report는 그 스텝을 `ECS_STATE_UNKNOWN` 보류로 읽는다. 확정된 업무 실패(exit 1)는 보류가 아니다. report가 원장에 옮긴다.
 - **report 도 못 도는 경우(`dagrun_timeout`).** 주기 Reconciler(EventBridge 15분, 야간·휴장일 포함)가 슬롯 대조와 별개로 `sweep_airflow_runs`를 돈다.
-  - ① 원장에 끝나지 않은 시도가 남은 Airflow 런(과거 슬롯 재처리 포함 — 슬롯 대조는 최근 예정일만 본다)을 대조한다. ECS 종료 증거로 닫고, 수명(`OPS_AIRFLOW_RUN_LIFETIME_SECONDS`, 기본 1800초 > dagrun_timeout)을 넘도록 안 끝난 시도는 `OPEN_ATTEMPT` 보류로 남긴다(종료 증거로 닫히면 자동 해결). 결과 미상으로 닫힌 시도는 `RESULT_UNKNOWN`으로 남긴다.
+  - ① 원장에 끝나지 않은 시도가 남은 Airflow 런(과거 슬롯 재처리 포함 — 슬롯 대조는 최근 예정일만 본다)을 대조한다. ECS 종료 증거로 닫고, 수명(`OPS_AIRFLOW_RUN_LIFETIME_SECONDS`, 기본 3000초 > dagrun_timeout)을 넘도록 안 끝난 시도는 `OPEN_ATTEMPT` 보류로 남긴다(종료 증거로 닫히면 자동 해결). 결과 미상으로 닫힌 시도는 `RESULT_UNKNOWN`으로 남긴다.
   - ② ECS에서 이 레인 명령(`--run-id <Airflow 런>`)으로 수명보다 오래 살아 있는데 원장에 시도가 없는 태스크(시간 초과 당시 PENDING)를 찾아 `ECS_STATE_UNKNOWN` 보류로 남긴다. 그 태스크가 늦게 떠도 게이트에서 자기 보류를 보고 76으로 멈춘다. ECS 조회 실패는 "없음"으로 읽지 않고 기록 없이 드러낸다.
   - 권한: Reconciler 역할에 `ecs:ListTasks`(같은 클러스터 한정)를 더했다.
 - **늦게 도착한 옛 보고.** report는 자기 DAG run(`OPS_REPORT_RUN_REF`)을 함께 넘긴다. 이 런의 최신 업무 시도가 다른 DAG run의 것이면 판정을 기록하지 않는다(보류 기록은 사실이라 남긴다).
@@ -153,7 +154,7 @@
       WHERE dedupe_key = :'dedupe_key' AND status = 'OPEN';
      ```
    - 그다음 5에서 정한 run을 trigger한다. 같은 task instance의 clear로는 풀리지 않는다(ECS 기록이 결과 미상이거나 없으면 다시 보류한다).
-- **clear를 쓸 수 있는 경우.** 앞 시도의 ECS 태스크가 아직 조회될 때(멈춘 뒤 약 1시간)만 clear가 그 결과를 보고 판단한다. 첫 시도가 **제출 전에** 실패한 경우(ECS 조회 실패·RunTask 4xx·배치 거부 반복)나 기록이 만료된 뒤에 clear하면, 둘째 시도는 아무것도 안 보여 ECS_STATE_UNKNOWN으로 보류하고 그 스텝을 레인 전체에서 막는다. 선행 스텝 결말 미확인으로 **skip된** 스텝을 clear해도 같다(그 스텝은 제출한 적이 없다). 이런 복구는 clear가 아니라 새 run(정제·적재는 재처리 run)으로 한다.
+- **clear를 쓸 수 있는 경우.** 앞 시도의 ECS 태스크가 아직 조회될 때(멈춘 뒤 약 1시간)만 clear가 그 결과를 보고 판단한다. 첫 시도가 **제출 전에** 실패한 경우(ECS 조회 실패·RunTask 4xx·배치 거부 반복)나 기록이 만료된 뒤에 clear하면(자동 재시도의 예외는 위 표 3″), 둘째 시도는 아무것도 안 보여 ECS_STATE_UNKNOWN으로 보류하고 그 스텝을 레인 전체에서 막는다. 선행 스텝 결말 미확인으로 **skip된** 스텝을 clear해도 같다(그 스텝은 제출한 적이 없다). 이런 복구는 clear가 아니라 새 run(정제·적재는 재처리 run)으로 한다.
 7. **정상 스케줄 재개.** DAG unpause. 다음 cron 슬롯부터 돈다(지난 슬롯을 돌리지 않는다).
 
 금지: 잠금 행·원장 행을 **삭제**해 실행 가능하게 만들기, DAG pause를 기존 ECS 종료 확인으로 대신하기, 상태를 확인할 수 없는데 "충분히 기다렸다"는 이유로 재실행하기, 과거 슬롯을 다시 수집하기.
@@ -224,7 +225,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 | 호스트 | **t4g.small**(arm64, 2 vCPU·2 GiB) 1대, ASG `host_count`(1/0) | micro 는 로컬 사양 검증과 실제 EC2 검증 모두에서 불가였다(아래 "사양 검증"·"실제 AWS 단기 검증 결과"). medium 은 small 이 모자란 근거가 없다 |
 | AMI | ECS 최적화 AL2023 arm64 **고정**(`ami_id`) | SSM recommended 를 data 로 읽으면 사람이 고르지 않은 시각(머지 = apply)에 교체가 준비된다 |
 | 서비스 | 서비스 1개·태스크 1개 안에 `api-server`·`scheduler`·`dag-processor`(awsvpc) | 세 컨테이너가 localhost 를 공유한다. LocalExecutor 의 task 프로세스가 Execution API 를 `http://localhost:8080/execution/` 로 부른다. 별도 서비스로 나누면 서비스 간 이름 해석(Service Connect 등)이 필요하다 |
-| Executor | LocalExecutor, `parallelism=1`, DAG 파싱 프로세스 1 | 장중 수급은 직렬이다(`max_active_runs=1`). LocalExecutor 는 parallelism 만큼 워커를 미리 띄운다(4 면 약 120MiB). 검증 DAG 와 겹치면 차례로 돈다. Celery·Redis·Kubernetes 를 쓸 근거가 없다 |
+| Executor | LocalExecutor, `parallelism=1`, DAG 파싱 프로세스 1, `task_queued_timeout=3600` | 장중 수급은 직렬이다(`max_active_runs=1`). LocalExecutor 는 parallelism 만큼 워커를 미리 띄운다(4 면 약 120MiB). 검증 DAG 와 겹치면 차례로 돈다. Celery·Redis·Kubernetes 를 쓸 근거가 없다. 큐에 넣을 때 발급하는 작업 토큰의 수명이 `task_queued_timeout` 이라, 기본 600초면 앞 작업이 10분을 넘길 때 뒤 작업이 시작 순간 인증에 실패한다(ALPHA-1473). LocalExecutor 는 `revoke_task` 가 없어 대기 초과 재큐잉은 일어나지 않는다 |
 | Triggerer | 없음 | `EdgeStep` 이 `deferrable=False` 로 고정돼 있다(defer 하면 재개가 provider 의 `execute_complete` 로 가서 판정을 건너뛴다). 다른 deferrable operator 도 없다 |
 | 버전 | Airflow 3.3.2 · amazon provider 9.36.0 (CI 와 같은 다이제스트) | 로컬·CI 에서 검증한 조합 그대로 |
 | 메타DB | **기존 업무 RDS(`edge-dev`) 안의 전용 DB `airflow`·역할 `airflow_meta`** | 아래 "메타DB"·"실제 AWS 단기 검증". 2026-10-02 상시 운영 구성으로 정했다("첫 운영 전환 실행안"의 "확정한 결정") |
@@ -1278,11 +1279,15 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 - terraform 값 인자 `--limit`(`tag_news_limit`)·`--window-days`(`assemble_window_days`)는 장전 레인과 같은 `EDGE_LANE_ARGS` 경로로 받는다. 위 "장전 유니버스 레인"의 배포 순서 주의가 같이 적용된다.
 - FMP 뉴스 수집은 `us_fmp_enabled` 일 때만 SFN 에 들어간다. dev 는 꺼져 있어 DAG 에 없다. 켜려면 DAG 도 함께 고친다(tests 가 막는다).
 - **전환 전 조건 — 소요 실측.** SFN 은 태깅과 문서 적재를 병렬로 돌렸다. Airflow 는 PARALLELISM=1 이라 직렬이다.
-  - dagrun_timeout 은 Reconciler 수명(1800초)보다 짧아야 해서 1700초다. SFN 은 2400초였다.
+  - dagrun_timeout 은 Reconciler 수명(3000초)보다 짧아야 하고 08:10 run 이 09:00 전에 끝나야 해서 2700초다(ALPHA-1475 에서 1700초 → 2700초). SFN 은 2400초였다.
   - SFN 최근 40회: p50 477초, 최대 1099초. 과거에는 25분 상한에 40%가 잘린 기록도 있다(variables.tf `news_state_machine_timeout_seconds`).
-  - 그래서 전환 전에 원장 `ops_task_attempt` 로 스텝별 소요(특히 태깅·문서 적재·조립)를 재고, 합이 1700초 안에 드는지 확인한다.
+  - 그래서 원장 `ops_task_attempt` 로 스텝별 소요(특히 태깅·문서 적재·조립)를 재고, 스텝 사이 대기까지 더한 시작~끝이 상한(2700초) 안에 드는지 확인한다.
   - 08:10 run 은 09:00 뉴스 분 격자 전에 끝나야 한다.
-  - 전환 전 실측(10-24, 원장 최근 40 run): 스텝 소요 합 최대 1031초(10-22 00:10, 수집 911초), 시작~끝 최대 1245초. 08:10 run 은 최대 1044초. Airflow 수동 run(10-21 15:54)은 스텝 합 423초·시작~끝 737초로 SFN 보다 스텝 사이 대기가 약 100초 길었다 — 최대 run 에 더해도 1700초 안이다.
+  - 전환 전 실측(10-24, 원장 최근 40 run): 스텝 소요 합 최대 1031초(10-22 00:10, 수집 911초), 시작~끝 최대 1245초. 08:10 run 은 최대 1044초. Airflow 수동 run(10-21 15:54)은 스텝 합 423초·시작~끝 737초로 SFN 보다 스텝 사이 대기가 약 100초 길었다 — 최대 run 에 더해도 1700초 안이다(당시 상한).
+  - 전환 뒤 실측(ALPHA-1475, 10-26~31 00:10 run): 같은 날 밤 태깅이 로컬 RoBERTa 로 바뀌고(#1568) 태깅 전 종목명 거르기가 빠져(#1577)
+    태깅 대상이 약 800 → 1,791~3,202건, 태깅이 약 200초 → 835~1,205초가 됐다. Airflow 는 스텝마다 ECS 기동 40~50초·종료 감지 30~40초가
+    붙어(8스텝 약 10분) 1700초 상한에 평일 밤마다 잘렸다. 가장 긴 밤(10-30) 추정 시작~끝 약 2,400초 → 상한 2700초. 문서 적재는 태깅
+    결과를 쓰지 않으므로 태깅보다 먼저 돈다(priority_weight) — run 이 잘려도 06:00 전망이 읽는 기사는 들어간다.
 - **전환·롤백.** 위 "운영 전환·롤백 절차(장중 수급)"를 따르되, 아래만 바꿔 읽는다.
   - ①·⑥: `pipeline_type = 'news'`.
   - ②: 작업 키 6개 `NEWS_COLLECTION_BIGKINDS`·`NORMALIZE_NEWS`·`TAG_NEWS`·`LOAD_DOCUMENTS`·`LOAD_ASSERTIONS`·`ASSEMBLE_EVENTS`.
@@ -1522,7 +1527,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
    - **전날 이전 슬롯의 재처리는 주기 대조를 받지 않는다.** 주기 Reconciler는 가장 최근 예정일의 슬롯만 본다(ALPHA-565 사각). 그래서 과거 슬롯 재처리 run이 `report` 전에 죽으면 앞 판정이 남는다. 그 run_key를 `OPS_RUN_KEY`로 지정해 `reconcile`을 한 번 돌려야 한다.
    - **과거 슬롯 재처리 중 R02가 잠깐 켠다.** 새 업무 시도가 결론 나기 전 주기 대조가 돌면 판정이 NULL(미귀결)이 된다. 그 슬롯은 hard deadline이 이미 지났으므로 `report` 전까지 R02 P1이 뜬다. 멈춘 재처리를 숨기지 않기 위한 선택이다. 경보 소음으로 볼지 결정한다.
 4. **결말 없이 끝난 실행의 보류 기록 — 해결(ALPHA-1088 후속, 아래 "미확정 실행을 원장이 스스로 찾는다").** worker 사망·수동 failed·`dagrun_timeout`으로 report·verdict·callback이 돌지 못해도 원장에 보류가 남는다. 남는 경계(탐지 지연)는 그 절에 적었다.
-5. **run 시간 상한.** `dagrun_timeout`(1500초)과 Reconciler 수명 기준(`OPS_AIRFLOW_RUN_LIFETIME_SECONDS`, 기본 1800초)의 관계는 테스트가 고정한다. 실제 스텝 소요를 재고 두 값을 다시 볼지 결정한다(실제 환경 검증 항목).
+5. **run 시간 상한.** `dagrun_timeout`(1500초)과 Reconciler 수명 기준(`OPS_AIRFLOW_RUN_LIFETIME_SECONDS`, 기본 3000초)의 관계는 테스트가 고정한다. 실제 스텝 소요를 재고 두 값을 다시 볼지 결정한다(실제 환경 검증 항목).
 6. **Airflow 실행 환경 — 정함(ALPHA-1119).** ECS on EC2 자체 운영(위 "실행 환경"). `EDGE_ECS_*`·`EDGE_ALARM_TOPIC_ARN`·`aws_default` 는 `modules/airflow` 태스크 정의가 주입하고, DAG 는 이미지로 배포한다. 실제 리소스 생성과 실제 AWS 검증은 끝났다(위 "실제 AWS 단기 검증 결과"·"small·1408 A4·A5 표적 재검증 결과").
 7. **아래 "실제 환경 검증"의 성공 기준 충족.**
 

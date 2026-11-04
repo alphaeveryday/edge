@@ -5,8 +5,9 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-from edge_portfolio import api, catalog, dashboard, dashboard_work as work, market_data, store
-from test_dashboard_work import asset, record
+from edge_portfolio.market_preload import PriceSession
+from edge_portfolio import api, catalog, dashboard, dashboard_work as work, store
+from test_dashboard_work import asset, record, serve
 from test_store import isolated_db  # noqa: F401
 
 
@@ -47,11 +48,11 @@ async def test_stock_save_quotes_profit_and_dividends_share_existing_storage(iso
             result['frame'].loc['2026-10-15', 'Dividends'] = 2.
         return result
 
-    monkeypatch.setattr(market_data, 'fetch_prices', fetch)
+    serve(monkeypatch, fetch)
     keys = [key] + (['FX'] if currency == 'USD' else [])
-    records, failures = await work.records_for(keys, day, valuation_since={key: day})
+    records, failures = await work.records_for(keys, day, valuation_since={key: day}, session=PriceSession())
     assert failures == [] and set(calls) == {catalog.price_symbol(item) for item in keys}
-    again, failures = await work.records_for(keys, day, valuation_since={key: day})
+    again, failures = await work.records_for(keys, day, valuation_since={key: day}, session=PriceSession())
     assert len(calls) == len(keys), 'Repeated reads must not refetch stock quotes'
     value = work.valuation(saved['workbook'], again, None, day)
     fx = 1400 if currency == 'USD' else 1

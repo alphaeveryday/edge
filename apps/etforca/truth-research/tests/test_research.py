@@ -110,6 +110,21 @@ def test_publishes_contract_valid_ranking_with_false_first(cfg):
     assert doc["pricedAt"] == "2026-10-22T11:14:00+09:00"  # 화면이 '가격 몇 시 기준'을 쓴다
 
 
+def test_session_transcript_goes_to_the_private_store_only(cfg):
+    # WHY: 도구를 왜 안 썼는지·무엇을 보고 판정했는지는 세션 기록으로만 알 수 있다. 기사·웹 원문이 담겨 공개 경로에는 두지 않는다
+    import gzip
+    _seed_news(cfg)
+    judging = _judging({"900010": "false"})
+
+    def runner(cfg_, ws, **kw):
+        (ws.root / research.session.TRANSCRIPT).write_bytes(b'{"type": "message_end"}\n')
+        return judging(cfg_, ws, **kw)
+    report = _run(cfg, FakeQuotes({"KOSDAQ": [_m("900010", "가나다전자", 29.9)]}), runner)
+    body = LocalStore(cfg.store).get(f"runs/2026-10-22/{report['runId']}/900010.jsonl.gz")[0]
+    assert gzip.decompress(body) == b'{"type": "message_end"}\n'
+    assert not [p for p in Path(cfg.publish).rglob("*.jsonl.gz")]
+
+
 def test_ach_table_stays_private(cfg):
     # 가설·증거 표는 감사용이다 — 공개 데이터에 새면 화면 계약(스키마)이 깨지고 내부 메모가 그대로 나간다.
     _seed_news(cfg)

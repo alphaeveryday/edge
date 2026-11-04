@@ -18,9 +18,6 @@ from pydantic import ValidationError
 
 from . import store
 
-# ponytail: 가격은 하나씩(동시 1) 받고 전체 상한을 둔다. 운영 중인 2GB 호스트와 가격 공급자 부담 때문이다
-PRICE_BUDGET_SECONDS = 1200
-PRICE_PAUSE_SECONDS = 1
 BUSY_WAIT_SECONDS = 5
 LLM_TIMEOUT_SECONDS = 300
 TOTAL_SECONDS = 3000  # 호스트가 3300초에 컨테이너를 끊는다. 그 전에 모은 결과를 찍는다
@@ -107,51 +104,20 @@ def busy():
         return store.queued_count(db) > 0
 
 
-async def collect_prices(ids_by_use, as_of, budget=PRICE_BUDGET_SECONDS, pause=PRICE_PAUSE_SECONDS):
-    """분석과 같은 순서로 받는다: 미리 저장된 가격(saved_prices)을 먼저 쓰고, 모자란 종목만 같은 공급자 경로
-    (fetch_prices, 같은 시간 제한)로 종목마다 한 번만, 많이 쓰인 종목부터, 상한까지.
-    고객 분석이 돌면 기다리고, 공급자가 호출 제한을 걸면 멈춘다(같은 호스트의 고객 분석이 같은 공급자를 쓴다)."""
-    from .catalog import price_symbol
+async def collect_prices(ids, as_of):
+    """분석과 같은 곳(수집기가 저장한 가격)만 읽는다. 분석처럼 공급자는 부르지 않는다.
+    읽기 전용이라 빠진 종목을 수집기에 요청하지는 않고, 못 쓰는 이유 코드만 모은다."""
     from .dashboard_work import saved_prices
-    from .market_data import fetch_prices, price_failure
-    from .optimizer import PRICE_TIMEOUT_SECONDS
-    records = await asyncio.to_thread(saved_prices, [key for key in ids_by_use if key != 'FX'], as_of)
-    saved = set(records)
-    outcomes, stopped = {key: (None, 0.0) for key in saved}, None
-    started = time.monotonic()
-    for key in sorted((key for key in ids_by_use if key not in saved), key=lambda key: (-ids_by_use[key], key)):
-        while time.monotonic() - started <= budget and busy():
-            await asyncio.sleep(BUSY_WAIT_SECONDS)
-        if time.monotonic() - started > budget:
-            stopped = 'BUDGET'
-            break
-        began = time.monotonic()
-        try:
-            records[key] = await fetch_prices(price_symbol(key), as_of, provider_timeout=PRICE_TIMEOUT_SECONDS,
-                                              on_raw=lambda record, key=key: records.__setitem__(key, record))
-            limit = primary = None
-        except Exception as error:
-            limit = price_failure(error)
-            primary = getattr(error, 'primary_failure', None)
-        # 분석도 원본 기록을 먼저 받았으면 그것으로 계산한다(optimizer 의 fetch 와 같다)
-        failure = None if key in records else limit
-        outcomes[key] = (failure, time.monotonic() - began)
-        # 대체 공급자로 가격은 받았어도 Yahoo 가 호출 제한을 걸었으면 더 묻지 않는다
-        record = records.get(key) or {}
-        if 'PRICE_PROVIDER_RATE_LIMIT' in (limit, primary, record.get('primary_failure'), (record.get('price_recovery') or {}).get('reason')):
-            stopped = 'RATE_LIMIT'
-            break
-        await asyncio.sleep(pause)
-    return records, outcomes, stopped, saved
+    rejected = {}
+    records = await asyncio.to_thread(saved_prices, sorted(ids), as_of, rejected)
+    return records, rejected
 
 
-def baseline_price(ids, records, outcomes, as_of):
+def baseline_price(ids, records, rejected, as_of):
     from .market_data import price_failure
     from .optimizer import optimization_bounds
-    if any(key not in outcomes for key in ids):
-        return 'NOT_CHECKED'
-    if any(outcomes[key][0] for key in ids):
-        return 'BASELINE_PRICE_UNAVAILABLE'
+    if missing := sorted(ids - records.keys()):
+        return rejected.get(missing[0], 'PRICE_UNAVAILABLE')
     try:
         optimization_bounds(ids - {'FX'}, records, as_of)
     except (KeyError, ValueError) as error:
@@ -200,14 +166,6 @@ def execution_codes(request, allocations):
     return [result['status']] + [f"{result['status']}:{code(reason)}" for reason in result['reasons']]
 
 
-def quantiles(values):
-    values = sorted(values)
-    if not values:
-        return {'n': 0}
-    pick = lambda q: round(values[min(len(values) - 1, int(q * len(values)))], 1)
-    return {'n': len(values), 'p50': pick(.5), 'p90': pick(.9), 'max': round(values[-1], 1)}
-
-
 def distinct_inputs(rows):
     """같은 입력은 한 번만(가장 최근 job). draft_id 는 저장할 때마다 달라 같은 입력 판정에서 뺀다."""
     seen = {}
@@ -230,7 +188,7 @@ class Report:
                 self.examples[label].append(job_id)
 
 
-async def review(rows, *, as_of, llm_samples=0, key=None, budget=PRICE_BUDGET_SECONDS, pause=PRICE_PAUSE_SECONDS):
+async def review(rows, *, as_of, llm_samples=0, key=None):
     deadline = time.monotonic() + TOTAL_SECONDS
     report = Report()
     inputs = distinct_inputs(rows)
@@ -261,28 +219,20 @@ async def review(rows, *, as_of, llm_samples=0, key=None, budget=PRICE_BUDGET_SE
             ids, reason = None, 'ERROR:' + error_codes(error)[0]
         baselines[row['id']] = (ids, reason)
         uses.update(ids or ())
-    records, outcomes, stopped, saved = await collect_prices(uses, as_of, budget, pause)
-    from .optimizer import PRICE_COLLECTION_BUDGET_SECONDS
+    records, rejected = await collect_prices(uses, as_of)
     for row, _ in checked:
         ids, reason = baselines[row['id']]
-        report.add('price_analysis', [reason or baseline_price(ids, records, outcomes, as_of)], row['id'])
+        report.add('price_analysis', [reason or baseline_price(ids, records, rejected, as_of)], row['id'])
         if ids:
-            failed = sum(1 for key in ids if key in outcomes and outcomes[key][0])
-            report.add('price_failed_per_analysis', [str(min(failed, 3)) + ('+' if failed >= 3 else '')], row['id'])
-            if all(key in outcomes for key in ids):
-                # 추정: 분석은 가격을 한 슬롯으로 차례로 받는다. 지금 보유만의 차례 합이 가격 수집 상한을 넘으면 후보 가격 전에 시간이 다 된다
-                serial = sum(outcomes[key][1] for key in ids)
-                report.add('price_serial_budget', ['OVER' if serial > PRICE_COLLECTION_BUDGET_SECONDS else 'WITHIN'], row['id'])
+            missing = len(ids - records.keys())
+            report.add('price_missing_per_analysis', [str(min(missing, 3)) + ('+' if missing >= 3 else '')], row['id'])
     summary = {
         'as_of': as_of.isoformat(), 'rows': len(rows), 'distinct_inputs': len(inputs), 'contract_passed': len(checked),
         'stages': {stage: dict(counter.most_common()) for stage, counter in report.counts.items()},
-        'prices': {'instruments': len(uses), 'saved': len(saved), 'attempted': len(outcomes) - len(saved), 'stopped': stopped,
-                   'failures': dict(Counter(failure or 'OK' for failure, _ in outcomes.values()).most_common()),
-                   'seconds': quantiles([seconds for _, seconds in outcomes.values()])},
+        'prices': {'instruments': len(uses), 'stored': len(records),
+                   'missing': dict(Counter(rejected.values()).most_common())},
     }
-    if llm_samples and stopped == 'RATE_LIMIT':
-        summary['llm'] = 'skipped_rate_limited'  # 실제 분석도 같은 공급자를 쓴다. 고객 분석 몫을 남긴다
-    elif llm_samples:
+    if llm_samples:
         summary['llm'] = await llm_replays(checked[:min(llm_samples, MAX_LLM_SAMPLES)], key, deadline)
     summary['examples'] = dict(report.examples)
     return summary

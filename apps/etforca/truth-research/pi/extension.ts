@@ -20,6 +20,7 @@ const maxCalls = Number(process.env.TRUTH_MAX_TOOL_CALLS ?? "40");
 const reserve = Math.min(6, Math.floor(maxCalls / 4));
 const WRAP_UP = new Set(["set_hypotheses", "add_evidence", "set_premises", "set_verdict", "finish"]);
 const web = process.env.EXA_API_KEY ? "1" : "0";
+const graph = process.env.TRUTH_GRAPH === "1" ? "1" : "0"; // 국내 세션 + 그래프 DB (session.py 가 정한다)
 
 type Spec = { name: string; description: string; parameters: Record<string, unknown> };
 
@@ -41,7 +42,7 @@ function runTool(name: string, args: unknown, signal?: AbortSignal): Promise<{ o
 
 export default function (pi: ExtensionAPI) {
   const specs: Spec[] = JSON.parse(
-    execFileSync(python, ["-m", "edge_truth_research", "tool-specs", "--web", web], { cwd: sessionDir, encoding: "utf8" }),
+    execFileSync(python, ["-m", "edge_truth_research", "tool-specs", "--web", web, "--graph", graph], { cwd: sessionDir, encoding: "utf8" }),
   );
   let calls = 0;
   for (const spec of specs) {

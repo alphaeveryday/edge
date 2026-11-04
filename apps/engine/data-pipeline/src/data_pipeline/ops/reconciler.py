@@ -414,9 +414,9 @@ def run_hold_key(run_id: str, task_key: str, kind: str) -> str:
     return f"execution_hold:{run_id}:{task_key}:{kind}"
 
 
-# Airflow DAG run 이 살아 있을 수 있는 최대 시간 — dagrun_timeout(1500초) + 여유. 이보다 오래 결말이 없는 실행은
-# 그 run 의 report·verdict 가 돌 수 없으므로(시간 초과·worker 사망) 원장이 스스로 보류로 남긴다.
-AIRFLOW_RUN_LIFETIME_SECONDS = 1800
+# Airflow DAG run 이 살아 있을 수 있는 최대 시간 — 가장 긴 dagrun_timeout(뉴스 2700초) + 여유. 이보다 오래 결말이
+# 없는 실행은 그 run 의 report·verdict 가 돌 수 없으므로(시간 초과·worker 사망) 원장이 스스로 보류로 남긴다.
+AIRFLOW_RUN_LIFETIME_SECONDS = 3000
 
 
 def _record_unfinished(ledger, run_id: str, tasks: list[dict], evidence: dict[str, list[dict]], *,

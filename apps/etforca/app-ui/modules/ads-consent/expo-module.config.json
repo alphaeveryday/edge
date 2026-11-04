@@ -1,0 +1,16 @@
+{
+  "platforms": [
+    "apple",
+    "android"
+  ],
+  "apple": {
+    "modules": [
+      "AdsConsentModule"
+    ]
+  },
+  "android": {
+    "modules": [
+      "com.alphaeveryday.adsconsent.AdsConsentModule"
+    ]
+  }
+}

@@ -102,7 +102,27 @@ variable "db_secret_arn" {
   description = "읽기 전용 DB 계정 시크릿 ARN(JSON 의 password 키를 TRUTH_DB_PASSWORD 로 주입한다)."
 }
 
+variable "dart_secret_arn" {
+  type        = string
+  description = "OpenDART 인증키 시크릿 ARN(JSON 의 apikey 를 DART_API_KEY 로 주입). 국내 공시 원문을 DART 에서 받는다(ALPHA-1457)."
+}
+
 variable "db_security_group_id" {
   type        = string
   description = "RDS 보안 그룹. 태스크는 이 그룹으로만 5432 를 나간다."
+}
+
+variable "graph_uri" {
+  type        = string
+  description = "국내 종목 사건 그래프(bolt://…:7687). 평일 05:30~16:00 KST 에만 떠 있다(ALPHA-1453)."
+}
+
+variable "graph_security_group_id" {
+  type        = string
+  description = "그래프 서비스 보안 그룹. 태스크는 이 그룹으로만 7687 을 나간다."
+}
+
+variable "graph_password_parameter_arn" {
+  type        = string
+  description = "그래프 관리자 비밀번호 SSM SecureString ARN(GRAPH_PASSWORD 로 주입)."
 }

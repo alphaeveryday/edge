@@ -321,7 +321,8 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   `tag-news` 가 거는 mentions 게이트를 통째로 우회하기 때문이다: 배치는 유니버스 무관 기사를
   일부러 태깅에서 빼는데(ALPHA-416) 1분 레인에는 아직 그 게이트가 없어(ALPHA-690) 그런 기사의
   미러가 오고, `load-assertions` 는 mentions 를 안 본다. 그래서 `tag-news` 가 흡수 시점에
-  거르고(`minute_mirrors_dropped_no_mention`), 소비는 흡수된 part 파일만 본다. 지연은 없다 —
+  거르고(`minute_mirrors_dropped_no_mention`), 소비는 흡수된 part 파일만 본다. 이 게이트는 LLM 경로에만
+  있다 — 로컬 태거 경로(ALPHA-1456)는 미러를 전부 흡수하고 이 값은 0 이다. 지연은 없다 —
   SFN 이 `TagNews` 뒤에 `LoadAssertions` 를 돌리므로 같은 런에서 흡수분이 실린다.
   ⚠️ 그래서 **흡수는 canonical 이 없는 날짜에도 닿아야 한다** — 기사 정본은 PG 이고 canonical
   은 다음 `normalize-news` 에 오므로 장중만 본 기사의 발행일이 아직 canonical 에 없을 수 있다.

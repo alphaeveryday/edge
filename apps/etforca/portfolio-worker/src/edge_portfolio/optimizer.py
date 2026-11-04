@@ -7,7 +7,7 @@ from time import monotonic
 
 import numpy as np
 
-from .market_data import fetch_prices, normalized_prices, comparison_bounds, expected_sessions, history_basis, history_returns, price_failure, weights
+from .market_data import normalized_prices, comparison_bounds, expected_sessions, history_basis, history_returns, price_failure, weights
 from .recommendation import selected_accounts, allocation_error
 from .decision import ACCEPTED, Decision, check_constraints
 from .execution import plan_execution
@@ -15,7 +15,6 @@ from .catalog import price_symbol
 from .contracts import calculate
 from .market_data import comparison_method, comparison_column
 
-PRICE_TIMEOUT_SECONDS = 65
 PRICE_COLLECTION_BUDGET_SECONDS = 180
 # 8차: 모든 비교를 가장 짧은 종목의 기록에 맞추고, 자료가 짧다고 후보를 빼지 않는다.
 # 종가 둘(하루치 수익률)이면 계산한다. 종가 하나뿐인 상장 당일은 비교할 수익률이 없다
@@ -211,19 +210,6 @@ class Optimizer:
             priority.add('FX')
         ordered = sorted(needed, key=lambda key: (key not in priority, key != 'FX', key))
 
-        attempted = set()
-        async def fetch(key, symbol):
-            if key not in self.market.records:
-                self.market.failures.pop(key, None)
-                async with self.market.semaphore:
-                    attempted.add(key)
-                    try:
-                        self.market.records[key] = self.market.loader(symbol, self.market.as_of) if self.market.loader else await fetch_prices(symbol, self.market.as_of,
-                            provider_timeout=PRICE_TIMEOUT_SECONDS, on_raw=lambda record: self.market.records.__setitem__(key, record))
-                        self.market.failures.pop(key, None)
-                    except Exception as error:
-                        if key not in self.market.records:
-                            self.market.failures[key] = price_failure(error)
         rejections = {}
         collection_started = monotonic()
         try:
@@ -232,13 +218,11 @@ class Optimizer:
                 if remaining <= 0:
                     raise TimeoutError
                 async with asyncio.timeout(remaining):
-                    await self.market.use_saved(needed)  # Counted in the budget like any price wait.
-                    for baseline in (True, False):
-                        await asyncio.gather(*(fetch(key, needed[key]) for key in ordered if (key in priority) == baseline), return_exceptions=True)
+                    await self.market.load({key: needed[key] for key in ordered})
             except TimeoutError:
                 for key in needed:
                     if key not in self.market.records:
-                        self.market.failures.setdefault(key, 'PRICE_COLLECTION_TIMEOUT' if key in attempted else 'PRICE_QUEUE_TIMEOUT')
+                        self.market.failures.setdefault(key, 'PRICE_QUEUE_TIMEOUT')
             finally:
                 self.price_collection_seconds += monotonic() - collection_started
             failed = set(needed) - set(self.market.records)

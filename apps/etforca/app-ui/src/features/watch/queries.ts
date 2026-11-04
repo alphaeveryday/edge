@@ -1,6 +1,7 @@
-import { keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, type EtfSummary, type WatchGroup } from '@/api';
 import { track } from '@/lib/analytics';
+import { useSessionQuery } from '@/lib/useSessionQuery';
 
 const invalidate = (qc: ReturnType<typeof useQueryClient>) => {
   qc.invalidateQueries({ queryKey: ['watch'] });
@@ -20,21 +21,25 @@ const trackWatch = (qc: ReturnType<typeof useQueryClient>, apply: (members: Reco
 };
 
 export const useWatchGroups = () => useQuery({ queryKey: ['watch', 'groups'], queryFn: () => api.watch.groups() });
-export const useWatchList = (group: string, keep = false) =>
-  useQuery({ queryKey: ['watch', 'list', group], queryFn: () => api.watch.list(group), placeholderData: keep ? keepPreviousData : undefined });
+export const useWatchList = (group: string, keep = false) => {
+  const session = useSessionQuery();
+  return useQuery({ ...session, queryKey: ['watch', 'list', group], queryFn: () => api.watch.list(group), placeholderData: keep ? session.placeholderData : undefined });
+};
 // 모든 관심 그룹에 담긴 ETF 코드
 export const useWatchedCodes = () => {
   const { data: groups } = useWatchGroups();
+  const { meta } = useSessionQuery();
   return useQueries({
-    queries: (groups ?? []).map((g) => ({ queryKey: ['watch', 'list', g.key], queryFn: () => api.watch.list(g.key) })),
+    queries: (groups ?? []).map((g) => ({ queryKey: ['watch', 'list', g.key], queryFn: () => api.watch.list(g.key), meta })),
     combine: (rs) => ({ codes: new Set(rs.flatMap((r) => r.data ?? []).map((e) => e.code)), ready: !!groups && rs.every((r) => r.isSuccess) }),
   });
 };
 // 그룹별 담긴 ETF 코드
 export const useGroupMembers = () => {
   const { data: groups } = useWatchGroups();
+  const { meta } = useSessionQuery();
   return useQueries({
-    queries: (groups ?? []).map((g) => ({ queryKey: ['watch', 'list', g.key], queryFn: () => api.watch.list(g.key) })),
+    queries: (groups ?? []).map((g) => ({ queryKey: ['watch', 'list', g.key], queryFn: () => api.watch.list(g.key), meta })),
     combine: (rs) => Object.fromEntries((groups ?? []).flatMap((g, i) => (rs[i]?.data ? [[g.key, new Set(rs[i].data.map((e) => e.code))]] : []))) as Record<string, Set<string>>,
   });
 };

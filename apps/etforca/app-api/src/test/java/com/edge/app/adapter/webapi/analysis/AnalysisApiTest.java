@@ -41,6 +41,15 @@ record AnalysisApiTest(MockMvcTester mvcTester) {
         jdbc.update("insert into etf_analysis_axis(etf_analysis_id, axis, dir, payload) values (?, 'value', 'burden', ?::jsonb) "
                 + "on conflict (etf_analysis_id, axis) do update set payload = excluded.payload", id,
                 "{\"headline\":\"평소보다 비싸요\",\"metrics\":[{\"key\":\"per\",\"label\":\"PER\",\"value\":\"31\",\"unit\":\"배\",\"sticker\":\"하락\",\"subject\":\"SK하이닉스\",\"observed_at\":\"9/24\"}]}");
+        jdbc.update("insert into etf_analysis_axis(etf_analysis_id, axis, dir, payload) values (?, 'flow', 'help', '{}')", id);
+        Long historical = jdbc.queryForObject("select id from etf_analysis where etf_code = '950001' and as_of = '2026-09-24'", Long.class);
+        for (String axis : List.of("issue", "value", "chart")) {
+            jdbc.update("insert into etf_analysis_axis(etf_analysis_id, axis, dir, payload) values (?, ?, 'help', ?::jsonb)",
+                    historical, axis, "{\"headline\":\"9월 24일 근거\",\"metrics\":[{\"label\":\"PER\",\"value\":\"20\",\"unit\":\"배\"}]}");
+        }
+        Long weekly = jdbc.queryForObject("select id from etf_analysis where etf_code = '950003' and as_of = '2026-09-02'", Long.class);
+        jdbc.update("insert into etf_analysis_axis(etf_analysis_id, axis, dir, payload) values (?, 'issue', 'help', ?::jsonb)",
+                weekly, "{\"headline\":\"9월 2일 근거\"}");
     }
 
     @Test
@@ -124,6 +133,54 @@ record AnalysisApiTest(MockMvcTester mvcTester) {
 
         assertThat(get("/api/v1/etfs/950001/analysis/metrics/chart")).bodyJson().extractingPath("$.code").isEqualTo("ANALYSIS4001");
         assertThat(get("/api/v1/etfs/950001/analysis/metrics/sideways")).hasStatus(400);
+    }
+
+    @Test
+    void historicalDetailsStayWithSelectedPublication() {
+        Map<String, Object> daily = result(get("/api/v1/etfs/950001/analysis?date=2026-09-24"));
+        String date = (String) daily.get("date");
+        Map<String, Object> factor = result(get("/api/v1/etfs/950001/analysis/factors/issue?date=" + date));
+        Map<String, Object> metric = result(get("/api/v1/etfs/950001/analysis/metrics/value?date=" + date));
+        assertThat(factor.get("headline")).isEqualTo("9월 24일 근거");
+        assertThat(metric.get("verdict")).isEqualTo("9월 24일 근거");
+        assertThat(((List<Map<String, Object>>) metric.get("tiles")).get(0).get("value")).isEqualTo("20배");
+        // 최신 발행본에 없는 축도 선택한 과거 발행본에 있으면 조회한다.
+        Map<String, Object> chart = result(get("/api/v1/etfs/950001/analysis/metrics/chart?date=" + date));
+        assertThat(chart.get("verdict")).isEqualTo("9월 24일 근거");
+    }
+
+    @Test
+    void weeklySelectionUsesResolvedPublicationDateForDetails() {
+        Map<String, Object> daily = result(get("/api/v1/etfs/950003/analysis?week=2026-09-03"));
+        assertThat(daily.get("date")).isEqualTo("2026-09-02");
+        Map<String, Object> factor = result(get("/api/v1/etfs/950003/analysis/factors/issue?date=" + daily.get("date")));
+        assertThat(factor.get("headline")).isEqualTo("9월 2일 근거");
+    }
+
+    @Test
+    void missingPublicationOrAxisDoesNotFallBackToLatest() {
+        for (String page : List.of("factors/issue", "metrics/value")) {
+            assertThat(get("/api/v1/etfs/950001/analysis/" + page + "?date=2026-09-23"))
+                    .hasStatus(404).bodyJson().extractingPath("$.code").isEqualTo("ANALYSIS4001");
+            assertThat(get("/api/v1/etfs/950001/analysis/" + page + "?date=invalid")).hasStatus(400);
+        }
+        for (String kind : List.of("factors", "metrics")) {
+            assertThat(get("/api/v1/etfs/950001/analysis/" + kind + "/flow?date=2026-09-24"))
+                    .hasStatus(404).bodyJson().extractingPath("$.code").isEqualTo("ANALYSIS4001");
+        }
+        assertThat(get("/api/v1/etfs/950003/analysis/factors/issue?date=2026-09-16"))
+                .hasStatus(404).bodyJson().extractingPath("$.code").isEqualTo("ANALYSIS4001");
+    }
+
+    @Test
+    void emptyDateRetainsLatestAndInvalidCalendarDateIsRejected() {
+        Map<String, Object> factor = result(get("/api/v1/etfs/950001/analysis/factors/issue?date="));
+        Map<String, Object> metric = result(get("/api/v1/etfs/950001/analysis/metrics/value?date="));
+        assertThat(factor.get("headline")).isEqualTo("이슈 헤드라인");
+        assertThat(metric.get("verdict")).isEqualTo("평소보다 비싸요");
+        for (String page : List.of("factors/issue", "metrics/value")) {
+            assertThat(get("/api/v1/etfs/950001/analysis/" + page + "?date=2026-02-30")).hasStatus(400);
+        }
     }
 
     private MvcTestResult get(String uri) {

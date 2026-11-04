@@ -403,6 +403,9 @@ locals {
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_PASSWORDS_FILE = "/opt/airflow/simple_auth_manager_passwords.json"
     AIRFLOW__API__WORKERS                             = "1"
     AIRFLOW__API__EXPOSE_CONFIG                       = "False"
+    # 큐에 넣을 때 발급하는 작업 토큰의 수명이 이 값이다(3.3.2 workloads/base.py). 기본 600초면 앞 작업이 10분을 넘길 때
+    # 뒤 작업이 시작 순간 인증에 실패해 죽는다(ALPHA-1473). LocalExecutor 는 revoke_task 가 없어 대기 초과 재큐잉은 안 일어난다.
+    AIRFLOW__SCHEDULER__TASK_QUEUED_TIMEOUT = "3600"
     # 프로세스별 풀(scheduler·dag-processor·api-server 각각). 실측 연결은 합계 3~5(최대 5)였다 — 설정값 합이 아니다.
     AIRFLOW__DATABASE__SQL_ALCHEMY_POOL_SIZE    = "2"
     AIRFLOW__DATABASE__SQL_ALCHEMY_MAX_OVERFLOW = "3"

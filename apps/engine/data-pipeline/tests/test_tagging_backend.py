@@ -97,3 +97,27 @@ def test_load_tagger_passes_the_thread_count_to_the_model(monkeypatch, tmp_path)
 
     backend.load_tagger(storage=None)
     assert seen == {"model_dir": str(tmp_path), "threads": 1}
+
+
+def test_relevance_filter_is_off_unless_turned_on(monkeypatch):
+    # WHY(ALPHA-1476): 기본이 켜짐이면 모델 묶음 업로드 전에 배포된 이미지가 기동하다 죽는다. 꺼져 있으면
+    # 판정기를 만들지 않아 거르지 않는다(이 기능 이전과 같은 동작).
+    monkeypatch.delenv("RELEVANCE_FILTER", raising=False)
+    assert backend.load_relevance(storage=None) is None
+    monkeypatch.setenv("RELEVANCE_FILTER", "off")
+    assert backend.load_relevance(storage=None) is None
+
+
+def test_relevance_filter_rejects_unknown_values(monkeypatch):
+    # WHY: 오타(예: "true")가 조용히 꺼짐으로 읽히면 켰다고 믿는 배포에서 필터가 안 돈다.
+    monkeypatch.setenv("RELEVANCE_FILTER", "true")
+    with pytest.raises(RuntimeError, match="on 또는 off"):
+        backend.load_relevance(storage=None)
+
+
+def test_relevance_filter_refuses_to_start_without_the_bundle(monkeypatch, tmp_path):
+    # WHY: 켰는데 묶음이 없으면 기동 때 크게 죽어야 한다 — 필터 없이 조용히 돌면 거른다고 믿는 기사가 보인다.
+    monkeypatch.setenv("RELEVANCE_FILTER", "on")
+    monkeypatch.delenv("RELEVANCE_MODEL_DIR", raising=False)
+    with pytest.raises(RuntimeError, match=f"모델 묶음이 없다: {backend.RELEVANCE_PREFIX}"):
+        backend.load_relevance(LocalStorage(root=str(tmp_path)))

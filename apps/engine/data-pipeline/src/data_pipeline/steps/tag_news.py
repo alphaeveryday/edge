@@ -32,6 +32,9 @@ status(판정이 아니라 '물어보지도 못했다'는 뜻).
 in_universe 필터)이 어차피 버린다 — 거기에 기사당 1 LLM 콜을 태우지 않는다. mentions 는
 normalize_news 가 종목명 탐지로 합성하므로 이 게이트가 곧 '유니버스 관련 기사' 필터다.
 건너뛴 수는 skipped_no_mention 으로 드러낸다(Rule 12).
+단 **로컬 태거(`tagger`) 경로에는 이 게이트가 없다(ALPHA-1456)** — 호출 비용이 없고, 조립이 모델이
+뽑은 회사를 표기 매칭기(ADR-0065)로 직접 해소하므로 종목명 부분문자열 탐지로 미리 거를 이유가 없다.
+1분 레인과 대상 집합도 같아진다. 게이트는 LLM 경로의 비용 가드로만 남는다.
 
 entity_id 는 채우지 않는다 — 모델은 사내 식별자를 모르고, 엔티티 해소는 entity 마스터(RDB)를
 읽어야 해서 로더(ALPHA-190)와 같은 소관이다. `text` 가 그 해소의 입력으로 남는다.
@@ -688,8 +691,9 @@ def run(
                                      "reasons": ["non_object_article"]})
                     continue
                 read += 1
-                if not _has_mentions(article):
+                if tagger is None and not _has_mentions(article):
                     # 유니버스 종목이 안 잡힌 기사 — 다운스트림이 버릴 기사에 LLM 을 안 태운다.
+                    # 로컬 태거는 이 게이트를 안 건다(ALPHA-1456, 모듈 docstring).
                     skipped_no_mention += 1
                     no_mention_ids.add(article.get("article_id"))
                     continue

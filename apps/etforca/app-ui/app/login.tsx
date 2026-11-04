@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { api, isApiError, type SocialProvider } from '@/api';
+import { tokens } from '@/api/http/storage';
 import { CtaButton, NavBar, PageScroll } from '@/components/ui';
 import { AuthField } from '@/features/auth/AuthField';
 import { AuthBrand } from '@/features/auth/AuthBrand';
@@ -59,6 +60,7 @@ export default function Login() {
     router.replace('/(tabs)/home');
   };
   const submit = useMutation({
+    meta: { sessionTransition: true },
     mutationFn: () => api.auth.login(email.trim(), pw),
     onSuccess: () => { track('login_completed', { method: 'email' }); login(); done(); toast('로그인했어요'); },
     onError: (e) => setErr(isApiError(e) ? e.message : '로그인에 실패했어요'),
@@ -69,8 +71,12 @@ export default function Login() {
   const scheme = useScheme();
   // 취소는 무응답
   const social = useMutation({
+    meta: { sessionTransition: true },
     mutationFn: async (provider: SocialProvider) => {
+      // Zustand 반영을 기다리는 전환도 토큰 교체 순간부터 이전 SDK 결과를 거부한다.
+      const version = tokens.version();
       const t = provider === 'apple' ? await appleLogin() : await kakaoLogin();
+      tokens.assertCurrent(version);
       return t && api.auth.social({ provider, ...t });
     },
     onSuccess: (r, provider) => {

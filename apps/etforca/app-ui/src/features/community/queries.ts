@@ -4,10 +4,19 @@ import type { Me, Page, VoteStat, VoteChoice, Post, ReportReason } from '@/api';
 import { usePages } from '@/lib/usePages';
 import { useRequireLogin, useSession } from '@/store/session';
 
-export const useMyPosts = () => usePages(['community', 'mine'], (c) => api.community.mine(c));
+export const useMyPosts = () => {
+  const loggedIn = useSession((s) => s.loggedIn);
+  return usePages(['community', 'mine'], (c) => api.community.mine(c), loggedIn);
+};
 export const useUpdateMe = () => {
   const qc = useQueryClient();
-  return useMutation({ mutationFn: (patch: Partial<Me>) => api.member.update(patch), onSuccess: (me) => qc.setQueryData(['member', 'me'], me) });
+  return useMutation({
+    onMutate: () => useSession.getState().revision,
+    mutationFn: (patch: Partial<Me>) => api.member.update(patch),
+    onSuccess: (me, _patch, revision) => {
+      if (revision === useSession.getState().revision) qc.setQueryData(['member', 'me'], me);
+    },
+  });
 };
 export const useMe = () => {
   const loggedIn = useSession((s) => s.loggedIn);
@@ -21,6 +30,7 @@ export const useComments = (id: string) => usePages(['community', 'comments', id
 export const useVoteStat = (code: string, enabled = true) => useQuery({ queryKey: ['community', 'voteStat', code], queryFn: () => api.community.voteStat(code), enabled });
 
 const invalidateLists = (qc: ReturnType<typeof useQueryClient>) => {
+  qc.invalidateQueries({ queryKey: ['community', 'mine'] });
   qc.invalidateQueries({ queryKey: ['community', 'feed'] });
   qc.invalidateQueries({ queryKey: ['community', 'posts'] });
   qc.invalidateQueries({ queryKey: ['community', 'hot'] });
@@ -31,8 +41,10 @@ export const useToggleLike = () => {
   const qc = useQueryClient();
   const requireLogin = useRequireLogin();
   const m = useMutation({
+    onMutate: () => useSession.getState().revision,
     mutationFn: (id: string) => api.community.toggleLike(id),
-    onSuccess: (updated) => {
+    onSuccess: (updated, _id, revision) => {
+      if (revision !== useSession.getState().revision) return;
       const swap = (p: Post) => (p.id === updated.id ? updated : p);
       // 인기글 배열과 이어 받는 목록 모두 교체
       qc.setQueriesData<Post[] | InfiniteData<Page<Post>>>({ queryKey: ['community'], predicate: (q) => q.queryKey[1] !== 'comments' }, (old) => {
@@ -50,8 +62,11 @@ export const useVote = (code: string) => {
   const qc = useQueryClient();
   return useMutation({
     // null 선택의 철회 요청
+    onMutate: () => useSession.getState().revision,
     mutationFn: (choice: VoteChoice | null) => (choice ? api.community.vote(code, choice) : api.community.unvote(code)),
-    onSuccess: (stat) => qc.setQueryData<VoteStat>(['community', 'voteStat', code], stat),
+    onSuccess: (stat, _choice, revision) => {
+      if (revision === useSession.getState().revision) qc.setQueryData<VoteStat>(['community', 'voteStat', code], stat);
+    },
   });
 };
 

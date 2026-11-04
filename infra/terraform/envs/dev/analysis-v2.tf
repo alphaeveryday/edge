@@ -8,6 +8,8 @@ locals {
   etf_map_section   = split("\n[", split("[krx_etf.source.etf_map]\n", local.sources_toml)[1])[0]
   etf_map_lines     = [for line in split("\n", local.etf_map_section) : line if !can(regex("^\\s*(#.*)?$", line))]
   outlook_etf_codes = [for line in local.etf_map_lines : try(regex("^\\s*\"?([0-9A-Z]{6})\"?\\s*=", line)[0], "invalid:${trimspace(line)}")]
+  # 종목 이름은 줄 끝 주석(# KODEX 반도체)에만 있다. 주석이 없는 줄은 빼고, 내보내기가 코드로 대신 적는다
+  outlook_etf_names = { for line in local.etf_map_lines : regex("^\\s*\"?([0-9A-Z]{6})\"?\\s*=", line)[0] => trimspace(regex("#(.*)$", line)[0]) if can(regex("^\\s*\"?([0-9A-Z]{6})\"?\\s*=.*#.+$", line)) }
 }
 
 module "analysis_v2" {

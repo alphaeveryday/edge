@@ -7,7 +7,8 @@
 | `landing.html` | 랜딩 본문. **Claude Artifact용 조각 문서**다(doctype·`<html>`·`<head>`·`<body>`·viewport 메타가 없다) |
 | `assets/` | 로고, 파비콘(`icon.png`·`apple-touch-icon.png`), 공유 미리보기 그림(`og.png`), 글꼴(Pretendard 서브셋, SIL OFL 1.1 — `assets/fonts/LICENSE`), 뉴스레터 메일 제호 로고(`newsletter-logo.png` — 포트폴리오 워커 메일이 이 URL을 참조하므로 지우거나 이름을 바꾸지 않는다) |
 | `robots.txt`·`sitemap.xml` | 검색엔진이 사이트 최상위에서 읽는 파일 |
-| `build.sh` | 조각 문서에 문서 뼈대(doctype·`<html>`·`<head>`·`<body>`)를 씌워 `dist/index.html` 을 만들고 `assets/`·`robots.txt`·`sitemap.xml` 을 `dist/` 에 복사한다 |
+| `get/index.html` | 데스크톱 QR 이 가리키는 `https://etforca.com/get/`. 휴대폰 종류를 보고 스토어로 바로 보낸다(아래 다운로드 단추) |
+| `build.sh` | 조각 문서에 문서 뼈대(doctype·`<html>`·`<head>`·`<body>`)를 씌워 `dist/index.html` 을 만들고 `assets/`·`robots.txt`·`sitemap.xml`·`get/` 을 `dist/` 에 복사한다 |
 
 ## 왜 조각 문서인가
 
@@ -26,7 +27,7 @@
    ```
 3. PR 을 dev 에 머지하면 [`deploy-app-landing.yml`](../../../.github/workflows/deploy-app-landing.yml) 이 S3 에 올리고 CloudFront 캐시를 비운다.
 
-배포는 버킷의 `index.html`·`robots.txt`·`sitemap.xml` 과 `assets/` 만 다룬다. `assets/` 에서 지운 파일은 버킷에서도 지워진다.
+배포는 버킷의 `index.html`·`robots.txt`·`sitemap.xml`·`get/` 과 `assets/` 만 다룬다. `get/` 은 키 `get/` 하나로 올린다(CloudFront 가 `index.html` 을 붙여 주지 않아서다 — 그래서 `https://etforca.com/get` 처럼 끝 `/` 가 없으면 404). `assets/` 에서 지운 파일은 버킷에서도 지워진다.
 
 버킷·CloudFront·도메인 레코드는 `infra/terraform/envs/dev` 의 `landing_site` 가, 영역과 인증서는 `infra/terraform/foundation` 이 소유한다.
 
@@ -56,10 +57,11 @@
 
 다운로드 단추(상단 바·히어로·마지막 CTA·하단 고정 바·리포트 카드)는 App Store 주소를 달고 있고, 기기에 따라 다르게 동작한다.
 
-- 마우스로 쓰는 화면(데스크톱)에서는 스토어로 가지 않고 QR 창을 띄운다. QR 그림은 App Store 주소를 미리 그려 둔 것이라 주소가 바뀌면 다시 만든다. 창 아래에 App Store·Google Play 페이지로 가는 링크를 함께 둔다.
+- 마우스로 쓰는 화면(데스크톱)에서는 스토어로 가지 않고 QR 창을 띄운다. QR 그림은 `https://etforca.com/get/` 을 미리 그려 둔 것이다(ALPHA-1478). 그 페이지(`get/index.html`)가 안드로이드는 Google Play(`referrer` 에 `utm_content=qr`), iPhone·iPad 는 App Store, 그 밖은 랜딩으로 바로 보낸다. 스토어 주소가 바뀌면 QR 은 그대로 두고 `get/index.html` 을 고친다. 창 아래에 App Store·Google Play 페이지로 가는 링크를 함께 둔다.
 - 안드로이드(UA 에 `Android`)에서는 다운로드 단추를 모두 Google Play 로 보내고 문구의 "App Store" 를 "Google Play" 로 바꾼다(ALPHA-1440). 따로 둔 Google Play 단추는 겹치므로 뺀다.
 - 그 밖의 휴대폰(iOS)은 그대로 App Store 로 간다.
-- 안드로이드가 아닌 모든 기기에서는 히어로·마지막 CTA 의 App Store 단추 옆에 "Google Play에서 다운로드" 단추(`data-play`)를 함께 둔다. 이 단추는 데스크톱에서도 QR 창 없이 Google Play 웹 페이지로 간다(웹에서 로그인한 폰으로 설치할 수 있다). 안드로이드에서 쓰는 Google Play 주소도 이 단추에서 읽으므로, 주소가 바뀌면 `landing.html` 의 `data-play` 단추 두 개와 QR 창 링크를 함께 고친다.
+- 안드로이드가 아닌 모든 기기에서는 히어로·마지막 CTA 의 App Store 단추 옆에 "Google Play에서 다운로드" 단추(`data-play`)를 함께 둔다. 이 단추는 데스크톱에서도 QR 창 없이 Google Play 웹 페이지로 간다(웹에서 로그인한 폰으로 설치할 수 있다). 안드로이드에서 쓰는 Google Play 주소도 이 단추에서 읽으므로, 주소가 바뀌면 `landing.html` 의 `data-play` 단추 두 개와 QR 창 링크, `get/index.html` 을 함께 고친다.
+- Google Play 로 가는 링크에는 모두 `referrer` 를 붙인다(ALPHA-1451). 랜딩 주소의 `utm_source`·`utm_medium`·`utm_campaign`·`utm_content` 를 그대로 넘기고, 없으면 `utm_source=etforca.com&utm_medium=landing&utm_campaign=landing` 이다. 설치 수는 Play Console 사용자 확보 보고서의 UTM 채널에서 본다. App Store 링크는 아직 꼬리표가 없다(App Store Connect 제공자 토큰 `pt` 필요).
 - 하단 고정 바는 다운로드 단추가 있는 줄(`data-cta-zone`: 히어로 단추 줄·포트폴리오 점검·마지막 CTA)이 화면에 보이는 동안 숨는다. 히어로는 글 묶음 전체가 아니라 단추 줄만 본다 — 휴대폰 첫 화면 카드가 길어 단추가 화면 밖으로 밀려도 바가 숨어 있던 문제(ALPHA-1445).
 
 ## 검색과 공유 미리보기
@@ -71,6 +73,7 @@
 - `assets/og.png`(1200x630)에는 페이지 제목 문구가 그림으로 들어 있다. 제목을 바꾸면 그림도 다시 만든다.
 - 구글 서치 콘솔에는 URL 접두어 속성 `https://etforca.com` 으로 등록했다(팀 구글 계정). 소유 확인은 머리의 `google-site-verification` 메타 태그로 한다. 이 태그를 지우면 소유 확인이 풀린다.
 - 네이버 서치어드바이저에는 등록하지 않았다. 등록할 때 `https://etforca.com/sitemap.xml` 을 제출한다.
+- ETF별 오늘 이슈 페이지(`/etf/<코드>`, 148개)는 이 폴더가 아니라 전망 내보내기 람다(`infra/terraform/modules/landing-export`, 틀은 `page.html`)가 매일 08:00 에 만든다(ALPHA-1454). 전망의 방향·결론·근거 판단은 싣지 않고 '오늘 일어난 일'과 참고 기사만 싣는다. 그 주소 목록 `etf/sitemap.xml` 도 람다가 쓰고, `robots.txt` 가 두 sitemap 을 함께 가리킨다. 지난 날짜 페이지는 남기지 않는다.
 
 ## 푸터 링크
 

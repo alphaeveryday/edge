@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$name($code) 오늘 이슈 정리 | ETF Orca</title>
+<meta name="description" content="$description">
+<link rel="canonical" href="$url">
+<link rel="icon" href="/assets/icon.png">
+<meta property="og:type" content="article">
+<meta property="og:site_name" content="ETF Orca">
+<meta property="og:title" content="$name 오늘 이슈 정리">
+<meta property="og:description" content="$description">
+<meta property="og:url" content="$url">
+<meta property="og:image" content="https://etforca.com/assets/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<!-- 랜딩과 같은 PostHog 방문 분석(쿠키 없음). 바꿀 때는 apps/etforca/app-landing/landing.html 머리와 같이 고친다. -->
+<script>
+!function(t,e){var o,n,p,r;e.__SV||(window.posthog && window.posthog.__loaded)||(window.posthog=e,e._i=[],e.init=function(i,s,a){function g(t,e){var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}p||((p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",p.onerror=function(){p=null},(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r));var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],Object.defineProperty(u,"toString",{configurable:!0,enumerable:!0,writable:!0,value:function(t){var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e}}),Object.defineProperty(u.people,"toString",{configurable:!0,enumerable:!0,writable:!0,value:function(){return u.toString(1)+".people (stub)"}}),o="init capture register register_once register_for_session unregister opt_out_capturing has_opted_out_capturing opt_in_capturing reset isFeatureEnabled getFeatureFlag getFeatureFlagPayload reloadFeatureFlags group identify setPersonProperties setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags resetGroups onFeatureFlags addFeatureFlagsHandler onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey getNextSurveyStep".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])},e.__SV=1)}(document,window.posthog||[]);
+posthog.init('phc_yiMfdC2Hi7iPBWHg7F9n3dBokvnXkjcsqFzN8Bs496R3', { api_host: 'https://us.i.posthog.com', cookieless_mode: 'always', defaults: '2026-05-30', person_profiles: 'identified_only' });
+</script>
+<style>
+:root{--bg:#12141a;--raised:#181b22;--line:#262a34;--t1:#eef1f6;--t2:#a9b1bf;--t3:#7b8494;--point:#4f8cff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--t1);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;word-break:keep-all}
+a{color:inherit}
+.wrap{max-width:640px;margin:0 auto;padding:0 16px}
+header{padding:16px 0}
+header a{display:inline-flex;align-items:center;gap:8px;font-weight:700;text-decoration:none}
+h1{font-size:1.5rem;line-height:1.35;margin:24px 0 4px}
+h2{font-size:1.0625rem;margin:32px 0 12px}
+.when{color:var(--t3);font-size:.875rem;margin:0}
+ul{list-style:none;margin:0;padding:0}
+.facts li{background:var(--raised);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:8px}
+.facts b{display:block;color:var(--t2);font-size:.8125rem;font-weight:600}
+.news li{padding:8px 0;border-bottom:1px solid var(--line);font-size:.9375rem}
+.news a{color:var(--t2)}
+.cta{margin:32px 0;padding:20px 16px;border-radius:16px;background:var(--raised);border:1px solid var(--line)}
+.cta p{margin:0 0 4px;font-weight:700}
+.cta small{color:var(--t2)}
+.btns{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.btns a{flex:1 1 160px;text-align:center;padding:12px;border-radius:10px;font-weight:700;text-decoration:none;border:1px solid var(--line)}
+.btns a:first-child{background:var(--point);border-color:var(--point)}
+footer{color:var(--t3);font-size:.8125rem;padding:24px 0 48px}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header><a href="/"><img src="/assets/logo-white.png" alt="" width="28" height="28">ETF Orca</a></header>
+<main>
+<h1>$name 오늘 이슈</h1>
+<p class="when">$when 기준 · 공개 자료 정리</p>
+<h2>오늘 무슨 일이 있었나요</h2>
+<ul class="facts">
+$facts
+</ul>
+<h2>참고한 기사</h2>
+<ul class="news">
+$news
+</ul>
+<section class="cta">
+<p>그래서 한 달 뒤 오를까요, 내릴까요?</p>
+<small>ETF Orca 앱에서 방향과 이유를 매일 확인해요. 무료예요.</small>
+<div class="btns">
+<a href="https://apps.apple.com/kr/app/etf-orca/id6816826436" target="_blank" rel="noopener">App Store</a>
+<a href="$play" target="_blank" rel="noopener">Google Play</a>
+</div>
+</section>
+<p><a href="/">다른 ETF 찾아보기</a></p>
+</main>
+<footer>ETF Orca AI가 공개 자료로 정리한 내용이에요. 투자 추천이 아니에요.</footer>
+</div>
+</body>
+</html>

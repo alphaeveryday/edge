@@ -2,6 +2,7 @@
 
 - 목록: POST /disclosure/details.do (종목코드 A+6자리, 기간). 회사 공시와 시장감시위원회 조치(투자주의·경고)가 함께 나온다.
 - 본문: /common/disclsviewer.do?method=search&acptno= 에서 문서번호 → searchContents → /external/…htm
+  (이 뷰어는 AWS 출구 IP 를 Akamai 에서 막는다 — 운영의 회사 공시 원문은 dart.py 가 받는다, ALPHA-1457)
 - 홈페이지: /common/companysummary.do (회사 개요). 로고를 받을 때만 쓴다.
 """
 from __future__ import annotations

@@ -357,6 +357,22 @@ def test_injected_tagger_version_decides_retagging(tmp_path):
     assert _read_feature(storage, "ko", "2026-07-01")[0]["tagger_version"] == "tagging-roberta-test"
 
 
+def test_local_tagger_tags_articles_without_mentions(tmp_path):
+    """WHY(ALPHA-1456): mentions 게이트는 LLM 비용 가드다. 로컬 태거 경로에서 걸면 종목명 부분문자열
+    탐지가 못 잡은 기사(약칭·다른 표기·비상장 대상)의 사건을 모델이 보기도 전에 버린다 — 조립은 모델이
+    뽑은 회사를 표기 매칭기로 해소하므로 이 기사들도 태깅돼야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1"), _article("a2", mentions="[]")])
+    roberta = _CountingTagger("tagging-roberta-test")
+
+    assert tag_news.run(storage, "R1", tagger=roberta) == 0
+
+    assert roberta.calls == 2
+    assert [r["article_id"] for r in _read_feature(storage, "ko", "2026-07-01")] == ["a1", "a2"]
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    assert json.loads(storage.get_bytes(keys[0]).decode("utf-8"))["articles_skipped_no_mention"] == 0
+
+
 def test_run_without_any_tagger_refuses_to_start(tmp_path):
     """WHY(ALPHA-1446): LLM·로컬 태거가 둘 다 없으면 모든 기사가 llm_error 로 저장되고 런은 성공으로
     끝난다(기존 판정을 오류 행으로 덮을 수도 있다) — 아무것도 쓰기 전에 막아야 한다."""

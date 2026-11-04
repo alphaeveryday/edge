@@ -9,6 +9,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from datetime import datetime, timedelta
+import gzip
 import json
 import logging
 import re
@@ -398,6 +399,13 @@ def run_research(cfg, *, quotes: Quotes | None = None, kind=None, session_runner
                         state.update(first)  # 판정·표·표 판정 모두 앞 세션 것으로(감사 기록이 게시와 어긋나지 않게)
                         state.pop("premiseDecision", None)
                         ws.save_state(state)
+            transcript = ws.root / session.TRANSCRIPT
+            if transcript.exists():  # 왜 그렇게 조사했는지 나중에 보려고(생각·도구 인자·결과). 못 올려도 판정은 그대로 게시한다
+                try:
+                    store.put(f"runs/{today}/{run_id}/{m.code}.jsonl.gz", gzip.compress(transcript.read_bytes()),
+                              content_type="application/gzip")
+                except Exception as error:  # noqa: BLE001
+                    log.warning(json.dumps({"event": "transcript_failed", "code": m.code, "error": str(error)[:200]}, ensure_ascii=False))
             state = ws.state
             table = {"ach": state.get("ach"), "decision": state.get("achDecision")}
             if state.get("premiseDecision"):

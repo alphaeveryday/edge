@@ -25,31 +25,39 @@ const qs = (q?: Query) => {
 
 // 서버 거절만 토큰 폐기, 네트워크·서버 장애는 토큰 유지
 type Refresh = 'ok' | 'rejected' | 'offline';
-let refreshing: Promise<Refresh> | null = null;
-// 액세스 만료 시 동시 요청이 공유하는 리프레시 1회
-const tryRefresh = () => {
-  refreshing ??= (async (): Promise<Refresh> => {
+let refreshing: { version: number; promise: Promise<Refresh> } | null = null;
+// 같은 세션의 동시 요청만 리프레시 1회를 공유한다.
+const tryRefresh = (version: number) => {
+  if (refreshing?.version === version) return refreshing.promise;
+  const promise = (async (): Promise<Refresh> => {
     const refresh = await tokens.refresh();
+    tokens.assertCurrent(version);
     if (!refresh) return 'rejected';
     try {
       const r = await fetch(`${BASE_URL}/auth/refresh`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ refreshToken: refresh }) });
-      if (r.status >= 500) return 'offline';
+      tokens.assertCurrent(version);
+      if (r.status >= 500 || r.status === 429) return 'offline';
       const body = (await r.json()) as Envelope<{ accessToken: string; refreshToken: string }>;
-      if (!body.isSuccess || !body.result) return 'rejected';
-      await tokens.save(body.result.accessToken, body.result.refreshToken);
+      tokens.assertCurrent(version);
+      if (!body.isSuccess || !body.result) {
+        return !body.isSuccess && ['COMMON400', 'COMMON401', 'AUTH4001'].includes(body.code) ? 'rejected' : 'offline';
+      }
+      await tokens.save(body.result.accessToken, body.result.refreshToken, version);
       return 'ok';
     } catch {
+      tokens.assertCurrent(version);
       return 'offline';
-    } finally {
-      refreshing = null;
     }
   })();
-  return refreshing;
+  refreshing = { version, promise };
+  void promise.finally(() => { if (refreshing?.promise === promise) refreshing = null; }).catch(() => undefined);
+  return promise;
 };
 
 // 로그인과 가입은 게스트 데이터 매핑용 디바이스 헤더만 전송
 // both 는 회원 토큰이 있어도 기기 헤더를 함께 보내는 기기 단위 요청
 export async function request<T>(method: string, path: string, opts: { query?: Query; body?: unknown; auth?: boolean | 'device' | 'both'; retry?: boolean } = {}): Promise<T> {
+  const version = tokens.version();
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (opts.body !== undefined) headers['Content-Type'] = 'application/json';
   if (opts.auth === 'device') headers['X-Device-Id'] = await deviceId();
@@ -58,24 +66,34 @@ export async function request<T>(method: string, path: string, opts: { query?: Q
     if (access) headers.Authorization = `Bearer ${access}`;
     if (!access || opts.auth === 'both') headers['X-Device-Id'] = await deviceId();
   }
+  tokens.assertCurrent(version);
   let res: Response;
   try {
     res = await fetch(`${BASE_URL}${path}${qs(opts.query)}`, { method, headers, body: opts.body === undefined ? undefined : JSON.stringify(opts.body) });
   } catch (e) {
+    tokens.assertCurrent(version);
     throw new ApiError('NETWORK', e instanceof Error ? e.message : 'network');
   }
+  tokens.assertCurrent(version);
+  if (res.status >= 500) throw new ApiError('NETWORK', `server error ${res.status}`);
   let body: Envelope<T>;
   try {
     body = (await res.json()) as Envelope<T>;
   } catch {
+    tokens.assertCurrent(version);
     throw new ApiError('NETWORK', `bad response ${res.status}`);
   }
+  tokens.assertCurrent(version);
   if (body.isSuccess) return body.result as T;
-  if (body.code === 'COMMON401' && opts.retry !== false && (await tokens.refresh())) {
-    const r = await tryRefresh();
+  if (body.code === 'COMMON401' && headers.Authorization && opts.retry !== false) {
+    // 이미 다른 요청이 갱신한 토큰을 다시 회전시키지 않는다.
+    const access = await tokens.access();
+    tokens.assertCurrent(version);
+    const r = headers.Authorization !== `Bearer ${access}` ? 'ok' : await tryRefresh(version);
+    tokens.assertCurrent(version);
     if (r === 'ok') return request<T>(method, path, { ...opts, retry: false });
     if (r === 'offline') throw new ApiError('NETWORK', 'refresh failed');
   }
-  if (body.code === 'COMMON401') await tokens.clear();
+  if (body.code === 'COMMON401' && headers.Authorization) await tokens.clear('expired', version);
   throw new ApiError(toCode(body.code), body.message);
 }

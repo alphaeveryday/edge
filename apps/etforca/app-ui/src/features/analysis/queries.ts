@@ -10,9 +10,9 @@ export const useDaily = (code: string, pick: { date?: string; week?: string } = 
     // 같은 ETF 안의 주 이동만 이전 화면 유지
     placeholderData: (prev, prevQuery) => (prevQuery?.queryKey[2] === code ? prev : undefined),
   });
-export const useFactor = (code: string, axis: Axis) =>
-  useQuery({ queryKey: ['analysis', 'factor', code, axis], queryFn: () => api.analysis.factor(code, axis) });
-export const useMetric = (code: string, axis: Axis) =>
-  useQuery({ queryKey: ['analysis', 'metric', code, axis], queryFn: () => api.analysis.metric(code, axis) });
+export const useFactor = (code: string, axis: Axis, date?: string) =>
+  useQuery({ queryKey: ['analysis', 'factor', code, axis, date ?? 'latest'], queryFn: () => api.analysis.factor(code, axis, date) });
+export const useMetric = (code: string, axis: Axis, date?: string) =>
+  useQuery({ queryKey: ['analysis', 'metric', code, axis, date ?? 'latest'], queryFn: () => api.analysis.metric(code, axis, date) });
 export const useHint = (key: string | null) =>
   useQuery({ queryKey: ['analysis', 'hint', key], queryFn: () => api.analysis.hint(key!), enabled: !!key });

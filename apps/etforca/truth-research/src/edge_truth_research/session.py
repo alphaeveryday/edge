@@ -13,23 +13,55 @@ from edge_truth_agent.workspace import Workspace
 
 log = logging.getLogger(__name__)
 PROMPTS = Path(__file__).resolve().parent / "prompts"
+TRANSCRIPT = "transcript.jsonl"  # 작업 폴더 안 세션 기록. 조사 실행이 비공개 저장소에 올린다
+KEPT = ("message_end", "tool_execution_start", "tool_execution_end")  # 완성된 메시지(생각·답·도구 호출)와 도구 실행·결과
 __all__ = ["SessionResult", "run", "command"]
 
 
-def command(cfg, prompt: str) -> list[str]:
-    """pi 실행 명령. 허용 도구는 확장이 등록한 목록과 같다."""
+def command(cfg, prompt: str, *, graph: bool = False, system: Path | None = None) -> list[str]:
+    """pi 실행 명령. 허용 도구는 확장이 등록한 목록과 같다(그래프 도구는 graph 일 때만)."""
     from .toolspec import specs
-    names = ",".join(s["name"] for s in specs(web=bool(cfg.exa_key)))
+    names = ",".join(s["name"] for s in specs(web=bool(cfg.exa_key), graph=graph))
     cli = cfg.pi_dir / "node_modules" / "@earendil-works" / "pi-coding-agent" / "dist" / "cli.js"
     return ["node", str(cli), "--mode", "json", "--no-session", "--offline",
             "--no-extensions", "--no-mcp", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files",
             "-e", str(cfg.pi_dir / "extension.ts"), "--tools", names,
             "--model", cfg.model, "--thinking", cfg.thinking,
-            "--system-prompt", str(PROMPTS / "system.md"),
+            "--system-prompt", str(system or PROMPTS / "system.md"),
             prompt]
 
 
-def _env(cfg, ws: Workspace, corpus_path: Path) -> dict:
+def _graph(cfg, ws: Workspace) -> bool:
+    """그래프 도구를 여는가: 국내 종목 세션이고 그래프 DB 주소가 있을 때(사건 그래프는 국내 뉴스·공시로 만든다)."""
+    from .markets import US, of_exchange
+    return bool(cfg.graph_uri) and of_exchange((ws.mover() or {}).get("market", "")) is not US
+
+
+def _system(ws: Workspace) -> Path:
+    """그래프 도구를 여는 세션의 시스템 지시: 기본 지시 + 사건 그래프 스킬(저장 구조·수치·탐색법 + 온톨로지 타입 목록).
+    pi 의 스킬 로딩은 read·bash 도구로 파일을 여는 방식이라(세션에 그 도구를 주지 않는다) 본문을 지시에 바로 넣는다."""
+    from . import graph
+    path = ws.root / ".pi" / "system.md"
+    path.write_text((PROMPTS / "system.md").read_text(encoding="utf-8").rstrip() +
+                    "\n\n" + graph.skill() + "\n", encoding="utf-8")
+    return path
+
+
+def _kept(stdout: bytes) -> bytes:
+    """pi JSON 출력에서 세션 기록으로 남길 이벤트만. 글자 단위 스트림 이벤트는 같은 내용이 message_end 에 다시 오므로 뺀다."""
+    lines = []
+    for raw in stdout.split(b"\n"):  # 레코드 구분은 LF 뿐이다
+        raw = raw.rstrip(b"\r")
+        try:
+            kind = json.loads(raw).get("type")
+        except (json.JSONDecodeError, AttributeError):
+            continue
+        if kind in KEPT:
+            lines.append(raw)
+    return b"".join(line + b"\n" for line in lines)
+
+
+def _env(cfg, ws: Workspace, corpus_path: Path, graph: bool | None = None) -> dict:
     env = {k: v for k, v in os.environ.items() if k not in ("DEEPSEEK_RESIST_NEWS_API_KEY", "TRUTH_DB_PASSWORD")}
     env.update({
         "DEEPSEEK_API_KEY": cfg.deepseek_key,  # pi 의 DeepSeek 제공자가 읽는 이름. 이 프로세스에만 넘긴다
@@ -37,6 +69,7 @@ def _env(cfg, ws: Workspace, corpus_path: Path) -> dict:
         "TRUTH_SESSION_DIR": str(ws.root), "TRUTH_PYTHON": cfg.python, "TRUTH_MAX_TOOL_CALLS": str(cfg.max_tool_calls),
         "TRUTH_CORPUS": str(corpus_path), "TRUTH_WEB_CALL_LIMIT": str(cfg.web_calls),
     })
+    env["TRUTH_GRAPH"] = "1" if (_graph(cfg, ws) if graph is None else graph) else "0"  # pi 확장이 그래프 도구를 등록할지(--tools 와 같은 판단)
     if cfg.exa_key:
         env["EXA_API_KEY"] = cfg.exa_key
     else:
@@ -48,7 +81,20 @@ def run(cfg, ws: Workspace, *, code: str, prompt: str, corpus_path: Path) -> Ses
     """세션을 실행하고 결과를 돌려준다. 시간 초과·비정상 종료는 error 에 적는다(실행 전체를 멈추지 않는다)."""
     result = SessionResult(case_id=code, done=False)
     (ws.root / ".pi").mkdir(exist_ok=True)
-    proc = subprocess.Popen(command(cfg, prompt), cwd=ws.root, env=_env(cfg, ws, corpus_path),
+    graph, system = _graph(cfg, ws), None
+    if graph:
+        try:
+            system = _system(ws)
+        except Exception as error:  # noqa: BLE001 - 스킬을 못 만들면 그래프 도구 없이 조사한다(세션을 잃지 않는다)
+            graph = False
+            log.warning(json.dumps({"event": "graph_skill_failed", "code": code, "reason": f"{type(error).__name__}: {str(error)[:200]}"},
+                                   ensure_ascii=False))
+    cmd = command(cfg, prompt, graph=graph, system=system)
+    text = (system or PROMPTS / "system.md").read_text(encoding="utf-8")
+    # 모델이 받은 지시를 실행 로그만으로 확인한다(스킬이 빠지거나 잘리면 도구를 엉뚱하게 쓴다)
+    log.info(json.dumps({"event": "session_start", "code": code, "graph": graph, "skill": "# 사건 그래프 스킬" in text,
+                         "systemChars": len(text), "tools": cmd[cmd.index("--tools") + 1].split(",")}, ensure_ascii=False))
+    proc = subprocess.Popen(cmd, cwd=ws.root, env=_env(cfg, ws, corpus_path, graph),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=os.name == "posix")
     try:
         stdout, stderr = proc.communicate(timeout=cfg.session_timeout)
@@ -62,6 +108,8 @@ def run(cfg, ws: Workspace, *, code: str, prompt: str, corpus_path: Path) -> Ses
         stdout, _ = proc.communicate()
         result.error = f"{cfg.session_timeout}초 안에 끝나지 않아 멈췄습니다."
     _read_events(stdout, result)
+    with open(ws.root / TRANSCRIPT, "ab") as f:  # 전제 검증 세션은 같은 작업 폴더에 이어 쓴다
+        f.write(_kept(stdout or b""))
     state = ws.state
     result.done, result.summary = bool(state["done"]), state.get("summary", "")
     log.info(json.dumps({"event": "session_end", "code": code, "done": result.done, "error": result.error,
