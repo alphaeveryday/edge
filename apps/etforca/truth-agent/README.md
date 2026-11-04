@@ -29,7 +29,7 @@ uv run --package edge-truth-agent python -m edge_truth_agent run discover   # �
 
 ## 로컬 실행 준비
 
-- Node 22.19 이상과 pi: `cd apps/etforca/truth-agent/pi && npm ci`. pi 형제 패키지는 `overrides` 로 1.0.4에 고정돼 있다. 범위 지정으로 1.3.x가 섞이면 기동하지 않는다.
+- Node 22.19 이상과 pi: `cd apps/etforca/truth-agent/pi && npm ci`. pi 1.5.0 이 형제 패키지를 같은 버전으로 정확히 고정하므로 `overrides` 는 두지 않는다. 버전을 올릴 때는 새 버전의 의존성이 정확한 버전인지 먼저 확인한다(1.0.4 는 범위 지정이라 1.3.x 가 섞이면 기동하지 않았다).
 - 렌더 검사용 Chromium: `uv run --package edge-truth-agent playwright install chromium`. 없으면 렌더 시험은 건너뛴다(사유를 표시한다).
 - 저장·게시를 로컬 폴더로 주면 AWS 없이 돈다. 이때 `TRUTH_LAKE_BUCKET` 이 없으면 새 기사가 없다. 한 번도 조사하지 않은 사건은 그래도 계획 후보가 되므로 첫 실행은 모델을 부른다.
 
