@@ -214,9 +214,9 @@ neo4j==5.28.7 \
     --hash=sha256:5acc6c83870c9c2f35395e16d3d14193cf59b34c961a4c6fd4c2d7de258e51a3 \
     --hash=sha256:e118db8e13d49639b85ec778412b0be2147be3f12593f579f52cf4fb960f7e8d
     # via analysis-engine-v2
-opentelemetry-api==1.45.0 \
-    --hash=sha256:711ede81773c8025c2c03dac0450bc89f3d30aea6eabcc815c570d4e35a963f7 \
-    --hash=sha256:80e068aba7cd56c8b58512d6a36f8d25cb1dfaa0c0a4cc1c938ccf9f362d9cb3
+opentelemetry-api==1.45.1 \
+    --hash=sha256:aa38ed19bcc084ba42782a73255b3582283eced7ad6dddbd6695189e69adfb75 \
+    --hash=sha256:b31553efa588ae44bc306f863c785c5333a9ecc091248c6ee68b4b6c87fdedfb
     # via mcp
 psycopg==3.3.4 \
     --hash=sha256:b6bbc25ccf05c8fad3b061d9db2ef0909a555171b84b07f29458a447253d679a \
