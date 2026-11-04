@@ -64,6 +64,7 @@ test('🔴 대표 작업은 taskKeys 순서에서 stage 가 feature 인 첫 작�
     macro_observation: 'LOAD_MACRO',
     sector_classification: 'LOAD_SECTOR',
     financial_metric: 'LOAD_FINANCIAL_METRIC',
+    cash_distribution: 'LOAD_DIVIDEND',
     disclosures: 'LOAD_DISCLOSURE',
     etf_holdings: 'LOAD_ETF_HOLDINGS',
     price_daily: 'LOAD_PRICE_DAILY',

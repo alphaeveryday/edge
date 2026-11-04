@@ -242,12 +242,13 @@ test('🔴 하루 안 누적 속성은 하루 여러 번 도는 레인의 데이
     'source-daily': crons(repo('apps/engine/airflow/dags/edge_source_daily.py')),
     news: mapEntries(newsVar, 'default'),
     disclosure: mapEntries(repo('infra/terraform/envs/dev/main.tf'), 'disclosure_schedule_expressions'),
+    'dividend-daily': crons(repo('apps/engine/airflow/dags/edge_dividend_daily.py')),
     'etf-daily': 1,   // 스케줄이 문자열 하나다(`schedule_expression`)
   };
   for (const [lane, n] of Object.entries(slotsPerDay)) assert.ok(n >= 1, `${lane}: 일정 정의를 못 읽었다`);
   /* 아래 단언이 타입을 리터럴로 좁히므로 레인 이름으로 읽을 표를 먼저 떼어 둔다 */
   const slotsOf = new Map(Object.entries(slotsPerDay));
-  assert.deepEqual(slotsPerDay, { 'investor-intraday': 5, 'source-daily': 1, news: 2, disclosure: 1, 'etf-daily': 1 });
+  assert.deepEqual(slotsPerDay, { 'investor-intraday': 5, 'source-daily': 1, 'dividend-daily': 1, news: 2, disclosure: 1, 'etf-daily': 1 });
 
   const cumulative = ALL_DATASETS.filter((d) => d.rowsCumulativeWithinDay);
   for (const d of cumulative) {
