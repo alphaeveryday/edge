@@ -37,9 +37,12 @@ def test_ranking_is_finite_and_ordered_with_zero_or_negative_excess(excess):
     assert all(row['recent_outperform_days'] == 0 for row in result)
 
 
-def test_less_than_ten_measured_sessions_cannot_claim_ten_days_of_outperformance():
-    frame = pd.DataFrame({'A': [1] + [1.1] * 9, 'CASH:KRW': 1.0})
-    assert search(['A'], frame, {'CASH:KRW': 1}) == []
+def test_one_measured_session_is_compared_without_claiming_more_days_than_exist():
+    # 8차: 하루치 기록이어도 비교한다. 대신 '최근 앞선 날'은 실제로 잰 날 수를 넘지 않는다
+    frame = pd.DataFrame({'A': [1, 1.1], 'CASH:KRW': 1.0})
+    rows = search(['A'], frame, {'CASH:KRW': 1})
+    assert rows and all(row['recent_outperform_days'] <= 1 for row in rows)
+    assert search(['A'], frame.iloc[:1], {'CASH:KRW': 1}) == []  # 종가 하나는 수익률이 없다
 
 
 def test_every_grid_is_fully_invested_in_ten_percent_units():
@@ -117,6 +120,27 @@ def batch():
     groups = [['KR:A'], ['KR:B'], ['KR:C'], ['KR:D'], ['KR:E'],
               ['KR:A', 'KR:B'], ['KR:A', 'KR:C'], ['KR:A', 'KR:D'], ['KR:B', 'KR:C'], ['KR:C', 'KR:D']]
     return request, market, groups
+
+
+def collector(monkeypatch, prices, slow=()):
+    """The collector's store as an analysis sees it: `prices` maps an instrument to its stored record or the
+    collector's failure code; `slow` instruments never arrive. Returns each request's keys in order."""
+    requested = []
+    async def stored_prices(keys, as_of, records, failures, **_):
+        requested.append(list(keys))
+        for key in keys:
+            value = prices.get(key)
+            if key in slow:
+                failures[key] = 'PRICE_QUEUE_TIMEOUT'
+            elif isinstance(value, dict):
+                records[key] = value
+                failures.pop(key, None)
+            else:
+                failures[key] = value or 'PRICE_NOT_STORED'
+        if set(keys) & set(slow):
+            await asyncio.Event().wait()
+    monkeypatch.setattr('edge_portfolio.market_preload.stored_prices', stored_prices)
+    return requested
 
 
 async def test_saved_holdings_removed_from_catalog_are_reported_without_losing_recovery():
@@ -225,33 +249,16 @@ async def test_a_failed_price_batch_can_recover_without_a_frozen_unavailable_res
     assert (await optimizer.tool({'combinations': groups}))['status'] == 'available'
 
 
-async def test_shared_baseline_and_fx_are_loaded_before_slow_optional_candidates(monkeypatch):
+async def test_shared_baseline_and_fx_are_requested_before_optional_candidates(monkeypatch):
+    # The collector serves requests in order: the baseline and FX lead, so a slow candidate cannot hold them back.
     request, market, groups = batch()
     market.current = {'US:VOO': 1}
     market.catalog['US:VOO'] = {'ticker': 'VOO', 'market': 'US', 'kind': 'etf'}
-    market.semaphore = asyncio.Semaphore(2)
-    calls = []
-    baseline_finished = False
-    premature_candidates = []
-    async def fetch(symbol, *_args, **_kwargs):
-        nonlocal baseline_finished
-        calls.append(symbol)
-        if symbol == 'KRW=X':
-            return record(start=1000, finish=1000)
-        if symbol == 'VOO':
-            await asyncio.sleep(.01)
-            baseline_finished = True
-            return record('USD', finish=105)
-        if not baseline_finished:
-            premature_candidates.append(symbol)
-        if symbol == 'A.KS':
-            return record(finish=120)
-        await asyncio.wait_for(asyncio.Event().wait(), timeout=_kwargs['provider_timeout'])
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
-    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .1)
+    prices = {'FX': record(start=1000, finish=1000), 'US:VOO': record('USD', finish=105), 'KR:A': record(finish=120)}
+    requested = collector(monkeypatch, prices, slow={'KR:B', 'KR:C', 'KR:D', 'KR:E'})
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .1)
     result = await Optimizer(market).tool({'combinations': groups})
-    assert calls[:2] == ['KRW=X', 'VOO']
-    assert not premature_candidates
+    assert requested[0][:2] == ['FX', 'US:VOO']
     assert result['status'] == 'available'
     assert result['candidates'][0]['allocations'] == [{'instrument_id': 'KR:A', 'weight_pct': 100}]
 
@@ -268,16 +275,17 @@ async def test_static_service_policy_conflict_does_not_blame_missing_price_data(
 
 
 def test_vector_filter_uses_funded_amounts_before_rejecting_diluted_no_sale_weights():
+    # 팔지 않기는 금액으로 거른다. 8차에서 새 돈은 입력한 현금이고 글로 적은 추가금은 세지 않는다
     from edge_portfolio.decision import Decision
-    request = AnalysisInput(holdings=[{'name': 'VOO', 'instrument_id': 'US:VOO', 'amount_krw': 1000000}],
-        horizon='10년 이상', question='추가 100만원. 매도 금지.')
-    market = MarketData(request)
-    optimizer = Optimizer(market, request)
-    optimizer.decision = Decision(funding_text='추가 100만원', constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
     rows = [{'instrument_id': key, 'weight_pct': 50} for key in ['US:VOO', 'US:QQQ']]
-    assert all(check['status'] == 'pass' for check in optimizer.vector_checks(rows))
-    optimizer.decision.funding_text = ''
-    assert any(check['status'] == 'fail' for check in optimizer.vector_checks(rows))
+    def checks(holdings):
+        request = AnalysisInput(holdings=[{'name': key, 'instrument_id': key, 'amount_krw': amount, 'kind': 'cash' if key == 'CASH:KRW' else 'etf'}
+                                          for key, amount in holdings], horizon='10년 이상', question='추가 100만원. 매도 금지.')
+        optimizer = Optimizer(MarketData(request), request)
+        optimizer.decision = Decision(funding_text='추가 100만원', constraints=[{'kind': 'no_sell', 'source': '매도 금지'}])
+        return optimizer.vector_checks(rows)
+    assert all(check['status'] == 'pass' for check in checks([('US:VOO', 1000000), ('CASH:KRW', 1000000)]))
+    assert any(check['status'] == 'fail' for check in checks([('US:VOO', 1000000)]))
 
 
 async def test_bad_dividends_do_not_destroy_price_eligible_candidates():
@@ -336,21 +344,18 @@ async def test_unexpected_optimizer_exception_never_publishes_internal_details(m
 async def test_partial_price_failures_preserve_nine_independent_combinations(monkeypatch, failure):
     request, market, groups = batch()
     if failure == 'timeout':
-        monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .05)
+        monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .05)
     if failure == 'fx':
         market.catalog['KR:E']['market'] = 'US'
     if failure == 'shared-window':
         market.as_of = date(2026, 10, 2)
-    async def fetch(symbol, as_of, **kwargs):
-        if failure == 'timeout' and symbol == 'E.KS':
-            await asyncio.wait_for(asyncio.sleep(10), timeout=kwargs['provider_timeout'])
-        if symbol == 'KRW=X':
-            raise ValueError('No FX available')
+    prices = {'FX': 'PRICE_STALE'}
+    for key in market.catalog:
         dates = None
         if failure == 'shared-window':
-            dates = pd.bdate_range('2025-10-01', '2026-10-01') if symbol == 'E.KS' else pd.bdate_range('2025-09-30', '2026-09-30')
-        return record(currency='USD' if symbol == 'E' else 'KRW', dates=dates)
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+            dates = pd.bdate_range('2025-10-01', '2026-10-01') if key == 'KR:E' else pd.bdate_range('2025-09-30', '2026-09-30')
+        prices[key] = record(dates=dates)
+    collector(monkeypatch, prices, slow={'KR:E'} if failure == 'timeout' else ())
     result = await Optimizer(market, request).tool({'combinations': groups})
     assert result['status'] == 'available'
     assert len(result['candidates']) == (10 if failure == 'shared-window' else 9)
@@ -368,14 +373,15 @@ async def test_new_baseline_etf_uses_its_available_period_for_all_candidates():
     assert result['candidates']
 
 
-async def test_candidate_too_new_for_ten_days_does_not_shorten_usable_peers():
+async def test_newest_candidate_sets_the_shared_window_instead_of_being_dropped():
+    # 8차 결정: 모든 비교를 가장 짧은 종목의 기록에 맞춘다. 7거래일짜리 새 ETF도 후보에 남고 모두 그 기간으로 견준다
     request, market, groups = batch()
     market.loader = lambda symbol, _: record(dates=pd.bdate_range('2026-10-01', '2026-10-09')) if symbol == 'E.KS' else record()
     result = await Optimizer(market, request).tool({'combinations': groups})
     assert result['status'] == 'available'
-    assert result['tested_combinations'] == 9
-    assert len(result['candidates']) == 9
-    assert result['start_date'] < '2026-10-01'
+    assert result['tested_combinations'] == 10
+    assert len(result['candidates']) == 10
+    assert result['start_date'] == '2026-10-01'
 
 
 async def test_candidates_are_validated_within_the_shared_window_not_their_full_histories():
@@ -402,8 +408,10 @@ async def test_shared_endpoint_does_not_let_a_short_candidate_disqualify_longer_
     market.loader = lambda symbol, _: record(dates=short if symbol == 'E.KS' else pd.bdate_range('2025-10-09', '2026-10-12'))
     result = await Optimizer(market, request).tool({'combinations': groups})
     assert result['status'] == 'available'
-    assert result['tested_combinations'] == 9
-    assert len(result['candidates']) == 9
+    # 짧은 후보도 남고(8차: 기록이 짧다고 빼지 않는다), 공통 끝날로 잘려도 긴 후보들은 그대로 견준다
+    assert result['tested_combinations'] == 10
+    assert len(result['candidates']) == 10
+    assert result['end_date'] == '2026-10-12'
 
 
 async def test_null_close_column_excludes_only_the_malformed_candidate():
@@ -485,19 +493,13 @@ async def test_optimizer_retains_the_failed_instrument_and_provider_cause():
     assert result['rejected_combinations'] == [{'combination': 5, 'reason': 'INSTRUMENT_PRICE_UNAVAILABLE'}]
 
 
-async def test_collection_timeout_does_not_overwrite_an_already_known_price_failure(monkeypatch):
+async def test_collection_deadline_does_not_overwrite_a_failure_the_collector_reported(monkeypatch):
     request, market, groups = batch()
-    async def fetch(symbol, _, **kwargs):
-        if symbol == 'E.KS':
-            raise ValueError('PRICE_STALE')
-        if symbol == 'D.KS':
-            await asyncio.wait_for(asyncio.sleep(10), timeout=kwargs['provider_timeout'])
-        return record()
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
-    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .05)
+    collector(monkeypatch, {**{key: record() for key in market.catalog}, 'KR:E': 'PRICE_STALE'}, slow={'KR:D'})
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .05)
     result = await Optimizer(market, request).tool({'combinations': groups})
     assert result['failures']['KR:E'] == 'PRICE_STALE'
-    assert result['failures']['KR:D'] == 'PRICE_PROVIDER_TIMEOUT'
+    assert result['failures']['KR:D'] == 'PRICE_QUEUE_TIMEOUT'
 
 
 async def test_all_provider_failed_combinations_are_accounted_for_in_diagnostics():
@@ -546,67 +548,17 @@ def test_agent_can_withhold_backtest_winner_when_rating_evidence_is_insufficient
         optimizer.validate(final)
 
 
-async def test_queued_instruments_receive_their_own_provider_timeout(monkeypatch):
-    from edge_portfolio import market_data
-    request, market, groups = batch()
-    started = []
-    async def fetch(symbol, _, **kwargs):
-        started.append(symbol)
-        await asyncio.sleep(.01)
-        return record()
-    monkeypatch.setattr(market_data, '_fetch_prices', fetch)
-    monkeypatch.setattr(market_data, 'price_status', lambda *_: None)
-    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .1)
-    assert market_data._PRICE_SLOTS.acquire(blocking=False)
-    task = asyncio.create_task(Optimizer(market, request).tool({'combinations': groups}))
-    try:
-        await asyncio.sleep(.2)  # Another loop occupies the shared slot longer than a provider deadline.
-        assert not started
-    finally:
-        market_data._PRICE_SLOTS.release()
-    result = await task
-    assert result['status'] == 'available'
-    assert set(started) == {'A.KS', 'B.KS', 'C.KS', 'D.KS', 'E.KS'}
-    assert not market.failures
-    assert result['tested_combinations'] == 10
-
-
 @pytest.mark.parametrize('completed', [False, True])
-async def test_batch_deadline_distinguishes_unstarted_prices_from_interrupted_providers(monkeypatch, completed):
+async def test_batch_deadline_keeps_arrived_prices_and_names_the_rest_as_still_queued(monkeypatch, completed):
     request, market, groups = batch()
-    started = []
-    completed_record = record()
-    async def fetch(symbol, _, **kwargs):
-        started.append(symbol)
-        if completed and symbol == 'A.KS':
-            return completed_record
-        await asyncio.sleep(10)
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    arrived = {'KR:A'} if completed else set()
+    collector(monkeypatch, {key: record() for key in arrived}, slow=set(market.catalog) - arrived)
     monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .05)
     result = await Optimizer(market, request).tool({'combinations': groups})
-    assert len(started) == 2 + int(completed)
-    assert set(market.failures.values()) == {'PRICE_COLLECTION_TIMEOUT', 'PRICE_QUEUE_TIMEOUT'}
-    assert sum(reason == 'PRICE_QUEUE_TIMEOUT' for reason in market.failures.values()) == 3 - int(completed)
+    assert market.failures == {key: 'PRICE_QUEUE_TIMEOUT' for key in set(market.catalog) - arrived}
     assert bool(result['candidates']) == completed
     if completed:
-        assert market.records['KR:A'] is completed_record
         assert result['tested_combinations'] == 1
-
-
-async def test_timeout_checkpoint_is_not_reported_as_an_unavailable_instrument(monkeypatch):
-    request, market, groups = batch()
-    async def fetch(symbol, _, **kwargs):
-        try:
-            await asyncio.wait_for(asyncio.sleep(10), timeout=kwargs['provider_timeout'])
-        except TimeoutError:
-            kwargs['on_raw'](record())
-            raise
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
-    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_TIMEOUT_SECONDS', .03)
-    result = await Optimizer(market, request).tool({'combinations': groups})
-    assert result['status'] == 'available'
-    assert result['tested_combinations'] == 10
-    assert result['failures'] == {}
 
 
 def test_rating_alone_cannot_withhold_an_available_candidate():
@@ -624,26 +576,19 @@ def test_rating_alone_cannot_withhold_an_available_candidate():
 async def test_price_retries_share_collection_time_and_keep_completed_candidates(monkeypatch):
     from itertools import combinations
     request, market, groups = batch()
-    started = []
-    async def fetch(symbol, _, **kwargs):
-        started.append(symbol)
-        if symbol == 'A.KS':
-            return record()
-        await asyncio.sleep(10)
-    monkeypatch.setattr('edge_portfolio.optimizer.fetch_prices', fetch)
+    requested = collector(monkeypatch, {'KR:A': record()}, slow=set(market.catalog) - {'KR:A'})
     monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', .03)
     optimizer = Optimizer(market, request)
     first = await optimizer.tool({'combinations': groups})
-    attempts = list(started)
+    attempts = len(requested)
     second = await optimizer.tool({'combinations': groups})
-    assert started == attempts  # Retrying cannot consume the report-writing time again.
+    assert len(requested) == attempts  # Retrying cannot consume the report-writing time again.
     assert first['status'] == second['status'] == 'available'
     assert [row['allocations'] for row in first['candidates']] == [row['allocations'] for row in second['candidates']]
     assert first['failures'] == second['failures']
     third = await optimizer.tool({'combinations': [list(group) for group in combinations(market.catalog, 3)]})
-    assert started == attempts  # A different candidate batch shares the same collection budget.
+    assert len(requested) == attempts  # A different candidate batch shares the same collection budget.
     assert [row['allocations'] for row in third['candidates']] == [row['allocations'] for row in first['candidates']]
-
 
 
 def test_model_chosen_balanced_weights_remain_selectable_below_historical_winner():
@@ -664,7 +609,6 @@ async def test_single_researched_combination_is_enough_and_model_can_change_its_
     result = await optimizer.tool({'combinations': [['KR:A', 'KR:B']], 'preferred_allocations': preferred})
     assert result['revision'] > first['revision']
     assert any(row['allocations'] == preferred for row in result['candidates'])
-
 
 
 async def test_model_preferred_weights_still_obey_explicit_customer_limits():
@@ -759,3 +703,89 @@ def test_numerical_noise_cannot_override_outperform_duration_with_equal_final_re
     result = rank([rows], [['A', 'B']])
     assert result[0]['excess_pp'] == 20
     assert result[0]['duration_pct'] == 100
+
+
+def test_funded_candidates_that_would_buy_more_of_a_held_stock_are_dropped_before_ranking():
+    # 비중이 현재보다 낮아도 새 돈(현금)이 들어오면 개별주를 더 사야 할 수 있다. 그런 후보가 1위로 남으면 게시에서 거절돼 분석이 실패한다.
+    from edge_portfolio.catalog import canonicalize
+    from edge_portfolio.decision import Decision
+    request = canonicalize(AnalysisInput(holdings=[{'name': 'x', 'instrument_id': key, 'kind': kind, 'amount_krw': amount}
+                                                   for key, kind, amount in [('KR:005930', 'stock', 500000), ('KR:069500', 'etf', 500000), ('CASH:KRW', 'cash', 1000000)]],
+                                         horizon='10년 이상'))
+    optimizer = Optimizer(MarketData(request), request)
+    optimizer.decision = Decision(kind='rebalance')
+    def held(weight):
+        rows = [{'instrument_id': 'KR:005930', 'weight_pct': weight}, {'instrument_id': 'KR:069500', 'weight_pct': 100 - weight}]
+        return next((c['status'] for c in optimizer.vector_checks(rows) if c['kind'] == 'held_stock'), 'pass')
+    assert held(25) == 'pass', '₩500,000 of ₩2,000,000 keeps the stock as it is'
+    assert held(30) == 'fail', 'below the current 25%+cash weight but still a ₩100,000 purchase'
+    assert held(60) == 'fail'
+
+
+
+
+async def test_dividend_chip_shows_trailing_yields_so_the_model_can_favor_higher_payers():
+    # '배당 받기'를 고른 고객에게 모델이 분배율 높은 ETF에 무게를 두려면, 목적(income)을 따로 적지 않아도
+    # ETF별 분배율과 후보별 비중 가중 분배율이 보여야 한다. 칩이 없으면 붙이지 않는다
+    from edge_portfolio.decision import Decision
+    request, market, _ = batch()
+    market.catalog = {'KR:A': {'ticker': 'A', 'market': 'KR', 'kind': 'etf', 'name': '고배당 A'},
+                      'KR:B': {'ticker': 'B', 'market': 'KR', 'kind': 'etf', 'name': '배당성장 B'}}
+    def loader(symbol, _):
+        data = record(start=100, finish=100)
+        data['frame']['Dividends'] = 0.0
+        data['frame'].iloc[60, data['frame'].columns.get_loc('Dividends')] = 6.0 if symbol == 'A.KS' else 2.0
+        return data
+    market.loader = loader
+    groups = [['KR:A'], ['KR:B'], ['KR:A', 'KR:B']]
+    optimizer = Optimizer(market, request)
+    optimizer.decision = Decision(constraints=[{'kind': 'dividend', 'source': '배당 받기'}])
+    result = await optimizer.tool({'combinations': groups})
+    assert result['income_yields_pct'] == {'KR:A': 6, 'KR:B': 2}  # 최근 12개월 분배금 ÷ 최근 종가 100
+    assert result['candidates']
+    for row in result['candidates']:
+        expected = sum(a['weight_pct'] / 100 * result['income_yields_pct'][a['instrument_id']] for a in row['allocations'])
+        assert row['income_yield_pct'] == pytest.approx(expected)
+    optimizer = Optimizer(market, request)
+    optimizer.decision = Decision()
+    result = await optimizer.tool({'combinations': groups})
+    assert result['income_yields_pct'] == {}
+    assert all(row['income_yield_pct'] is None for row in result['candidates'])
+
+
+class SavedPrices:
+    """portfolio_dashboard_prices as the collector leaves it, without a database."""
+    def __init__(self, payloads):
+        self.payloads = payloads
+    def __enter__(self):
+        return self
+    def __exit__(self, *_):
+        return False
+    def execute(self, _, params):
+        payload = self.payloads.get(params[0])
+        return SimpleNamespace(fetchone=lambda: {'payload': payload} if payload else None)
+
+
+async def test_twelve_holdings_answer_from_the_store_and_only_the_missing_one_waits(monkeypatch):
+    # ALPHA-1437: one provider slot served twelve holdings one by one until the shared
+    # 180-second budget ran out, so every holding failed at once. The analysis now reads the
+    # collector's store: stored holdings answer at once and are never requested again;
+    # only the instrument the store lacks is requested, and it alone fails when the collector is slow.
+    from edge_portfolio import store
+    from edge_portfolio.price_fetch import serialize
+    held = [f'KR:H{number:02d}' for number in range(12)]
+    request, market, _ = batch()
+    market.catalog = {key: {'ticker': key[3:], 'market': 'KR', 'kind': 'etf'} for key in [*held, 'KR:NEW']}
+    market.current = {key: 1 / 12 for key in held}
+    payloads = {key: serialize({**record(finish=110 + n), 'history_complete': True}) for n, key in enumerate(held)}  # payload::text
+    monkeypatch.setattr(store, 'connect', lambda: SavedPrices(payloads))
+    asked = []
+    monkeypatch.setattr('edge_portfolio.market_preload.request_prices', lambda keys: asked.extend(keys) or 'requested')
+    monkeypatch.setattr('edge_portfolio.market_preload.finished_requests', lambda requested: {})
+    monkeypatch.setattr('edge_portfolio.optimizer.PRICE_COLLECTION_BUDGET_SECONDS', 1.5)
+    result = await Optimizer(market, request).tool({'combinations': [[held[0], held[1]], ['KR:NEW']]})
+    assert asked == ['KR:NEW'], 'Stored archives must not be requested from the collector again'
+    assert market.failures == {'KR:NEW': 'PRICE_QUEUE_TIMEOUT'}
+    assert result['status'] != 'unavailable' and result['candidates']
+
+

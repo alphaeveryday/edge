@@ -12,7 +12,8 @@ def daily_quote(instrument_id, edition):
     """Use the last two completed exchange dates, never today's intraday bar."""
     import yfinance as yf
     market, ticker = instrument_id.split(':', 1)
-    symbol = ticker + '.KS' if market == 'KR' else ticker
+    from .catalog import price_symbol
+    symbol = price_symbol(instrument_id)
     frame = yf.Ticker(symbol).history(period='1mo', end=edition.isoformat(), auto_adjust=False, actions=False, timeout=12)
     rows = [(stamp.date(), float(close)) for stamp, close in frame['Close'].items()
             if stamp.date() < edition and math.isfinite(float(close)) and float(close) > 0]

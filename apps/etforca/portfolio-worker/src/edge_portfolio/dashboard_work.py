@@ -1,20 +1,15 @@
-"""Daily dashboard valuation and queued backtests on the existing worker."""
+"""Daily dashboard valuation on the existing worker."""
 import asyncio
-import json
 import logging
-import math
 from datetime import date, datetime, timedelta
 from functools import lru_cache
-from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from pydantic import Field, model_validator
 from psycopg.types.json import Jsonb
 
 from . import store
-from .catalog import directory
-from .contracts import StrictModel
+from .catalog import directory, price_symbol
 
 log = logging.getLogger(__name__)
 
@@ -31,45 +26,25 @@ def identify(asset, *, strict=True, fx=None):
                 return asset
             asset.update(amount=asset['quantity'] * asset['price'] * (fx if asset['currency'] == 'USD' else 1), quantity=None, price=None)
         return {**asset, 'instrument_id': 'CASH:KRW', 'currency': 'KRW', 'category': '현금'}
-    rows = directory()['instruments']
+    rows = directory(include_stocks=True)['instruments']
     key = asset.get('instrument_id')
     matches = [r for r in rows if r['id'] == key] if key else [r for r in rows
         if asset['name'].casefold() in (r['ticker'].casefold(), r['name'].casefold(), f"{r['name']} ({r['ticker']})".casefold())]
     if key and not matches:
         if strict:
-            raise ValueError('SELECT_LISTED_ETF')
+            raise ValueError('SELECT_LISTED_INSTRUMENT')
         asset['instrument_id'] = None
     if len(matches) == 1:
         item = matches[0]
         if asset['currency'] != ('USD' if item['market'] == 'US' else 'KRW'):
             if strict:
-                raise ValueError('SELECT_LISTED_ETF')
+                raise ValueError('SELECT_LISTED_INSTRUMENT')
             asset['instrument_id'] = None
             return asset
         asset.update(instrument_id=item['id'], currency='USD' if item['market'] == 'US' else 'KRW', name=f"{item['name']} ({item['ticker']})")
+        if item['kind'] == 'stock':
+            asset.update(category='주식', name=item['name'])
     return asset
-
-
-class Allocation(StrictModel):
-    instrument_id: str = Field(max_length=40)
-    weight_pct: float = Field(gt=0, le=100, allow_inf_nan=False, strict=True)
-
-
-class Backtest(StrictModel):
-    allocations: list[Allocation] = Field(min_length=1, max_length=20)
-    start: date | None = None
-    end: date | None = None
-
-    @model_validator(mode='after')
-    def valid(self):
-        allowed = {r['id'] for r in directory()['instruments']} | {'CASH:KRW'}
-        if any(a.instrument_id not in allowed for a in self.allocations):
-            raise ValueError('SELECT_LISTED_ETF')
-        if abs(sum(a.weight_pct for a in self.allocations) - 100) > .01:
-            raise ValueError('INVALID_MARKET_WEIGHTS')
-        if self.end and self.end >= today() or self.start and self.start >= today() or self.start and self.end and self.start >= self.end:
-            raise ValueError('INVALID_PERIOD')
-        return self
 
 
 def initialize(db):
@@ -83,10 +58,6 @@ def initialize(db):
         PRIMARY KEY(owner,day))''')
     db.execute('''CREATE TABLE IF NOT EXISTS portfolio_dashboard_prices (
         instrument text PRIMARY KEY, day date NOT NULL, payload jsonb NOT NULL)''')
-    db.execute('''CREATE TABLE IF NOT EXISTS portfolio_backtests (
-        id text PRIMARY KEY, owner text NOT NULL, input jsonb NOT NULL, state text NOT NULL DEFAULT 'queued',
-        created_at timestamptz NOT NULL DEFAULT now(), lease_until timestamptz, result jsonb)''')
-    db.execute('CREATE INDEX IF NOT EXISTS portfolio_backtest_owner ON portfolio_backtests(owner,created_at)')
 
 
 def tracking(owner):
@@ -95,31 +66,6 @@ def tracking(owner):
         days = db.execute('SELECT day,payload FROM portfolio_dashboard_days WHERE owner=%s ORDER BY day', (owner,)).fetchall()
         archives = db.execute('SELECT version,payload FROM portfolio_workbook_archives WHERE owner=%s ORDER BY version DESC', (owner,)).fetchall()
     return {'market': market, 'days': [{'date': str(r['day']), **r['payload']} for r in days], 'archives': archives}
-
-
-def submit(owner, body):
-    payload = body.model_dump(mode='json')
-    with store.connect() as db:
-        db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s,0))', ('backtest:' + owner,))
-        active = db.execute("SELECT id,input FROM portfolio_backtests WHERE owner=%s AND state IN ('queued','running') ORDER BY created_at LIMIT 1", (owner,)).fetchone()
-        if active:
-            if active['input'] == payload:
-                return {'id': active['id']}
-            raise ValueError('BACKTEST_BUSY')
-        count = db.execute("SELECT count(*) AS n FROM portfolio_backtests WHERE owner=%s AND created_at>now()-interval '1 day'", (owner,)).fetchone()['n']
-        if count >= 50:
-            raise ValueError('BACKTEST_LIMIT')
-        db.execute('SELECT pg_advisory_xact_lock(1266)')
-        if store.queued_count(db) >= 20:
-            raise ValueError('QUEUE_FULL')
-        key = str(uuid4())
-        db.execute('INSERT INTO portfolio_backtests(id,owner,input) VALUES (%s,%s,%s)', (key, owner, Jsonb(payload)))
-    return {'id': key}
-
-
-def read_backtest(owner, key):
-    with store.connect() as db:
-        return db.execute('SELECT id,state,result FROM portfolio_backtests WHERE id=%s AND owner=%s', (key, owner)).fetchone()
 
 
 @lru_cache(maxsize=16)
@@ -146,80 +92,31 @@ def held_history_missing(key, record, since, end):
     return bool(len(expected_sessions(key, min(since, end), end).difference(frame.index[frame['Close'].map(positive_price)])))
 
 
+def price_window(end, since=None):
+    """First day the collector stores: a year of daily bars (analysis needs seven months), or the oldest holding's
+    basis date when that is earlier, since a valuation checks splits from there."""
+    return min(end - timedelta(days=380), since or end)
+
+
 def publish_prices(db, key, end, record, *, collector_lease=None):
-    from .market_data import decode_prices, positive_price
+    from .market_data import positive_price
     from .price_fetch import serialize
     observed_on = last_close(record)[1]
     if collector_lease is not None and not db.execute('SELECT 1 FROM portfolio_quote_refresh WHERE instrument=%s AND lease_until=%s FOR UPDATE', (key, collector_lease)).fetchone():
         return False
-    # Serialize read/merge/write; a partial daily update must retain the archive.
+    # Each fetch is a whole window (a year, or from the oldest holding): it replaces the stored record, never merges.
     db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', ('portfolio-price:' + key,))
-    old = db.execute('SELECT payload FROM portfolio_dashboard_prices WHERE instrument=%s', (key,)).fetchone()
-    saved = decode_prices(json.dumps(old['payload'])) if old else None
-    if saved:
-        record = {**record, 'pending_splits': sorted(set(record.get('pending_splits', [])) |
-            {day for day in saved.get('pending_splits', []) if day >= str(end)})}
-    if saved and record.get('history_complete') is False:
-        overlap = saved['frame'].index.intersection(record['frame'].index)
-        # Changed adjustment/split basis needs a fresh archive, never a mixed-basis chart.
-        compatible = (saved['currency'] == record['currency'] and len(overlap) >= 2
-            and saved.get('return_basis') != 'price' and not saved.get('provider', '').startswith('FinanceDataReader:NAVER:'))
-        if compatible:
-            pairs = [(a, b) for a, b in zip(saved['frame'].loc[overlap, 'Close'], record['frame'].loc[overlap, 'Close'])
-                     if positive_price(a) and positive_price(b)]
-            if not pairs:
-                raise ValueError('PRICE_OVERLAP_UNAVAILABLE')
-            compatible = all(math.isclose(a, b, rel_tol=1e-6) for a, b in pairs)
-        if compatible:
-            priced = overlap[saved['frame'].loc[overlap, 'Close'].map(positive_price) | record['frame'].loc[overlap, 'Close'].map(positive_price)]
-            ratios = [b / a for a, b in zip(saved['frame'].loc[priced, 'Adj Close'], record['frame'].loc[priced, 'Adj Close'])
-                      if positive_price(a) and positive_price(b)]
-            anchored = len(ratios) == len(priced) and len(ratios) >= 2
-            anchored = anchored and record.get('return_basis') != 'price' and all(math.isclose(ratio, ratios[0], rel_tol=1e-6) for ratio in ratios)
-            action_dates = record['frame'].index[record['frame'].index <= saved['frame'].index.max()]
-            for column in ('Dividends', 'Stock Splits'):
-                if column in record['frame']:
-                    previous = saved['frame'].get(column, pd.Series(dtype=float)).reindex(action_dates).fillna(0)
-                    incoming = record['frame'].loc[action_dates, column].fillna(previous)
-                    anchored = anchored and bool((incoming == previous).all())
-            if anchored:
-                # A new cash distribution rebases earlier adjusted closes by one factor.
-                saved['frame']['Adj Close'] *= ratios[0]
-            else:
-                # Keep actual prices/actions usable, but never invent an adjustment basis.
-                saved['frame']['Adj Close'] = float('nan')
-                record = {**record, 'frame': record['frame'].copy()}
-                record['frame']['Adj Close'] = float('nan')
-                saved['history_complete'] = False
-        if compatible:
-            record = {**record, 'frame': record['frame'].copy()}
-            if not record['frame'].loc[record['frame']['Close'].map(positive_price), 'Adj Close'].map(positive_price).all():
-                saved['history_complete'] = False
-            for column in ('Close', 'Adj Close'):
-                missing = overlap[~record['frame'].loc[overlap, column].map(positive_price)]
-                record['frame'].loc[missing, column] = saved['frame'].loc[missing, column]
-            for column in ('Dividends', 'Stock Splits'):
-                if column in saved['frame']:
-                    if column not in record['frame']:
-                        record['frame'][column] = saved['frame'][column].reindex(record['frame'].index)
-                    else:
-                        known = saved['frame'][column].reindex(record['frame'].index)
-                        missing = ~record['frame'][column].map(positive_price) & known.map(positive_price)
-                        record['frame'].loc[missing, column] = known.loc[missing]
-            record = {**record, 'frame': pd.concat([saved['frame'].drop(record['frame'].index, errors='ignore'), record['frame']]).sort_index(),
-                      'history_complete': saved.get('history_complete', True),
-                      'repair_since': min(saved.get('repair_since', str(end)), record.get('repair_since', str(end)))}
-            for metadata in ('return_basis', 'return_source_url'):
-                if metadata in saved and metadata not in record:
-                    record[metadata] = saved[metadata]
-            if saved.get('price_recovery', {}).get('status') in ('partial', 'unavailable', 'rejected'):
-                record['price_recovery'] = saved['price_recovery']
+    # A split announced for a coming session stays flagged even if a later response omits it (the split is unproven
+    # until its session closes); only this list is read from the stored record.
+    old = db.execute("SELECT payload->'pending_splits' AS pending FROM portfolio_dashboard_prices WHERE instrument=%s", (key,)).fetchone()
+    if old and old['pending']:
+        record = {**record, 'pending_splits': sorted(set(record.get('pending_splits', [])) | {day for day in old['pending'] if day >= str(end)})}
     priced = record['frame']['Close'].map(positive_price)
     actions_complete = key == 'FX' or ({'Dividends', 'Stock Splits'} <= set(record['frame'].columns) and not any(
         record['frame'].loc[priced, column].isna().any()
         for column in ('Dividends', 'Stock Splits') if column in record['frame']))
     record = {**record, 'observed_on': observed_on, 'actions_complete': actions_complete}
-    updated = db.execute('''INSERT INTO portfolio_dashboard_prices VALUES (%s,%s,%s)
+    updated = db.execute('''INSERT INTO portfolio_dashboard_prices VALUES (%s,%s,%s::jsonb)
         ON CONFLICT(instrument) DO UPDATE SET day=excluded.day,payload=excluded.payload
         WHERE (portfolio_dashboard_prices.day<excluded.day OR
             (portfolio_dashboard_prices.day=excluded.day AND coalesce(portfolio_dashboard_prices.payload->>'requested_at',portfolio_dashboard_prices.payload->>'fetched_at','')<=excluded.payload->>'requested_at'))
@@ -227,68 +124,44 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
                 (SELECT max(p->>'date') FROM jsonb_array_elements(portfolio_dashboard_prices.payload->'frame') p WHERE (p->>'Close')::numeric>0),'')
             AND (coalesce(excluded.payload->>'provider','') NOT LIKE 'FinanceDataReader:NAVER:%%'
                 OR coalesce(portfolio_dashboard_prices.payload->>'provider','') LIKE 'FinanceDataReader:NAVER:%%')
-        RETURNING instrument''', (key, end, Jsonb(json.loads(serialize(record))))).fetchone()
+        RETURNING instrument''', (key, end, serialize(record))).fetchone()
     return bool(updated)
 
 
-async def records_for(ids, day, *, valuation_since=None, include_fx=True, collector_lease=None):
-    from .market_data import decode_prices, fetch_prices, positive_price, year_before, with_actual_prices
+async def records_for(ids, day, *, session, valuation_since, include_fx=True, collector_lease=None):
+    """`session`: the collector's warm price process (market_preload.PriceSession), shared with the preload."""
+    from .market_data import decode_prices, year_before
     records, failures = {}, []
     keys = set(ids) - {'CASH:KRW', None}
     if include_fx and any(k.startswith('US:') for k in keys):
         keys.add('FX')
-    # One subprocess at a time keeps the existing small worker within its memory limit.
+    # One warm price process keeps the existing small worker within its memory limit.
     try:
         async with asyncio.timeout(210):
             for key in sorted(keys):
-                since = (valuation_since or {}).get(key)
+                since = valuation_since.get(key)
                 end = price_end(key, day)
                 with store.connect() as db:
-                    cached = db.execute('SELECT payload FROM portfolio_dashboard_prices WHERE instrument=%s AND day=%s', (key, end)).fetchone()
+                    cached = db.execute('SELECT payload::text AS payload FROM portfolio_dashboard_prices WHERE instrument=%s AND day=%s', (key, end)).fetchone()
                 try:
                     if cached:
-                        saved = decode_prices(json.dumps(cached['payload']))
-                        needed_since = since or (end - timedelta(days=35) if valuation_since is not None else year_before(end, 2))
+                        saved = decode_prices(cached['payload'])
+                        needed_since = since or end - timedelta(days=35)
                         incomplete = date.fromisoformat(saved.get('repair_since', year_before(end, 2).isoformat())) > needed_since
-                        if valuation_since is not None:
-                            incomplete |= saved.get('actions_checked_on') != str(day)
-                            expired = not saved.get('fetched_at') or datetime.fromisoformat(saved['fetched_at']) < datetime.now(ZoneInfo('UTC')) - timedelta(minutes=1)
-                            incomplete |= expired
-                        else:
-                            incomplete |= saved.get('history_complete') is False
-                            adjusted = saved['frame']['Adj Close'].map(positive_price)
-                            incomplete |= saved.get('provider', '').startswith('FinanceDataReader:NAVER:') or saved.get('price_recovery', {}).get('status') in ('unavailable', 'partial')
-                            incomplete |= key != 'FX' and (saved.get('return_basis') == 'price' or adjusted.sum() < 2)
-                            incomplete |= last_close(saved)[1] != str(end - timedelta(days=1))
-                            incomplete |= saved.get('actions_checked_on') != str(day)
+                        incomplete |= saved.get('actions_checked_on') != str(day)
+                        incomplete |= not saved.get('fetched_at') or datetime.fromisoformat(saved['fetched_at']) < datetime.now(ZoneInfo('UTC')) - timedelta(minutes=1)
                         if incomplete:
-                            if valuation_since is None and saved.get('history_complete') is not False:
-                                records[key] = saved
                             cached = None  # Retain usable observations while retrying missing data.
                     if cached:
-                        record = decode_prices(json.dumps(cached['payload']))
+                        record = saved
                     else:
                         requested_at = datetime.now(ZoneInfo('UTC')).isoformat()
-                        symbol = 'KRW=X' if key == 'FX' else key[3:] + ('.KS' if key.startswith('KR:') else '')
+                        symbol = price_symbol(key)
                         expected = 'KRW' if key == 'FX' or key.startswith('KR:') else 'USD'
-                        captured = None
-                        def capture(record):
-                            nonlocal captured
-                            _, stamp = last_close(record)
-                            if record['currency'] == expected and 0 <= (end - date.fromisoformat(stamp)).days <= 7:
-                                captured = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat(), 'requested_at': requested_at}
-                                records[key] = captured
-                        try:
-                            budget = 200 / max(1, len(keys))
-                            record = await fetch_prices(symbol, end, on_raw=capture, on_primary=capture, provider_timeout=budget * .45,
-                                                        repair_since=since, **({'history_start': min(since or end, end - timedelta(days=35))} if valuation_since is not None else {}))
-                            record = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat(), 'requested_at': requested_at}
-                        except TimeoutError:
-                            if key not in records:
-                                raise
-                            record = records[key]
-                        if record.get('provider', '').startswith('FinanceDataReader:NAVER:') and captured and not captured.get('provider', '').startswith('FinanceDataReader:NAVER:'):
-                            record = with_actual_prices(record, captured)
+                        # On a provider deadline the session returns the unrepaired history it already has.
+                        # The collector's own window: a shorter fetch here would replace the year analysis reads.
+                        record = await session.fetch(symbol, end, price_window(end, since), repair_since=since)
+                        record = {**record, 'actions_checked_on': str(day), 'fetched_at': datetime.now(ZoneInfo('UTC')).isoformat(), 'requested_at': requested_at}
                         if record['currency'] != expected:
                             raise ValueError('UNSUPPORTED_CURRENCY')
                         record['observed_on'] = last_close(record)[1]
@@ -306,11 +179,59 @@ async def records_for(ids, day, *, valuation_since=None, include_fx=True, collec
         if key == 'FX':
             continue
         # A missing held session may contain a split; a failed cache upgrade cannot assume none.
-        if held_history_missing(key, record, (valuation_since or {}).get(key), price_end(key, day) - timedelta(days=1)):
+        if held_history_missing(key, record, valuation_since.get(key), price_end(key, day) - timedelta(days=1)):
             del records[key]
             if key not in failures:
                 failures.append(key)
     return records, failures
+
+
+def analysis_archive(key, payload, as_of, *, fetched_since=None):
+    """`payload`: the stored record as text. The collector's stored record cut like a fetch for `as_of`. Analysis never
+    fetches, so anything the collector would have published from a fetch is usable; only a short or out-of-date record is not.
+    `fetched_since`: a record whose own fetch started at or after this time is as current as a fetch can be,
+    so it need not reach the last finished session (price_status still bounds its age)."""
+    from .market_data import decode_prices, expected_sessions, positive_price, price_status
+    record = decode_prices(payload)
+    # Seven months of daily bars are enough for a comparison. A younger instrument is usable once fetched from its
+    # listing: the fetch asked for a year and its first bar came later.
+    first = record['frame'].index[0].date() if len(record['frame']) else None
+    listed_late = first and record.get('history_start') and first > date.fromisoformat(record['history_start']) + timedelta(days=14)
+    if first is None or (first > (pd.Timestamp(as_of) - pd.DateOffset(months=7)).date() and not listed_late):
+        raise ValueError('PRICE_HISTORY_INCOMPLETE')
+    frame = record['frame'].loc[record['frame'].index < pd.Timestamp(as_of)]
+    closes = frame.index[frame['Close'].map(positive_price)]
+    sessions = expected_sessions(key, as_of - timedelta(days=14), as_of - timedelta(days=1))
+    fresh = fetched_since is not None and datetime.fromisoformat(record.get('requested_at') or '0001-01-01T00:00:00+00:00') >= fetched_since
+    if not fresh and (closes.empty or not len(sessions) or closes[-1] < sessions[-1]):
+        raise ValueError('PRICE_STALE')
+    record = {**record, 'frame': frame}
+    failure = price_status(record, as_of)
+    if failure:
+        raise ValueError(failure)
+    return record
+
+
+def saved_prices(keys, as_of, rejected=None, *, fetched_since=None):
+    """The collector's stored prices usable for `as_of`. One row per query: a whole archive is 1-2MB and many
+    in one statement can pass the 5-second statement limit. `rejected` receives why each other key is unusable."""
+    rejected = {} if rejected is None else rejected
+    records = {}
+    try:
+        with store.connect() as db:
+            for key in keys:
+                row = db.execute('SELECT payload::text AS payload FROM portfolio_dashboard_prices WHERE instrument=%s', (key,)).fetchone()
+                if not row:
+                    rejected[key] = 'PRICE_NOT_STORED'
+                    continue
+                try:
+                    records[key] = analysis_archive(key, row['payload'], as_of, fetched_since=fetched_since)
+                except Exception as error:
+                    rejected[key] = str(error) if isinstance(error, ValueError) and str(error).startswith('PRICE_') else 'PRICE_RESPONSE_INVALID'
+    except Exception as error:
+        log.warning('saved prices unavailable code=%s', type(error).__name__)
+        rejected.update({key: 'PRICE_READ_FAILED' for key in keys if key not in records and key not in rejected})
+    return records
 
 
 def last_close(record):
@@ -448,84 +369,30 @@ def valuation(workbook, records, prior, day):
             'dividend_missing': dividend_missing, 'pending_splits': pending_splits}
 
 
-def run_backtest(body, records, day, failures):
-    import pandas as pd
-    from .market_data import comparison, comparison_bounds, weights, year_before
-    day = min(day, date.fromisoformat(body['end']) + timedelta(days=1)) if body.get('end') else day
-    allocation = weights(body['allocations'])
-    excluded = [k for k in allocation if k != 'CASH:KRW' and (k not in records or k.startswith('US:') and 'FX' not in records or records[k].get('return_basis') == 'price')]
-    for key in allocation.keys() - set(excluded) - {'CASH:KRW'}:
-        try:
-            last_close(records[key])
-            comparison_bounds({key}, records, day, column='Adj Close')
-        except (ValueError, KeyError):
-            excluded.append(key)
-    target = {k: v for k, v in allocation.items() if k not in excluded}
-    if not target:
-        raise ValueError('PRICE_UNAVAILABLE')
-    total = sum(target.values())
-    if set(target) == {'CASH:KRW'}:
-        end = pd.Timestamp(body.get('end') or day - timedelta(days=1))
-        start = pd.Timestamp(body.get('start') or year_before(end.date()))
-    else:
-        start, end = comparison_bounds(set(target), records, day)
-        if body.get('start'):
-            start = max(start, pd.Timestamp(body['start']))
-        if body.get('end'):
-            end = pd.Timestamp(body['end'])
-    if start >= end:
-        raise ValueError('NO_COMMON_PRICE_HISTORY')
-    history = comparison({k: v / total for k, v in target.items()}, None, records, day, bounds=(start, end))
-    points = history['points']
-    if len(points) < 2:
-        raise ValueError('NO_COMMON_PRICE_HISTORY')
-    baseline = points[0]['recommended']
-    history.update(points=[{**p, 'recommended': round(p['recommended'] / baseline * 1000000, 2)} for p in points],
-                   basis=f"{points[0]['date']} ~ {points[-1]['date']} · 100만 원 · 분배금 전액 재투자")
-    return {'history': history, 'excluded': excluded, 'return_pct': round((points[-1]['recommended'] / baseline - 1) * 100, 2)}
-
-
-async def work_once(stopping=None, *, kind=None):
+async def work_once(stopping=None):
     if stopping and stopping.is_set():
         return False
     with store.connect() as db:
-        job = db.execute("""SELECT * FROM portfolio_backtests WHERE state='queued' OR state='running' AND lease_until<now()
-                ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone() if kind != 'valuation' else None
         book = db.execute("""SELECT * FROM portfolio_workbooks WHERE refresh_after<=now()
-                ORDER BY refresh_after FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone() if kind != 'backtest' else None
-        if book and (not job or book['refresh_after'] <= job['created_at']):
-            job = None
+                ORDER BY refresh_after FOR UPDATE SKIP LOCKED LIMIT 1""").fetchone()
+        if book:
             book = db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '10 minutes' WHERE owner=%s RETURNING *", (book['owner'],)).fetchone()
-        elif job:
-            book = None
-            job = db.execute("UPDATE portfolio_backtests SET state='running',lease_until=now()+interval '10 minutes' WHERE id=%s RETURNING *", (job['id'],)).fetchone()
-    if not job and not book:
+    if not book:
         return False
-    day = today()
     try:
         async with asyncio.timeout(240):
-            if job:
-                collection_day = min(day, date.fromisoformat(job['input']['end']) + timedelta(days=1)) if job['input'].get('end') else day
-                records, failures = await records_for([a['instrument_id'] for a in job['input']['allocations']], collection_day)
-                result = run_backtest(job['input'], records, day, failures)
-                with store.connect() as db:
-                    db.execute("UPDATE portfolio_backtests SET state='succeeded',result=%s WHERE id=%s AND lease_until=%s", (Jsonb(result), job['id'], job['lease_until']))
-            else:
-                assets = [identify(a, strict=False, fx=book['payload'].get('fx')) for a in book['payload']['assets']]
-                from .dashboard_quotes import project
-                with store.connect() as db:
-                    current = db.execute('SELECT version,refresh_after FROM portfolio_workbooks WHERE owner=%s FOR UPDATE', (book['owner'],)).fetchone()
-                    if current['version'] != book['version'] or current['refresh_after'] != book['refresh_after']:
-                        return True
-                    if assets != book['payload']['assets']:
-                        db.execute('UPDATE portfolio_workbooks SET payload=%s WHERE owner=%s', (Jsonb({**book['payload'], 'assets': assets}), book['owner']))
-                    project(db, book['owner'], book['version'], {**book['payload'], 'assets': assets}, record_day=True)
-                    db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 minute' WHERE owner=%s", (book['owner'],))
+            assets = [identify(a, strict=False, fx=book['payload'].get('fx')) for a in book['payload']['assets']]
+            from .dashboard_quotes import project
+            with store.connect() as db:
+                current = db.execute('SELECT version,refresh_after FROM portfolio_workbooks WHERE owner=%s FOR UPDATE', (book['owner'],)).fetchone()
+                if current['version'] != book['version'] or current['refresh_after'] != book['refresh_after']:
+                    return True
+                if assets != book['payload']['assets']:
+                    db.execute('UPDATE portfolio_workbooks SET payload=%s WHERE owner=%s', (Jsonb({**book['payload'], 'assets': assets}), book['owner']))
+                project(db, book['owner'], book['version'], {**book['payload'], 'assets': assets}, record_day=True)
+                db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 minute' WHERE owner=%s", (book['owner'],))
     except Exception as error:
-        log.warning('dashboard task failed kind=%s code=%s', 'backtest' if job else 'valuation', type(error).__name__)
+        log.warning('dashboard task failed kind=%s code=%s', 'valuation', type(error).__name__)
         with store.connect() as db:
-            if job:
-                db.execute("UPDATE portfolio_backtests SET state='failed',result=%s WHERE id=%s AND lease_until=%s", (Jsonb({'message': '가격 자료를 가져오지 못했어요. 잠시 후 다시 조회해 주세요.'}), job['id'], job['lease_until']))
-            else:
-                db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 minute' WHERE owner=%s AND version=%s AND refresh_after=%s", (book['owner'], book['version'], book['refresh_after']))
+            db.execute("UPDATE portfolio_workbooks SET refresh_after=now()+interval '1 minute' WHERE owner=%s AND version=%s AND refresh_after=%s", (book['owner'], book['version'], book['refresh_after']))
     return True

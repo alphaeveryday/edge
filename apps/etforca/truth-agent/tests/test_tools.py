@@ -100,6 +100,10 @@ def test_session_rules_catch_status_changed_without_verdict_tool(ws):
 
 def test_finish_without_changes_is_a_valid_outcome(ws):
     # 바꿀 근거가 없으면 고치지 않고 끝내는 것이 정상이다(사람이 검토한 문장을 흔들지 않는다).
+    # 단 조사 노트는 남겨야 한다 — 다음 세션이 같은 검색을 되풀이하지 않게.
+    with pytest.raises(tools.ToolError, match="write_notes"):
+        tools.finish(ws, {"summary": "새 사실 없음"})
+    tools.write_notes(ws, {"next": ["서울남부지법 1심 선고일 확인"], "record": "새 기사 2건 모두 반복. 바꾼 칸 없음."})
     assert tools.finish(ws, {"summary": "새 사실 없음"}).startswith("완료: 변경 없음")
     assert ws.state["done"] is True
 

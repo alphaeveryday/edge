@@ -1,10 +1,10 @@
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 from datetime import date
 import re
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, model_validator
 
 ROLES = ("question", "portfolio", "outlook", "opinion")
 LIMITS = {role: (90, 650) for role in ROLES}
@@ -16,7 +16,7 @@ class StrictModel(BaseModel):
 
 class Holding(StrictModel):
     name: str = Field(min_length=1, max_length=250)
-    kind: Literal['etf', 'cash'] = 'etf'
+    kind: Literal['etf', 'stock', 'cash'] = 'etf'
     instrument_id: str | None = Field(default=None, max_length=32)
     account: Literal["일반 계좌", "ISA", "연금저축", "IRP"] = "일반 계좌"
     amount_krw: Decimal | None = Field(default=None, gt=0, le=10**13, max_digits=16, decimal_places=2)
@@ -48,13 +48,53 @@ class TaxAccount(StrictModel):
 class TaxProfile(StrictModel):
     recommended_accounts: list[Literal['ISA', 'IRP', '연금저축']] = Field(default_factory=list, max_length=3)
     residence: Literal['대한민국 거주자', '비거주자', '확인 필요']
-    age: Literal['19세 미만', '19~54세', '55세 이상', '확인 필요']
+    age: Literal['15세 미만', '15~18세', '19세 미만', '19~54세', '55세 이상', '확인 필요']
     income: str = Field(min_length=1, max_length=60)
     financial_income_tax: Literal['아니요', '예', '확인 필요']
+    previous_year_earned_income: Literal['', '예', '아니요', '확인 필요'] = ''
+    irp_qualification: Literal['', '근로자·자영업자·직역연금 가입자', '퇴직급여 수령 대상', '해당 없음', '확인 필요'] = ''
     accounts: list[TaxAccount] = Field(max_length=4)
 
+    @model_validator(mode='after')
+    def eligible_targets(self, info: ValidationInfo):
+        # Saved reports predate eligibility checks and must remain usable for follow-ups.
+        if info.context and info.context.get('persisted_input'):
+            return self
+        if 'ISA' in self.recommended_accounts and (
+            self.residence == '비거주자' or self.financial_income_tax == '예' or self.age == '15세 미만'
+            or (self.age in ('15~18세', '19세 미만') and self.previous_year_earned_income == '아니요')
+        ):
+            raise ValueError('ISA 가입 요건에 맞지 않아요. 전략에 포함할 계좌를 다시 선택해 주세요.')
+        if 'IRP' in self.recommended_accounts and self.irp_qualification == '해당 없음':
+            raise ValueError('IRP 가입 대상이 아니에요. 전략에 포함할 계좌를 다시 선택해 주세요.')
+        return self
 
-class DraftInput(StrictModel):
+
+class ConstraintChip(StrictModel):
+    """8차: 고객이 칩으로 고른 조건만 지킬 조건이다. 글(질문·원하는 포트폴리오)은 참고일 뿐 조건이 되지 않는다."""
+    kind: Literal['no_leverage', 'some_bonds', 'dividend', 'max_positions', 'no_sell', 'kr_listed_etf_only']
+    value: int | None = Field(default=None, ge=1, le=20, strict=True)
+
+    @model_validator(mode='after')
+    def value_only_for_count(self):
+        if (self.kind == 'max_positions') != (self.value is not None):
+            raise ValueError('max_positions needs value 1..20; other chips take no value')
+        return self
+
+
+class V8Fields(StrictModel):
+    monthly_krw: int | None = Field(default=None, ge=0, le=10**13, strict=True)
+    goal_text: str = Field(default='', max_length=1000)
+    constraints: list[ConstraintChip] = Field(default_factory=list, max_length=6)
+
+    @model_validator(mode='after')
+    def distinct_chips(self):
+        if len({chip.kind for chip in self.constraints}) != len(self.constraints):
+            raise ValueError('Duplicate constraint chip')
+        return self
+
+
+class DraftInput(V8Fields):
     holdings: list[Holding] = Field(max_length=20)
     question: str = Field(default='', max_length=1000)
     horizon: Literal['', '3년 안', '3~10년', '10년 이상', '정한 때 없음'] = ''
@@ -69,7 +109,7 @@ class DraftInput(StrictModel):
         return self
 
 
-class AnalysisInput(StrictModel):
+class AnalysisInput(V8Fields):
     draft_id: UUID | None = None
     holdings: list[Holding] = Field(max_length=20)
     question: str = Field(default="", max_length=1000)
@@ -137,6 +177,7 @@ class Evaluation(StrictModel):
 
 
 class RecommendationEvaluation(Evaluation):
+    # 4~5점은 프롬프트 지침이다. 서버가 점수로 추천을 막으면 고객은 추천 없는 결과를 받는다
     scores: Scores
 
 
@@ -208,6 +249,17 @@ class FinalReport(StrictModel):
     selected_candidate_id: str | None = None
     insights: list[Insight] = Field(min_length=1, max_length=3)
     return_forecast: ReturnForecast | None = None
+    # 8차 결과 맨 위·최종 추천·더 물어보기 칸. 옛 보고서에는 없으므로 비어 있어도 된다(화면이 기존 필드로 대신 보인다)
+    headline: str = Field(default='', max_length=40)
+    answer: str = Field(default='', max_length=300)
+    final_note: str = Field(default='', max_length=120)
+    suggested_questions: list[Annotated[str, Field(min_length=2, max_length=40)]] = Field(default_factory=list, max_length=4)
+
+    @model_validator(mode='after')
+    def four_or_no_questions(self):
+        if len(self.suggested_questions) not in (0, 4):
+            raise ValueError('suggested_questions: write exactly four follow-up questions')
+        return self
 
 
 def validate_section(role, raw, sources):

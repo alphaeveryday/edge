@@ -3,6 +3,8 @@ import { AppDownloadSheet } from './AppDownloadSheet';
 import { DashboardNewsletter } from './DashboardNewsletter';
 import { preview } from './preview';
 
+const dismissedUntilKey = preview ? 'edge-preview-app-dismissed-until' : 'edge-app-dismissed-until';
+
 export function DashboardPromotions({ ready, blocked, newsletterEligible }: { ready: boolean; blocked: boolean; newsletterEligible: boolean }) {
   const counted = useRef(false);
   const [returning, setReturning] = useState<boolean | null>(null);
@@ -24,6 +26,9 @@ export function DashboardPromotions({ ready, blocked, newsletterEligible }: { re
     if (!returning || blocked || shown) return;
     let timer: ReturnType<typeof setTimeout>;
     function show() {
+      try {
+        if (Number(localStorage.getItem(dismissedUntilKey)) > Date.now()) return;
+      } catch { return; } // Do not show a promotion when its dismissal history cannot be read.
       if (document.hidden || document.querySelector('dialog[open], [role="dialog"]')) {
         timer = setTimeout(show, 1000);
         return;
@@ -34,8 +39,13 @@ export function DashboardPromotions({ ready, blocked, newsletterEligible }: { re
     timer = setTimeout(show, 3000);
     return () => clearTimeout(timer);
   }, [returning, blocked, shown]);
+  function dismiss() {
+    try { localStorage.setItem(dismissedUntilKey, String(Date.now() + 24 * 60 * 60 * 1000)); }
+    catch { /* Closing still works when browser storage is unavailable. */ }
+    setOpen(false);
+  }
   if (returning === null) return null;
   return returning
-    ? <AppDownloadSheet open={open} onClose={() => setOpen(false)} />
+    ? <AppDownloadSheet open={open} onClose={dismiss} />
     : newsletterEligible ? <DashboardNewsletter blocked={blocked} /> : null;
 }

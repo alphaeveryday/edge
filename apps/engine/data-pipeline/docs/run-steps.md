@@ -337,7 +337,15 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 #
 # 정상 실행은 NormalizeNews manifest의 직접 parquet와 현재 article_id만 읽는다. --from/--to는
 # 명시적 과거 복구, --all은 명시적 전체 복구다. --limit은 이번 런의 새 LLM 호출 수 상한이다.
+#
+# 태거는 TAGGER_BACKEND 가 고른다(ALPHA-1446, ADR-0064). 기본 llm 은 DeepSeek(LLM_API_KEY 필수),
+# roberta 는 로컬 int8 모델(LLM 키 불필요 — torch·transformers 가 깔린 환경, 이미지에는 있다).
+# roberta 의 모델 묶음은 레이크 models/tagger/<버전>/ 에서 받고, 로컬은 TAGGER_MODEL_DIR 로 디렉터리를
+# 직접 준다. tagger_version 이 달라 백엔드를 바꾸면 그 창의 기사는 다시 태깅된다.
+# 추론 스레드는 TAGGER_THREADS(태스크 vCPU 수, terraform 이 넣는다) — Fargate 1 vCPU 는 CPU 가 2개로 보여
+# 그대로 두면 스레드끼리 다퉈 두 배 느리다(ALPHA-1449).
 LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-news --input-run-id 20260701T000000Z --limit 50
+#   로컬 모델: TAGGER_BACKEND=roberta TAGGER_MODEL_DIR=<묶음 디렉터리> uv run --package data-pipeline python -m data_pipeline.run tag-news ...
 #   기간 복구: ... run tag-news --from 2026-07-01 --to 2026-07-08
 #   전체 복구: ... run tag-news --all
 
@@ -479,6 +487,21 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 뉴스 SFN 은 --window-days 1 로 [어제,오늘] 겹침(ALPHA-592) — day-close 가 00:10 이라(ALPHA-905)
 # assemble 은 **언제나** 다음 날짜에 돈다. 겹침이 없으면 닫으려던 어제를 통째로 못 읽고
 # read=0 으로 성공한다. 멱등이라 겹침 비용은 스캔뿐.
+# TAGGER_BACKEND=roberta 면 LLM 2콜 대신 기사마다 로컬 모델이 제목+리드로 분류·추출하고, 1분 단건
+# 조립과 같은 변환으로 적재한다(ko 기사만, LLM_API_KEY 불필요 — tag-news 단서와 같은 env).
+# 같은 런 tag-news 가 같은 태거·같은 본문(지문)으로 내린 판정은 다시 추론하지 않고 재사용한다
+# (ALPHA-1449 — quality_log `tagger_reused`). 없거나 본문이 바뀐 기사만 모델을 돌린다. 캐시를 못 읽으면
+# 재추론으로 진행하고 `tagger_cache_errors` 로 센다(느려질 수 있다).
+# 뉴스 스레드(ALPHA-508, ADR-0064): 키는 타입 + 주체 회사(증권사 리포트는 증권사 원문까지)이고, 같은
+# 키의 마지막 보도에서 7일 넘게 끊기면 새 스레드(thread_key 끝 `||since=<UTC 시각>`), 스레드 안에서
+# 하루 넘게 끊겼다 다시 나온 보도는 FOLLOW_UP_STAGE 다. 회사가 없을 때만 UNKNOWN. 공시는 identity 키
+# 그대로. 키 전환 전에 identity 키로 묶인 뉴스 스레드는 이어받지 않는다(새 보도부터 새 키).
+# RELEVANCE_FILTER=on(ALPHA-1476, 기본 off)이면 스레드에 붙기 전에 관련성 판정기(klue/roberta-base fp32,
+# 레이크 models/relevance/<버전>/ 또는 RELEVANCE_MODEL_DIR)가 (주체 회사, 타입, 제목, 리드)로 그 회사의
+# 사건 기사인지 본다. 기준값 미만이면 source_event 를 REJECTED 로 두고 UNKNOWN 링크(unknown_reason
+# `relevance filter <버전> p=…`)만 남긴다 — 분석 엔진은 REJECTED 를 사건 묶음에서 뺀다. 판정 타입은
+# 계약·실적·인수·지분투자·인증·소송·당국조치 7개이고, 그 밖 타입·공시는 거르지 않는다. 1분 단건 조립도
+# 같은 함수를 지난다. quality_log `relevance_rejected` 가 거른 수다. 켜기 전 이미 묶인 기사는 다시 보지 않는다.
 LLM_API_KEY=... DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
   uv run --package data-pipeline python -m data_pipeline.run assemble-events
 

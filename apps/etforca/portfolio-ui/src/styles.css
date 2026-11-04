@@ -4551,6 +4551,8 @@ button:disabled {
   display: grid;
   gap: 8px;
 }
+.tax-dialog .tax-targets p.tax-ineligible { color: var(--color-danger)!important; font-size: .875rem; margin: .5rem 0; }
+.tax-dialog .tax-option:has(input:disabled) { opacity: .6; cursor: not-allowed; }
 .tax-dialog .tax-option {
   display: flex;
   align-items: center;
@@ -6126,9 +6128,7 @@ to {
 .dividend-scroll .dividend-bars button { scroll-snap-align: start; min-width: 48px; }
 .dividend-navigation { display: flex; align-items: center; gap: 8px; color: var(--color-text-secondary); font-size: var(--text-caption); }
 .dividend-navigation span { margin-right: auto; }
-.backtest-rows>div, .selected-instrument { display: flex; align-items: center; gap: 16px; }
-.backtest-rows label { flex: 1; min-width: 0; }
-.backtest-rows input { max-width: 160px; }
+.selected-instrument { display: flex; align-items: center; gap: 16px; }
 .seed-money { display: grid; gap: 16px; }
 .dividend-bars button {
   padding: 0 3px;
@@ -6436,6 +6436,35 @@ to {
 .holdings-input .row + .row { border-top: 1px solid var(--color-border); }
 .holdings-input .num { height: 48px; background: var(--color-surface); border: 1px solid var(--color-border-strong); }
 .holdings-input .num:focus-within { border-color: var(--color-primary); }
+.holdings-input .num[data-unit=amount] input { width: 8.5em; }
+@media (min-width: 601px) { .holdings-input .num[data-unit=amount] input { width: 9.5em; } }
+.holdings-input .num[data-unit=percent] input { width: 4.5em; }
+/* 모바일: 도넛은 상단에 두되 작게, 범례는 옆에 3줄까지만 — 종목을 넣은 뒤에도 검색창이 첫 화면에 남게 한다(전체 목록은 아래 계좌 카드에 있다). */
+/* 하단 고정 버튼이 가리는 높이만큼 스크롤 여백을 둔다 — 포커스가 옮겨 간 검색창·금액 칸이 버튼 뒤로 숨지 않게. */
+html { scroll-padding-bottom: var(--input-cta-height, 0px); }
+.portfolio-preview .more { display: none; }
+@media (max-width: 600px) {
+  .holdings-eyebrow, .unit__note[data-mode=amount] { display: none; }
+  .portfolio-preview { padding: var(--space-3) var(--space-4); }
+  .portfolio-preview .mixviz { gap: var(--space-3); margin-top: var(--space-2); }
+  .portfolio-preview .donut.md { width: 96px; height: 96px; }
+  .portfolio-preview .donut.md .donut__c b { font-size: var(--text-caption); }
+  .portfolio-preview .donut__c span { font-size: var(--text-chart); }
+  .portfolio-preview .mixviz ul { gap: var(--space-2); }
+  .portfolio-preview .mixviz li span { font-size: var(--text-caption); }
+  .portfolio-preview .mixviz li b { font-size: var(--text-label); }
+  .portfolio-preview .mixviz li:nth-child(n+4):not(.more) { display: none; }
+  .portfolio-preview .mixviz li.more { display: block; color: var(--color-text-muted); font-size: var(--text-caption); }
+  .portfolio-preview > .hint { margin-top: var(--space-2); }
+}
+@media (max-width: 340px) { .portfolio-preview .donut.md { width: 80px; height: 80px; } }
+.reuse-link { align-self: flex-start; font-size: var(--text-label); }
+/* 요청사항은 선택이라 접어 둘 수 있다. 펼친 뒤에는 위 '요청사항' 제목과 겹치므로 접기 줄을 감춘다. */
+.askbox > summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; font-size: var(--text-label); font-weight: 600; color: var(--t1); }
+.askbox:not([open]) { padding-block: var(--space-2); }
+.askbox[open] > summary { display: none; }
+/* details 안의 내용은 별도 상자에 담겨 .askbox 의 flex 간격을 받지 못한다 — 안쪽 상자가 같은 간격을 맡는다. */
+.askbox__body { display: flex; flex-direction: column; gap: 8px; }
 .holdings-input .row__name { overflow-wrap: anywhere; }
 .holdings-input .instrument-search .field { background: var(--color-surface); }
 @media (max-width: 1099px) {
@@ -6451,6 +6480,7 @@ to {
   .holdings-input .row > .x { grid-column: 2; grid-row: 1; }
   .holdings-input .num { grid-column: 1 / -1; justify-content: flex-end; }
   .holdings-input .num input { width: 100%; min-width: 0; }
+  .holdings-input .num[data-unit] input { width: 100%; }
 }
 
 .holdings-table tr[data-needs-input=true] { outline: 2px solid var(--color-primary); outline-offset: -2px; }
@@ -6513,3 +6543,63 @@ to {
 }
 .bulk-entry > summary { min-height: 44px; padding-block: var(--space-3); cursor: pointer; }
 .bulk-entry .field { margin-block: var(--space-2); }
+
+/* 예시 결과: 긴 이미지를 대화상자 안에서 스크롤하고, 닫기는 위에 붙여 언제든 누를 수 있게 한다. */
+.step .hint + .example-link { margin-top: calc(-1 * var(--space-4)); } /* 안내 바로 아래에서만 간격을 줄인다(360×640 첫 화면) */
+.step .example-link { align-self: flex-start; min-height: 44px; padding: 0; border: 0; background: none; font-size: var(--text-label); font-weight: 600; color: var(--color-primary); text-decoration: underline; text-underline-offset: 3px; }
+.example-dialog { width: calc(100% - var(--space-4)); max-width: 720px; max-height: calc(100dvh - 40px); overflow-y: auto; overscroll-behavior: contain; padding: var(--space-4); }
+.example-dialog .dialog-close { position: sticky; top: 0; float: right; margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2)) 0 0; background: var(--bg-raised); border-radius: var(--radius-pill); z-index: 1; }
+.example-dialog h2 { font-size: var(--text-heading); margin: 0 0 var(--space-2); }
+.example-dialog img { display: block; width: 100%; height: auto; margin-top: var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-card); }
+
+/* 추가 질문 대화 화면: 분석 결과 위에 전체 화면으로 열리고, 위에는 돌아가기, 아래에는 입력창이 붙는다. */
+body:has(.chat-screen[open]) { overflow: hidden; }
+.chat-resume { width: 100%; margin-top: var(--space-4); justify-content: space-between; text-align: left; }
+.chat-screen {
+  box-sizing: border-box; width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; padding: 0; border: 0;
+  background: var(--color-canvas); color: var(--color-text);
+}
+.chat-screen[open] { display: flex; flex-direction: column; }
+.chat-screen::backdrop { background: var(--color-canvas); }
+.chat-screen__bar {
+  display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4);
+  padding-top: max(var(--space-3), env(safe-area-inset-top));
+  background: var(--color-surface); border-bottom: 1px solid var(--color-border);
+}
+.chat-screen__bar h2 { flex: 1; margin: 0; font-size: var(--text-body); text-align: center; }
+.chat-screen__back { flex: none; min-height: 44px; padding: 0 var(--space-2); border: 0; background: none; color: var(--color-primary); font: inherit; font-size: var(--text-label); font-weight: 600; cursor: pointer; }
+.chat-screen__count { flex: none; min-width: 9ch; text-align: right; font-size: var(--text-caption); color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
+.chat-screen__messages { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: var(--space-6) var(--space-4); }
+.chat-screen__messages > * { max-width: 720px; margin-left: auto; margin-right: auto; }
+.chat-screen__intro { margin-bottom: var(--space-6); font-size: var(--text-caption); color: var(--color-text-muted); text-align: center; }
+.chat-turn { display: flex; flex-direction: column; gap: var(--space-3); margin-bottom: var(--space-8); }
+.chat-bubble { margin: 0; overflow-wrap: anywhere; font-size: var(--text-label); line-height: 1.75; }
+.chat-bubble--me {
+  align-self: flex-end; max-width: 85%; padding: var(--space-3) var(--space-4); white-space: pre-wrap;
+  background: var(--color-primary); color: var(--color-on-primary); border-radius: 20px 20px 6px 20px;
+}
+.chat-bubble--ai { align-self: stretch; padding: var(--space-1) 0; }
+.chat-bubble--ai p { margin: 0 0 var(--space-3); }
+.chat-bubble--ai .followup-revision { margin-top: var(--space-2); padding: var(--space-3) var(--space-4); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-control); }
+.chat-bubble--ai .followup-revision summary { cursor: pointer; color: var(--color-primary); font-weight: 600; min-height: 32px; }
+.chat-bubble--failed { padding: var(--space-3) var(--space-4); background: var(--color-danger-soft); border-radius: var(--radius-control); }
+.chat-bubble--failed .ds-button { margin-top: var(--space-1); }
+.chat-bubble--waiting small { color: var(--color-text-muted); font-size: var(--text-caption); }
+.chat-dots { display: inline-flex; gap: 5px; margin-bottom: var(--space-2); }
+.chat-dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--color-primary); animation: chat-dot 1.2s var(--ease) infinite; }
+.chat-dots i:nth-child(2) { animation-delay: .15s; }
+.chat-dots i:nth-child(3) { animation-delay: .3s; }
+@keyframes chat-dot { 0%, 60%, 100% { opacity: .25; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+@media (prefers-reduced-motion: reduce) { .chat-dots i { animation: none; opacity: .6; } }
+.chat-screen__error { color: var(--color-danger); font-size: var(--text-caption); }
+/* 결과 화면의 .followup form/textarea 규칙이 대화 화면 안까지 내려오지 않게 한 단계 더 구체적으로 쓴다. */
+.chat-screen .chat-screen__composer {
+  display: flex; flex-direction: row; align-items: flex-end; gap: var(--space-2); width: 100%; max-width: 720px; box-sizing: border-box; margin: 0 auto;
+  padding: var(--space-3) var(--space-4); padding-bottom: max(var(--space-3), env(safe-area-inset-bottom));
+}
+.chat-screen .chat-screen__composer textarea {
+  display: block; margin: 0; flex: 1; min-width: 0; min-height: 52px; max-height: 160px; box-sizing: border-box; resize: none; field-sizing: content;
+  padding: 14px var(--space-4); border: 1px solid var(--color-border-strong); border-radius: 26px; background: var(--color-surface);
+  font: inherit; font-size: 1rem; line-height: 1.5; color: var(--color-text);
+}
+.chat-screen .chat-screen__composer .ds-button { flex: none; min-height: 52px; width: 52px; height: 52px; padding: 0; border-radius: 50%; font-size: 1.25rem; }

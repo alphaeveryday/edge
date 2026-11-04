@@ -132,3 +132,9 @@ The mobile holdings list/currency toggle is a separate UI work unit.
 - Activation order: schema, pipeline image, Airflow IAM/environment, DAG image,
   first verified run, then missed-slot monitoring. No additional AWS service or
   paid data subscription is introduced.
+- Missed-slot monitoring (ALPHA-1443): the periodic reconcile gets
+  `OPS_DIVIDEND_DAILY_SCHED_HHMM=03:00` and `OPS_DIVIDEND_DAILY_SCHED_WEEKEND=true`
+  from the module local `dividend_daily_schedule_hhmm`, so a 03:00 slot with no
+  ledger run opens `PLANNER_MISSING` after the 30-minute grace. A failed DAG run,
+  including a run that started after the 03:00–03:30 window, sends the same SNS
+  failure notice as the other Airflow DAGs.

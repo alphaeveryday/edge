@@ -48,8 +48,9 @@ def test_machine_checks_do_not_call_empty_or_invalid_recommendations_a_pass():
     opinion = {'sections': {'opinion': {'paragraphs': ['conclusion']}}}
     assert '추천 비중 없음' in v.check_report(cases()[0], opinion)
     report = {**opinion, 'recommendation': {'allocations': [{'instrument_id': 'US:QQQ', 'account': '일반 계좌', 'weight_pct': 90}]}}
-    assert set(v.check_report(cases()[18], report)) == {'추천 비중 합계가 100% 아님', '제외 종목 추천'}
-    assert v.check_report(cases()[16], opinion) == []
+    assert set(v.check_report(cases()[0], report)) == {'추천 비중 합계가 100% 아님'}
+    # 8차: 글로 쓴 계좌·종목 조건이 부딪쳐도 보류하지 않는다. 추천이 없으면 실패다
+    assert v.check_report(cases()[16], opinion) == ['추천 비중 없음']
     assert v.check_report(cases()[19], {**opinion, 'scenarios': {'rows': [{'annual_return_pct': '5', 'years': 10, 'future_krw': '93470527'}]}}) == []
     for rate in ('5.00', 5.0):
         assert v.check_report(cases()[19], {**opinion, 'scenarios': {'rows': [{'annual_return_pct': rate, 'years': 10, 'future_krw': '93470527.0'}]}}) == []

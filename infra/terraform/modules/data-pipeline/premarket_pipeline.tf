@@ -46,6 +46,9 @@
 # 이 레포에서 달력을 아는 판정자는 원장 Reconciler 뿐이다 — 즉 이 구멍의 정답은 아래
 # ⏭ 원장 편입이다. 그 전까지는 terraform 이 매 apply 마다 스케줄을 되살린다는 것이
 # 유일한 방어다(드리프트가 오래 살아남지 못한다).
+# → ALPHA-1431: 원장 편입 대신 **결과**를 보는 감시로 덮었다. 주기 reconcile 이 달력(OPS_KR_HOLIDAYS)을
+#   알고, 거래일 07:30 까지 universe 성공 로그가 없으면 `premarket_missing` 알람(ops_ledger.tf)이 운다.
+#   실행 주체가 Airflow 로 가 ①②③이 모두 꺼져도 이 알람은 남는다.
 #
 # ⏭ 원장에 넣는 길은 열려 있다 — **작업을 0개 등록한 레인**으로 Planner 를 태우면 by_cli
 # 충돌 없이 pipeline_run 만 남길 수 있다(그러면 PLANNER_MISSING 도 살아난다). 코드 변경

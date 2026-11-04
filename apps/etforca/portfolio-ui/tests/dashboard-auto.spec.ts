@@ -35,18 +35,6 @@ test('partial daily profit stays visible and an imported QLD average survives sa
   await expect(page.getByLabel(/평균매수가/)).toHaveValue('80');
 });
 
-for (const amount of [500000, 0]) test(`copying holdings excludes zero balances instead of producing invalid allocations: ${amount}`, async ({ page }) => {
-  const cash: Asset = { ...asset, id: 'cash', instrument_id: 'CASH:KRW', name: '현금', category: '현금', quantity: null, amount: 0 };
-  await mock(page, { version: 1, workbook: { ...workbook, assets: [asset, cash] } });
-  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { ...tracking, market: { ...tracking.market, payload: { ...tracking.market.payload, assets: [{ ...tracking.market.payload.assets[0], value: amount }, { id: 'cash', value: 0, profit: 0 }] } } } }));
-  await page.goto('/portfolio/?view=dashboard');
-  await expect(page.locator('.holding-edit')).toHaveCount(2);
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
-  await expect(page.locator('.backtest-rows input')).toHaveCount(amount ? 1 : 0);
-  if (amount) await expect(page.getByLabel('KODEX 200 비중 (%)')).toHaveValue('100');
-  else await expect(page.getByRole('alert')).toContainText('보유금액이 있는 종목을 먼저 담아 주세요.');
-});
 async function mock(page: Page, saved: Saved = { version: 1, workbook }) {
   await page.route('**/api/portfolio/**', async r => {
     const path = new URL(r.request().url()).pathname;
@@ -58,17 +46,33 @@ async function mock(page: Page, saved: Saved = { version: 1, workbook }) {
   });
 }
 
-test('tiny positive holdings stay represented by a valid hundredth-percent allocation', async ({ page }) => {
-  const cash: Asset = { ...asset, id: 'cash', instrument_id: 'CASH:KRW', name: '현금', category: '현금', quantity: null, amount: 100000000 };
-  await mock(page, { version: 1, workbook: { ...workbook, assets: [asset, cash] } });
-  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { ...tracking, market: { ...tracking.market, payload: { ...tracking.market.payload, assets: [{ ...tracking.market.payload.assets[0], value: 1 }, { id: 'cash', value: 100000000, profit: 0 }] } } } }));
+for (const stock of [
+  { id: 'KR:005930', name: '삼성전자', ticker: '005930', market: 'KR', symbol: '005930.KS' },
+  { id: 'KR:247540', name: '에코프로비엠', ticker: '247540', market: 'KR', symbol: '247540.KQ' },
+  { id: 'US:AAPL', name: 'Apple', ticker: 'AAPL', market: 'US', symbol: 'AAPL' },
+  { id: 'US:BRK.B', name: 'Berkshire Hathaway', ticker: 'BRK.B', market: 'US', symbol: 'BRK-B' },
+]) test(`stock entry preserves identity, quantity and purchase basis on reload: ${stock.id}`, async ({ page }) => {
+  await mock(page);
+  await page.route('**/api/portfolio/workbook/catalog', r => r.fulfill({ json: { instruments: [...catalog.instruments, { ...stock, code: stock.ticker, kind: 'stock' }] } }));
   await page.goto('/portfolio/?view=dashboard');
-  await expect(page.locator('.holding-edit')).toHaveCount(2);
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
-  await expect(page.getByLabel('KODEX 200 비중 (%)')).toHaveValue('0.01');
-  await expect(page.getByLabel('현금 비중 (%)')).toHaveValue('99.99');
-  await expect(page.getByRole('alert')).toContainText('0.01%보다 작은 보유분');
+  await page.getByRole('button', { name: '종목 추가', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('combobox', { name: '계좌', exact: true }).selectOption('일반 계좌');
+  await dialog.getByRole('combobox', { name: /종목 찾기/ }).fill(stock.symbol);
+  await expect(page.getByRole('option', { name: new RegExp(stock.name) })).toContainText('상장 주식');
+  await page.getByRole('option', { name: new RegExp(stock.name) }).click();
+  await expect(dialog.getByLabel('보유 수량', { exact: true })).toBeFocused();
+  await dialog.getByLabel('보유 수량', { exact: true }).fill('2.5');
+  await dialog.getByLabel(/평균매수가/).fill('100');
+  await page.screenshot({ path: `test-results/stock-entry-${stock.ticker}-${test.info().project.name}.png`, fullPage: true });
+  const request = page.waitForRequest(r => r.url().endsWith('/workbook') && r.method() === 'POST');
+  await dialog.getByRole('button', { name: '저장', exact: true }).click();
+  expect((await request).postDataJSON().workbook.assets[1]).toMatchObject({ instrument_id: stock.id, quantity: 2.5, average: 100, category: '주식', currency: stock.market === 'US' ? 'USD' : 'KRW' });
+  await expect(dialog).not.toBeVisible();
+  await page.reload();
+  await page.locator('.holding-edit').filter({ hasText: stock.name }).click();
+  await expect(dialog.getByLabel('보유 수량', { exact: true })).toHaveValue('2.5');
+  await expect(dialog.getByLabel(/평균매수가/)).toHaveValue('100');
 });
 
 test('an unavailable first tracking response never presents the old import amount as current value', async ({ page }) => {
@@ -78,20 +82,6 @@ test('an unavailable first tracking response never presents the old import amoun
   await expect(page.getByRole('alert')).toContainText('자동 기록을 불러오지 못했어요.');
   await expect(page.locator('.dashboard-stats article').first().locator('strong')).toHaveText('—');
   await expect(page.locator('.holdings-table tbody tr')).not.toContainText('1,000,000원');
-});
-
-for (const status of [401, 404]) test(`an expired backtest connection preserves the composition and permits a retry: ${status}`, async ({ page }) => {
-  await mock(page);
-  await page.route('**/api/portfolio/backtests', r => r.fulfill({ json: { id: 'job' } }));
-  await page.route('**/api/portfolio/backtests/job', r => r.fulfill({ status, json: {} }));
-  await page.goto('/portfolio/?view=dashboard');
-  await expect(page.locator('.holding-edit')).toHaveCount(1);
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
-  await page.getByRole('button', { name: '과거 수익률 조회', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('백테스트 연결이 만료됐어요. 다시 조회해 주세요.');
-  await expect(page.getByLabel('KODEX 200 비중 (%)')).toHaveValue('100');
-  await expect(page.getByRole('button', { name: '과거 수익률 조회', exact: true })).toBeEnabled();
 });
 
 test('an older poll cannot replace the fresh valuation returned after saving', async ({ page }) => {
@@ -149,28 +139,42 @@ test('holdings need only instrument quantity and optional average, never a custo
   await expect(page.getByLabel(/평균매수가/)).not.toHaveAttribute('required', '');
 });
 
-test('the overview replaces redundant tabs with a working backtest', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await expect(page.getByRole('navigation', { name: '대시보드' }).getByRole('button')).toHaveText(['한눈에', '배당 달력', '수익 기록', '백테스트', 'AI 포폴 분석']);
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
-  await page.getByRole('button', { name: '과거 수익률 조회', exact: true }).click();
-  await expect(page.getByRole('heading', { name: '기간 수익률 +34.5%' })).toBeVisible();
-  await expect(page.locator('.history-legend')).toContainText('내 조합');
+test('the dashboard offers no backtest tab, and an old backtest link opens the overview', async ({ page }) => {
+  // 백테스트는 서버 API 까지 없앴다 — 탭이 남거나 옛 북마크가 빈 화면을 열면 안 된다.
+  await page.goto('/portfolio/?preview=dashboard&tab=backtest');
+  await expect(page.getByRole('navigation', { name: '대시보드' }).getByRole('button')).toHaveText(['한눈에', '배당 달력', '수익 기록', 'AI 포폴 분석']);
+  await expect(page.getByRole('button', { name: '한눈에', exact: true })).toHaveAttribute('aria-current', 'page');
 });
 
-test('preview backtests and daily records make no customer requests', async ({ page }) => {
+test('daily records show the latest five days and fold the older ones away', async ({ page }) => {
+  // 기록은 하루에 한 줄씩 끝없이 쌓인다 — 기본은 최근 5일만 보여 화면이 늘어지지 않게 한다.
+  await mock(page);
+  const days = Array.from({ length: 8 }, (_, i) => ({ date: `2026-10-${String(11 + i).padStart(2, '0')}`, value: 500000 + i, assets: tracking.market.payload.assets, fx: null }));
+  await page.route('**/api/portfolio/workbook/tracking', r => r.fulfill({ json: { ...tracking, days } }));
+  await page.goto('/portfolio/?view=dashboard&tab=returns');
+  const records = page.locator('#return-records article');
+  await expect(records).toHaveCount(5);
+  await expect(records.first().locator('time')).toHaveText('2026-10-18');
+  const more = page.getByRole('button', { name: '지난 기록 3일 더 보기' });
+  await expect(more).toHaveAttribute('aria-expanded', 'false');
+  await expect(more).toHaveAttribute('aria-controls', 'return-records');
+  await more.click();
+  await expect(records).toHaveCount(8);
+  await expect(records.last().locator('time')).toHaveText('2026-10-11');
+  await page.getByRole('button', { name: '접기', exact: true }).click();
+  await expect(records).toHaveCount(5);
+  await expect(page.getByRole('button', { name: '지난 기록 3일 더 보기' })).toHaveAttribute('aria-expanded', 'false');
+});
+
+test('preview daily records make no customer requests', async ({ page }) => {
   const traffic: string[] = [];
   page.on('request', r => { if (/\/api\/portfolio|posthog\.com/.test(r.url())) traffic.push(r.url()); });
   await page.goto('/portfolio/?preview=dashboard');
   await page.getByRole('button', { name: '수익 기록', exact: true }).click();
   await expect(page.locator('.return-records article')).toHaveCount(3);
-  await expect(page.locator('.dashboard-main form')).toHaveCount(1); // Only the hidden backtest form remains.
+  await expect(page.locator('.dashboard-main form')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /지난 기록/ })).toHaveCount(0); // 5일 이하면 접을 것이 없다.
   await expect(page.getByRole('button', { name: '월 기록 저장' })).toHaveCount(0);
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
-  await page.getByRole('button', { name: '과거 수익률 조회', exact: true }).click();
-  await expect(page.getByRole('heading', { name: /기간 수익률/ })).toBeVisible();
   expect(traffic).toEqual([]);
 });
 
@@ -193,7 +197,7 @@ test('a forecast never pretends to know a confirmed future payment day', async (
   await page.getByRole('button', { name: '배당 달력', exact: true }).click();
   await expect(page.locator('.dashboard-main')).toContainText('지급월과 금액은 실제 공시에 따라 달라질 수');
   await expect(page.locator('.dividend-calendar')).toHaveCount(0);
-  await expect(page.locator('input[type=date]')).toHaveCount(2); // Backtest period, no invented dividend date.
+  await expect(page.locator('input[type=date]')).toHaveCount(0); // No invented dividend date.
 });
 
 test('seed conversion preserves total money even for tiny portfolios and leaves no negative remainder', () => {
@@ -221,28 +225,6 @@ test('a percent-only dashboard asks for seed once and derives values and account
   await expect(page.locator('.holdings-table tbody tr').first()).toContainText('600,000원');
   await page.getByRole('combobox', { name: '계좌', exact: true }).selectOption('ISA');
   await expect(page.locator('.holdings-table tbody tr')).toContainText('100.0%');
-});
-
-test('saving a percent analysis pauses for seed before navigating or writing', async ({ page }) => {
-  let writes = 0;
-  let version = 0;
-  await mock(page);
-  await page.route('**/api/portfolio/workbook', r => { if (r.request().method() === 'POST') { writes++; expect(r.request().postDataJSON().workbook.assets[0].amount).toBe(1000000); if (writes === 1) { version = 2; return r.fulfill({ status: 409, json: { detail: 'WORKBOOK_CONFLICT' } }); } expect(r.request().postDataJSON().version).toBe(2); return r.fulfill({ json: {} }); } return r.fulfill({ json: { version, workbook: version ? workbook : null } }); });
-  await page.route('**/api/portfolio/analyses/*/workbook', r => r.fulfill({ json: { ...workbook, assets: [{ ...asset, quantity: null, weight: 100 }] } }));
-  await page.goto('/portfolio/?preview=result');
-  // The real SavePortfolio component is exercised with fetch through the normal report route below.
-  await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'seed-test'));
-  await page.route('**/api/portfolio/analyses/seed-test', r => r.fulfill({ json: { id: 'seed-test', state: 'succeeded', result: { sections: { question: { paragraphs: [], evidence: [], limitations: [] }, portfolio: { paragraphs: [], evidence: [], limitations: [] }, outlook: { paragraphs: [], evidence: [], limitations: [] }, opinion: { paragraphs: [], evidence: [], limitations: [] } }, metrics: { holdings: [], total_krw: null, unavailable_reason: '' }, sources: [], as_of: '2026-10-18', model: 'test', elapsed_seconds: 0 } } }));
-  await page.goto('/portfolio/');
-  await page.locator('.feedback-anchor .save-portfolio button').first().click();
-  expect(writes).toBe(0);
-  await page.locator('.feedback-anchor').getByLabel('총 투자금액 (원)').fill('1000000');
-  await page.locator('.feedback-anchor').getByRole('button', { name: '금액 적용하고 저장' }).click();
-  await expect(page.locator('.feedback-anchor').getByRole('alert')).toContainText('다른 탭');
-  await expect(page.locator('.feedback-anchor').getByLabel('총 투자금액 (원)')).toHaveValue('1000000');
-  await page.locator('.feedback-anchor').getByRole('button', { name: '금액 적용하고 저장' }).click();
-  await expect(page).toHaveURL(/view=dashboard/);
-  expect(writes).toBe(2);
 });
 
 test('a pending save keeps the edited holding locked until the response arrives', async ({ page }) => {
@@ -297,7 +279,7 @@ test('invalid quantity cannot be saved and a missing average does not block hold
 test('cash can be added without quantity average price or currency fields', async ({ page }) => {
   await page.goto('/portfolio/?preview=empty');
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
-  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('현금');
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('현금');
   await page.getByRole('option', { name: /현금/ }).click();
   await page.getByLabel('현금 (원)', { exact: true }).fill('123456');
   await expect(page.getByLabel('보유 수량', { exact: true })).toHaveCount(0);
@@ -306,25 +288,13 @@ test('cash can be added without quantity average price or currency fields', asyn
   await expect(page.getByRole('button', { name: '종목 추가', exact: true })).toBeFocused();
 });
 
-test('backtest edits stay available when navigating to another dashboard tab', async ({ page }) => {
-  await page.goto('/portfolio/?preview=dashboard');
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('combobox', { name: '백테스트에 담은 ETF 찾기' }).fill('VOO');
-  await page.getByRole('option', { name: /Vanguard/ }).click();
-  await page.getByLabel('시작일 · 선택').fill('2020-01-01');
-  await page.getByRole('button', { name: '한눈에', exact: true }).click();
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await expect(page.getByLabel('시작일 · 선택')).toHaveValue('2020-01-01');
-  await expect(page.getByLabel(/Vanguard.*비중/)).toHaveValue('100');
-});
-
 test('unknown legacy instruments require a real catalog match instead of fetching guessed symbols', async ({ page }) => {
   await mock(page, { version: 1, workbook: { ...workbook, assets: [{ ...asset, instrument_id: null, name: '내가 적은 별명' }] } });
   await page.goto('/portfolio/?view=dashboard');
   await page.locator('.holding-edit').click();
   await expect(page.getByRole('dialog')).toContainText('자동 시세를 연결할 종목을 선택');
   await expect(page.getByRole('dialog').getByRole('button', { name: '저장', exact: true })).toBeDisabled();
-  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
   await page.getByRole('option', { name: /KODEX/ }).click();
   await expect(page.getByLabel('보유 수량', { exact: true })).toHaveValue('10');
   await expect(page.getByLabel(/평균매수가/)).toHaveValue('40000');
@@ -336,7 +306,7 @@ test('linking an old amount-only holding keeps its amount without demanding quan
   await mock(page, { version: 1, workbook: { ...workbook, assets: [{ ...asset, instrument_id: null, quantity: null, amount: 123456 }] } });
   await page.goto('/portfolio/?view=dashboard');
   await page.locator('.holding-edit').click();
-  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
   await page.getByRole('option', { name: /KODEX/ }).click();
   await expect(page.getByLabel('가져온 보유금액 (원)')).toHaveValue('123456');
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
@@ -390,14 +360,14 @@ test('removing a holding retains manual dividend records with its original name'
 test('the AI tab shows the original report and can start another analysis without losing tab drafts', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
   await page.getByRole('button', { name: 'AI 포폴 분석', exact: true }).click();
-  await expect(page.locator('#report')).toBeVisible();
-  await expect(page.locator('.report-history')).toBeVisible();
+  await expect(page.locator('#result')).toBeVisible();
+  await expect(page.locator('.r8-past-chart')).toBeVisible();
   await page.getByRole('button', { name: '새로 분석하기', exact: true }).click();
-  await expect(page.locator('.step').first()).toBeVisible();
-  await expect(page.locator('#report')).toHaveCount(0);
+  await expect(page.locator('.fl-step').first()).toBeVisible();
+  await expect(page.locator('#result')).toHaveCount(0);
   await page.getByRole('button', { name: '한눈에', exact: true }).click();
   await page.getByRole('button', { name: 'AI 포폴 분석', exact: true }).click();
-  await expect(page.locator('.step').first()).toBeVisible();
+  await expect(page.locator('.fl-step').first()).toBeVisible();
 });
 
 test('latest analysis is recovered from the server even without the local result pointer', async ({ page }) => {
@@ -406,9 +376,9 @@ test('latest analysis is recovered from the server even without the local result
   await page.route('**/api/portfolio/analyses/*', r => r.fulfill({ json: job }));
   await page.goto('/portfolio/?view=dashboard');
   await page.getByRole('button', { name: 'AI 포폴 분석', exact: true }).click();
-  await expect(page.locator('.research-motion svg')).toBeVisible();
-  await expect(page.locator('.progress-steps li')).toHaveCount(4);
-  await expect(page.locator('.progress-steps li[aria-current=step]')).toHaveCount(1);
+  await expect(page.locator('.progress-steps')).toHaveCount(0);
+  await expect(page.locator('.fl-agent[data-s="run"]')).toHaveCount(2);
+  await expect(page.getByRole('list', { name: '분석 역할과 검토 흐름' })).toBeVisible();
 });
 
 for (const [profit, value, expected] of [[100000, 500000, '+100,000원 (+25.00%)'], [-100000, 300000, '-100,000원 (-25.00%)'], [0, 400000, '0원 (0.00%)'], [null, 400000, '—'], [100000, 100000, '+100,000원']] as const) {
@@ -444,22 +414,6 @@ test('mixed legacy weights and known cash remain editable without an impossible 
   expect(updated[1].amount).toBe(100000);
 });
 
-test('a temporary polling outage resumes the accepted backtest without submitting another job', async ({ page }) => {
-  await mock(page);
-  let submits = 0, polls = 0;
-  await page.route('**/api/portfolio/backtests', r => { submits++; return r.fulfill({ json: { id: 'retained' } }); });
-  await page.route('**/api/portfolio/backtests/retained', r => ++polls === 1 ? r.fulfill({ status: 503, json: {} }) : r.fulfill({ json: { state: 'succeeded', result: { return_pct: 25, excluded: [], history: { points: [], currency: 'KRW', basis: '', method: '', source_url: '' } } } }));
-  await page.goto('/portfolio/?view=dashboard');
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await page.getByRole('button', { name: '내 보유 종목으로 시작' }).click();
-  await page.getByRole('button', { name: '과거 수익률 조회', exact: true }).click();
-  await expect(page.getByRole('alert')).toContainText('조회 연결을 다시 시도');
-  await expect(page.getByRole('button', { name: '내 보유 종목으로 시작' })).toBeDisabled();
-  await expect(page.getByRole('heading', { name: '기간 수익률 +25%' })).toBeVisible({ timeout: 10000 });
-  await expect(page.getByRole('alert')).toHaveCount(0);
-  expect(submits).toBe(1);
-});
-
 
 test('legacy percentages below 100 remain editable instead of trapping the owner in seed conversion', async ({ page }) => {
   await mock(page, { version: 1, workbook: { ...workbook, assets: [{ ...asset, quantity: null, weight: 60 }] } });
@@ -481,7 +435,7 @@ test('recovering the first workbook read also restores ETF search', async ({ pag
   fail = false;
   await page.getByRole('button', { name: '저장된 내용 다시 불러오기' }).click();
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
-  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
   await expect(page.getByRole('option', { name: /KODEX/ })).toBeVisible();
 });
 

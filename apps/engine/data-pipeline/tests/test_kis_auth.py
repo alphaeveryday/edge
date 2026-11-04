@@ -624,7 +624,13 @@ def test_재시도_예산이_동시_kis_브랜치_수보다_크다():
     #    생기면 조용히 지나가지 말고 여기서 멈춰 이 계산을 env 기준으로 고치게 한다.
     #    목록은 **위에서 실제로 읽은 var** 에서 뽑는다 — 손으로 유지하면 kis 잡이 다른 레인으로
     #    옮겨갔을 때 그 레인의 var 가 목록에 없어 가드가 또 눈이 먼다.
-    env_tf = _strip_hcl((tf.parent.parent.parent / "envs/dev/main.tf").read_text())
+    # 같은 인자 이름을 다른 모듈도 쓴다(예: app_batch 의 schedule_expression) — 이 모듈을 부르는 블록만 본다.
+    env_all = _strip_hcl((tf.parent.parent.parent / "envs/dev/main.tf").read_text())
+    module_dir = _re_module.escape(tf.parent.name)
+    blocks = [b for b in _re_module.findall(r'^module\s+"[^"]+"\s*\{(.*?)^\}', env_all, _re_module.S | _re_module.M)
+              if _re_module.search(rf'source\s*=\s*"[^"]*/modules/{module_dir}"', b)]
+    assert blocks, f"envs/dev 에서 modules/{tf.parent.name} 을 부르는 module 블록을 못 찾았다 — 파서가 낡았다"
+    env_tf = "\n".join(blocks)
     for var in read_vars:
         assert not _re_module.search(rf"^\s*{var}\s*=", env_tf, _re_module.M), (
             f"envs/dev 가 `{var}` 를 오버라이드한다 — 이 가드는 모듈 default 로 창을 계산하므로 "

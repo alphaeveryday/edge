@@ -24,7 +24,8 @@ _VALIDATOR = Draft202012Validator(SCHEMA)
 RESOLUTION_KINDS = frozenset({"official", "disclosure"})
 REFUTATION_KINDS = frozenset({"official"})
 # 출처 종류를 사건 파일이 스스로 주장하므로, 판정 근거 출처만큼은 주소로 다시 확인한다.
-OFFICIAL_HOSTS = ("fsc.go.kr", "fss.or.kr", "spo.go.kr", "police.go.kr", "scourt.go.kr", "ftc.go.kr", "moj.go.kr", "www.krx.co.kr")
+OFFICIAL_HOSTS = ("fsc.go.kr", "fss.or.kr", "spo.go.kr", "police.go.kr", "scourt.go.kr", "ftc.go.kr", "moj.go.kr", "www.krx.co.kr",
+                  "law.go.kr")  # law.go.kr: 법제처 국가법령정보센터 판례(법원 판결 원문)
 DISCLOSURE_HOSTS = ("dart.fss.or.kr", "opendart.fss.or.kr", "kind.krx.co.kr")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # 공개 문장에서 확인 수준을 넘어서는 단정어. 행위를 구체적으로 쓰게 한다 (방법론 §8 작성 원칙).

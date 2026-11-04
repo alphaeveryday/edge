@@ -34,6 +34,13 @@ def ecs_client():
     return boto3.client("ecs", region_name=_region())
 
 
+def logs_client():
+    """CloudWatch Logs 클라이언트 — 지연 import·region 명시(모듈 도크스트링)."""
+    import boto3
+
+    return boto3.client("logs", region_name=_region())
+
+
 def ssm_client():
     """KIS 토큰 공유 캐시 전용(ALPHA-573). **짧은 타임아웃·재시도 예산을 명시한다.**
 

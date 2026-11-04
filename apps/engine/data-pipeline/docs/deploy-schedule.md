@@ -287,8 +287,9 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   실제 변경한 파티션·`article_id`는
   `operations_archive/feature_run_manifests/dataset=news_assertions/run_id=…/manifest.json`에
   기록하며, 모든 파티션과 quality log가 성공한 뒤에만 `feature_written=true`가 된다.
-  상한에 걸린 잔여가 있으면 manifest를 완료하지 않고 같은 run 재시도가 이어받는다(mentions 있는 미태깅
-  기사만 고른다 — 유니버스 무관 기사는 `skipped_no_mention` 으로 계측하며 태깅하지 않는다).
+  상한에 걸린 잔여가 있으면 manifest를 완료하지 않고 같은 run 재시도가 이어받는다(LLM 경로는 mentions 있는
+  미태깅 기사만 고른다 — 유니버스 무관 기사는 `skipped_no_mention` 으로 계측하며 태깅하지 않는다.
+  로컬 태거 경로는 이 게이트 없이 ko 기사 전부를 태깅한다, ALPHA-1456).
   LLM 호출은 기사별로 병렬 실행한다(ALPHA-519, `LLM_CONCURRENCY` env·기본 32·상한 100) —
   카운터·격리·병합은 취합 후 메인스레드라 순차 실행과 결과가 같다
 - `load-instruments`(→ Cloud Event Store RDB, **rds 세트**) — 정상 `--latest-good`은 세 pointer를
@@ -355,8 +356,8 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   세운다(동률이면 늦은 파티션 승 — 생산자 배열 순서에 안 걸리게). 보장 범위는 **이번 런이
   싣는 행**까지고, 앞선 런이 이미 실은 옛 판정은 자연키가 갈리면 DB 에 남는다(ALPHA-1052).
   **흡수 전 장중 미러는
-  읽지 않는다**(`minute_mirrors_unabsorbed`) — 그 조각은 아직 `tag-news` 의 mentions 게이트를
-  안 거쳤다.
+  읽지 않는다**(`minute_mirrors_unabsorbed`) — 그 조각은 아직 `tag-news` 의 mentions 게이트(LLM
+  경로)와 기사별 최신 판정 압축을 안 거쳤다.
   역할별 엔티티 해소(ALPHA-831 — 명부·채번 축 포함)와 해소율은 quality log 로 남고,
   채번 경로는 entity·concept 마스터 행도 만든다
 - `assemble-events`(**직렬**, 뉴스 SFN 의 LoadAssertions 뒤 — ALPHA-412·553, **events 세트**=LLM+DB) —
@@ -367,7 +368,8 @@ bigkinds task-def 를 재사용한다(새 task-def·IAM 불요). **`--input-run-
   기사를 skip 하고, 트랜잭션은 날짜별 커밋이라 threading 락 점유가 1분 소비자를 오래 막지
   않는다. 자체 분류기 폐기는 단건 경로 커버리지 실증 후 후속. 결정적 ID 산식·프롬프트는
   엔진과 동일(정본), 창 미지정 = 오늘(KST) 하루 — 뉴스 SFN 은 `--window-days 1` 로 [어제,오늘]
-  겹침(ALPHA-592, 자정 crossing·overnight 갭 방지). event 의 소비자는 ADR-0028 기준 analyze 였으나
+  겹침(ALPHA-592, 자정 crossing·overnight 갭 방지). 조립 대상은 LLM 경로면 mentions 종목이 유니버스에
+  있는 기사, 로컬 태거 경로면 ko 기사 전부다(ALPHA-1456 — 참여자는 표기 매칭기가 해소한다). event 의 소비자는 ADR-0028 기준 analyze 였으나
   **ALPHA-806 이 시장 SFN 에서 analyze 를 걷어낸 뒤로는 분봉 트리거 큐의 상주 소비자**다. 제목 분류 LLM 콜은 배치별 병렬 실행한다(ALPHA-520, tag-news 와 같은
   `LLM_CONCURRENCY` env) — 단 threading 은 novelty 가 available_at 순서·prior 카운트에 의존해
   **직렬** 유지다

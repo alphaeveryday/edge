@@ -1,0 +1,5448 @@
+{
+ "node": [
+  {
+   "label": "Company",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "name",
+     "type": "STRING"
+    },
+    {
+     "name": "countryCode",
+     "type": "STRING"
+    },
+    {
+     "name": "dartCorpCode",
+     "type": "STRING"
+    },
+    {
+     "name": "profileAsOfDate",
+     "type": "DATE"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "company",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "name",
+       "targetFieldName": "name"
+      },
+      {
+       "sourceFieldName": "country_code",
+       "targetFieldName": "countryCode"
+      },
+      {
+       "sourceFieldName": "dart_corp_code",
+       "targetFieldName": "dartCorpCode"
+      },
+      {
+       "sourceFieldName": "profile_as_of_date",
+       "targetFieldName": "profileAsOfDate"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "Concept",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "name",
+     "type": "STRING"
+    },
+    {
+     "name": "conceptType",
+     "type": "STRING"
+    },
+    {
+     "name": "parentConceptId",
+     "type": "STRING"
+    },
+    {
+     "name": "parentConceptName",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "concept",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "name",
+       "targetFieldName": "name"
+      },
+      {
+       "sourceFieldName": "concept_type",
+       "targetFieldName": "conceptType"
+      },
+      {
+       "sourceFieldName": "parent_concept_id",
+       "targetFieldName": "parentConceptId"
+      },
+      {
+       "sourceFieldName": "parent_concept_name",
+       "targetFieldName": "parentConceptName"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "DailyBar",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "instrumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "tradeDate",
+     "type": "DATE"
+    },
+    {
+     "name": "openPrice",
+     "type": "STRING"
+    },
+    {
+     "name": "highPrice",
+     "type": "STRING"
+    },
+    {
+     "name": "lowPrice",
+     "type": "STRING"
+    },
+    {
+     "name": "closePrice",
+     "type": "STRING"
+    },
+    {
+     "name": "adjustedClosePrice",
+     "type": "STRING"
+    },
+    {
+     "name": "simpleReturn",
+     "type": "DOUBLE"
+    },
+    {
+     "name": "logReturn",
+     "type": "DOUBLE"
+    },
+    {
+     "name": "volume",
+     "type": "LONG"
+    },
+    {
+     "name": "turnoverValue",
+     "type": "STRING"
+    },
+    {
+     "name": "priceBasis",
+     "type": "STRING"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "securityName",
+     "type": "STRING"
+    },
+    {
+     "name": "securityTicker",
+     "type": "STRING"
+    },
+    {
+     "name": "securityMarketCode",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "daily_bar",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "instrumentId"
+      },
+      {
+       "sourceFieldName": "trade_date",
+       "targetFieldName": "tradeDate"
+      },
+      {
+       "sourceFieldName": "open_price_decimal_text",
+       "targetFieldName": "openPrice"
+      },
+      {
+       "sourceFieldName": "high_price_decimal_text",
+       "targetFieldName": "highPrice"
+      },
+      {
+       "sourceFieldName": "low_price_decimal_text",
+       "targetFieldName": "lowPrice"
+      },
+      {
+       "sourceFieldName": "close_price_decimal_text",
+       "targetFieldName": "closePrice"
+      },
+      {
+       "sourceFieldName": "adjusted_close_price_decimal_text",
+       "targetFieldName": "adjustedClosePrice"
+      },
+      {
+       "sourceFieldName": "simple_return",
+       "targetFieldName": "simpleReturn"
+      },
+      {
+       "sourceFieldName": "log_return",
+       "targetFieldName": "logReturn"
+      },
+      {
+       "sourceFieldName": "volume",
+       "targetFieldName": "volume"
+      },
+      {
+       "sourceFieldName": "turnover_value_decimal_text",
+       "targetFieldName": "turnoverValue"
+      },
+      {
+       "sourceFieldName": "price_basis",
+       "targetFieldName": "priceBasis"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "security_name",
+       "targetFieldName": "securityName"
+      },
+      {
+       "sourceFieldName": "security_ticker",
+       "targetFieldName": "securityTicker"
+      },
+      {
+       "sourceFieldName": "security_market_code",
+       "targetFieldName": "securityMarketCode"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "DailyInvestorFlow",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "instrumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "tradeDate",
+     "type": "DATE"
+    },
+    {
+     "name": "netQtyIndividual",
+     "type": "LONG"
+    },
+    {
+     "name": "netValIndividual",
+     "type": "LONG"
+    },
+    {
+     "name": "netQtyForeign",
+     "type": "LONG"
+    },
+    {
+     "name": "netValForeign",
+     "type": "LONG"
+    },
+    {
+     "name": "netQtyInstitutionTotal",
+     "type": "LONG"
+    },
+    {
+     "name": "netValInstitutionTotal",
+     "type": "LONG"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "securityName",
+     "type": "STRING"
+    },
+    {
+     "name": "securityTicker",
+     "type": "STRING"
+    },
+    {
+     "name": "securityMarketCode",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "daily_investor_flow",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "instrumentId"
+      },
+      {
+       "sourceFieldName": "trade_date",
+       "targetFieldName": "tradeDate"
+      },
+      {
+       "sourceFieldName": "net_qty_individual",
+       "targetFieldName": "netQtyIndividual"
+      },
+      {
+       "sourceFieldName": "net_val_individual",
+       "targetFieldName": "netValIndividual"
+      },
+      {
+       "sourceFieldName": "net_qty_foreign",
+       "targetFieldName": "netQtyForeign"
+      },
+      {
+       "sourceFieldName": "net_val_foreign",
+       "targetFieldName": "netValForeign"
+      },
+      {
+       "sourceFieldName": "net_qty_institution_total",
+       "targetFieldName": "netQtyInstitutionTotal"
+      },
+      {
+       "sourceFieldName": "net_val_institution_total",
+       "targetFieldName": "netValInstitutionTotal"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "security_name",
+       "targetFieldName": "securityName"
+      },
+      {
+       "sourceFieldName": "security_ticker",
+       "targetFieldName": "securityTicker"
+      },
+      {
+       "sourceFieldName": "security_market_code",
+       "targetFieldName": "securityMarketCode"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "DailyNAV",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "etfInstrumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "tradeDate",
+     "type": "DATE"
+    },
+    {
+     "name": "nav",
+     "type": "STRING"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "etfName",
+     "type": "STRING"
+    },
+    {
+     "name": "etfTicker",
+     "type": "STRING"
+    },
+    {
+     "name": "etfMarketCode",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "daily_nav",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "etf_instrument_id",
+       "targetFieldName": "etfInstrumentId"
+      },
+      {
+       "sourceFieldName": "trade_date",
+       "targetFieldName": "tradeDate"
+      },
+      {
+       "sourceFieldName": "nav_decimal_text",
+       "targetFieldName": "nav"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "etf_name",
+       "targetFieldName": "etfName"
+      },
+      {
+       "sourceFieldName": "etf_ticker",
+       "targetFieldName": "etfTicker"
+      },
+      {
+       "sourceFieldName": "etf_market_code",
+       "targetFieldName": "etfMarketCode"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "Disclosure",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "issuerId",
+     "type": "STRING"
+    },
+    {
+     "name": "disclosureType",
+     "type": "STRING"
+    },
+    {
+     "name": "reportDate",
+     "type": "DATE"
+    },
+    {
+     "name": "title",
+     "type": "STRING"
+    },
+    {
+     "name": "publishedAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "sourceDocumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "sourceUri",
+     "type": "STRING"
+    },
+    {
+     "name": "issuerName",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "disclosure",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "issuer_id",
+       "targetFieldName": "issuerId"
+      },
+      {
+       "sourceFieldName": "disclosure_type",
+       "targetFieldName": "disclosureType"
+      },
+      {
+       "sourceFieldName": "report_date",
+       "targetFieldName": "reportDate"
+      },
+      {
+       "sourceFieldName": "title",
+       "targetFieldName": "title"
+      },
+      {
+       "sourceFieldName": "published_at",
+       "targetFieldName": "publishedAt"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "source_document_id",
+       "targetFieldName": "sourceDocumentId"
+      },
+      {
+       "sourceFieldName": "source_uri",
+       "targetFieldName": "sourceUri"
+      },
+      {
+       "sourceFieldName": "issuer_name",
+       "targetFieldName": "issuerName"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "ETF",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "name",
+     "type": "STRING"
+    },
+    {
+     "name": "ticker",
+     "type": "STRING"
+    },
+    {
+     "name": "marketCode",
+     "type": "STRING"
+    },
+    {
+     "name": "currencyCode",
+     "type": "STRING"
+    },
+    {
+     "name": "etfType",
+     "type": "STRING"
+    },
+    {
+     "name": "trackingMarketSeriesId",
+     "type": "STRING"
+    },
+    {
+     "name": "primaryThemeConceptId",
+     "type": "STRING"
+    },
+    {
+     "name": "assetManagerName",
+     "type": "STRING"
+    },
+    {
+     "name": "leverageMultiplier",
+     "type": "DOUBLE"
+    },
+    {
+     "name": "currencyHedged",
+     "type": "BOOLEAN"
+    },
+    {
+     "name": "totalExpenseRatio",
+     "type": "DOUBLE"
+    },
+    {
+     "name": "profileAsOfDate",
+     "type": "DATE"
+    },
+    {
+     "name": "benchmarkName",
+     "type": "STRING"
+    },
+    {
+     "name": "themeName",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "etf",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "name",
+       "targetFieldName": "name"
+      },
+      {
+       "sourceFieldName": "ticker",
+       "targetFieldName": "ticker"
+      },
+      {
+       "sourceFieldName": "market_code",
+       "targetFieldName": "marketCode"
+      },
+      {
+       "sourceFieldName": "currency_code",
+       "targetFieldName": "currencyCode"
+      },
+      {
+       "sourceFieldName": "etf_type",
+       "targetFieldName": "etfType"
+      },
+      {
+       "sourceFieldName": "tracking_market_series_id",
+       "targetFieldName": "trackingMarketSeriesId"
+      },
+      {
+       "sourceFieldName": "primary_theme_concept_id",
+       "targetFieldName": "primaryThemeConceptId"
+      },
+      {
+       "sourceFieldName": "asset_manager_name",
+       "targetFieldName": "assetManagerName"
+      },
+      {
+       "sourceFieldName": "leverage_multiplier",
+       "targetFieldName": "leverageMultiplier"
+      },
+      {
+       "sourceFieldName": "currency_hedged",
+       "targetFieldName": "currencyHedged"
+      },
+      {
+       "sourceFieldName": "total_expense_ratio",
+       "targetFieldName": "totalExpenseRatio"
+      },
+      {
+       "sourceFieldName": "profile_as_of_date",
+       "targetFieldName": "profileAsOfDate"
+      },
+      {
+       "sourceFieldName": "benchmark_name",
+       "targetFieldName": "benchmarkName"
+      },
+      {
+       "sourceFieldName": "theme_name",
+       "targetFieldName": "themeName"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "ETFHolding",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "etfInstrumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "constituentInstrumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "tradeDate",
+     "type": "DATE"
+    },
+    {
+     "name": "weightRatio",
+     "type": "DOUBLE"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "etfName",
+     "type": "STRING"
+    },
+    {
+     "name": "etfTicker",
+     "type": "STRING"
+    },
+    {
+     "name": "etfMarketCode",
+     "type": "STRING"
+    },
+    {
+     "name": "securityName",
+     "type": "STRING"
+    },
+    {
+     "name": "securityTicker",
+     "type": "STRING"
+    },
+    {
+     "name": "securityMarketCode",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "etf_holding",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "etf_instrument_id",
+       "targetFieldName": "etfInstrumentId"
+      },
+      {
+       "sourceFieldName": "constituent_instrument_id",
+       "targetFieldName": "constituentInstrumentId"
+      },
+      {
+       "sourceFieldName": "trade_date",
+       "targetFieldName": "tradeDate"
+      },
+      {
+       "sourceFieldName": "weight_ratio",
+       "targetFieldName": "weightRatio"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "etf_name",
+       "targetFieldName": "etfName"
+      },
+      {
+       "sourceFieldName": "etf_ticker",
+       "targetFieldName": "etfTicker"
+      },
+      {
+       "sourceFieldName": "etf_market_code",
+       "targetFieldName": "etfMarketCode"
+      },
+      {
+       "sourceFieldName": "security_name",
+       "targetFieldName": "securityName"
+      },
+      {
+       "sourceFieldName": "security_ticker",
+       "targetFieldName": "securityTicker"
+      },
+      {
+       "sourceFieldName": "security_market_code",
+       "targetFieldName": "securityMarketCode"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "ETFOutlookReport",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "etfInstrumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "analysisAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "summary",
+     "type": "STRING"
+    },
+    {
+     "name": "previousReportId",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    },
+    {
+     "name": "evidenceRunIds",
+     "type": "Array<String>"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "etf_outlook_report",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "etf_instrument_id",
+       "targetFieldName": "etfInstrumentId"
+      },
+      {
+       "sourceFieldName": "analysis_at",
+       "targetFieldName": "analysisAt"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "summary",
+       "targetFieldName": "summary"
+      },
+      {
+       "sourceFieldName": "previous_report_id",
+       "targetFieldName": "previousReportId"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      },
+      {
+       "sourceFieldName": "evidence_run_ids",
+       "targetFieldName": "evidenceRunIds"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "ETFPriceExplanation",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "etfInstrumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "analysisAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "summary",
+     "type": "STRING"
+    },
+    {
+     "name": "previousReportId",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    },
+    {
+     "name": "evidenceRunIds",
+     "type": "Array<String>"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "etf_price_explanation",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "etf_instrument_id",
+       "targetFieldName": "etfInstrumentId"
+      },
+      {
+       "sourceFieldName": "analysis_at",
+       "targetFieldName": "analysisAt"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "summary",
+       "targetFieldName": "summary"
+      },
+      {
+       "sourceFieldName": "previous_report_id",
+       "targetFieldName": "previousReportId"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      },
+      {
+       "sourceFieldName": "evidence_run_ids",
+       "targetFieldName": "evidenceRunIds"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "Equity",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "name",
+     "type": "STRING"
+    },
+    {
+     "name": "issuerId",
+     "type": "STRING"
+    },
+    {
+     "name": "shareClass",
+     "type": "STRING"
+    },
+    {
+     "name": "ticker",
+     "type": "STRING"
+    },
+    {
+     "name": "marketCode",
+     "type": "STRING"
+    },
+    {
+     "name": "currencyCode",
+     "type": "STRING"
+    },
+    {
+     "name": "profileAsOfDate",
+     "type": "DATE"
+    },
+    {
+     "name": "issuerName",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "equity",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "name",
+       "targetFieldName": "name"
+      },
+      {
+       "sourceFieldName": "issuer_id",
+       "targetFieldName": "issuerId"
+      },
+      {
+       "sourceFieldName": "share_class",
+       "targetFieldName": "shareClass"
+      },
+      {
+       "sourceFieldName": "ticker",
+       "targetFieldName": "ticker"
+      },
+      {
+       "sourceFieldName": "market_code",
+       "targetFieldName": "marketCode"
+      },
+      {
+       "sourceFieldName": "currency_code",
+       "targetFieldName": "currencyCode"
+      },
+      {
+       "sourceFieldName": "profile_as_of_date",
+       "targetFieldName": "profileAsOfDate"
+      },
+      {
+       "sourceFieldName": "issuer_name",
+       "targetFieldName": "issuerName"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "EventMeasurement",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "sourceEventId",
+     "type": "STRING"
+    },
+    {
+     "name": "measurementOrdinal",
+     "type": "SHORT"
+    },
+    {
+     "name": "metricCode",
+     "type": "STRING"
+    },
+    {
+     "name": "reportedText",
+     "type": "STRING"
+    },
+    {
+     "name": "value",
+     "type": "STRING"
+    },
+    {
+     "name": "unit",
+     "type": "STRING"
+    },
+    {
+     "name": "periodBasis",
+     "type": "STRING"
+    },
+    {
+     "name": "valueSource",
+     "type": "STRING"
+    },
+    {
+     "name": "parseStatus",
+     "type": "STRING"
+    },
+    {
+     "name": "argumentGroup",
+     "type": "SHORT"
+    },
+    {
+     "name": "receiptNumber",
+     "type": "STRING"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "event_measurement",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "source_event_id",
+       "targetFieldName": "sourceEventId"
+      },
+      {
+       "sourceFieldName": "measurement_ordinal",
+       "targetFieldName": "measurementOrdinal"
+      },
+      {
+       "sourceFieldName": "metric_code",
+       "targetFieldName": "metricCode"
+      },
+      {
+       "sourceFieldName": "reported_text",
+       "targetFieldName": "reportedText"
+      },
+      {
+       "sourceFieldName": "value_decimal",
+       "targetFieldName": "value"
+      },
+      {
+       "sourceFieldName": "unit",
+       "targetFieldName": "unit"
+      },
+      {
+       "sourceFieldName": "period_basis",
+       "targetFieldName": "periodBasis"
+      },
+      {
+       "sourceFieldName": "value_source",
+       "targetFieldName": "valueSource"
+      },
+      {
+       "sourceFieldName": "parse_status",
+       "targetFieldName": "parseStatus"
+      },
+      {
+       "sourceFieldName": "argument_group",
+       "targetFieldName": "argumentGroup"
+      },
+      {
+       "sourceFieldName": "receipt_number",
+       "targetFieldName": "receiptNumber"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "EventThread",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "eventType",
+     "type": "STRING"
+    },
+    {
+     "name": "currentStage",
+     "type": "STRING"
+    },
+    {
+     "name": "openedAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "lastStateAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "argumentSummary",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "event_thread",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "event_type",
+       "targetFieldName": "eventType"
+      },
+      {
+       "sourceFieldName": "current_stage",
+       "targetFieldName": "currentStage"
+      },
+      {
+       "sourceFieldName": "opened_at",
+       "targetFieldName": "openedAt"
+      },
+      {
+       "sourceFieldName": "last_state_at",
+       "targetFieldName": "lastStateAt"
+      },
+      {
+       "sourceFieldName": "argument_summary",
+       "targetFieldName": "argumentSummary"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "ExchangeSecurityClassification",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "market",
+     "type": "STRING"
+    },
+    {
+     "name": "instrumentCode",
+     "type": "STRING"
+    },
+    {
+     "name": "standardCode",
+     "type": "STRING"
+    },
+    {
+     "name": "nameKr",
+     "type": "STRING"
+    },
+    {
+     "name": "securityGroup",
+     "type": "STRING"
+    },
+    {
+     "name": "collectedOn",
+     "type": "DATE"
+    },
+    {
+     "name": "largeCode",
+     "type": "STRING"
+    },
+    {
+     "name": "largeName",
+     "type": "STRING"
+    },
+    {
+     "name": "mediumCode",
+     "type": "STRING"
+    },
+    {
+     "name": "mediumName",
+     "type": "STRING"
+    },
+    {
+     "name": "smallCode",
+     "type": "STRING"
+    },
+    {
+     "name": "smallName",
+     "type": "STRING"
+    },
+    {
+     "name": "taxonomy",
+     "type": "STRING"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "securityName",
+     "type": "STRING"
+    },
+    {
+     "name": "securityTicker",
+     "type": "STRING"
+    },
+    {
+     "name": "securityMarketCode",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "exchange_security_classification",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "market",
+       "targetFieldName": "market"
+      },
+      {
+       "sourceFieldName": "instrument_code",
+       "targetFieldName": "instrumentCode"
+      },
+      {
+       "sourceFieldName": "standard_code",
+       "targetFieldName": "standardCode"
+      },
+      {
+       "sourceFieldName": "name_kr",
+       "targetFieldName": "nameKr"
+      },
+      {
+       "sourceFieldName": "security_group",
+       "targetFieldName": "securityGroup"
+      },
+      {
+       "sourceFieldName": "collected_on",
+       "targetFieldName": "collectedOn"
+      },
+      {
+       "sourceFieldName": "large_code",
+       "targetFieldName": "largeCode"
+      },
+      {
+       "sourceFieldName": "large_name",
+       "targetFieldName": "largeName"
+      },
+      {
+       "sourceFieldName": "medium_code",
+       "targetFieldName": "mediumCode"
+      },
+      {
+       "sourceFieldName": "medium_name",
+       "targetFieldName": "mediumName"
+      },
+      {
+       "sourceFieldName": "small_code",
+       "targetFieldName": "smallCode"
+      },
+      {
+       "sourceFieldName": "small_name",
+       "targetFieldName": "smallName"
+      },
+      {
+       "sourceFieldName": "taxonomy",
+       "targetFieldName": "taxonomy"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "security_name",
+       "targetFieldName": "securityName"
+      },
+      {
+       "sourceFieldName": "security_ticker",
+       "targetFieldName": "securityTicker"
+      },
+      {
+       "sourceFieldName": "security_market_code",
+       "targetFieldName": "securityMarketCode"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "FinancialMetric",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "corpCode",
+     "type": "STRING"
+    },
+    {
+     "name": "instrumentCode",
+     "type": "STRING"
+    },
+    {
+     "name": "fiscalYear",
+     "type": "SHORT"
+    },
+    {
+     "name": "fiscalPeriod",
+     "type": "STRING"
+    },
+    {
+     "name": "periodEnd",
+     "type": "DATE"
+    },
+    {
+     "name": "metric",
+     "type": "STRING"
+    },
+    {
+     "name": "periodKind",
+     "type": "STRING"
+    },
+    {
+     "name": "fsBasis",
+     "type": "STRING"
+    },
+    {
+     "name": "derivation",
+     "type": "STRING"
+    },
+    {
+     "name": "value",
+     "type": "STRING"
+    },
+    {
+     "name": "unit",
+     "type": "STRING"
+    },
+    {
+     "name": "formula",
+     "type": "STRING"
+    },
+    {
+     "name": "rceptNo",
+     "type": "STRING"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "receivedAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "availabilityBasis",
+     "type": "STRING"
+    },
+    {
+     "name": "calculationInputs",
+     "type": "STRING"
+    },
+    {
+     "name": "companyName",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "financial_metric",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "corp_code",
+       "targetFieldName": "corpCode"
+      },
+      {
+       "sourceFieldName": "instrument_code",
+       "targetFieldName": "instrumentCode"
+      },
+      {
+       "sourceFieldName": "fiscal_year",
+       "targetFieldName": "fiscalYear"
+      },
+      {
+       "sourceFieldName": "fiscal_period",
+       "targetFieldName": "fiscalPeriod"
+      },
+      {
+       "sourceFieldName": "period_end",
+       "targetFieldName": "periodEnd"
+      },
+      {
+       "sourceFieldName": "metric",
+       "targetFieldName": "metric"
+      },
+      {
+       "sourceFieldName": "period_kind",
+       "targetFieldName": "periodKind"
+      },
+      {
+       "sourceFieldName": "fs_basis",
+       "targetFieldName": "fsBasis"
+      },
+      {
+       "sourceFieldName": "derivation",
+       "targetFieldName": "derivation"
+      },
+      {
+       "sourceFieldName": "value_decimal_text",
+       "targetFieldName": "value"
+      },
+      {
+       "sourceFieldName": "unit",
+       "targetFieldName": "unit"
+      },
+      {
+       "sourceFieldName": "formula",
+       "targetFieldName": "formula"
+      },
+      {
+       "sourceFieldName": "rcept_no",
+       "targetFieldName": "rceptNo"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "received_at",
+       "targetFieldName": "receivedAt"
+      },
+      {
+       "sourceFieldName": "availability_basis",
+       "targetFieldName": "availabilityBasis"
+      },
+      {
+       "sourceFieldName": "calculation_inputs",
+       "targetFieldName": "calculationInputs"
+      },
+      {
+       "sourceFieldName": "company_name",
+       "targetFieldName": "companyName"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "FinancialReportSnapshot",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "corpCode",
+     "type": "STRING"
+    },
+    {
+     "name": "instrumentCode",
+     "type": "STRING"
+    },
+    {
+     "name": "fiscalYear",
+     "type": "SHORT"
+    },
+    {
+     "name": "reportTypeCode",
+     "type": "STRING"
+    },
+    {
+     "name": "reportCoverage",
+     "type": "STRING"
+    },
+    {
+     "name": "fsBasis",
+     "type": "STRING"
+    },
+    {
+     "name": "receiptNumber",
+     "type": "STRING"
+    },
+    {
+     "name": "receiptDate",
+     "type": "DATE"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "receivedAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "availabilityBasis",
+     "type": "STRING"
+    },
+    {
+     "name": "companyName",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "financial_report_snapshot",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "corp_code",
+       "targetFieldName": "corpCode"
+      },
+      {
+       "sourceFieldName": "instrument_code",
+       "targetFieldName": "instrumentCode"
+      },
+      {
+       "sourceFieldName": "fiscal_year",
+       "targetFieldName": "fiscalYear"
+      },
+      {
+       "sourceFieldName": "report_type_code",
+       "targetFieldName": "reportTypeCode"
+      },
+      {
+       "sourceFieldName": "report_coverage",
+       "targetFieldName": "reportCoverage"
+      },
+      {
+       "sourceFieldName": "fs_basis",
+       "targetFieldName": "fsBasis"
+      },
+      {
+       "sourceFieldName": "receipt_number",
+       "targetFieldName": "receiptNumber"
+      },
+      {
+       "sourceFieldName": "receipt_date",
+       "targetFieldName": "receiptDate"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "received_at",
+       "targetFieldName": "receivedAt"
+      },
+      {
+       "sourceFieldName": "availability_basis",
+       "targetFieldName": "availabilityBasis"
+      },
+      {
+       "sourceFieldName": "company_name",
+       "targetFieldName": "companyName"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "IntradayInvestorFlow",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "instrumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "tradeDate",
+     "type": "DATE"
+    },
+    {
+     "name": "reportingSlotCode",
+     "type": "STRING"
+    },
+    {
+     "name": "foreignNetPurchaseQuantityEstimate",
+     "type": "LONG"
+    },
+    {
+     "name": "institutionalNetPurchaseQuantityEstimate",
+     "type": "LONG"
+    },
+    {
+     "name": "foreignAndInstitutionalNetPurchaseQuantityEstimate",
+     "type": "LONG"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "estimateAsOf",
+     "type": "DATETIME"
+    },
+    {
+     "name": "securityName",
+     "type": "STRING"
+    },
+    {
+     "name": "securityTicker",
+     "type": "STRING"
+    },
+    {
+     "name": "securityMarketCode",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "intraday_investor_flow",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "instrumentId"
+      },
+      {
+       "sourceFieldName": "trade_date",
+       "targetFieldName": "tradeDate"
+      },
+      {
+       "sourceFieldName": "reporting_slot_code",
+       "targetFieldName": "reportingSlotCode"
+      },
+      {
+       "sourceFieldName": "foreign_net_purchase_quantity_estimate",
+       "targetFieldName": "foreignNetPurchaseQuantityEstimate"
+      },
+      {
+       "sourceFieldName": "institutional_net_purchase_quantity_estimate",
+       "targetFieldName": "institutionalNetPurchaseQuantityEstimate"
+      },
+      {
+       "sourceFieldName": "foreign_and_institutional_net_purchase_quantity_estimate",
+       "targetFieldName": "foreignAndInstitutionalNetPurchaseQuantityEstimate"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "estimate_as_of",
+       "targetFieldName": "estimateAsOf"
+      },
+      {
+       "sourceFieldName": "security_name",
+       "targetFieldName": "securityName"
+      },
+      {
+       "sourceFieldName": "security_ticker",
+       "targetFieldName": "securityTicker"
+      },
+      {
+       "sourceFieldName": "security_market_code",
+       "targetFieldName": "securityMarketCode"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "MacroObservation",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "seriesId",
+     "type": "STRING"
+    },
+    {
+     "name": "observationDate",
+     "type": "DATE"
+    },
+    {
+     "name": "value",
+     "type": "STRING"
+    },
+    {
+     "name": "unit",
+     "type": "STRING"
+    },
+    {
+     "name": "sourceVendor",
+     "type": "STRING"
+    },
+    {
+     "name": "sourceSeries",
+     "type": "STRING"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "regions",
+     "type": "Array<String>"
+    },
+    {
+     "name": "indicatorType",
+     "type": "STRING"
+    },
+    {
+     "name": "seriesName",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "macro_observation",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "series_id",
+       "targetFieldName": "seriesId"
+      },
+      {
+       "sourceFieldName": "observation_date",
+       "targetFieldName": "observationDate"
+      },
+      {
+       "sourceFieldName": "value_decimal_text",
+       "targetFieldName": "value"
+      },
+      {
+       "sourceFieldName": "unit",
+       "targetFieldName": "unit"
+      },
+      {
+       "sourceFieldName": "source_vendor",
+       "targetFieldName": "sourceVendor"
+      },
+      {
+       "sourceFieldName": "source_series",
+       "targetFieldName": "sourceSeries"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "regions",
+       "targetFieldName": "regions"
+      },
+      {
+       "sourceFieldName": "indicator_type",
+       "targetFieldName": "indicatorType"
+      },
+      {
+       "sourceFieldName": "series_name",
+       "targetFieldName": "seriesName"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "MarketCapitalization",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "instrumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "snapshotDate",
+     "type": "DATE"
+    },
+    {
+     "name": "amount",
+     "type": "STRING"
+    },
+    {
+     "name": "source",
+     "type": "STRING"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "currencyCode",
+     "type": "STRING"
+    },
+    {
+     "name": "capitalizationScope",
+     "type": "STRING"
+    },
+    {
+     "name": "valuationDate",
+     "type": "DATE"
+    },
+    {
+     "name": "securityName",
+     "type": "STRING"
+    },
+    {
+     "name": "securityTicker",
+     "type": "STRING"
+    },
+    {
+     "name": "securityMarketCode",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "market_capitalization",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "instrumentId"
+      },
+      {
+       "sourceFieldName": "snapshot_date",
+       "targetFieldName": "snapshotDate"
+      },
+      {
+       "sourceFieldName": "amount_decimal_text",
+       "targetFieldName": "amount"
+      },
+      {
+       "sourceFieldName": "source",
+       "targetFieldName": "source"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "currency_code",
+       "targetFieldName": "currencyCode"
+      },
+      {
+       "sourceFieldName": "capitalization_scope",
+       "targetFieldName": "capitalizationScope"
+      },
+      {
+       "sourceFieldName": "valuation_date",
+       "targetFieldName": "valuationDate"
+      },
+      {
+       "sourceFieldName": "security_name",
+       "targetFieldName": "securityName"
+      },
+      {
+       "sourceFieldName": "security_ticker",
+       "targetFieldName": "securityTicker"
+      },
+      {
+       "sourceFieldName": "security_market_code",
+       "targetFieldName": "securityMarketCode"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "MarketIndex",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "seriesName",
+     "type": "STRING"
+    },
+    {
+     "name": "sourceCode",
+     "type": "STRING"
+    },
+    {
+     "name": "sourceSeriesId",
+     "type": "STRING"
+    },
+    {
+     "name": "marketCode",
+     "type": "STRING"
+    },
+    {
+     "name": "currencyCode",
+     "type": "STRING"
+    },
+    {
+     "name": "regions",
+     "type": "Array<String>"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "market_index",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "series_name",
+       "targetFieldName": "seriesName"
+      },
+      {
+       "sourceFieldName": "source_code",
+       "targetFieldName": "sourceCode"
+      },
+      {
+       "sourceFieldName": "source_series_id",
+       "targetFieldName": "sourceSeriesId"
+      },
+      {
+       "sourceFieldName": "market_code",
+       "targetFieldName": "marketCode"
+      },
+      {
+       "sourceFieldName": "currency_code",
+       "targetFieldName": "currencyCode"
+      },
+      {
+       "sourceFieldName": "regions",
+       "targetFieldName": "regions"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "NewsArticle",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "title",
+     "type": "STRING"
+    },
+    {
+     "name": "publishedAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "sourceCode",
+     "type": "STRING"
+    },
+    {
+     "name": "sourceDocumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "sourceUri",
+     "type": "STRING"
+    },
+    {
+     "name": "leadText",
+     "type": "STRING"
+    },
+    {
+     "name": "publisher",
+     "type": "STRING"
+    },
+    {
+     "name": "leadObservedAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "representativeDocumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "themeConceptId",
+     "type": "STRING"
+    },
+    {
+     "name": "representativeTitle",
+     "type": "STRING"
+    },
+    {
+     "name": "themeName",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "news_article",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "title",
+       "targetFieldName": "title"
+      },
+      {
+       "sourceFieldName": "published_at",
+       "targetFieldName": "publishedAt"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "source_code",
+       "targetFieldName": "sourceCode"
+      },
+      {
+       "sourceFieldName": "source_document_id",
+       "targetFieldName": "sourceDocumentId"
+      },
+      {
+       "sourceFieldName": "source_uri",
+       "targetFieldName": "sourceUri"
+      },
+      {
+       "sourceFieldName": "lead_text",
+       "targetFieldName": "leadText"
+      },
+      {
+       "sourceFieldName": "publisher",
+       "targetFieldName": "publisher"
+      },
+      {
+       "sourceFieldName": "lead_observed_at",
+       "targetFieldName": "leadObservedAt"
+      },
+      {
+       "sourceFieldName": "representative_document_id",
+       "targetFieldName": "representativeDocumentId"
+      },
+      {
+       "sourceFieldName": "theme_concept_id",
+       "targetFieldName": "themeConceptId"
+      },
+      {
+       "sourceFieldName": "representative_title",
+       "targetFieldName": "representativeTitle"
+      },
+      {
+       "sourceFieldName": "theme_name",
+       "targetFieldName": "themeName"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "Organization",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "name",
+     "type": "STRING"
+    },
+    {
+     "name": "actorType",
+     "type": "STRING"
+    },
+    {
+     "name": "countryCode",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "organization",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "name",
+       "targetFieldName": "name"
+      },
+      {
+       "sourceFieldName": "actor_type",
+       "targetFieldName": "actorType"
+      },
+      {
+       "sourceFieldName": "country_code",
+       "targetFieldName": "countryCode"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "ReportedBusinessSegment",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "segmentName",
+     "type": "STRING"
+    },
+    {
+     "name": "conceptId",
+     "type": "STRING"
+    },
+    {
+     "name": "reportedPeriodText",
+     "type": "STRING"
+    },
+    {
+     "name": "revenueKrw",
+     "type": "STRING"
+    },
+    {
+     "name": "revenueSharePct",
+     "type": "DOUBLE"
+    },
+    {
+     "name": "shareCalculationMethod",
+     "type": "STRING"
+    },
+    {
+     "name": "documentId",
+     "type": "STRING"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "periodStart",
+     "type": "DATE"
+    },
+    {
+     "name": "periodEnd",
+     "type": "DATE"
+    },
+    {
+     "name": "statementBasis",
+     "type": "STRING"
+    },
+    {
+     "name": "revenueTotalKrw",
+     "type": "STRING"
+    },
+    {
+     "name": "revenueTotalScope",
+     "type": "STRING"
+    },
+    {
+     "name": "companyName",
+     "type": "STRING"
+    },
+    {
+     "name": "documentTitle",
+     "type": "STRING"
+    },
+    {
+     "name": "conceptName",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "reported_business_segment",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "segment_name",
+       "targetFieldName": "segmentName"
+      },
+      {
+       "sourceFieldName": "concept_id",
+       "targetFieldName": "conceptId"
+      },
+      {
+       "sourceFieldName": "reported_period_text",
+       "targetFieldName": "reportedPeriodText"
+      },
+      {
+       "sourceFieldName": "revenue_krw_decimal_text",
+       "targetFieldName": "revenueKrw"
+      },
+      {
+       "sourceFieldName": "revenue_share_pct",
+       "targetFieldName": "revenueSharePct"
+      },
+      {
+       "sourceFieldName": "share_calculation_method",
+       "targetFieldName": "shareCalculationMethod"
+      },
+      {
+       "sourceFieldName": "document_id",
+       "targetFieldName": "documentId"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "period_start",
+       "targetFieldName": "periodStart"
+      },
+      {
+       "sourceFieldName": "period_end",
+       "targetFieldName": "periodEnd"
+      },
+      {
+       "sourceFieldName": "statement_basis",
+       "targetFieldName": "statementBasis"
+      },
+      {
+       "sourceFieldName": "revenue_total_krw_decimal_text",
+       "targetFieldName": "revenueTotalKrw"
+      },
+      {
+       "sourceFieldName": "revenue_total_scope",
+       "targetFieldName": "revenueTotalScope"
+      },
+      {
+       "sourceFieldName": "company_name",
+       "targetFieldName": "companyName"
+      },
+      {
+       "sourceFieldName": "document_title",
+       "targetFieldName": "documentTitle"
+      },
+      {
+       "sourceFieldName": "concept_name",
+       "targetFieldName": "conceptName"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "SecurityIndustryClassification",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "instrumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "snapshotDate",
+     "type": "DATE"
+    },
+    {
+     "name": "sectorName",
+     "type": "STRING"
+    },
+    {
+     "name": "industryName",
+     "type": "STRING"
+    },
+    {
+     "name": "source",
+     "type": "STRING"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "effectiveFrom",
+     "type": "DATE"
+    },
+    {
+     "name": "securityName",
+     "type": "STRING"
+    },
+    {
+     "name": "securityTicker",
+     "type": "STRING"
+    },
+    {
+     "name": "securityMarketCode",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "security_industry_classification",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "instrumentId"
+      },
+      {
+       "sourceFieldName": "snapshot_date",
+       "targetFieldName": "snapshotDate"
+      },
+      {
+       "sourceFieldName": "sector_name",
+       "targetFieldName": "sectorName"
+      },
+      {
+       "sourceFieldName": "industry_name",
+       "targetFieldName": "industryName"
+      },
+      {
+       "sourceFieldName": "source",
+       "targetFieldName": "source"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "effective_from",
+       "targetFieldName": "effectiveFrom"
+      },
+      {
+       "sourceFieldName": "security_name",
+       "targetFieldName": "securityName"
+      },
+      {
+       "sourceFieldName": "security_ticker",
+       "targetFieldName": "securityTicker"
+      },
+      {
+       "sourceFieldName": "security_market_code",
+       "targetFieldName": "securityMarketCode"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "SecurityListingSnapshot",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "instrumentId",
+     "type": "STRING"
+    },
+    {
+     "name": "snapshotDate",
+     "type": "DATE"
+    },
+    {
+     "name": "listingMarket",
+     "type": "STRING"
+    },
+    {
+     "name": "isPrimaryShare",
+     "type": "BOOLEAN"
+    },
+    {
+     "name": "source",
+     "type": "STRING"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "securityName",
+     "type": "STRING"
+    },
+    {
+     "name": "securityTicker",
+     "type": "STRING"
+    },
+    {
+     "name": "securityMarketCode",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "security_listing_snapshot",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "instrumentId"
+      },
+      {
+       "sourceFieldName": "snapshot_date",
+       "targetFieldName": "snapshotDate"
+      },
+      {
+       "sourceFieldName": "listing_market",
+       "targetFieldName": "listingMarket"
+      },
+      {
+       "sourceFieldName": "is_primary_share",
+       "targetFieldName": "isPrimaryShare"
+      },
+      {
+       "sourceFieldName": "source",
+       "targetFieldName": "source"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "security_name",
+       "targetFieldName": "securityName"
+      },
+      {
+       "sourceFieldName": "security_ticker",
+       "targetFieldName": "securityTicker"
+      },
+      {
+       "sourceFieldName": "security_market_code",
+       "targetFieldName": "securityMarketCode"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "label": "SourceEvent",
+   "id": [
+    {
+     "name": "id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "id",
+     "type": "STRING"
+    },
+    {
+     "name": "eventType",
+     "type": "STRING"
+    },
+    {
+     "name": "predicate",
+     "type": "STRING"
+    },
+    {
+     "name": "sourceClass",
+     "type": "STRING"
+    },
+    {
+     "name": "eventDate",
+     "type": "DATE"
+    },
+    {
+     "name": "availableAt",
+     "type": "DATETIME"
+    },
+    {
+     "name": "lifecycleStage",
+     "type": "STRING"
+    },
+    {
+     "name": "argumentSummary",
+     "type": "STRING"
+    },
+    {
+     "name": "displayTitle",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "source_event",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "id"
+      },
+      {
+       "sourceFieldName": "event_type",
+       "targetFieldName": "eventType"
+      },
+      {
+       "sourceFieldName": "predicate",
+       "targetFieldName": "predicate"
+      },
+      {
+       "sourceFieldName": "source_class",
+       "targetFieldName": "sourceClass"
+      },
+      {
+       "sourceFieldName": "event_date",
+       "targetFieldName": "eventDate"
+      },
+      {
+       "sourceFieldName": "available_at",
+       "targetFieldName": "availableAt"
+      },
+      {
+       "sourceFieldName": "lifecycle_stage",
+       "targetFieldName": "lifecycleStage"
+      },
+      {
+       "sourceFieldName": "argument_summary",
+       "targetFieldName": "argumentSummary"
+      },
+      {
+       "sourceFieldName": "display_title",
+       "targetFieldName": "displayTitle"
+      }
+     ]
+    }
+   }
+  }
+ ],
+ "edge": [
+  {
+   "label": "Company_Issues_Equity",
+   "fromNodeLabel": "Company",
+   "toNodeLabel": "Equity",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "equity",
+     "mappedField": [
+      {
+       "sourceFieldName": "issuer_id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "issuer_id IS NOT NULL AND id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "Company_HasDisclosure_Disclosure",
+   "fromNodeLabel": "Company",
+   "toNodeLabel": "Disclosure",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "disclosure",
+     "mappedField": [
+      {
+       "sourceFieldName": "issuer_id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "issuer_id IS NOT NULL AND id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "Company_ParticipatesIn_SourceEvent",
+   "fromNodeLabel": "Company",
+   "toNodeLabel": "SourceEvent",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "roleCode",
+     "type": "STRING"
+    },
+    {
+     "name": "mentionedName",
+     "type": "STRING"
+    },
+    {
+     "name": "argumentGroup",
+     "type": "SHORT"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "actor_participation",
+     "mappedField": [
+      {
+       "sourceFieldName": "actor_id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "source_event_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "role_code",
+       "targetFieldName": "roleCode"
+      },
+      {
+       "sourceFieldName": "mentioned_name",
+       "targetFieldName": "mentionedName"
+      },
+      {
+       "sourceFieldName": "argument_group",
+       "targetFieldName": "argumentGroup"
+      },
+      {
+       "sourceFieldName": "participation_id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "actor_id IS NOT NULL AND source_event_id IS NOT NULL AND (actor_type = 'COMPANY')"
+    }
+   }
+  },
+  {
+   "label": "Concept_HasParentConcept_Concept",
+   "fromNodeLabel": "Concept",
+   "toNodeLabel": "Concept",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "concept",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "parent_concept_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND parent_concept_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "DailyBar_ForSecurity_Equity",
+   "fromNodeLabel": "DailyBar",
+   "toNodeLabel": "Equity",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "daily_bar",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND instrument_id IS NOT NULL AND (security_type = 'EQUITY')"
+    }
+   }
+  },
+  {
+   "label": "DailyBar_ForSecurity_ETF",
+   "fromNodeLabel": "DailyBar",
+   "toNodeLabel": "ETF",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "daily_bar",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND instrument_id IS NOT NULL AND (security_type = 'ETF')"
+    }
+   }
+  },
+  {
+   "label": "DailyInvestorFlow_ForSecurity_Equity",
+   "fromNodeLabel": "DailyInvestorFlow",
+   "toNodeLabel": "Equity",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "daily_investor_flow",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND instrument_id IS NOT NULL AND (security_type = 'EQUITY')"
+    }
+   }
+  },
+  {
+   "label": "DailyInvestorFlow_ForSecurity_ETF",
+   "fromNodeLabel": "DailyInvestorFlow",
+   "toNodeLabel": "ETF",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "daily_investor_flow",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND instrument_id IS NOT NULL AND (security_type = 'ETF')"
+    }
+   }
+  },
+  {
+   "label": "DailyNAV_ForETF_ETF",
+   "fromNodeLabel": "DailyNAV",
+   "toNodeLabel": "ETF",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "daily_nav",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "etf_instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND etf_instrument_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "Disclosure_DescribesEvent_SourceEvent",
+   "fromNodeLabel": "Disclosure",
+   "toNodeLabel": "SourceEvent",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "assertionId",
+     "type": "STRING"
+    },
+    {
+     "name": "evidenceType",
+     "type": "STRING"
+    },
+    {
+     "name": "evidenceText",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "document_event_evidence",
+     "mappedField": [
+      {
+       "sourceFieldName": "document_id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "source_event_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "assertion_id",
+       "targetFieldName": "assertionId"
+      },
+      {
+       "sourceFieldName": "evidence_type",
+       "targetFieldName": "evidenceType"
+      },
+      {
+       "sourceFieldName": "evidence_text",
+       "targetFieldName": "evidenceText"
+      },
+      {
+       "sourceFieldName": "evidence_id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "document_id IS NOT NULL AND source_event_id IS NOT NULL AND (document_type = 'DISCLOSURE')"
+    }
+   }
+  },
+  {
+   "label": "ETF_HasTheme_Concept",
+   "fromNodeLabel": "ETF",
+   "toNodeLabel": "Concept",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "etf",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "primary_theme_concept_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND primary_theme_concept_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "ETF_Tracks_MarketIndex",
+   "fromNodeLabel": "ETF",
+   "toNodeLabel": "MarketIndex",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "etf",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "benchmark_index_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND benchmark_index_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "ETFHolding_ForETF_ETF",
+   "fromNodeLabel": "ETFHolding",
+   "toNodeLabel": "ETF",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "etf_holding",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "etf_instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND etf_instrument_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "ETFHolding_HoldsSecurity_Equity",
+   "fromNodeLabel": "ETFHolding",
+   "toNodeLabel": "Equity",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "etf_holding",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "constituent_instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND constituent_instrument_id IS NOT NULL AND (security_type = 'EQUITY')"
+    }
+   }
+  },
+  {
+   "label": "ETFHolding_HoldsSecurity_ETF",
+   "fromNodeLabel": "ETFHolding",
+   "toNodeLabel": "ETF",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "etf_holding",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "constituent_instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND constituent_instrument_id IS NOT NULL AND (security_type = 'ETF')"
+    }
+   }
+  },
+  {
+   "label": "ETFOutlookReport_ForETF_ETF",
+   "fromNodeLabel": "ETFOutlookReport",
+   "toNodeLabel": "ETF",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "etf_outlook_report",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "etf_instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND etf_instrument_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "ETFPriceExplanation_ForETF_ETF",
+   "fromNodeLabel": "ETFPriceExplanation",
+   "toNodeLabel": "ETF",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "etf_price_explanation",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "etf_instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND etf_instrument_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "EventMeasurement_ForEvent_SourceEvent",
+   "fromNodeLabel": "EventMeasurement",
+   "toNodeLabel": "SourceEvent",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "event_measurement",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "source_event_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND source_event_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "ExchangeSecurityClassification_ForSecurity_Equity",
+   "fromNodeLabel": "ExchangeSecurityClassification",
+   "toNodeLabel": "Equity",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "exchange_security_classification",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "security_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND security_id IS NOT NULL AND (security_type = 'EQUITY')"
+    }
+   }
+  },
+  {
+   "label": "ExchangeSecurityClassification_ForSecurity_ETF",
+   "fromNodeLabel": "ExchangeSecurityClassification",
+   "toNodeLabel": "ETF",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "exchange_security_classification",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "security_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND security_id IS NOT NULL AND (security_type = 'ETF')"
+    }
+   }
+  },
+  {
+   "label": "FinancialMetric_ForCompany_Company",
+   "fromNodeLabel": "FinancialMetric",
+   "toNodeLabel": "Company",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "financial_metric",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "company_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND company_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "FinancialMetric_HasReportingContext_FinancialReportSnapshot",
+   "fromNodeLabel": "FinancialMetric",
+   "toNodeLabel": "FinancialReportSnapshot",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "financial_metric",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "reporting_context_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND reporting_context_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "FinancialMetric_ReportedIn_FinancialReportSnapshot",
+   "fromNodeLabel": "FinancialMetric",
+   "toNodeLabel": "FinancialReportSnapshot",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "financial_metric",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "reported_snapshot_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND reported_snapshot_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "FinancialReportSnapshot_ForCompany_Company",
+   "fromNodeLabel": "FinancialReportSnapshot",
+   "toNodeLabel": "Company",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "financial_report_snapshot",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "company_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND company_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "IntradayInvestorFlow_ForEquity_Equity",
+   "fromNodeLabel": "IntradayInvestorFlow",
+   "toNodeLabel": "Equity",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "intraday_investor_flow",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND instrument_id IS NOT NULL AND (security_type = 'EQUITY')"
+    }
+   }
+  },
+  {
+   "label": "MarketCapitalization_ForSecurity_Equity",
+   "fromNodeLabel": "MarketCapitalization",
+   "toNodeLabel": "Equity",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "market_capitalization",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND instrument_id IS NOT NULL AND (security_type = 'EQUITY')"
+    }
+   }
+  },
+  {
+   "label": "MarketCapitalization_ForSecurity_ETF",
+   "fromNodeLabel": "MarketCapitalization",
+   "toNodeLabel": "ETF",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "market_capitalization",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND instrument_id IS NOT NULL AND (security_type = 'ETF')"
+    }
+   }
+  },
+  {
+   "label": "NewsArticle_HasRepresentativeArticle_NewsArticle",
+   "fromNodeLabel": "NewsArticle",
+   "toNodeLabel": "NewsArticle",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "news_article",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "representative_document_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND representative_document_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "NewsArticle_HasTheme_Concept",
+   "fromNodeLabel": "NewsArticle",
+   "toNodeLabel": "Concept",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "news_article",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "theme_concept_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND theme_concept_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "NewsArticle_DescribesEvent_SourceEvent",
+   "fromNodeLabel": "NewsArticle",
+   "toNodeLabel": "SourceEvent",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "extractionConfidence",
+     "type": "DOUBLE"
+    },
+    {
+     "name": "assertionId",
+     "type": "STRING"
+    },
+    {
+     "name": "evidenceType",
+     "type": "STRING"
+    },
+    {
+     "name": "evidenceText",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "document_event_evidence",
+     "mappedField": [
+      {
+       "sourceFieldName": "document_id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "source_event_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "extraction_confidence",
+       "targetFieldName": "extractionConfidence"
+      },
+      {
+       "sourceFieldName": "assertion_id",
+       "targetFieldName": "assertionId"
+      },
+      {
+       "sourceFieldName": "evidence_type",
+       "targetFieldName": "evidenceType"
+      },
+      {
+       "sourceFieldName": "evidence_text",
+       "targetFieldName": "evidenceText"
+      },
+      {
+       "sourceFieldName": "evidence_id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "document_id IS NOT NULL AND source_event_id IS NOT NULL AND (document_type = 'NEWS')"
+    }
+   }
+  },
+  {
+   "label": "NewsArticle_MentionsSecurity_Equity",
+   "fromNodeLabel": "NewsArticle",
+   "toNodeLabel": "Equity",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    },
+    {
+     "name": "key_1",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "matchedText",
+     "type": "STRING"
+    },
+    {
+     "name": "linkMethod",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    },
+    {
+     "name": "key_1",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "document_security_mention",
+     "mappedField": [
+      {
+       "sourceFieldName": "document_id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "entity_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "matched_text",
+       "targetFieldName": "matchedText"
+      },
+      {
+       "sourceFieldName": "link_method",
+       "targetFieldName": "linkMethod"
+      },
+      {
+       "sourceFieldName": "document_id",
+       "targetFieldName": "key_0"
+      },
+      {
+       "sourceFieldName": "entity_id",
+       "targetFieldName": "key_1"
+      }
+     ],
+     "whereClause": "document_id IS NOT NULL AND entity_id IS NOT NULL AND (link_method = 'mention')"
+    }
+   }
+  },
+  {
+   "label": "Organization_ParticipatesIn_SourceEvent",
+   "fromNodeLabel": "Organization",
+   "toNodeLabel": "SourceEvent",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "roleCode",
+     "type": "STRING"
+    },
+    {
+     "name": "mentionedName",
+     "type": "STRING"
+    },
+    {
+     "name": "argumentGroup",
+     "type": "SHORT"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "actor_participation",
+     "mappedField": [
+      {
+       "sourceFieldName": "actor_id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "source_event_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "role_code",
+       "targetFieldName": "roleCode"
+      },
+      {
+       "sourceFieldName": "mentioned_name",
+       "targetFieldName": "mentionedName"
+      },
+      {
+       "sourceFieldName": "argument_group",
+       "targetFieldName": "argumentGroup"
+      },
+      {
+       "sourceFieldName": "participation_id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "actor_id IS NOT NULL AND source_event_id IS NOT NULL AND (actor_type = 'GOVERNMENT' OR actor_type = 'INSTITUTION')"
+    }
+   }
+  },
+  {
+   "label": "ReportedBusinessSegment_DisclosedIn_Disclosure",
+   "fromNodeLabel": "ReportedBusinessSegment",
+   "toNodeLabel": "Disclosure",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "reported_business_segment",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "document_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND document_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "ReportedBusinessSegment_IdentifiesSegment_Concept",
+   "fromNodeLabel": "ReportedBusinessSegment",
+   "toNodeLabel": "Concept",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "reported_business_segment",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "concept_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND concept_id IS NOT NULL"
+    }
+   }
+  },
+  {
+   "label": "SecurityIndustryClassification_ForSecurity_Equity",
+   "fromNodeLabel": "SecurityIndustryClassification",
+   "toNodeLabel": "Equity",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "security_industry_classification",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND instrument_id IS NOT NULL AND (security_type = 'EQUITY')"
+    }
+   }
+  },
+  {
+   "label": "SecurityIndustryClassification_ForSecurity_ETF",
+   "fromNodeLabel": "SecurityIndustryClassification",
+   "toNodeLabel": "ETF",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "security_industry_classification",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND instrument_id IS NOT NULL AND (security_type = 'ETF')"
+    }
+   }
+  },
+  {
+   "label": "SecurityListingSnapshot_ForSecurity_Equity",
+   "fromNodeLabel": "SecurityListingSnapshot",
+   "toNodeLabel": "Equity",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "security_listing_snapshot",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND instrument_id IS NOT NULL AND (security_type = 'EQUITY')"
+    }
+   }
+  },
+  {
+   "label": "SecurityListingSnapshot_ForSecurity_ETF",
+   "fromNodeLabel": "SecurityListingSnapshot",
+   "toNodeLabel": "ETF",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "ontology_view",
+     "table": "security_listing_snapshot",
+     "mappedField": [
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "instrument_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "id",
+       "targetFieldName": "key_0"
+      }
+     ],
+     "whereClause": "id IS NOT NULL AND instrument_id IS NOT NULL AND (security_type = 'ETF')"
+    }
+   }
+  },
+  {
+   "label": "SourceEvent_InEventThread_EventThread",
+   "fromNodeLabel": "SourceEvent",
+   "toNodeLabel": "EventThread",
+   "id": [
+    {
+     "name": "key_0",
+     "type": "STRING"
+    }
+   ],
+   "fromKey": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    }
+   ],
+   "toKey": [
+    {
+     "name": "target_id",
+     "type": "STRING"
+    }
+   ],
+   "attribute": [
+    {
+     "name": "source_id",
+     "type": "STRING"
+    },
+    {
+     "name": "target_id",
+     "type": "STRING"
+    },
+    {
+     "name": "key_0",
+     "type": "STRING"
+    },
+    {
+     "name": "noveltyStatus",
+     "type": "STRING"
+    }
+   ],
+   "dataSourceGroup": {
+    "externalDataSource": {
+     "enabled": true,
+     "catalog": "ontology",
+     "schema": "public",
+     "table": "event_thread_link",
+     "mappedField": [
+      {
+       "sourceFieldName": "source_event_id",
+       "targetFieldName": "source_id"
+      },
+      {
+       "sourceFieldName": "thread_id",
+       "targetFieldName": "target_id"
+      },
+      {
+       "sourceFieldName": "source_event_id",
+       "targetFieldName": "key_0"
+      },
+      {
+       "sourceFieldName": "novelty_status",
+       "targetFieldName": "noveltyStatus"
+      }
+     ],
+     "whereClause": "source_event_id IS NOT NULL AND thread_id IS NOT NULL"
+    }
+   }
+  }
+ ]
+}

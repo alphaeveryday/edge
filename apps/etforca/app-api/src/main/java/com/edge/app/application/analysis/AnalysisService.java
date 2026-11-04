@@ -103,8 +103,8 @@ public class AnalysisService implements AnalysisFinder {
     /** 이슈 축 payload 의 원문 매핑 */
     @Override
     @Transactional(readOnly = true)
-    public FactorPageResponse factor(String code, Axis axis) {
-        EtfAnalysisAxis row = axisRow(code, axis);
+    public FactorPageResponse factor(String code, Axis axis, LocalDate date) {
+        EtfAnalysisAxis row = axisRow(code, axis, date);
         Payload p = Payload.parse(row.getPayload());
         return new FactorPageResponse(axis, Dir.fold(row.getDir()), p.text("headline"),
                 p.list("items").stream().map(i -> new FactorPageResponse.Event(Dir.fold(i.text("sentiment")),
@@ -114,8 +114,8 @@ public class AnalysisService implements AnalysisFinder {
     /** 수치 축 payload 의 원문 매핑 */
     @Override
     @Transactional(readOnly = true)
-    public MetricPageResponse metric(String code, Axis axis) {
-        EtfAnalysisAxis row = axisRow(code, axis);
+    public MetricPageResponse metric(String code, Axis axis, LocalDate date) {
+        EtfAnalysisAxis row = axisRow(code, axis, date);
         Payload p = Payload.parse(row.getPayload());
         List<MetricPageResponse.Tile> tiles = p.list("metrics").stream().map(m -> new MetricPageResponse.Tile(
                 m.text("label").isEmpty() ? m.text("key") : m.text("label"), m.text("value") + m.text("unit"),
@@ -132,9 +132,9 @@ public class AnalysisService implements AnalysisFinder {
         return subject.isEmpty() || observed.isEmpty() ? subject + observed : subject + " · " + observed;
     }
 
-    private EtfAnalysisAxis axisRow(String code, Axis axis) {
+    private EtfAnalysisAxis axisRow(String code, Axis axis, LocalDate date) {
         requireEtf(code);
-        return analysisRepository.findTopByEtfCodeOrderByAsOfDesc(code)
+        return find(code, date, null)
                 .flatMap(a -> axisRepository.findById(new EtfAnalysisAxis.Key(a.getId(), axis.value())))
                 .orElseThrow(() -> new GeneralException(AppErrorStatus.ANALYSIS_NOT_READY));
     }

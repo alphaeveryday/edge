@@ -6,6 +6,8 @@ import { Holdings } from '../Holdings';
 import { sample } from '../preview';
 import { NewsletterSignup } from '../NewsletterSignup';
 import { AppDownloadSheet } from '../AppDownloadSheet';
+import { ExampleReport } from '../ExampleReport';
+import { InstrumentSearch } from '../InstrumentSearch';
 
 export function DesignCatalog() {
   const [selected, setSelected] = useState('금액');
@@ -23,11 +25,14 @@ export function DesignCatalog() {
       <p className="ds-catalog-note">본문 대비 4.5:1 · 조작 영역 44px 이상 · 키보드와 글자 확대 · 동작 줄이기 지원</p>
     </section>
     <section id="controls"><SectionHeading title="행동이 분명한 버튼과 입력" />
+      <InstrumentSearch includeStocks account="예시 계좌" catalog={{ fetched_at: '2026-10-21', counts: { KR: 1, US: 1 }, instruments: [{ id: 'KR:005930', market: 'KR', ticker: '005930', code: '005930', name: '삼성전자', kind: 'stock' }, { id: 'US:AAPL', market: 'US', ticker: 'AAPL', code: 'AAPL', name: 'Apple', kind: 'stock' }] }} onAdd={() => {}} />
+      <div className="step"><ExampleReport /></div>
       <div className="ds-examples"><Button variant="primary" type="button">포트폴리오 저장하기</Button><Button variant="secondary" type="button">다시 확인하기</Button><Button variant="danger" type="button">기록 삭제하기</Button><Button variant="primary" loading type="button">저장 중</Button><Button variant="primary" disabled type="button">선택 후 계속하기</Button></div>
       <form onSubmit={e=>{e.preventDefault();setSubmitted(true);}}>
         <label htmlFor="ds-email">이메일 주소<TextInput id="ds-email" type="email" value={email} onChange={e=>{setEmail(e.target.value);setSubmitted(false);}} placeholder="name@example.com" required /></label>
         <label htmlFor="ds-account">계좌<Select id="ds-account"><option>전체 계좌</option><option>ISA</option><option>IRP</option></Select></label>
         <label htmlFor="ds-question">요청사항 · 선택<TextArea id="ds-question" placeholder="궁금한 점을 적어 주세요" /></label>
+        <details className="askbox"><summary>요청사항 적기 · 선택</summary><div className="askbox__body"><label className="lab" htmlFor="ds-ask-folded">요청사항</label><p>모바일 입력 1단계에서는 선택 항목을 접어 두고 필요할 때 펼쳐요.</p><TextArea id="ds-ask-folded" placeholder="궁금한 점을 적어 주세요" /></div></details>
         <label htmlFor="ds-error">현재 평가금액<TextInput id="ds-error" value="" readOnly aria-invalid="true" aria-describedby="ds-error-message" /></label><p id="ds-error-message" className="ds-field-error">0보다 큰 금액을 입력해 주세요.</p>
         <Button variant="primary" type="submit">예시 입력 확인하기</Button>
         {submitted&&<Notice tone="success">입력 형식을 확인했어요. 저장하거나 메일을 보내지 않았어요.</Notice>}
@@ -42,7 +47,7 @@ export function DesignCatalog() {
     </section>
     <section id="states"><SectionHeading title="기다림과 실패에도 같은 기준" />
       <h3>이메일 미리보기와 간단한 신청</h3>
-      <NewsletterSignup compact showPreview />
+      <NewsletterSignup showPreview />
       <Loading>포트폴리오를 불러오고 있어요.</Loading>
       <Notice>입력한 내용을 확인하고 있어요.</Notice><Notice tone="error">저장하지 못했어요. 입력한 내용은 그대로예요. 다시 시도해 주세요.</Notice><Notice tone="success">포트폴리오를 저장했어요.</Notice>
       <div className="ds-empty"><Icon name="dashboard" size={36} /><h3>아직 보유 종목이 없어요</h3><p>종목을 추가하면 자산과 배당을 볼 수 있어요.</p></div>
@@ -51,6 +56,6 @@ export function DesignCatalog() {
       <Button variant="secondary" onClick={() => setAppDownload(true)}>앱 다운로드 시트 열어보기</Button>
       <AppDownloadSheet open={appDownload} onClose={() => setAppDownload(false)} />
     </section>
-    <section id="workflow"><SectionHeading title="다음 화면도 같은 방식으로" /><ol><li>사용자 과제와 다음 행동을 정해요.</li><li>기존 컴포넌트와 모든 상태를 확인해요.</li><li>공통 토큰으로 모바일·PC 화면을 만들어요.</li><li>접근성·문구·데이터·회귀 검사를 통과해요.</li><li>PR 검토 후 배포하고 실제 화면을 확인해요.</li></ol><div className="ds-examples"><a href="?preview=input">입력 화면 ↗</a><a href="?preview=result">분석 결과 ↗</a><a href="?preview=dashboard">대시보드 ↗</a></div></section>
+    <section id="workflow"><SectionHeading title="다음 화면도 같은 방식으로" /><ol><li>사용자 과제와 다음 행동을 정해요.</li><li>기존 컴포넌트와 모든 상태를 확인해요.</li><li>공통 토큰으로 모바일·PC 화면을 만들어요.</li><li>접근성·문구·데이터·회귀 검사를 통과해요.</li><li>PR 검토 후 배포하고 실제 화면을 확인해요.</li></ol><div className="ds-examples"><a href="?preview=input">시작·입력 화면 ↗</a><a href="?preview=return">다시 온 방문자 ↗</a><a href="?preview=running">분석 중 ↗</a><a href="?preview=failed">분석 실패 ↗</a><a href="?preview=result">분석 결과 ↗</a><a href="?preview=dashboard">대시보드 ↗</a></div></section>
   </main>;
 }

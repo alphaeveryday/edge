@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 
 from airflow.providers.amazon.aws.hooks.base_aws import AwsBaseHook
 from airflow.providers.amazon.aws.hooks.ecs import EcsHook
+from airflow.providers.amazon.aws.hooks.sns import SnsHook
 from airflow.providers.standard.sensors.python import PythonSensor
 from airflow.sdk import DAG, TriggerRule, task
 from airflow.sdk.exceptions import AirflowFailException
@@ -21,6 +22,7 @@ from edge_batch import (CLUSTER, KST, HOLD_ECS_STATE_UNKNOWN, HOLD_RESULT_UNKNOW
 LANE = "dividend-daily"
 CRONS = ("0 3 * * *",)
 TASK_KEYS = {"collect": "DIVIDEND_COLLECTION_KIS", "normalize": "NORMALIZE_DIVIDEND", "load": "LOAD_DIVIDEND"}
+ALARM_TOPIC = os.environ.get("EDGE_ALARM_TOPIC_ARN") or None
 
 
 def batch_window_clear(*, dag_run=None, now=None, ecs=None, sfn=None, state_machines=None, task_families=None):
@@ -89,7 +91,19 @@ def _holds(ti):
                        and hold.get("kind") in (HOLD_ECS_STATE_UNKNOWN, HOLD_RESULT_UNKNOWN)})
 
 
-def build_dag(step=EdgeStep):
+def _notify_failure(context):
+    """Run failure notice on the same SNS topic as the other DAGs, including a missed 03:00–03:30 window."""
+    if ALARM_TOPIC is None:
+        return
+    run = context["dag_run"]
+    SnsHook().publish_to_target(
+        target_arn=ALARM_TOPIC,
+        subject=f"[{LANE}] FAILED — airflow {run.run_id}"[:99],      # SNS 제목은 100자 미만 — 전체 run_id 는 본문에 있다
+        message=f"dag={run.dag_id} run={run.run_id} reason={context.get('reason')}",
+    )
+
+
+def build_dag(step=EdgeStep, notify=True):
     """Use existing ECS tasks and ops ledger; create no additional AWS service."""
     with DAG("edge_dividend_daily", auto_register=False,
         schedule=MultipleCronTriggerTimetable(*CRONS, timezone="Asia/Seoul", run_immediately=timedelta(0)),
@@ -100,7 +114,7 @@ def build_dag(step=EdgeStep):
             "dividend_run": lambda logical_date, dag_run: pipeline_run_id(LANE, slot_time({"logical_date": logical_date, "dag_run": dag_run})),
             "dividend_key": lambda logical_date, dag_run: run_key(LANE, slot_time({"logical_date": logical_date, "dag_run": dag_run})),
             "dividend_status": _status, "dividend_holds": _holds,
-        }, tags=["edge", "batch", LANE]) as dag:
+        }, on_failure_callback=_notify_failure if notify else None, tags=["edge", "batch", LANE]) as dag:
         wait = PythonSensor(task_id="wait_for_batch_window", python_callable=batch_window_clear,
                             mode="reschedule", poke_interval=60, timeout=600, retries=0)
         rid = "{{ dividend_run(logical_date, dag_run) }}"

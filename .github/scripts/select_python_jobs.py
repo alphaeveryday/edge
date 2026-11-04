@@ -11,6 +11,7 @@ OPTIONAL = {
     "analysis-engine-v2": "apps/engine/analysis-engine-v2",
     "edge-analysis-tools": "libs/analysis-tools",
     "edge-truth-agent": "apps/etforca/truth-agent",
+    "edge-truth-research": "apps/etforca/truth-research",
 }
 
 
@@ -67,6 +68,10 @@ def select_jobs(paths: list[str], available: set[str]) -> dict:
             requested.add("analysis-engine-v2")
         elif path.startswith("apps/etforca/truth-agent/"):
             requested.add("edge-truth-agent")
+            if "edge-truth-research" in available:
+                requested.add("edge-truth-research")  # 조사 에이전트가 truth-agent 의 저장소·도구·작업 폴더를 그대로 쓴다
+        elif path.startswith("apps/etforca/truth-research/"):
+            requested.add("edge-truth-research")
         elif any(path.startswith(f"apps/engine/{app}/") for app in APPS):
             apps.update(app for app in APPS if path.startswith(f"apps/engine/{app}/"))
         elif path.startswith("apps/engine/airflow/dags/") or path == "apps/engine/airflow/tests/ecs_stop_cases.json":

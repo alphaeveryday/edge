@@ -42,8 +42,8 @@
   },
   "impact": 60,
   "impactReason": "공개매수에 응했거나 남은 주주의 정보 공정성과 대형 상장사의 주주보호 신뢰에 연결됩니다. 증자 자체는 2024-11-13 철회됐습니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/QKDnd1aC_nw/hqdefault.jpg",
+  "video": {"youtube": "QKDnd1aC_nw", "title": "고려아연, 유상증자 계획 고의 누락?...금감원 \"부정거래 소지\" / YTN"},
   "body": [
     { "h": "공개매수 도중 증자를 이미 검토했는지가 핵심입니다" },
     {

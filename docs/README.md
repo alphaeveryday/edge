@@ -10,6 +10,7 @@
 
 | 문서 | 무엇을 담나 | 언제 보나 |
 |---|---|---|
+| [research/](research/README.md) | 뉴스 온톨로지 기반 학술 연구 — 표현공간·인과 트리·미래 효과 검증과 타입별 반복 | 사건 내부 파라미터의 효과를 연구할 때 |
 | [context.md](context.md) | 제품 정의·변경 배경, 기존 vs 신규, 하이브리드 아키텍처 개요, Cloud/On-Prem 책임 분리, 서비스/API 변경표 | 전체 그림을 잡을 때 (필독) |
 | [repo-structure.md](repo-structure.md) | 저장소 구조 — 모노레포 트리·워크스페이스·apps/libs 역할표·데이터 흐름 (구 루트 README 본문) | 모듈 위치·역할이 헷갈릴 때 |
 | [git-conventions.md](git-conventions.md) | Git 컨벤션 SSOT — 브랜치 전략·커밋/PR 제목·머지 정책·worktree (구 루트 README 본문) | 브랜치·커밋·PR·머지 전 |
@@ -117,3 +118,4 @@
 
 - [투자정보 기만 검증 조사 방법론](design/truth-investigation-methodology.md): 6유형·유형별 판정·경쟁가설·공개용 두 문장. 사건을 쓰거나 판정할 때의 정본.
 - [투자정보 기만 검증 서비스 설계](design/truth-service.md): 사건 JSON 계약, 화면 숫자의 정의, 매시 갱신 흐름과 한계.
+- [오늘의 급등주 해석](design/truth-movers.md): 조사 에이전트(truth-research)가 국내·미국 급등 종목의 급등 이유를 공시(KIND·SEC)·보도와 대조(ACH)해 유망주·허위매물로 판정하는 장중 매시 :35 흐름, 공개 데이터 형식.

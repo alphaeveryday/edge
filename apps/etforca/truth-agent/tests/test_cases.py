@@ -17,8 +17,11 @@ def seed(name: str) -> dict:
 
 
 def test_seed_cases_satisfy_contract():
-    # 처음 게시하는 실제 사건이므로 하나라도 계약을 어기면 배포하지 않는다.
-    assert len(load_dir(SEED)) == 4
+    # 처음 게시하는 실제 사건이므로 하나라도 계약을 어기면 배포하지 않는다(load_dir 가 계약 위반에서 멈춘다).
+    cases = load_dir(SEED)
+    assert len({c["id"] for c in cases}) == len(cases) >= 4
+    # 판정 근거가 공식 출처라는 규칙을 시작 사건 전부가 지키는지(밝혀짐·해소 사건이 하나는 있어야 검사가 의미 있다)
+    assert any(c["status"] != "pending" for c in cases)
 
 
 def test_status_change_requires_official_or_disclosure_source():
@@ -164,6 +167,8 @@ def test_timestamps_need_a_timezone(field):
     ("https://WWW.FSC.GO.KR/no010101/1", "official"),
     ("https://www.fsc.go.kr:443/x", "official"),
     ("https://dart.fss.or.kr/dsaf001/main.do?rcpNo=1", "disclosure"),
+    ("https://www.law.go.kr/LSW/precInfoP.do?precSeq=1", "official"),  # 국가법령정보센터 판례 원문(확정 판결 근거)
+    ("https://law.go.kr.evil.com/x", None),
     ("https://fsc.go.kr.evil.com/x", None),
     ("https://data.krx.co.kr/x", None),  # 시장 데이터 사이트는 공식 판단이 아니다
     ("https://evil.com\\@fsc.go.kr/x", None),  # 브라우저는 evil.com 으로 읽는다

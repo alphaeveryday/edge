@@ -104,11 +104,19 @@ async def work_once(stopping=None):
             saved = parent.get('result') or {}
             report = saved.get('partial_report', {}) if parent['state'] == 'failed' else saved
             report = {**report, 'input': parent['input'], 'parent_state': parent['state']}
+            # 같은 분석에서 먼저 받은 답만 맥락으로 넘긴다(보완 요청은 대화가 아니다).
+            conversation = [{'question': row['input']['question'], 'answer': row['result']['answer']['paragraphs'],
+                             **({'proposed_allocations': [{key: item[key] for key in ('name', 'account', 'weight_pct')}
+                                                          for item in row['result']['revision']['recommendation']['allocations']]}
+                                if ((row['result'].get('revision') or {}).get('recommendation') or {}).get('allocations') else {})}
+                            for row in store.chats(job['parent_id'], job['owner'])
+                            if row['state'] == 'succeeded' and row['created_at'] < job['created_at']
+                            ] if job['input'].get('mode', 'question') == 'question' else []
             result = await answer_question(job["input"]["question"], report, os.environ["DEEPSEEK_API_KEY"],
                 on_stage=lambda role: store.stage(job['id'], role), on_event=on_event,
-                on_checkpoint=on_checkpoint, revision_id=job['id'])
+                on_checkpoint=on_checkpoint, revision_id=job['id'], conversation=conversation)
         else:
-            result = await run_analysis(AnalysisInput.model_validate(job["input"]), os.environ["DEEPSEEK_API_KEY"],
+            result = await run_analysis(AnalysisInput.model_validate(job["input"], context={'persisted_input': True}), os.environ["DEEPSEEK_API_KEY"],
                                         lambda role: store.stage(job["id"], role), on_event=on_event, on_checkpoint=on_checkpoint)
         store.finish(job["id"], result=result)
         log.info("job=%s status=succeeded seconds=%s", job["id"], result.get("elapsed_seconds"))
@@ -129,15 +137,14 @@ async def work_once(stopping=None):
 async def dashboard_loop(stopping):
     from .dashboard_work import work_once as dashboard_once
     from .dashboard_quotes import collection_loop
-    from .market_preload import loop as preload_loop
-    async def loop(kind):
+    async def loop():
         while not stopping.is_set():
             try:
-                await dashboard_once(stopping, kind=kind)
+                await dashboard_once(stopping)
             except Exception as error:
-                log.warning('dashboard loop failed kind=%s code=%s; retrying', kind, type(error).__name__)
+                log.warning('dashboard loop failed kind=%s code=%s; retrying', 'valuation', type(error).__name__)
             await asyncio.sleep(1)
-    await asyncio.gather(loop('valuation'), loop('backtest'), collection_loop(stopping), preload_loop(stopping))
+    await asyncio.gather(loop(), collection_loop(stopping))
 
 
 async def main():

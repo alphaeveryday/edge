@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "id": "samchundang-fda-meeting-2026",
+  "subject": "삼천당제약",
+  "instruments": [{ "code": "000250", "name": "삼천당제약" }],
+  "aliases": ["전인석"],
+  "topics": ["Pre-ANDA", "ANDA", "Product Development Meeting", "FDA 미팅", "FDA 답변서", "생동성 시험", "제네릭 허가 요건", "경구용 세마글루타이드", "대조약"],
+  "speaker": "삼천당제약 관계자와 전인석 대표 (2026-04 발언)",
+  "audience": "투자자와 언론",
+  "title": "삼천당제약, FDA 사전미팅과 허가요건 설명",
+  "headline": [
+    "삼천당제약 관계자는 2026년 4월 8일 FDA가 미팅 일정을 잡은 사실만으로 제네릭 허가 요건 충족이 실체적으로 증명됐다고 주장했습니다.",
+    "FDA 설명상 이 미팅은 동등성 입증 방법에 조언하는 과학 미팅이고, 7월 답변서도 ANDA 경로 인정을 뜻하지 않는다는 지적이 나왔습니다."
+  ],
+  "status": "pending",
+  "behaviors": [
+    {
+      "type": "concealed",
+      "verdict": "suspected",
+      "basis": "맞는 말로 틀린 인상을 줄 수 있는 경우입니다. FDA가 미팅을 확정한 것은 사실입니다. FDA는 제품개발 미팅을 동등성 입증 방법에 조언·의견을 주는 과학 미팅으로 설명합니다. 회사는 이를 허가 요건 충족의 증명으로 설명했습니다. FDA 서신·회의록 전문은 확인하지 못했습니다.",
+      "sourceIds": ["news-businesspost-20260408", "web-fda-pdev-transcript"]
+    }
+  ],
+  "contrast": {
+    "before": {
+      "label": "삼천당제약 관계자 (2026-04-08)",
+      "text": "\"삼천당의 서류를 검토하고 미팅 일정을 잡았다는 사실 하나만으로도 삼천당의 기술이 FDA의 제네릭 허가 요건을 충족하고 있음이 실체적으로 증명됐다\"고 말했습니다.",
+      "sourceId": "news-businesspost-20260408"
+    },
+    "after": {
+      "label": "FDA 제품개발 미팅 설명",
+      "text": "FDA는 이 미팅을 복잡한 제네릭의 특정 문제에 대한 과학 미팅으로, 동등성 입증의 새로운·대안적 방법에 조언과 의견을 주는 자리로 설명합니다. 미팅의 공식 기록은 FDA 회의록입니다.",
+      "sourceId": "web-fda-pdev-transcript"
+    }
+  },
+  "levels": { "behavior": "suspected", "intent": "insufficient", "harm": "insufficient", "legal": "insufficient" },
+  "legalStatus": "공식 조사·제재 미확인. FDA 미팅 서신과 7월 답변서 전문 미공개",
+  "ach": {
+    "best": "undecided",
+    "strongestCounter": "FDA가 미팅을 확정했고 7월 답변서에서 대조약을 리벨서스로 명시한 진전은 실제로 있습니다. FDA는 일정 조건을 충족할 때 제품개발 미팅을 허락하므로 단순 접수로 볼 수도 없습니다.",
+    "decisiveEvidence": "FDA 미팅 허락 서신과 회의록, 7월 답변서 전문, FDA가 제시한 생동성(BE) 시험 조건, 실제 ANDA 제출과 FDA 판단."
+  },
+  "impact": 55,
+  "impactReason": "FDA 절차의 의미를 어떻게 설명하느냐에 따라 경구용 세마글루타이드 사업 가치가 달리 읽히고, 7월 답변서 소식에 주가가 상한가로 움직였습니다.",
+  "cover": "https://i.ytimg.com/vi/wpFpntT630k/hqdefault.jpg",
+  "video": {"youtube": "wpFpntT630k", "title": "삼천당제약, 의구심 더 커졌다…미 FDA 문서 정체는 [팩트체크] / 한국경제TV뉴스"},
+  "body": [
+    { "h": "미팅 확정과 허가 요건 충족은 다른 단계입니다" },
+    {
+      "p": "4월 6일 기자간담회에서 전인석 대표는 FDA 서류를 공개하고 \"경구용 세마글루타이드를 임상시험이 아닌 생동성 시험을 거쳐 개발해도 된다는 의미\"라고 말했습니다. 이틀 뒤 회사 관계자는 미팅 일정이 잡힌 사실만으로 허가 요건 충족이 증명됐다고 주장했습니다. FDA 설명에서 제품개발 미팅은 동등성 입증 방법에 조언을 주는 과학 미팅이며, FDA와 업계가 합의한 조건을 충족하면 허락됩니다.",
+      "sourceIds": ["news-mtn-20260406", "news-businesspost-20260408", "web-fda-pdev-transcript"]
+    },
+    {
+      "p": "7월 20일 회사는 Pre-ANDA(Product Development Meeting) 답변서를 받았다고 밝혔고, 답변서에는 대조약으로 리벨서스가 명시됐습니다. 한국경제는 이 답변서가 개발 방식이나 허가 경로의 확정을 뜻하지 않으며, 제품이 ANDA 대상으로 인정됐다는 뜻도 아니라고 전했습니다. 뉴데일리는 답변서 전문이 공개되지 않았다고 전했습니다. 7월 회사 설명은 4월보다 조건을 단 표현입니다.",
+      "sourceIds": ["news-hankyung-20260720", "news-newdaily-20260720"]
+    },
+    { "h": "확인한 순서" },
+    {
+      "list": [
+        "2026-04-06 기자간담회: 전 대표가 FDA 서류를 공개하고, FDA는 근거 없는 서류에는 회신조차 하지 않는다고 말했습니다.",
+        "2026-04-08 회사 관계자: 미팅 일정이 잡힌 사실만으로 허가 요건 충족이 증명됐다고 주장했습니다.",
+        "2026-04-11 경향신문: 전 대표의 'ANDA 사전 미팅 수락' 주장에 대해 FDA가 '향후 논의해보겠다'고 회신한 정도라는 지적을 전했습니다.",
+        "2026-07-20 회사가 Pre-ANDA 답변서를 받았다고 밝혔고, 주가는 상한가로 올랐습니다."
+      ]
+    },
+    {
+      "p": "FDA 절차 설명은 2017년 GDUFA II 설명회 기록입니다. 지금 적용되는 세부 조건과 다를 수 있습니다. 종목코드는 이데일리 보도로 확인했습니다.",
+      "sourceIds": ["web-fda-pdev-transcript", "news-edaily-20260402"]
+    }
+  ],
+  "rebuttal": [
+    {
+      "label": "삼천당제약 (2026-04-08)",
+      "text": "단순한 사전 미팅 단계라는 지적은 \"제약바이오의 허가 행정 프로세스에 대한 오해에서 비롯된 것\"이라고 주장했습니다.",
+      "sourceId": "news-businesspost-20260408"
+    },
+    {
+      "label": "전인석 대표 (2026-04-06)",
+      "text": "\"가장 까다로운 기준을 지닌 FDA는 근거가 없는 내용의 서류에 대해서는 회신조차 하지 않는다\"고 말했습니다.",
+      "sourceId": "news-mtn-20260406"
+    },
+    {
+      "label": "삼천당제약 관계자 (2026-07-20)",
+      "text": "FDA 공식 답변은 개발 프로그램이 규제당국과의 협의 아래 계획대로 진행되고 있음을 보여주는 중요한 진전이라고 말했습니다.",
+      "sourceId": "news-hankyung-20260720"
+    }
+  ],
+  "sources": [
+    { "id": "news-businesspost-20260408", "kind": "news", "publisher": "비즈니스포스트", "title": "삼천당제약 연이은 해명, \"미국 FDA 미팅 승인이 기술력\" \"특허도 100% 소유권 보유\"", "url": "https://www.businesspost.co.kr/BP?command=article_view&num=435257", "publishedAt": "2026-04-08", "accessedAt": "2026-10-21" },
+    { "id": "news-mtn-20260406", "kind": "news", "publisher": "머니투데이방송", "title": "기자간담회 진행자 이름도 '기밀' 삼천당제약", "url": "https://news.mtn.co.kr/news-detail/2026040617132655099", "publishedAt": "2026-04-06", "accessedAt": "2026-10-21" },
+    { "id": "news-khan-20260411", "kind": "news", "publisher": "경향신문", "title": "“천당에서 지옥으로”…잘 나가던 코스닥 발목 잡은 ‘삼천당 쇼크’", "url": "https://www.khan.co.kr/article/202604110700001/", "publishedAt": "2026-04-11", "accessedAt": "2026-10-21" },
+    { "id": "news-hankyung-20260720", "kind": "news", "publisher": "한국경제", "title": "FDA 답변에 '상한가'…삼천당제약, 정말 '허가 문턱' 넘었나", "url": "https://www.hankyung.com/article/202607203782i", "publishedAt": "2026-07-20", "accessedAt": "2026-10-21" },
+    { "id": "news-newdaily-20260720", "kind": "news", "publisher": "뉴데일리", "title": "\"美 FDA 답변\" 삼천당제약, 상한가 … '허가 문턱'은 아직", "url": "https://biz.newdaily.co.kr/site/data/html/2026/07/20/2026072000197.html", "publishedAt": "2026-07-20", "accessedAt": "2026-10-21" },
+    { "id": "web-fda-pdev-transcript", "kind": "web", "publisher": "미국 FDA", "title": "Transcript: GDUFA II – Pre-ANDA Product Development Meetings", "url": "https://www.fda.gov/industry/generic-drug-user-fee-amendments/transcript-gdufa-ii-pre-anda-product-development-meetings", "publishedAt": "2017-10-17", "accessedAt": "2026-10-21" },
+    { "id": "news-edaily-20260402", "kind": "news", "publisher": "팜이데일리", "title": "'15조 확신' 삼천당 美 계약…거래소, 비독점 판단·검증 불가 [삼천당제약 대해부③]", "url": "https://pharm.edaily.co.kr/news/read?newsId=04073766645412184", "publishedAt": "2026-04-02", "accessedAt": "2026-10-21" }
+  ],
+  "related": [],
+  "flaggedAt": "2026-10-21",
+  "updatedAt": "2026-10-21T00:00:00+09:00",
+  "origin": "seed",
+  "locked": false
+}

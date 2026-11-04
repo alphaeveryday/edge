@@ -10,3 +10,8 @@ spring:
   batch:
     jdbc:
       initialize-schema: never   # 메타 테이블은 app-api Flyway 소관
+app:
+  pipeline:
+    url: ${APP_PIPELINE_URL}
+    username: ${APP_PIPELINE_USERNAME}
+    password: ${APP_PIPELINE_PASSWORD}

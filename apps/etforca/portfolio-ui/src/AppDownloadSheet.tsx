@@ -11,7 +11,7 @@ import shot7 from './assets/app-store/ETF-Orca-07.png';
 const screenshots = [shot1, shot2, shot3, shot4, shot6, shot7];
 const storeUrl = 'https://apps.apple.com/kr/app/etf-orca/id6816826436';
 
-export function AppDownloadSheet({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function AppDownloadSheet({ open, onClose, onStoreClick }: { open: boolean; onClose: () => void; onStoreClick?: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -45,7 +45,7 @@ export function AppDownloadSheet({ open, onClose }: { open: boolean; onClose: ()
         </div>
       </div>
       <footer className="app-download-footer">
-        <a className="ds-button app-download-cta" data-variant="primary" href={storeUrl} target="_blank" rel="noopener noreferrer" onClick={onClose}>App Store에서 무료로 받기 <span aria-hidden="true">↗</span></a>
+        <a className="ds-button app-download-cta" data-variant="primary" href={storeUrl} target="_blank" rel="noopener noreferrer" onClick={() => { onStoreClick?.(); onClose(); }}>App Store에서 무료로 받기 <span aria-hidden="true">↗</span></a>
         <div><span>iPhone용 앱 · App Store로 이동해요</span><Button onClick={onClose}>나중에 볼게요</Button></div>
       </footer>
     </>}

@@ -414,9 +414,9 @@ def run_hold_key(run_id: str, task_key: str, kind: str) -> str:
     return f"execution_hold:{run_id}:{task_key}:{kind}"
 
 
-# Airflow DAG run 이 살아 있을 수 있는 최대 시간 — dagrun_timeout(1500초) + 여유. 이보다 오래 결말이 없는 실행은
-# 그 run 의 report·verdict 가 돌 수 없으므로(시간 초과·worker 사망) 원장이 스스로 보류로 남긴다.
-AIRFLOW_RUN_LIFETIME_SECONDS = 1800
+# Airflow DAG run 이 살아 있을 수 있는 최대 시간 — 가장 긴 dagrun_timeout(뉴스 2700초) + 여유. 이보다 오래 결말이
+# 없는 실행은 그 run 의 report·verdict 가 돌 수 없으므로(시간 초과·worker 사망) 원장이 스스로 보류로 남긴다.
+AIRFLOW_RUN_LIFETIME_SECONDS = 3000
 
 
 def _record_unfinished(ledger, run_id: str, tasks: list[dict], evidence: dict[str, list[dict]], *,
@@ -943,19 +943,29 @@ def record_execution_holds(ledger: Ledger, *, run_key: str, holds: dict[str, dic
                                        observed_updated_at=task["updated_at"])
 
 
+# terraform metric filter(ops_ledger.tf `planner_missing`)가 이 문구를 센다 — 바꾸면 양쪽을 함께.
+PLANNER_MISSING_LOG = "PLANNER_MISSING run_key="
+
+
 def detect_planner_missing(ledger: Ledger, *, expected_run_keys: list[str]) -> list[str]:
     """schedule 상 있어야 할 run_key 가 원장에 없으면 PLANNER_MISSING, 있으면 열린 이슈 RESOLVE.
 
     pipeline_run 이 0건이라고 정상으로 보지 않는다(스펙 §7). 늦게 run 이 생기면 거짓 경보를 닫는다.
     호출부(entry)가 **스케줄 시각이 지난 슬롯만** 넘긴다.
+
+    이슈를 **새로 열 때만** 고정 문구 ERROR 한 줄을 남긴다 — terraform metric filter
+    (`planner_missing`)가 이 문구로 알람을 울린다(ALPHA-1430). 15분마다 오는 재발 카운트 증가는
+    남기지 않는다(같은 슬롯이 매 주기 메일을 보내지 않게).
     """
     missing: list[str] = []
     for run_key in expected_run_keys:
         if ledger.get_pipeline_run(run_key) is None:
-            ledger.open_or_bump_issue(
+            _, created = ledger.open_or_bump_issue(
                 issue_type=states.ISSUE_PLANNER_MISSING,
                 dedupe_key=f"planner_missing:{run_key}", scope="slot", scope_key=run_key,
                 evidence={"run_key": run_key})
+            if created:
+                logger.error(PLANNER_MISSING_LOG + "%s — 예정 시각+grace 가 지났는데 런이 없다", run_key)
             missing.append(run_key)
         else:
             ledger.resolve_issue(f"planner_missing:{run_key}",

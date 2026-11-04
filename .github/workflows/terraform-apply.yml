@@ -12,6 +12,8 @@ on:
       - "infra/terraform/modules/**"
       # 전망 배치 대상 ETF 목록의 원본 — envs/dev/analysis-v2.tf 가 이 파일을 읽는다(ALPHA-1142).
       - "apps/engine/data-pipeline/src/data_pipeline/config/sources.toml"
+      # 그래프 DB 매핑 원본 — envs/dev/ontology-graph.tf 가 읽어 업로더 작업 정의에 싣는다(ALPHA-1342).
+      - "libs/ontology/src/edge_ontology/sql/puppygraph-schema.json"
       # demo 전용 모듈은 dev 가 안 쓴다 — carve-out 해서 demo-only 변경이 dev apply 에 안 묶이게.
       - "!infra/terraform/modules/demo-onprem/**"
       - ".github/workflows/terraform-plan.yml"

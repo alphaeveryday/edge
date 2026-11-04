@@ -13,7 +13,7 @@ from datetime import datetime, time, timedelta, timezone
 
 from ..failures import validated_failure
 from ..lake import Storage, collection_log_prefix, quality_log_prefix
-from . import aws, catalog, planner, reconciler, states, wrapper
+from . import aws, catalog, planner, premarket_watch, reconciler, states, wrapper
 from . import contracts
 from .contracts import ETF_HOLDINGS_KRX_EOD
 from .ledger import Ledger
@@ -535,6 +535,16 @@ def _execution_holds(run_key: str | None) -> dict[str, dict]:
     return holds
 
 
+def premarket_watch_cli() -> int:
+    """장전 감시만 단독으로 — 원장·DB 를 안 쓴다(실환경 시험용, `OPS_SCHEDULED_TIME` 으로 시각 지정).
+
+    ok·skip 이면 0, missing·failed 면 1(판정은 로그 문구로도 남는다).
+    """
+    verdict = premarket_watch.run_from_env(_scheduled_time(), aws.logs_client)
+    logger.info("premarket-watch: %s", verdict)
+    return 0 if verdict in ("ok", "skip") else 1
+
+
 def reconcile_cli(settings) -> int:
     """주기 Reconciler. advisory lock 으로 중복 실행 방지. 예정 지난 슬롯만 PLANNER_MISSING."""
     ledger = ledger_from_settings(settings)
@@ -549,6 +559,10 @@ def reconcile_cli(settings) -> int:
                                                                     states.ORCH_FAILED)):
         raise SystemExit("OPS_ORCHESTRATION_STATUS 는 OPS_RUN_KEY 와 함께, SUCCEEDED|FAILED 만")
     holds = _execution_holds(override)
+    if not override:
+        # 장전 레인은 원장 밖이라 아래 슬롯 대조가 못 본다(ALPHA-1431). 원장을 안 건드리는 읽기라
+        # 락보다 앞에 둔다 — 다른 인스턴스가 락을 쥔 주기에도 감시는 돈다. 실패는 안에서 ERROR 로 남는다.
+        premarket_watch.run_from_env(now, aws.logs_client)
     reported_ref = os.environ.get("OPS_REPORT_RUN_REF") or None
     lifetime = int(os.environ.get("OPS_AIRFLOW_RUN_LIFETIME_SECONDS")
                    or reconciler.AIRFLOW_RUN_LIFETIME_SECONDS)

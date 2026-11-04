@@ -4,7 +4,6 @@ import { chartColors, PerformanceChart, PortfolioDonut } from './ReportCharts';
 import { safeReportUrl } from './reportUrl';
 import { ExecutionDetails, ExecutionPlan } from './ExecutionPlan';
 import { hasTradeAmounts, TradeAmount } from './TradeAmount';
-import { ReportFeedback } from './ReportFeedback';
 import { ScenarioTable } from './ScenarioTable';
 
 const axes = [['leadership', '시장 주도성'], ['profitability', '수익성'], ['stability', '안정성']] as const;
@@ -59,7 +58,7 @@ function Evidence({ section, report, hidden }: { section?: Section; report: Repo
   return <details className="evaluation__sources"><summary>판단에 사용한 근거</summary>{section.evidence.map((e, i) => { const source = report.sources?.find(s => s.id === e.source_id); return <blockquote key={i}>{e.quote}{source?.url && <a href={safeReportUrl(source.url)} target="_blank" rel="noreferrer">원문 확인 ↗</a>}</blockquote>; })}</details>;
 }
 
-export function ReportView({ report, separateEvidence = false, allSections = false, feedbackJobId }: { report: Report; separateEvidence?: boolean; allSections?: boolean; feedbackJobId?: string }) {
+export function ReportView({ report, separateEvidence = false, allSections = false }: { report: Report; separateEvidence?: boolean; allSections?: boolean }) {
   const pending = !report.recommendation && report.completion && report.completion.status !== 'complete';
   const conclusionTitle = pending ? '현재 분석 결과' : '분석 결론';
   const fields: Record<string, string> = { structure: '상품 구조', holdings: '보유내역', fees: '보수', distributions: '분배' };
@@ -104,7 +103,7 @@ export function ReportView({ report, separateEvidence = false, allSections = fal
         <p className="todo">{plan.title}</p>
         {allocations.length > 0 && <div className="mixviz">{composition.every(h => Number.isFinite(h.weight_pct)) && <PortfolioDonut holdings={composition.map(h => ({ name: h.name, weight_pct: h.weight_pct!, color: color(h.instrument_id) }))} />}<ul>{composition.map(h => <li key={h.instrument_id}><i style={{ background: color(h.instrument_id) }} /><span title={h.name}>{h.instrument_id?.startsWith('US:') ? h.ticker : h.name}</span><b>{weight(h.weight_pct)}</b></li>)}</ul></div>}
         <Axes evaluation={plan.evaluation} recommended />
-        {(plan.expected_return_1y != null || plan.dividend_yield_1y != null) && <div className="forecast">{plan.expected_return_1y != null && <div><span>예상 1년 수익률</span><b>{`${plan.expected_return_1y > 0 ? '+' : ''}${plan.expected_return_1y}%`}</b></div>}{plan.dividend_yield_1y != null && <div><span>1년 배당률</span><b>{plan.dividend_yield_1y}%</b></div>}</div>}
+        {(plan.expected_return_1y != null || plan.dividend_yield_1y != null) && <div className="forecast">{plan.expected_return_1y != null && <div><span>{plan.return_forecast?.kind === 'upper_sigma_1y' ? '1년 수익률 · 1σ 상단 시나리오' : '예상 1년 수익률'}</span><b>{`${plan.expected_return_1y > 0 ? '+' : ''}${plan.expected_return_1y}%`}</b></div>}{plan.dividend_yield_1y != null && <div><span>1년 배당률</span><b>{plan.dividend_yield_1y}%</b></div>}</div>}
         {(plan.return_forecast || plan.dividend_basis) && <details className="forecast-basis"><summary>수익률·배당률 산정 근거</summary>{plan.return_forecast && <><p>{plan.return_forecast.reason}</p><p>{plan.return_forecast.method}</p></>}<p>{plan.dividend_basis}</p>{plan.target_return_1y != null && <p>연 {plan.target_return_1y}%는 목표 수익률이며 예상 수익률의 하한이 아니에요.</p>}{plan.dividend_observations?.map(row => <p key={row.instrument_id}>{row.instrument_id} · {row.trailing_yield_pct}% · {row.as_of}{row.source_url && <a href={safeReportUrl(row.source_url)} target="_blank" rel="noreferrer"> 분배금 내역 ↗</a>}{row.method && <small>{row.method}</small>}{(row.evidence ?? []).map((e, i) => <a key={i} href={safeReportUrl(e.url)} target="_blank" rel="noreferrer"> 배당 출처 ↗</a>)}</p>)}</details>}
       </div>
       <section className="improvements" data-analytics-section="changes"><div className="improvements-heading"><h4>내 포트폴리오에서 바꿀 것</h4></div>{plan.execution && <ExecutionDetails plan={plan.execution} />}{changes.length ? <ul className="improvement-list">{changes.map((a, i) => {
@@ -119,7 +118,6 @@ export function ReportView({ report, separateEvidence = false, allSections = fal
       <div className="why"><i>이렇게 고른 이유</i><Bullets section={plan.evaluation?.reason} /><Evidence section={plan.evaluation?.reason} report={report} hidden={separateEvidence} /></div>
       <section className="performance" data-analytics-section="performance"><h4>과거 성과</h4>{plan.historical_performance ? <PerformanceChart history={plan.historical_performance} /> : <p className="notice">{plan.unavailable_reason}</p>}</section>
     </article> : report.scenarios || report.execution ? null : <article className="ans"><p className="notice">{recommendationStatus(report)}</p>{report.metrics?.total_krw != null && <p className="fee"><span>입력한 평가금액</span><b>{money(report.metrics.total_krw)}</b></p>}<ul className="report-bullets">{(report.metrics?.holdings ?? []).map((h, i) => <li key={i}>{h.name} · {h.account} · {h.weight_pct == null ? '비중 미입력' : `${h.weight_pct}%`}</li>)}</ul>{!report.optimization && <section className="performance"><h4>과거 성과</h4><p className="notice">{report.metrics?.unavailable_reason}</p></section>}</article>}
-    {feedbackJobId && <ReportFeedback key={feedbackJobId} jobId={feedbackJobId} />}
     <article className="evaluation" data-analytics-section="evaluation"><h3>핵심 평가 정리</h3>{parts.map((part, i) => <section data-analytics-section={i === 0 ? 'conclusion' : i === 1 ? 'outlook' : 'insights'} className={'evaluation__part' + (i === 0 ? ' action-first' : '')} key={i}><h4>{part.title}</h4><Bullets section={part.content} /><Evidence section={part.content} report={report} hidden={separateEvidence} /></section>)}</article>
   </div>;
 }

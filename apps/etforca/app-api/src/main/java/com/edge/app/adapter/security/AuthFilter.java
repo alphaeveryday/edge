@@ -1,5 +1,6 @@
 package com.edge.app.adapter.security;
 
+import com.edge.app.application.member.provided.MemberFinder;
 import com.edge.common.apipayload.ApiResponse;
 import com.edge.common.apipayload.code.status.ErrorStatus;
 import jakarta.servlet.FilterChain;
@@ -14,7 +15,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.io.IOException;
 
 /**
-  * DB 조회 없는 헤더 해석과 요청 속성 principal 설정
+  * 토큰 검증과 DB의 활동 회원 확인 뒤 요청 속성 principal 설정
   * Bearer 우선 해석
   * Bearer 검증 실패 시 즉시 COMMON401 응답
   * Bearer 가 없을 때의 X-Device-Id 게스트 처리
@@ -29,10 +30,12 @@ public class AuthFilter extends OncePerRequestFilter {
 
     private final AccessTokens tokens;
     private final ObjectMapper objectMapper;
+    private final MemberFinder memberFinder;
 
-    public AuthFilter(AccessTokens tokens, ObjectMapper objectMapper) {
+    public AuthFilter(AccessTokens tokens, ObjectMapper objectMapper, MemberFinder memberFinder) {
         this.tokens = tokens;
         this.objectMapper = objectMapper;
+        this.memberFinder = memberFinder;
     }
 
     @Override
@@ -45,7 +48,7 @@ public class AuthFilter extends OncePerRequestFilter {
                 return;
             }
             var memberId = tokens.verify(authorization.substring(BEARER.length()).trim());
-            if (memberId.isEmpty()) {
+            if (memberId.isEmpty() || !memberFinder.isActive(memberId.get())) {
                 reject(response, ErrorStatus._UNAUTHORIZED);
                 return;
             }

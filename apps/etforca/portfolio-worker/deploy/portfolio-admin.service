@@ -1,0 +1,14 @@
+[Unit]
+Description=ETF Orca administrator container
+After=docker.service
+Requires=docker.service
+StopWhenUnneeded=yes
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/edge-portfolio/current/deploy
+ExecStart=/usr/bin/docker compose --env-file /opt/edge-portfolio/runtime.env --profile admin up -d --no-deps --wait --wait-timeout 120 admin
+# ExecStopPost also runs when the start failed, so a half-started administrator never lingers
+ExecStopPost=/usr/bin/docker compose --env-file /opt/edge-portfolio/runtime.env --profile admin stop admin
+TimeoutStartSec=180

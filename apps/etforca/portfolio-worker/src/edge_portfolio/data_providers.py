@@ -13,10 +13,11 @@ log = logging.getLogger(__name__)
 
 def load_fallback_prices(symbol, as_of):
     import FinanceDataReader as fdr
+    from .catalog import instruments
     from .market_data import positive_price
     if symbol == 'KRW=X':
         feed, currency, url = 'FRED:DEXKOUS', 'KRW', 'https://fred.stlouisfed.org/series/DEXKOUS'
-    elif re.fullmatch(r'[0-9A-Z]{6}\.KS', symbol):
+    elif re.fullmatch(r'[0-9A-Z]{6}\.K[SQ]', symbol):
         feed, currency = 'NAVER:' + symbol[:-3], 'KRW'
         url = 'https://fchart.stock.naver.com/sise.nhn?timeframe=day&count=6000&requestType=0&symbol=' + symbol[:-3]
     else:
@@ -38,7 +39,7 @@ def load_fallback_prices(symbol, as_of):
         raise ValueError('PRICE_INVALID')
     if (as_of - close.index[-1].date()).days > 7:
         raise ValueError('PRICE_STALE')
-    if feed.startswith('NAVER:'):
+    if feed.startswith('NAVER:') and instruments().get('KR:' + symbol[:-3], {}).get('kind') == 'etf':
         # NAVER ETF chart Close already adjusts for distributions; never add cash again.
         frame['Adj Close'] = frame['Close']
     basis = 'total_return' if 'Adj Close' in frame else 'price'

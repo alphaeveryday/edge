@@ -2,7 +2,7 @@ import { useRouter, useScrollToTop } from 'expo-router';
 import { useState } from 'react';
 import { Animated, ScrollView, Text, View } from 'react-native';
 import { TopBar } from '@/components/TopBar';
-import { Chip, LinkRow, PageTitle, SectionHead } from '@/components/ui';
+import { Chip, LinkRow, PageTitle, SectionHead, TabBarLine } from '@/components/ui';
 import { EtfPostRow } from '@/features/community/EtfPostRow';
 import { useHotPosts } from '@/features/community/queries';
 import { EtfRow } from '@/features/etf/EtfRow';
@@ -71,6 +71,7 @@ export default function Home() {
           <LinkRow muted center divider label="커뮤니티 더 보기" onPress={() => router.push('/(tabs)/community')} />
         </View>
       </ScrollView>
+      <TabBarLine />
     </View>
   );
 }

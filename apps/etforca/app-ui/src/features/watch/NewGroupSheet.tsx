@@ -4,6 +4,7 @@ import type { WatchGroup } from '@/api';
 import { BottomSheet, CtaButton, SheetHead } from '@/components/ui';
 import { useToast } from '@/store/toast';
 import { useWatchGroup } from '@/store/watch';
+import { useSession } from '@/store/session';
 import { createStyles, useColors } from '@/theme/theme';
 import { radius } from '@/theme/tokens';
 import { fam } from '@/theme/typography';
@@ -18,8 +19,10 @@ export function NewGroupForm({ onCreated }: { onCreated: (g: WatchGroup) => void
   const toast = useToast((s) => s.show);
   const submit = () => {
     if (!name.trim() || create.isPending) return;
+    const revision = useSession.getState().revision;
     create.mutate(name.trim(), {
       onSuccess: (g) => {
+        if (revision !== useSession.getState().revision) return;
         setName('');
         onCreated(g);
         toast(`${g.label} 그룹을 만들었어요`);

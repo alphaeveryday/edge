@@ -2,18 +2,6 @@ import { test, expect } from '@playwright/test';
 import { cost, performance, purchases, value, type Asset } from '../src/workbook';
 
 const asset: Asset = { id: 'a', name: 'ETF', account: 'ISA', category: '주식', currency: 'USD', quantity: 80, average: 25, price: 28, cost_fx: 1300, amount: null, weight: null, target: 100, fee: 5000, price_date: null };
-test('save popup shows the actual dashboard preview and newsletter needs only email and submit', async ({ page }) => {
-  await page.goto('/portfolio/?preview=result');
-  await page.locator('.evaluation').scrollIntoViewIfNeeded();
-  const popup = page.locator('.report-feedback');
-  const preview = popup.getByRole('img', { name: /대시보드 예시/ });
-  await expect(preview).toBeVisible();
-  await expect.poll(() => preview.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(1200);
-  await expect(popup.getByRole('checkbox')).toHaveCount(0);
-  await popup.getByLabel('뉴스레터 이메일').fill('preview@example.test');
-  await popup.getByRole('button', { name: '매일 핵심 소식 받기' }).click();
-  await expect(popup.getByRole('status')).toContainText('확인 메일');
-});
 test('chart motion respects reduced motion and monthly bars open the chosen month', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
   await expect(page.locator('.allocation-donut').first()).toHaveCSS('animation-name', 'none');
@@ -24,12 +12,16 @@ test('chart motion respects reduced motion and monthly bars open the chosen mont
   await expect(page.getByRole('heading', { name: /2026년 10월/ })).toBeVisible();
   await expect(page.locator('.dividend-records')).not.toBeEmpty();
   await page.goto('/portfolio/?preview=running');
-  await expect(page.locator('.progress-steps [aria-current="step"]')).toHaveCount(1);
-  await expect(page.locator('.research-flow')).toHaveCSS('animation-name', 'research-flow');
+  await expect(page.locator('.progress-steps')).toHaveCount(0);
+  // 서버 단계(portfolio)의 두 역할만 '검토 중'으로 돈다. 동작 줄이기에서는 도는 표시를 멈추고 글자는 남긴다.
+  await expect(page.locator('.fl-agent[data-s="run"]')).toHaveCount(2);
+  await expect(page.locator('.fl-agent[data-s="run"] .ds-spinner').first()).toHaveCSS('animation-name', 'ds-spin');
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  await expect(page.locator('.research-flow')).toHaveCSS('animation-name', 'none');
+  await expect(page.locator('.fl-agent[data-s="run"] .ds-spinner').first()).toHaveCSS('animation-name', 'none');
+  await expect(page.locator('.fl-agent[data-s="run"]').first()).toContainText('검토 중');
   await page.goto('/portfolio/?preview=queued');
-  await expect(page.locator('.progress-steps [aria-current="step"]')).toHaveCount(0);
+  await expect(page.locator('.fl-agent[data-s="run"]')).toHaveCount(0);
+  await expect(page.getByRole('list', { name: '분석 역할과 검토 흐름' })).toBeVisible();
 });
 test('money calculations preserve FX, fees and unavailable cost; purchases never exceed the budget', () => {
   expect(value(asset, 1360)).toBe(3046400);
@@ -70,7 +62,7 @@ test('preview edits and reloads without sending customer API or analytics traffi
   await page.getByRole('dialog').press('Escape');
   await expect(page.getByRole('button', { name: '종목 추가', exact: true })).toBeFocused();
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
-  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
   await page.getByRole('option', { name: /KODEX 200/ }).click();
   await page.getByLabel('보유 수량', { exact: true }).fill('2');
   await page.getByRole('dialog').getByRole('button', { name: '저장', exact: true }).click();
@@ -83,19 +75,9 @@ test('preview edits and reloads without sending customer API or analytics traffi
   await expect(page.getByRole('heading', { name: '배당 달력', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '수익 기록', exact: true }).click();
   await expect(page.getByRole('heading', { name: '일별 수익 기록' })).toBeVisible();
-  await page.getByRole('button', { name: '백테스트', exact: true }).click();
-  await expect(page.locator('.dashboard-main')).toContainText('내 조합 백테스트');
   expect(calls).toEqual([]);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });
-test('result can save original holdings into the dashboard without analysis', async ({ page }) => {
-  await page.goto('/portfolio/?preview=result');
-  await page.locator('.feedback-anchor > .save-portfolio button').click();
-  await expect(page).toHaveURL(/preview=dashboard/);
-  await expect(page.locator('.holdings-table')).toContainText('금 ETF 예시');
-  await expect(page.locator('.dashboard-stats')).toContainText('25,586,400원');
-});
-
 test('preview navigation and repeated followups remain isolated from a saved customer job', async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'customer-secret'));
   const calls: string[] = [];
@@ -107,12 +89,12 @@ test('preview navigation and repeated followups remain isolated from a saved cus
   await page.getByRole('link', { name: '포트폴리오로 돌아가기' }).click();
   await expect(page).toHaveURL(/preview=input/);
   await page.goto('/portfolio/?preview=result');
-  for (const question of ['어떻게 살까요?', '한 번 더 설명해 주세요']) {
-    await page.getByRole('textbox', { name: '추가 질문', exact: true }).fill(question);
-    await page.getByRole('button', { name: '질문 보내기' }).click();
-    await expect(page.locator('.chat-answer')).toContainText('테스트 답변');
-    await expect(page.getByRole('button', { name: '질문 보내기' })).toBeEnabled();
-  }
+  await page.getByRole('textbox', { name: '직접 물어보기', exact: true }).fill('어떻게 살까요?');
+  await page.getByRole('button', { name: '질문 보내기' }).click();
+  await page.getByRole('textbox', { name: '이어서 질문' }).fill('한 번 더 설명해 주세요');
+  await page.getByRole('button', { name: '이어서 질문 보내기' }).click();
+  await expect(page.locator('.chat-bubble--ai')).toHaveCount(2);
+  await expect(page.locator('.chat-bubble--ai').last()).toContainText('테스트 답변');
   expect(calls).toEqual([]);
   expect(await page.evaluate(() => localStorage.getItem('edge-portfolio-job'))).toBe('customer-secret');
 });

@@ -1,0 +1,30 @@
+[project]
+name = "edge-truth-research"
+version = "0.1.0"
+description = "오늘 크게 오른 종목의 급등 이유를 공시·보도와 대조(ACH)해 유망주·허위매물로 판정·게시하는 배치"
+requires-python = ">=3.12"
+dependencies = [
+    "jsonschema>=4.23,<5",
+    "psycopg[binary]>=3.1", # 국내 보도를 운영 DB 에서 읽는다(dbnews)
+    "neo4j>=5", # 국내 종목 사건 그래프(PuppyGraph Bolt) 조회 — graph.py
+    "edge-ontology", # 사건 타입 목록(graph.skill) — 워크스페이스 멤버
+    "edge-truth-agent", # 저장소·뉴스 말뭉치·웹 도구·작업 폴더·세션 이벤트 읽기를 그대로 쓴다 — 워크스페이스 멤버
+]
+
+[tool.uv.sources]
+edge-truth-agent = { workspace = true }
+edge-ontology = { workspace = true }
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/edge_truth_research"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

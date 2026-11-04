@@ -6,6 +6,21 @@ on:
         description: 'Optional failed analysis ID to replay without modifying the saved job'
         required: false
         type: string
+      review_past:
+        description: 'Re-run past customer analysis inputs through current code (read-only, aggregate output only)'
+        required: false
+        type: boolean
+        default: false
+      days:
+        description: 'Past review window in days (0 = all)'
+        required: false
+        type: number
+        default: 90
+      llm_samples:
+        description: 'Past review: newest distinct inputs to run through the full analysis (0..5, 300s each)'
+        required: false
+        type: number
+        default: 0
 permissions:
   id-token: write
   contents: read
@@ -13,7 +28,7 @@ jobs:
   diagnose:
     if: github.ref == 'refs/heads/dev'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: ${{ inputs.review_past && 70 || 10 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,3 +45,6 @@ jobs:
           python .github/scripts/portfolio_diagnostics.py
         env:
           PORTFOLIO_REPLAY_JOB_ID: ${{ inputs.replay_job_id }}
+          PORTFOLIO_REVIEW_PAST: ${{ inputs.review_past }}
+          PORTFOLIO_REVIEW_DAYS: ${{ inputs.days }}
+          PORTFOLIO_REVIEW_LLM_SAMPLES: ${{ inputs.llm_samples }}

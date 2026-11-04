@@ -4,14 +4,36 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 
 import pytest
 
 from edge_truth_agent.news import Article
+from edge_truth_agent import media
+
+
+@pytest.fixture(autouse=True)
+def no_media_network(monkeypatch):
+    """시험은 기사·YouTube 서버에 접속하지 않는다. 사진·영상을 보는 시험은 이 두 함수를 따로 바꾼다."""
+    monkeypatch.setattr(media, "og_image", lambda url: None)
+    monkeypatch.setattr(media, "image_ok", lambda url: False)
+    monkeypatch.setattr(media, "video_ok", lambda video_id: False)
 
 ROOT = Path(__file__).resolve().parents[1]
 SEED = ROOT / "seed"
 WEB = ROOT.parent / "truth-web"
+
+
+FLOW_SEEDS = ("geumyang-monlaa", "homeplus-short-term-bonds", "hybe-ipo-2019", "koreazinc-offering-2024")
+
+
+def flow_seed(tmp_path: Path) -> Path:
+    """실행 흐름 시험용 seed 폴더(처음 4건). 시작 사건이 늘어도 흐름 시험의 후보·렌더 범위가 바뀌지 않게."""
+    out = tmp_path / "flow-seed"
+    out.mkdir(exist_ok=True)
+    for name in FLOW_SEEDS:
+        shutil.copy(SEED / f"{name}.json", out)
+    return out
 
 
 def seed(name: str) -> dict:

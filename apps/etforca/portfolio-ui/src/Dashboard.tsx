@@ -12,11 +12,10 @@ import { trackAction, trackScreen, type Screen } from './analytics';
 import { InstrumentSearch } from './InstrumentSearch';
 import { PerformanceChart } from './ReportCharts';
 import { SeedMoney } from './SeedMoney';
-import { Backtest } from './Backtest';
 import { Analysis } from './Analysis';
 
-const tabs = ['한눈에', '배당 달력', '수익 기록', '백테스트', 'AI 포폴 분석'];
-const tabIds = ['overview', 'dividends', 'returns', 'backtest', 'analysis'];
+const tabs = ['한눈에', '배당 달력', '수익 기록', 'AI 포폴 분석'];
+const tabIds = ['overview', 'dividends', 'returns', 'analysis'];
 const initialTab = () => tabs[Math.max(0, tabIds.indexOf(new URLSearchParams(location.search).get('tab') || ''))];
 const empty: Workbook = { title: '내 포트폴리오', fx: null, assets: [], dividends: [], months: [] };
 const today = () => preview ? '2026-10-18' : new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Seoul' }).format(new Date());
@@ -30,9 +29,10 @@ export function Dashboard() {
   const [catalogError, setCatalogError] = useState('');
   const [trackingError, setTrackingError] = useState('');
   const [tab, setTab] = useState(initialTab);
+  const [allRecords, setAllRecords] = useState(false);
   const [analysisOpened, setAnalysisOpened] = useState(() => initialTab() === 'AI 포폴 분석');
   useEffect(() => { const url = new URL(location.href); url.searchParams.set('tab', tabIds[tabs.indexOf(tab)]); history.replaceState(null, '', url); }, [tab]);
-  useEffect(() => tab === 'AI 포폴 분석' ? undefined : trackScreen((['dashboard_overview', 'dashboard_dividends', 'dashboard_returns', 'dashboard_backtest'] as Screen[])[tabs.indexOf(tab)]), [tab]);
+  useEffect(() => tab === 'AI 포폴 분석' ? undefined : trackScreen((['dashboard_overview', 'dashboard_dividends', 'dashboard_returns'] as Screen[])[tabs.indexOf(tab)]), [tab]);
   const [account, setAccount] = useState('전체');
   const [month, setMonth] = useState(thisMonth);
   const [error, setError] = useState('');
@@ -50,7 +50,7 @@ export function Dashboard() {
   const trackingSequence = useRef(0);
   const trackingPoll = useRef(false);
   const { ask, confirmation, restoreFocus } = useConfirmation();
-  async function loadCatalog() { try { setCatalog(await request<Catalog>('/catalog')); setCatalogError(''); } catch { setCatalogError('종목 목록을 불러오지 못했어요.'); } }
+  async function loadCatalog() { try { setCatalog(await request<Catalog>('/workbook/catalog')); setCatalogError(''); } catch { setCatalogError('종목 목록을 불러오지 못했어요.'); } }
   async function loadTracking() {
     const sequence = ++trackingSequence.current;
     try { const next = await request<Tracking>('/workbook/tracking'); if (!Array.isArray(next.days)) throw new Error('Invalid tracking'); if (sequence === trackingSequence.current) { setTracking(next); setTrackingLoaded(true); setTrackingError(''); } }
@@ -136,7 +136,7 @@ export function Dashboard() {
     if (w.assets.some(a => a.id !== editing.id && a.instrument_id === item.id && a.account === editing.account)) return '이 계좌에 이미 있어요. 보유 목록에서 수량을 수정해 주세요.';
     const currency = item.market === 'US' ? 'USD' : 'KRW';
     const existing = w.assets.some(a => a.id === editing.id);
-    setEditing({ ...editing, instrument_id: item.id, name: item.name, currency, category: item.kind === 'cash' ? '현금' : editing.category === '현금' ? '기타' : editing.category,
+    setEditing({ ...editing, instrument_id: item.id, name: item.name, currency, category: item.kind === 'cash' ? '현금' : item.kind === 'stock' ? '주식' : editing.category === '현금' ? '기타' : editing.category,
       quantity: existing ? editing.quantity : null, average: existing && editing.currency === currency ? editing.average : null, amount: existing ? editing.amount : null }); setDirty(true);
   }
   async function saveAsset(e: React.FormEvent<HTMLFormElement>) {
@@ -168,7 +168,6 @@ export function Dashboard() {
         <section className="dashboard-stats" hidden={tab === 'AI 포폴 분석'}><article><span>{values.some(v => v === null) ? '확인된 자산' : '총 자산'}</span><strong>{assets.length ? money(total) : '아직 비어 있어요'}</strong><small>{refreshing ? '갱신 중 · 이전 값' : market ? `${market.date} 확인 · 최근 종가 기준` : assets.length ? '시세를 자동으로 가져오고 있어요' : '보유 종목부터 담아 보세요'}</small></article><article><span>{profitMissing && profit !== null ? '확인된 평가손익' : '보유 자산 평가손익'}</span><strong className={`profit-display ${profit === null ? '' : profit >= 0 ? 'gain' : 'loss'}`}><span className="profit-amount">{profit !== null && profit > 0 ? '+' : ''}{money(profit)}</span>{returnPct !== null && <> <span className="profit-percent">({returnPct > 0 ? '+' : ''}{returnPct.toFixed(2)}%)</span></>}</strong>{market && profitMissing > 0 && <small>손익 미확인 {profitMissing}종목 제외</small>}{assets.some(a => a.currency === 'USD') && <small>해외 종목은 현재 환율 기준 · 매입 이후 환차익 제외</small>}</article><article><span>확인된 예상 분배금</span><strong>{(annualEstimate === 0 || forecasts.length > 0) ? money(forecasts.reduce((s, d) => s + d.amount, 0)) : '확인 중'}</strong><small>세전 · 최근 분배 이력 기준</small></article></section>
         {trackingError && <p role="alert">{trackingError} <Button onClick={() => void loadTracking()}>다시 확인</Button></p>}
         {tab !== 'AI 포폴 분석' && assets.length > 0 && !market && !trackingError && (tracking.market && tracking.market.version > saved.version ? <p className="notice">다른 탭에서 보유 목록이 바뀌었어요. <Button disabled={busy || loading} onClick={() => void reload()}>최신 보유 목록 불러오기</Button></p> : !seedOnly && <Loading>시세를 준비하고 있어요. 보유 종목과 분석 결과는 먼저 볼 수 있어요.</Loading>)}
-        {catalogError && tab === '백테스트' && <p role="alert">{catalogError} <Button onClick={() => void loadCatalog()}>목록 다시 불러오기</Button></p>}
         {market?.missing.some(id => quotes.get(id)?.value == null && !market.pending_splits?.includes(id) && assets.some(a => a.id === id)) && <p className="notice">일부 종목의 시세나 수량을 확인하지 못했어요. 종목을 눌러 보유 정보를 확인해 주세요.</p>}
         {market?.pending_splits?.some(id => assets.some(a => a.id === id)) && <p className="notice">분할된 종목은 분할 후 첫 종가를 확인하면 평가액을 표시해요.</p>}
         {tab === '한눈에' && <><div className="dashboard-overview"><AllocationChart assets={graphAssets} fx={market?.fx ?? null} /><section className="dashboard-card dividend-summary" data-analytics-section="dividend_summary"><SectionHeading className="card-heading" title="배당 분석" action={<Button onClick={() => setTab('배당 달력')}>달력 보기 <Icon name="chevronRight" size={16} /></Button>} /><DividendSummary forecasts={forecasts} annualEstimate={annualEstimate} total={total} /><DividendChart dividends={[]} forecasts={forecasts} complete={forecastComplete} unavailableMonths={unavailableMonths} incompleteMonths={uncoveredMonths} startMonth={thisMonth()} selectedMonth={month} onMonth={m => { setMonth(m); setTab('배당 달력'); }} /></section></div>
@@ -183,19 +182,19 @@ export function Dashboard() {
         {tab === '수익 기록' && <section className="dashboard-card"><SectionHeading title="일별 수익 기록" description="전체 계좌 · 등록한 날부터 하루에 한 번 자동 기록해요." />
           {tracking.days.length >= 2 && <PerformanceChart showSources={false} label="총자산" history={{ currency: 'KRW', points: tracking.days.map(d => ({ date: d.date, recommended: d.value, current: null })), basis: '전체 계좌 · 일별 평가액', source_url: '', method: '최근 종가와 환율 기준. 보유 수량 변경과 입출금도 자산 변화에 포함돼요.' }} />}
           {!tracking.days.length && <p className="empty-state">첫 시세를 확인하면 오늘부터 기록을 시작해요.</p>}
-          <div className="return-records">{[...tracking.days].sort((a, b) => b.date.localeCompare(a.date)).map(d => {
+          <div className="return-records" id="return-records">{[...tracking.days].sort((a, b) => b.date.localeCompare(a.date)).slice(0, allRecords ? undefined : 5).map(d => {
             const held = d.assets.filter(a => a.price !== null || a.quantity === 0);
             const { profit: gain, returnPct: pct, missing } = profitSummary(held);
             return <article key={d.date}><time dateTime={d.date}>{d.date}</time><span>총자산 <b>{money(d.value)}</b></span><span className={gain === null ? '' : gain >= 0 ? 'gain' : 'loss'}>{missing ? '확인된 평가손익' : '평가손익'} {gain !== null && gain > 0 ? '+' : ''}{money(gain)}{pct !== null && ` (${pct > 0 ? '+' : ''}${pct.toFixed(2)}%)`}{missing > 0 && <small>손익 미확인 {missing}종목 제외</small>}</span></article>;
           })}</div>
+          {tracking.days.length > 5 && <Button aria-expanded={allRecords} aria-controls="return-records" onClick={() => setAllRecords(!allRecords)}>{allRecords ? '접기' : `지난 기록 ${tracking.days.length - 5}일 더 보기`}</Button>}
         </section>}
-        <div hidden={tab !== '백테스트'}><Backtest assets={graphAssets} catalog={catalog} /></div>
       </>}
       {analysisOpened && <div hidden={tab !== 'AI 포폴 분석'}><Analysis embedded active={tab === 'AI 포폴 분석'} /></div>}
     </main>
     {editing && <dialog ref={dialog} onCancel={e => { e.preventDefault(); void cancelEditor(); }} className="asset-editor" aria-labelledby="asset-editor-title"><form onSubmit={saveAsset} onChange={() => setDirty(true)} onInput={e => { const data = new FormData(e.currentTarget); const q = data.get('quantity'), p = data.get('average'); setEntryCost(q && p && Number.isFinite(Number(q) * Number(p)) ? Number(q) * Number(p) : null); }}><div className="card-heading"><h2 id="asset-editor-title">{w.assets.some(a => a.id === editing.id) ? '보유 자산 수정' : '보유 자산 추가'}</h2><Button type="button" aria-label="수정 닫기" disabled={busy} onClick={() => void cancelEditor()}>×</Button></div><fieldset disabled={busy || loading} className="editor-fields">
       <label>계좌<Select name="account" value={editing.account} onChange={e => setEditing({ ...editing, account: e.target.value })}>{accounts.map(a => <option key={a}>{a}</option>)}</Select></label>
-      {editing.instrument_id ? <div className="selected-instrument"><strong>{editing.name}</strong>{!w.assets.some(a => a.id === editing.id) && <Button type="button" onClick={() => { setEditing({ ...editing, instrument_id: null }); setDirty(true); }}>종목 변경</Button>}</div> : <><InstrumentSearch account={editing.account} catalog={catalog} onAdd={selectInstrument} />{editing.name && <p>저장된 종목: {editing.name} · 자동 시세를 연결할 종목을 선택해 주세요.</p>}</>}
+      {editing.instrument_id ? <div className="selected-instrument"><strong>{editing.name}</strong>{!w.assets.some(a => a.id === editing.id) && <Button type="button" onClick={() => { setEditing({ ...editing, instrument_id: null }); setDirty(true); }}>종목 변경</Button>}</div> : <><InstrumentSearch includeStocks account={editing.account} catalog={catalog} onAdd={selectInstrument} />{editing.name && <p>저장된 종목: {editing.name} · 자동 시세를 연결할 종목을 선택해 주세요.</p>}</>}
       {catalogError && <p role="alert">{catalogError} <Button type="button" onClick={() => void loadCatalog()}>목록 다시 불러오기</Button></p>}
       {editing.instrument_id && (editing.category === '현금' ? <label>현금 (원)<TextInput name="amount" type="number" min="0" max="10000000000000" step="any" defaultValue={editing.amount ?? ''} required /></label> : <div className="editor-grid" key={editing.instrument_id}>
         <div><label>보유 수량<TextInput name="quantity" type="number" inputMode="decimal" aria-describedby="quantity-help" min="0" max="10000000000000" step="any" placeholder="예: 10" defaultValue={editing.quantity ?? ''} required={editing.amount === null} /></label><small id="quantity-help">소수점 수량도 입력할 수 있어요.</small></div>

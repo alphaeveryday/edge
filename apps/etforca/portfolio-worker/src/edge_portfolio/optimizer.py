@@ -7,20 +7,24 @@ from time import monotonic
 
 import numpy as np
 
-from .market_data import fetch_prices, normalized_prices, comparison_bounds, expected_sessions, history_basis, history_returns, price_failure, weights
+from .market_data import normalized_prices, comparison_bounds, expected_sessions, history_basis, history_returns, price_failure, weights
 from .recommendation import selected_accounts, allocation_error
-from .decision import Decision, check_constraints
+from .decision import ACCEPTED, Decision, check_constraints
 from .execution import plan_execution
+from .catalog import price_symbol
+from .contracts import calculate
 from .market_data import comparison_method, comparison_column
 
-PRICE_TIMEOUT_SECONDS = 65
 PRICE_COLLECTION_BUDGET_SECONDS = 180
+# 8차: 모든 비교를 가장 짧은 종목의 기록에 맞추고, 자료가 짧다고 후보를 빼지 않는다.
+# 종가 둘(하루치 수익률)이면 계산한다. 종가 하나뿐인 상장 당일은 비교할 수익률이 없다
+MIN_PRICE_POINTS = 2
 
 
 def optimization_bounds(ids, records, as_of, *, column=None):
     start, end = comparison_bounds(ids, records, as_of, column=column)
     sessions = set().union(*(set(expected_sessions(key, start, end)) for key in ids - {'CASH:KRW'}))
-    if len(sessions) < 11:
+    if len(sessions) < MIN_PRICE_POINTS:
         raise ValueError('INSUFFICIENT_COMPARISON_SESSIONS')
     return start, end
 
@@ -30,7 +34,7 @@ def optimization_prices(ids, records, as_of, bounds=None):
     sessions = set().union(*(set(expected_sessions(key, frame.index[0], frame.index[-1])) for key in ids - {'CASH:KRW'}))
     if sessions:
         frame = frame.loc[frame.index.isin(sessions)]
-    if len(frame) < 11:
+    if len(frame) < MIN_PRICE_POINTS:
         raise ValueError('INSUFFICIENT_COMPARISON_SESSIONS')
     return frame / frame.iloc[0], sources
 
@@ -42,8 +46,8 @@ def grid(size):
 
 
 def search(ids, frame, current, preferred=()):
-    if len(frame) < 11:
-        return []  # Ten measured sessions plus the initial normalization date.
+    if len(frame) < MIN_PRICE_POINTS:
+        return []  # The initial normalization date plus at least one measured session.
     allocation = grid(len(ids))
     extra = [[weight / 100 for _, weight in proposal] for proposal in preferred
              if [key for key, _ in proposal] == ids and any(weight % 10 for _, weight in proposal)]
@@ -124,7 +128,7 @@ class Optimizer:
             if any(sorted((row['instrument_id'], row['weight_pct']) for row in candidate['allocations']) == list(preferred)
                    for candidate in result.get('candidates', [])):
                 continue
-            if any(check['status'] not in {'pass', 'model_review'} for check in self.vector_checks(rows)):
+            if any(check['status'] not in ACCEPTED for check in self.vector_checks(rows)):
                 continue
             result.setdefault('comparison_status', result['status'])
             result.setdefault('comparison_reason', result.get('reason'))
@@ -198,8 +202,7 @@ class Optimizer:
         if missing:
             self.result.update(reason='CURRENT_INSTRUMENT_UNAVAILABLE', missing_instrument_ids=missing)
             return self.result
-        needed = {key: self.market.catalog[key]['ticker'] + ('.KS' if self.market.catalog[key]['market'] == 'KR' else '')
-                  for key in ids - {'CASH:KRW'}}
+        needed = {key: price_symbol(key) for key in ids - {'CASH:KRW'}}
         if any(self.market.catalog[key]['market'] == 'US' for key in ids - {'CASH:KRW'}):
             needed['FX'] = 'KRW=X'
         priority = set(self.market.current) - {'CASH:KRW'}
@@ -207,19 +210,6 @@ class Optimizer:
             priority.add('FX')
         ordered = sorted(needed, key=lambda key: (key not in priority, key != 'FX', key))
 
-        attempted = set()
-        async def fetch(key, symbol):
-            if key not in self.market.records:
-                self.market.failures.pop(key, None)
-                async with self.market.semaphore:
-                    attempted.add(key)
-                    try:
-                        self.market.records[key] = self.market.loader(symbol, self.market.as_of) if self.market.loader else await fetch_prices(symbol, self.market.as_of,
-                            provider_timeout=PRICE_TIMEOUT_SECONDS, on_raw=lambda record: self.market.records.__setitem__(key, record))
-                        self.market.failures.pop(key, None)
-                    except Exception as error:
-                        if key not in self.market.records:
-                            self.market.failures[key] = price_failure(error)
         rejections = {}
         collection_started = monotonic()
         try:
@@ -228,12 +218,11 @@ class Optimizer:
                 if remaining <= 0:
                     raise TimeoutError
                 async with asyncio.timeout(remaining):
-                    for baseline in (True, False):
-                        await asyncio.gather(*(fetch(key, needed[key]) for key in ordered if (key in priority) == baseline), return_exceptions=True)
+                    await self.market.load({key: needed[key] for key in ordered})
             except TimeoutError:
                 for key in needed:
                     if key not in self.market.records:
-                        self.market.failures.setdefault(key, 'PRICE_COLLECTION_TIMEOUT' if key in attempted else 'PRICE_QUEUE_TIMEOUT')
+                        self.market.failures.setdefault(key, 'PRICE_QUEUE_TIMEOUT')
             finally:
                 self.price_collection_seconds += monotonic() - collection_started
             failed = set(needed) - set(self.market.records)
@@ -316,7 +305,8 @@ class Optimizer:
             unknown_count = rejected_count = 0
             dividends_by_id = {}
             income_failures = {}
-            if 'income' in self.decision.objectives:
+            # '배당 받기' 칩도 분배율을 붙인다: 모델이 분배율 높은 ETF에 무게를 두려면 숫자가 보여야 한다
+            if 'income' in self.decision.objectives or any(rule.kind == 'dividend' for rule in self.decision.constraints):
                 for ids_in_group, rows in zip(eligible, results):
                     if not rows:
                         continue
@@ -333,7 +323,7 @@ class Optimizer:
                 for row in rows[:]:
                     allocation = [{'instrument_id': key, 'weight_pct': round(weight * 100, 8)} for key, weight in zip(ids_in_group, row['weights'])]
                     checks = self.vector_checks(allocation)
-                    if any(check['status'] not in {'pass', 'model_review'} for check in checks):
+                    if any(check['status'] not in ACCEPTED for check in checks):
                         unknown_count += any(check['status'] == 'unknown' for check in checks)
                         rejected_count += 1
                         rows.remove(row)
@@ -348,6 +338,7 @@ class Optimizer:
                            'service_eligible_vectors': service_count, 'customer_rejected_vectors': rejected_count,
                            'customer_unknown_vectors': unknown_count,
                            'income_failures': income_failures,
+                           'income_yields_pct': {key: value['trailing_yield_pct'] for key, value in dividends_by_id.items() if value},
                            'reason': None if candidates else 'CUSTOMER_CONSTRAINT_UNVERIFIED' if unknown_count else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if rejected_count else 'SERVICE_CRITERIA_NOT_MET',
                            'search_scope': 'Submitted combinations only; 10% grid, positive ETF weights, zero cash; no global impossibility claim',
                            'start_date': str(frame.index[0].date()), 'end_date': str(frame.index[-1].date()),
@@ -404,11 +395,9 @@ class Optimizer:
                     status = 'pass'
                 elif self.request.input_mode == 'percent':
                     status = check_constraints(self.decision.model_copy(update={'constraints': [rule]}), rows, self.request, self.market.catalog)[0]['status']
-                elif plan['status'] not in {'ready', 'conditional'}:
+                elif plan['status'] == 'needs_input':
                     status = 'unknown'
-                elif plan['monthly_krw'] and Decimal(plan['monthly_krw']) > 0:
-                    status = 'pass'  # A necessary existence check; exact months/accounts are checked at publication.
-                else:
+                else:  # 8차: 월 납입은 목표 금액에 들어가지 않으므로 팔지 않기를 채워 주지 못한다
                     amounts = {}
                     for holding in holdings:
                         amounts[holding.instrument_id] = amounts.get(holding.instrument_id, Decimal(0)) + holding.amount_krw
@@ -417,6 +406,19 @@ class Optimizer:
                     status = 'pass' if all(amount <= (total * targets[key] / 100).to_integral_value(rounding=ROUND_CEILING) + max(0, len(allowed) - 1)
                                            for key, amount in amounts.items()) else 'fail'
                 checks.append({'kind': 'no_sell', 'status': status})
+        # 고객 보유 개별주의 비중을 늘리는 조합은 추가 매수라 게시할 수 없다. 후보 단계에서 미리 뺀다.
+        held = {}
+        for holding in calculate(self.request)['holdings']:
+            if holding['kind'] == 'stock' and holding['weight_pct'] is not None:
+                held[holding['instrument_id']] = held.get(holding['instrument_id'], 0) + holding['weight_pct']
+        target = {}
+        for row in rows:
+            target[row['instrument_id']] = target.get(row['instrument_id'], 0) + float(row['weight_pct'])
+        if held:
+            # 추가 투자금이 정해져 있으면 금액표로 순매수를 본다(같은 비중이어도 새 돈이 들어가면 더 사야 할 수 있다).
+            funded = plan_execution(request, [{**row, 'account': '일반 계좌'} for row in rows], self.decision.model_copy(update={'constraints': []}))
+            if 'HELD_STOCK_BUY' in funded['reasons'] or any(target.get(key, 0) > weight + .005 for key, weight in held.items()):
+                checks.append({'kind': 'held_stock', 'status': 'fail'})
         possible = all(any(allocation_error(self.market.catalog[row['instrument_id']], account, self.request.preferences.tax_profile) is None
                            for account in allowed) for row in rows)
         if not possible:
@@ -446,7 +448,7 @@ class Optimizer:
             return None
         if final.recommendation is None and final.selected_candidate_id is None and final.return_forecast is None:
             if getattr(final, 'withheld_reason', None) == 'quality_failed':
-                raise ValueError('Rating is not a recommendation threshold: select a customer-compliant candidate and report its honest scores')
+                raise ValueError('Rating is not a recommendation threshold: select a customer-compliant candidate and score it 4.0~5.0 on average by the same evidence')
             return None  # Exact customer constraints and execution still require validation.
         candidate = next((row for row in candidates if row['candidate_id'] == final.selected_candidate_id), None)
         if candidate is None or final.recommendation is None:
@@ -461,7 +463,7 @@ class Optimizer:
 
 
 TOOL = {'type': 'function', 'function': {'name': 'optimize_portfolios',
-    'description': '고객 요청과 투자 의도에 맞게 선정한 ETF 조합 1~10개를 비교하고 고객 제약을 검사한다. 통과 후보를 초과수익률, 오버퍼폼 기간 비율 순으로 정렬하며 고객 목적 적합성은 LLM이 판단한다. MDD는 선택 기준이 아니다. preferred_allocations로 LLM이 설계한 소수점 8자리까지의 비중을 그대로 검산한다. 고객 제약을 통과하면 비교 자료가 부족해도 추천 후보에 남기고 미계산 지표만 null이다. 자동 탐색은 10% 단위다. 새 ETF 조합이나 다른 비중도 재검토할 수 있다. 현금 0%, 조합당 최대 5종, 전체 40종. 현재 revision의 후보만 선택한다.',
+    'description': '고객 요청과 투자 의도에 맞게 선정한 ETF 조합 1~10개를 비교하고 고객 제약을 검사한다. 통과 후보를 초과수익률, 오버퍼폼 기간 비율 순으로 정렬하며 고객 목적 적합성은 LLM이 판단한다. MDD는 선택 기준이 아니다. 목적에 income이 있거나 고객이 배당 받기를 고르면 ETF별 최근 12개월 분배율(분배금 합계 ÷ 최근 종가) income_yields_pct와 후보별 비중 가중 income_yield_pct를 붙이고, 자료가 없으면 null과 income_failures로 알린다. preferred_allocations로 LLM이 설계한 소수점 8자리까지의 비중을 그대로 검산한다. 고객 제약을 통과하면 비교 자료가 부족해도 추천 후보에 남기고 미계산 지표만 null이다. 자동 탐색은 10% 단위다. 새 ETF 조합이나 다른 비중도 재검토할 수 있다. 현금 0%, 조합당 최대 5종, 전체 40종. 현재 revision의 후보만 선택한다.',
     'parameters': {'type': 'object', 'properties': {'combinations': {'type': 'array', 'minItems': 1, 'maxItems': 10,
         'items': {'type': 'array', 'minItems': 1, 'maxItems': 5, 'items': {'type': 'string'}}},
         'preferred_allocations': {'type': 'array', 'maxItems': 5, 'items': {'type': 'object', 'properties': {

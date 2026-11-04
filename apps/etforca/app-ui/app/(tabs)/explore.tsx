@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { isApiError } from '@/api';
 import { TopBar } from '@/components/TopBar';
-import { PageTitle, SectionHead, SectorIcon, Sticker } from '@/components/ui';
+import { PageTitle, SectionHead, SectorIcon, Sticker, TabBarLine } from '@/components/ui';
 import { DailySheet } from '@/features/analysis/DailySheet';
 import { useDaily } from '@/features/analysis/queries';
 import { DisclaimerInfoSheet, DisclaimerSheet } from '@/features/disclaimer/DisclaimerSheet';
@@ -92,6 +92,7 @@ export default function Explore() {
       )}
       <DisclaimerInfoSheet open={info} onClose={() => setInfo(false)} />
       <DisclaimerSheet />
+      <TabBarLine />
     </View>
   );
 }

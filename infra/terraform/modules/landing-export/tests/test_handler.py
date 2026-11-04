@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from handler import export, strip_internal  # noqa: E402
+from handler import export, render_page, sitemap, strip_internal  # noqa: E402
 
 SCREEN = {'outlook': {'direction': '상승'},
           'detail': {'items': [{'id': 'a', 'tool_run_ids': ['r1'], 'source_links': [{'title': 't', 'url': 'u'}]}]},
@@ -63,6 +63,48 @@ class ExportTest(unittest.TestCase):
         # 조회 경로가 바뀌어도 404 라 '발행본 없음'과 구분되지 않는다. 0건을 성공으로 두면 조용히 낡는다.
         with self.assertRaises(RuntimeError):
             self.run_export({})
+
+
+PUBLIC_SCREEN = {
+    'outlook': {'direction': '강력하락'},
+    'summary_card': {'title': 'KODEX 반도체, 한 달 뒤 더 낮아요', 'summary': '요약에만 있는 판단'},
+    'conclusion': {'title': '한 달 뒤 더 낮아요', 'sentence': '결론에만 있는 판단', 'supports': [{'label': '지지 꼬리표'}]},
+    'detail': {'items': [{'title_keyword': '항목 제목의 판단', 'sentences': [{'sentence': '근거 문장의 판단'}],
+                          'source_links': [{'url': 'https://news.example/a', 'title': '기사 <제목>'},
+                                           {'url': 'javascript:alert(1)', 'title': '나쁜 주소'}]}]},
+    'factors': [{'type': '이슈', 'sticker': '스티커방향', 'sentence': '23일 ETF가 -0.7% 내렸어요 <b>'},
+                {'type': '수급', 'sticker': '중립', 'sentence': '외국인이 5일 순매도했어요.'}],
+    'publication': {'analysis_at': '2026-10-23T21:00:00+00:00'},
+}
+
+
+class PageTest(unittest.TestCase):
+    def test_public_page_carries_no_outlook_judgement(self):
+        # 종목별 방향은 검색 결과에 공개하지 않기로 했다(ALPHA-1454). 방향·결론·요약·근거 문장·스티커가
+        # 하나라도 새면 그 결정이 깨진다 — 실을 수 있는 것은 오늘 일어난 일(factors)과 기사뿐이다.
+        page = render_page('091160', 'KODEX 반도체', PUBLIC_SCREEN)
+        for judgement in ('강력하락', '한 달 뒤 더 낮아요', '요약에만', '결론에만', '지지 꼬리표', '항목 제목의', '근거 문장의', '스티커방향'):
+            self.assertNotIn(judgement, page)
+        self.assertIn('외국인이 5일 순매도했어요.', page)
+        self.assertIn('10월 24일 06:00', page)  # 분석 시각은 KST 로 적는다
+
+    def test_llm_text_cannot_inject_markup_or_script_links(self):
+        # 문장은 LLM 이 쓴 글이고 기사 주소는 바깥에서 온다. 그대로 넣으면 공개 페이지에 태그·스크립트 링크가 박힌다.
+        page = render_page('091160', 'SOL 전고체배터리&실리콘음극재', PUBLIC_SCREEN)
+        self.assertIn('-0.7% 내렸어요 &lt;b&gt;', page)
+        self.assertIn('기사 &lt;제목&gt;', page)
+        self.assertNotIn('javascript:', page)
+        self.assertIn('SOL 전고체배터리&amp;실리콘음극재', page)
+
+    def test_play_link_counts_installs_per_etf_page(self):
+        # 설치를 종목 페이지별로 세려면 Play 링크 referrer 에 페이지와 종목이 남아야 한다.
+        page = render_page('091160', 'KODEX 반도체', PUBLIC_SCREEN)
+        self.assertIn('referrer=utm_source%3Detforca.com%26utm_medium%3Detf_page%26utm_campaign%3D091160', page)
+
+    def test_sitemap_lists_every_etf_page(self):
+        xml = sitemap(['091160', '0000J0'])
+        self.assertIn('<loc>https://etforca.com/etf/091160</loc>', xml)
+        self.assertIn('<loc>https://etforca.com/etf/0000J0</loc>', xml)
 
 
 if __name__ == '__main__':

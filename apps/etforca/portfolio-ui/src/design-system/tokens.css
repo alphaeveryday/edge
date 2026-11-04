@@ -47,4 +47,11 @@
   --glass: var(--color-surface); --hair: var(--color-border); --hair-strong: var(--color-border-strong);
   --grad: linear-gradient(var(--color-primary),var(--color-primary)); --grad-fill: var(--color-primary);
   --radius: var(--radius-card); --line: var(--color-border); --muted: var(--color-text-secondary);
+  /* 8차 결과: 적립일 앱 알림 버튼(검정 바탕 + 빨간 배지)과 유형 카드 10가지의 진한 바탕. */
+  --color-app: #0b0d10; --color-app-badge: #ff3b30; --color-on-dark-alert: #ffd7d7; --color-star: #ffb800;
+  --type-start-1: #d6336c; --type-start-2: #601731; --type-lev-1: #b16b00; --type-lev-2: #503000;
+  --type-stock-1: #191f28; --type-stock-2: #191f28; --type-chip-1: #8b5cf6; --type-chip-2: #3f296f;
+  --type-div-1: #027648; --type-div-2: #013520; --type-bond-1: #206985; --type-bond-2: #0e2f3c;
+  --type-pension-1: #5b5bd6; --type-pension-2: #292960; --type-kr-1: #d22030; --type-kr-2: #5e0e16;
+  --type-us-1: #1b64da; --type-us-2: #0c2d62; --type-bal-1: #007780; --type-bal-2: #00363a;
 }

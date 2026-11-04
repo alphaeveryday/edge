@@ -59,7 +59,7 @@ async def origin_check(request, call_next):
     if request.method == "POST" and len(await request.body()) > limit:
         return Response(status_code=413)
     response = await call_next(request)
-    response.headers["Cache-Control"] = "public, max-age=3600" if request.url.path == '/api/portfolio/catalog' else "no-store"
+    response.headers["Cache-Control"] = "public, max-age=3600" if request.url.path in ('/api/portfolio/catalog', '/api/portfolio/workbook/catalog') else "no-store"
     return response
 
 
@@ -84,6 +84,11 @@ def session(request: Request, response: Response):
 @app.get('/api/portfolio/catalog')
 def catalog():
     return directory()
+
+
+@app.get('/api/portfolio/workbook/catalog')
+def workbook_catalog():
+    return directory(include_stocks=True)
 
 
 @app.post('/api/portfolio/presence')
@@ -151,7 +156,14 @@ def chat(job_id: str, body: ChatInput, request: Request, idempotency_key: UUID =
         return public(store.submit(owner(request), str(idempotency_key), body.model_dump(exclude_defaults=True), parent_id=job_id))
     except ValueError as error:
         code = str(error)
-        raise HTTPException(404 if code == "PARENT_NOT_FOUND" else 409 if code in ("CHAT_LIMIT", "RECOVERY_LIMIT", "IDEMPOTENCY_CONFLICT") else 429, code) from None
+        raise HTTPException(404 if code == "PARENT_NOT_FOUND" else 409 if code in ("CHAT_LIMIT", "CHAT_BUSY", "RECOVERY_LIMIT", "IDEMPOTENCY_CONFLICT") else 429, code) from None
+
+
+@app.get("/api/portfolio/analyses/{job_id}/chats")
+def chats(job_id: str, request: Request):
+    # 실패한 질문의 진단·중간 기록은 고객 화면에 필요 없다. 3초마다 다시 읽으므로 질문만 남긴다.
+    return {'limit': store.CHAT_LIMIT, 'items': [public(row) if row['state'] != 'failed' else {**public(row), 'result': None}
+                                                 for row in store.chats(job_id, owner(request))]}
 
 
 @app.post("/api/portfolio/analyses/{job_id}/report-request", status_code=201)
@@ -161,22 +173,29 @@ def report_request(job_id: str, body: ReportRequest, request: Request):
     return {"status": "received", "delivery_status": "not_scheduled"}
 
 
-@app.post("/api/portfolio/analyses", status_code=202)
-def submit(body: AnalysisInput, request: Request, idempotency_key: UUID = Header()):
+def admit(body):
+    """제출 직전 검사와 정규화. 지난 분석 재검토(past_review)도 같은 판정을 쓴다. 거부는 ValueError(코드)다."""
     # Drafts and historical reports may be incomplete; new paid/trial jobs must be computable.
     if body.input_mode == 'names':
-        raise HTTPException(422, 'HOLDING_WEIGHTS_REQUIRED')
+        raise ValueError('HOLDING_WEIGHTS_REQUIRED')
     from .execution import parse_funding
     contribution = body.preferences.contribution.strip()
-    if not contribution:
-        raise HTTPException(422, 'CONTRIBUTION_CHOICE_REQUIRED')
-    if contribution.startswith('매달 꾸준히'):
+    if body.monthly_krw is not None:
+        pass  # 8차 입력: 매달 넣을 돈을 숫자 칸으로 받는다. 글 선택지는 없어도 된다
+    elif not contribution:
+        raise ValueError('CONTRIBUTION_CHOICE_REQUIRED')
+    elif contribution.startswith('매달 꾸준히'):
         if not parse_funding(contribution):
-            raise HTTPException(422, 'MONTHLY_AMOUNT_REQUIRED')
+            raise ValueError('MONTHLY_AMOUNT_REQUIRED')
     elif contribution not in {'이미 다 매수한 상태에요', '목돈 한 번에', '아직 고민 중'} and not parse_funding(contribution):
-        raise HTTPException(422, 'CONTRIBUTION_CHOICE_REQUIRED')
+        raise ValueError('CONTRIBUTION_CHOICE_REQUIRED')
+    return canonicalize(body)
+
+
+@app.post("/api/portfolio/analyses", status_code=202)
+def submit(body: AnalysisInput, request: Request, idempotency_key: UUID = Header()):
     try:
-        body = canonicalize(body)
+        body = admit(body)
     except ValueError as error:
         raise HTTPException(422, str(error)) from None
     try:
@@ -245,22 +264,6 @@ from . import dashboard_work
 @app.get('/api/portfolio/workbook/tracking')
 def workbook_tracking(request: Request):
     return dashboard_work.tracking(owner(request))
-
-
-@app.post('/api/portfolio/backtests', status_code=202)
-def backtest(body: dashboard_work.Backtest, request: Request):
-    try:
-        return dashboard_work.submit(owner(request), body)
-    except ValueError as error:
-        raise HTTPException(429 if str(error) in ('BACKTEST_LIMIT', 'QUEUE_FULL') else 409, str(error)) from None
-
-
-@app.get('/api/portfolio/backtests/{key}')
-def backtest_result(key: str, request: Request):
-    result = dashboard_work.read_backtest(owner(request), key)
-    if not result:
-        raise HTTPException(404, 'NOT_FOUND')
-    return result
 
 
 @app.get('/api/portfolio/analyses/{job_id}/workbook')

@@ -35,6 +35,16 @@ on:
         description: "제품 디렉터리 (engine · edgesignal · etforca). 소스 경로 apps/<product>/<app>"
         required: true
         type: string
+      dockerfile:
+        description: "Dockerfile 경로. 비우면 apps/<product>/<app>/Dockerfile"
+        required: false
+        type: string
+        default: ""
+      kind:
+        description: "service = 리비전 등록 + 서비스 롤아웃, task = 리비전 등록만(예약 태스크가 최신 리비전 실행)"
+        required: false
+        type: string
+        default: service
 
 # 호출자에게서 상속되는 상한 안에서만 유효.
 # id-token: OIDC / contents: 체크아웃.
@@ -104,17 +114,26 @@ jobs:
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           APP: ${{ inputs.app }}
           PRODUCT: ${{ inputs.product }}
+          DOCKERFILE: ${{ inputs.dockerfile }}
+          KIND: ${{ inputs.kind }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           image="${REGISTRY}/edge/${APP}:${VERSION}"
           # 빌드 컨텍스트 = 레포 루트(멀티프로젝트, 각 앱 Dockerfile 헤더 참고). Fargate 는 amd64.
-          docker build --platform linux/amd64 -f "apps/${PRODUCT}/${APP}/Dockerfile" -t "${image}" .
+          docker build --platform linux/amd64 -f "${DOCKERFILE:-apps/${PRODUCT}/${APP}/Dockerfile}" -t "${image}" .
           docker push "${image}"
+          # 예약 태스크의 TF baseline 이 가리키는 움직이는 태그(ADR-0063). TF 가 task 정의 리비전을
+          # 새로 만들어도 최근 배포 이미지를 실행하게 한다. 서비스는 TF 리비전을 쓰지 않아 해당 없음
+          if [ "${KIND}" = "task" ]; then
+            docker tag "${image}" "${REGISTRY}/edge/${APP}:latest"
+            docker push "${REGISTRY}/edge/${APP}:latest"
+          fi
 
       # TF 소유 base task 정의에서 이미지만 교체해 새 리비전 등록 → 서비스 롤링 업데이트 → 안정화 대기.
       - name: Deploy to ECS service
         env:
+          KIND: ${{ inputs.kind }}
           CLUSTER: ${{ vars.ECS_CLUSTER_ARN }}
           REGISTRY: ${{ steps.ecr.outputs.registry }}
           APP: ${{ inputs.app }}
@@ -132,6 +151,11 @@ jobs:
           new_arn="$(aws ecs register-task-definition --cli-input-json "${new_def}" \
             --query 'taskDefinition.taskDefinitionArn' --output text)"
           echo "등록된 task 정의: ${new_arn}"
+
+          if [ "${KIND}" = "task" ]; then
+            echo "${APP} 배포 완료(예약 태스크, 다음 실행부터 반영): ${image}"
+            exit 0
+          fi
 
           aws ecs update-service --cluster "${CLUSTER}" --service "${APP}" \
             --task-definition "${new_arn}" >/dev/null

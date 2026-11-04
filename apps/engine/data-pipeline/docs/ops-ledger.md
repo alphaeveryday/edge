@@ -95,13 +95,13 @@ SFN/ECS 실행을 **사후 복구 가능하게 관측**하는 Postgres projectio
   계약은 유지한다. 구 진단(쌍 없음)도 계속 읽으며 운영 주의 판정은 API가 별도로 제공한다.
   observer와 wrapper가 구조·닫힌 사유
   어휘·크기·현재 `ops_attempt_id`·성공 exit를 다시 검증한 뒤 `ops_task_attempt`에 저장하므로,
-  같은 run의 재시도가 바뀐 로그를 내면 각 attempt에는 자기 진단만 남는다. 정상 런에서 확인한
-  정식명 변형 별칭은 canonical master가 실제로 존재하고 단일 종목일 때만 assertion 해소에
-  사용한다. event 조립에서는 그 canonical ticker가 기사 mentions 허용집합에도 있어야 한다.
-  그룹명·브랜드처럼 상장사 귀속이 해석인 표현은 별칭에 포함하지 않는다.
-  2026-09-19 미해소 재현으로 검증한 정식명·약칭 28개 표기를 추가했다(ALPHA-1080).
-  공백·괄호·법인표기를 일반적으로 제거하는 규칙이 아니라 명시적 별칭이며, 다른 종목의
-  실제 이름과 충돌하면 `ambiguous`로 남긴다.
+  같은 run의 재시도가 바뀐 로그를 내면 각 attempt에는 자기 진단만 남는다. 완전일치로 못
+  찾은 회사 표기는 표기 매칭(조사·법인 표기·공백·영문↔한글 읽기 정규화, 끝 괄호 병기)과
+  별칭 명부 `instrument_aliases.tsv`로 한 번 더 찾는다(ALPHA-850, ADR-0065). 명부는
+  `scripts/build_instrument_aliases.py`가 운영 해소기로 검사해 다시 쓰고, 대상 종목이 마스터에
+  없거나 다른 종목 이름과 부딪히면 넣지 않는다. 같은 키가 두 종목을 가리키면 `ambiguous`로
+  남긴다. 그룹명·브랜드·비상장 자회사처럼 상장사 귀속이 해석인 표현은 별칭에 포함하지 않는다.
+  DeepSeek 조립 경로에서는 별칭이 가리키는 ticker가 기사 mentions 허용집합에도 있어야 한다.
 - **ETF 수집 완전성**(ALPHA-611) — `NAV_COLLECTION_KIS`·`ETF_PROFILE_COLLECTION_KIS`·
   `ETF_HOLDINGS_COLLECTION_KRX` 세 작업은 Planner가 실행 전에
   `krx_etf.source.etf_map`의 key(our_etf_id)를 기대 snapshot으로 고정하고, 공통 수집 스텝이
@@ -209,6 +209,11 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
   로 영영 RESOLVE 되지 않는다). ⚠️ 이 형제에는 위의 ENABLED 조건이 **없다** — HH:MM 이 빈 값이면
   `_due_slots` 가 그 레인을 먼저 건너뛰므로 플래그만 남아도 무해하다. 미주입이면 `False`(=평일 전용,
   종전 동작)이고, `"true"`/`"false"` 외의 값은 fail-loud 다.
+- **PLANNER_MISSING 이 새로 열리면 메일이 간다**(ALPHA-1430). `detect_planner_missing` 이 이슈를
+  **새로 열 때만** `PLANNER_MISSING run_key=<키>` ERROR 를 남기고, terraform metric filter·알람
+  `<name>-planner-missing`(`modules/data-pipeline/ops_ledger.tf`)이 alarms SNS 로 보낸다. 15분마다의
+  재발 카운트 증가는 메일을 내지 않는다. ⚠️ 그래서 위의 "꺼진 채 넣으면 참인 결측을 연다"는 이제
+  **매 슬롯 메일**이다 — 레인 env 를 켤 때(첫 정기 슬롯 전 주입·DAG pause 인 채 주입) 메일이 함께 온다.
 - 주기 Reconciler 는 레인별로 "가장 최근에 슬롯이 지난 **예정일**"의 **그날 지난 스케줄 슬롯 전부**를
   대조한다(ALPHA-591 — 뉴스의 앞 슬롯이 최신 하나에 밀려 영영 미대조되지 않게). 평일 전용 레인이면
   그 예정일이 주말을 건너뛴 직전 평일이다. ⚠️ 수동 슬롯은
@@ -705,7 +710,7 @@ DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET=... \
 DATA_PIPELINE_DB__PASSWORD=... \
 OPS_KR_HOLIDAYS=2026-01-01,2026-03-02 \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
-MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill,edge-dev-data-pipeline-analysis-consumer \
+MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_ANALYSIS_SERVICES=edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \
@@ -730,7 +735,7 @@ DATA_PIPELINE_STORAGE__BACKEND=s3 \
 DATA_PIPELINE_STORAGE__BUCKET=edge-dev-pipeline-lake \
 DATA_PIPELINE_DB__PASSWORD=... \
 MINUTE_SESSION_CLUSTER=arn:aws:ecs:ap-northeast-2:...:cluster/edge-dev-worker \
-MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-news-consumer-backfill,edge-dev-data-pipeline-analysis-consumer \
+MINUTE_SESSION_SERVICES=edge-dev-data-pipeline-price-worker,edge-dev-data-pipeline-relay,edge-dev-data-pipeline-price-consumer,edge-dev-data-pipeline-news-consumer-realtime,edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_ANALYSIS_SERVICES=edge-dev-data-pipeline-analysis-consumer \
 MINUTE_SESSION_NEWS_SOURCE_GROUP=bigkinds \
 MINUTE_SESSION_NEWS_WORKER_SERVICES=edge-dev-data-pipeline-news-worker \

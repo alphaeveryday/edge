@@ -19,11 +19,11 @@ from mcp.client.streamable_http import streamable_http_client
 
 from .contracts import LIMITS, ROLES, Section, FinalReport, calculate, validate_section
 from .outlook import TOOL as OUTLOOK_TOOL, OutlookReader
-from .recommendation import search_etfs, publish_recommendation
+from .recommendation import search_etfs, publish_recommendation, result_fields, answer_amount_error
 from .market_data import MarketData, TOOL as MARKET_TOOL, enrich_report, model_price_payload
 from .optimizer import Optimizer, TOOL as OPTIMIZER_TOOL
 from .exa_transport import ExaTransport
-from .decision import Decision, QuestionSection, validate_decision, check_constraints, filter_preference_constraints
+from .decision import ACCEPTED, Decision, QuestionSection, validate_decision, check_constraints
 from .execution import execution_tool, resolve_funding, zero_funding_quote, funding_assumptions, validate_funding, TOOL as EXECUTION_TOOL
 from .scenarios import build_scenarios, ScenarioToolInput, stated_principal, principal_declaration, principal_context_matches, principal_preference_matches, TOOL as SCENARIO_TOOL
 from .evidence_quality import inspect_body, source_page
@@ -39,6 +39,20 @@ MAX_MODEL_CALLS = 100
 MAX_CONTEXT_BYTES = 1000000
 ANALYSIS_TIMEOUT_SECONDS = 600
 MODEL_CALL_TIMEOUT_SECONDS = 90
+# '배당 받기' 칩을 고른 고객에게만 붙인다. 50% 선은 코드가 검사하고, 이 글은 그 안에서 무엇을 고를지 정한다
+DIVIDEND_INSTRUCTION = (
+    "고객이 '배당 받기'를 골랐다. 배당 ETF 합계 50% 선은 코드가 검사한다. 그 선 안에서 후보를 고를 때 분배율이 높은 ETF에 더 무게를 둔다. "
+    '분배율은 최근 12개월 분배금 합계 ÷ 최근 종가다. optimize_portfolios 결과의 income_yields_pct(ETF별)와 후보별 income_yield_pct(비중 가중), '
+    'read_portfolio_history의 dividends[].trailing_yield_pct만 분배율로 쓴다. '
+    '같은 역할의 배당 ETF가 여럿이면 분배율이 높은 쪽을 먼저 조합에 넣고, 배당 ETF 비중을 50%보다 높인 안도 함께 제출해 견준다. '
+    '후보를 견줄 때는 이 고객에게 한해 income_yield_pct를 초과수익률·오버퍼폼 기간 비율과 함께 본다. 분배율이 더 높은 후보를 기본으로 두고, 분배율이 낮은 후보를 고르면 그 이유를 적는다. '
+    '레버리지·인버스 상품은 분배율이 높아도 고르지 않는다. 커버드콜·프리미엄 인컴처럼 분배율이 유난히 높은 ETF는 분배금이 원금에서 나갈 수 있다. '
+    '그런 ETF를 크게 담으려면 read_portfolio_history로 그 ETF 100% 구성을 한 번 읽어(최종 추천 확인에 쓸 조회는 남긴다) return_1y_pct(분배금 재투자 총수익률)를 본다. '
+    '이 값이 분배율보다 낮으면 분배금을 빼고 가격이 내린 것이므로 분배율만 보고 비중을 높이지 않는다. 확인하지 못했으면 그 ETF 비중을 높이지 않는다. '
+    '칩끼리 부딪치면 기존 순서를 따른다. 팔지 않기가 먼저이고, 레버리지 빼기·국내 상장 ETF만을 지킨 범위 안에서만 분배율을 견준다. '
+    '분배율 숫자는 도구가 준 값이 있을 때만 쓴다. 값이 null이거나 income_failures에 있으면 숫자 없이 분배율을 확인하지 못했다고 적는다. '
+    '웹에서 찾은 선행·연환산 분배율로 이 숫자를 대신하지 않는다. '
+    '후속 질문에서 배당 받기를 풀어 보는 계산(relaxed_constraints에 dividend)이면 이 지시를 따르지 않는다.')
 TOOLS = [
     {"type": "function", "function": {"name": "search_etfs", "description": "ETF 등록 ID를 이름·티커로 찾는다. 정확 일치 우선, 공백·하이픈 차이를 허용한다. 결과가 8개면 offset을 8씩 늘려 다음 후보를 읽는다. 상품 근거 조회와 별개다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "offset": {"type": "integer", "minimum": 0, "maximum": 200}}, "required": ["query"], "additionalProperties": False}}},
     {"type": "function", "function": {"name": "search_sources", "description": "Exa에서 ETF 공식 자료와 반대 근거 검색. 개인정보를 검색어에 넣지 않는다.", "parameters": {"type": "object", "properties": {"query": {"type": "string"}, "objective": {"type": "string"}}, "required": ["query", "objective"], "additionalProperties": False}}},
@@ -157,7 +171,7 @@ class ExaEvidence:
 
 
 async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None, observe=None, market=None,
-                       on_event=None, on_checkpoint=None, prior_report=None, followup_question=None):
+                       on_event=None, on_checkpoint=None, prior_report=None, followup_question=None, conversation=None):
     started = time.monotonic()
     metrics = calculate(request)
     system = (PROMPTS / "system.md").read_text(encoding="utf8")
@@ -184,7 +198,12 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
         if prior_report.get('recommendation'):
             context['prior_report']['recommendation'] = {key: value for key, value in prior_report['recommendation'].items() if key != 'historical_performance'}
         context['followup_question'] = followup_question
-        context['followup_instruction'] = '후속 질문에 직접 답하고 저장된 결정을 설명하거나 보완하세요. 기존 고객 필수 제약은 유지합니다. 이전 보고서는 과거 판단이며 이번에 새로 확인한 사실과 구분합니다. 리밸런싱은 기존 추천의 실행표부터 확인하고 변경이 필요할 때만 새 후보를 제안하세요.'
+        if conversation:
+            # 고객은 채팅처럼 이어 묻는다. 앞선 질문과 답을 알아야 "그럼", "그거" 같은 질문을 이해한다.
+            context['conversation'] = conversation
+        context['followup_instruction'] = '후속 질문에 직접 답하고 저장된 결정을 설명하거나 보완하세요. 기존 고객 필수 제약은 유지합니다. 이전 보고서는 과거 판단이며 이번에 새로 확인한 사실과 구분합니다. 리밸런싱은 기존 추천의 실행표부터 확인하고 변경이 필요할 때만 새 후보를 제안하세요.' + (' conversation은 이 분석에서 앞서 주고받은 질문과 답 문단(답에서 제안한 비중이 있으면 proposed_allocations)입니다. 이번 질문이 "그럼", "그거"처럼 앞선 답을 가리키면 그 답을 기준으로 해석하세요. 앞선 답에 적힌 수치만 이어 쓰고, 적히지 않은 앞선 계산값을 지어내지 마세요. 앞선 답과 결론이 달라지면 무엇이 왜 바뀌었는지 밝히세요.' if conversation else '')
+    if any(chip.kind == 'dividend' for chip in getattr(request, 'constraints', [])):
+        context['dividend_instruction'] = DIVIDEND_INSTRUCTION
     messages = [{"role": "system", "content": system}, {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]
     sections, trace, published = {}, [], {}
     outlook = OutlookReader(request, datetime.fromisoformat(context['as_of']))
@@ -206,6 +225,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
     recommendation_reconciled = False
     reconciliation_draft = None
     retained_prior_text = False
+    answer_repairs = 0
     termination_reason = 'COMPLETED'
 
     def checkpoint():
@@ -511,7 +531,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                  'NO_COMPARABLE_PRICE_HISTORY', 'BASELINE_PRICE_UNAVAILABLE', 'PRICE_STALE', 'PRICE_UNAVAILABLE',
                                  'CURRENT_AMOUNTS_REQUIRED', 'INVESTMENT_AMOUNT_REQUIRED', 'ADDITIONAL_FUNDING_REQUIRED',
                                  'NO_SELL_ZERO_TARGET', 'NO_SELL_VIOLATION', 'ACCOUNT_OPENING_REQUIRED',
-                                 'ACCOUNT_WITHDRAWAL_REVIEW_REQUIRED', 'ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED', 'ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED'}
+                                 'ACCOUNT_WITHDRAWAL_REVIEW_REQUIRED', 'ACCOUNT_CONTRIBUTION_LIMIT_REQUIRED', 'ACCOUNT_CONTRIBUTION_LIMIT_EXCEEDED',
+                                 'ACCOUNT_TRANSFER_NOT_ALLOWED', 'MONTHLY_CONTRIBUTION_LIMIT_EXCEEDED'}
                         reason_codes = sorted({value.split(':')[0] for value in answer.get('reasons', []) if isinstance(value, str) and value.split(':')[0] in codes}) if isinstance(answer, dict) else []
                         emit('tool_finished', role=role, tool=tool,
                              status=status if status in {'available', 'unavailable', 'rejected', 'no_match', 'found', 'not_found', 'missing', 'stale', 'not_connected', 'ready', 'conditional', 'needs_input', 'infeasible'} else 'unknown',
@@ -559,7 +580,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                        'status': 'model_review' if rule.kind == 'unverified' else 'unknown',
                                        'reason': 'MODEL_REVIEW' if rule.kind == 'unverified' else 'NO_ALLOCATION_SELECTED'}
                                       for number, rule in enumerate(decision.constraints, 1)]
-                        if final.recommendation and any(check['status'] not in {'pass', 'model_review'} for check in checks):
+                        if final.recommendation and any(check['status'] not in ACCEPTED for check in checks):
                             raise ValueError('CUSTOMER_CONSTRAINT_NOT_SATISFIED: select another candidate; never relax mandatory constraints: ' + json.dumps(checks, ensure_ascii=False))
                         validation_step = 'report_sections'
                         sections = {name: validate_section('question' if source_free_allowed and (decision.scenario_requested or not evidence.sources) and getattr(final, name).limitations else name,
@@ -576,8 +597,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         if not selected and optimizer.result['candidates']:
                             if not execution_rejection and all(row['candidate_id'] in execution_failures for row in optimizer.result['candidates']):
                                 execution_rejection = execution_failures[optimizer.result['candidates'][0]['candidate_id']]
-                            blocked = any(check['status'] not in {'pass', 'model_review'} and check.get('reason') != 'NO_ALLOCATION_SELECTED' for check in checks)
-                            published['optimization']['reason'] = 'EXECUTION_INFEASIBLE' if execution_rejection else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RATING_BELOW_MINIMUM' if final.withheld_reason == 'quality_failed' else 'RECOMMENDATION_WITHHELD'
+                            blocked = any(check['status'] not in ACCEPTED and check.get('reason') != 'NO_ALLOCATION_SELECTED' for check in checks)
+                            published['optimization']['reason'] = 'EXECUTION_INFEASIBLE' if execution_rejection else 'CUSTOMER_CONSTRAINT_NOT_SATISFIED' if blocked else 'RECOMMENDATION_WITHHELD'
                             if execution_rejection:
                                 published['execution_rejection'] = execution_rejection
                         validation_step = 'report_enrichment'
@@ -593,6 +614,15 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                 'required_additional_krw': None, 'assumptions': []}
                                 if final.withheld_reason == 'customer_failed' else followup_execution)
                             checks = followup_checks or checks
+                        validation_step = 'result_fields'
+                        published.update(result_fields(published, sections, final, request, checks, market.catalog, evidence.sources))
+                        if published.get('answer') and (amount_error := answer_amount_error(published, request)):
+                            # 분석 전체에서 두 번만, 모델 호출 예산이 남았을 때만 고쳐 쓰게 한다(조사 보완 라운드가 repairs 를 되돌려도)
+                            if answer_repairs < 2 and repairs < 2 and not finalizing and calls < MAX_MODEL_CALLS - 2:
+                                answer_repairs += 1
+                                raise ValueError('ANSWER_AMOUNT_MISMATCH: ' + amount_error)
+                            published.pop('answer')  # 고쳐 쓰지 못한 답은 싣지 않는다. 화면은 기존 답으로 대신 보인다
+                            emit('answer_dropped', role=role, code='ANSWER_AMOUNT_MISMATCH')
                         validation_step = 'report_completion'
                         published['completion'] = assess_completion(final, request, decision, published, evidence.sources, context['as_of'],
                             considered_ids=[key for group in getattr(optimizer, 'groups', []) for key in group])
@@ -637,28 +667,14 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                             decision = validate_decision(interpreted.decision, request, market.catalog, question_text=followup_question or request.question)
                             if prior_report:
                                 inherited = Decision.model_validate(prior_report.get('decision') or {})
-                                rules = {}
-                                resolved_sources = ({rule.source for rule in decision.constraints if rule.kind != 'unverified'}
-                                                    - {rule.source for rule in decision.constraints if rule.kind == 'unverified'})
-                                for rule in [*inherited.constraints, *decision.constraints]:
-                                    if rule.kind == 'unverified' and rule.source in resolved_sources:
-                                        continue
-                                    identity = rule.model_dump(mode='json', exclude={'source'})
-                                    if rule.kind == 'unverified':
-                                        identity['source'] = rule.source
-                                    for name in ('instrument_ids', 'accounts', 'markets'):
-                                        identity[name] = sorted(identity[name])
-                                    rules.setdefault(json.dumps(identity, sort_keys=True), rule)
-                                decision.constraints = list(rules.values())
-                                filter_preference_constraints(decision, request, question_text=followup_question)
+                                # 조건은 저장된 입력의 칩에서 다시 만든다(validate_decision). 옛 보고서의 글 조건은 잇지 않는다
                                 decision.objectives = decision.objectives or inherited.objectives
-                                if decision.funding is None and not decision.funding_text:
+                                # 숫자 칸의 월 납입이 있으면 옛 글 해석을 물려받지 않는다. 그래야 저장된 monthly_krw 가 그대로 쓰인다
+                                if decision.funding is None and not decision.funding_text and getattr(request, 'monthly_krw', None) is None:
                                     decision.funding = inherited.funding.model_copy(deep=True) if inherited.funding is not None else None
                                 decision.funding_text = zero_funding_quote(request, decision) or decision.funding_text or inherited.funding_text
                                 if followup_question:
                                     decision.questions = [question for question in decision.questions if question in followup_question] or [followup_question]
-                                # Each extraction is bounded and validated already; merging
-                                # must not discard inherited rules at the extraction limit.
                                 context['active_decision'] = decision.model_dump(mode='json')
                                 saved_target_verified = prior_report.get('parent_state') != 'failed' and (prior_report.get('completion') or {}).get('status') == 'complete'
                                 if (decision.execute_saved_target or decision.execution_requested) and prior_report.get('recommendation') and saved_target_verified:
@@ -674,7 +690,7 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                                                 'required_additional_krw': None, 'additional_krw': '0', 'monthly_krw': None,
                                                 'allocation_scope': 'total_portfolio'}
                                             current_checks = []
-                                        if any(check['status'] not in {'pass', 'model_review'} for check in current_checks):
+                                        if any(check['status'] not in ACCEPTED for check in current_checks):
                                             followup_execution.update(status='needs_input' if any(check['status'] == 'unknown' for check in current_checks) else 'infeasible',
                                                 rows=[], reasons=['CUSTOMER_CONSTRAINT_NOT_SATISFIED'])
                                         context['saved_target_execution'] = followup_execution

@@ -7,6 +7,8 @@
 
 import json
 
+import pytest
+
 from data_pipeline.lake import (
     LocalStorage,
     canonical_run_manifest_key,
@@ -324,6 +326,61 @@ def test_tagger_version_change_forces_retag(tmp_path):
     assert tag_news.run(storage, "R2", complete_fn=_fake_complete(calls)) == 0
     assert len(calls) == 1  # 재태깅됨
     assert _read_feature(storage, "ko", "2026-07-01")[0]["tagger_version"] == TAGGER_VERSION
+
+
+class _CountingTagger:
+    """RobertaTagger 대역(ALPHA-1446) — 사건 1건을 내고 호출 수를 센다."""
+
+    def __init__(self, version: str):
+        self.version, self.calls = version, 0
+
+    def parse(self, title, lead):
+        """고정 사건 1건."""
+        self.calls += 1
+        return {"doc_class": "EVENT", "events": [{
+            "event_type_code": "COMPANY.CONTRACT.SIGNING", "predicate_code": None,
+            "arguments": [{"role_code": "SUPPLIER", "text": "삼성전자"}], "confidence": 0.9}]}
+
+
+def test_injected_tagger_version_decides_retagging(tmp_path):
+    """WHY(ALPHA-1446): 재태깅 축은 **실제로 돌린 태거**의 버전이다. 전역 env 버전과 비교하면
+    주입한 태거가 자기 결과를 매 런 다시 태깅하고(비용·값 흔들림), LLM 판정과 섞여도 구분이 안 된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    assert tag_news.run(storage, "R1", complete_fn=_fake_complete([])) == 0  # LLM 판정이 먼저 있다
+
+    roberta = _CountingTagger("tagging-roberta-test")
+    assert tag_news.run(storage, "R2", tagger=roberta) == 0
+    assert roberta.calls == 1  # 다른 태거의 판정이라 다시 태깅
+    assert tag_news.run(storage, "R3", tagger=roberta) == 0
+    assert roberta.calls == 1  # 자기 판정은 건너뛴다
+    assert _read_feature(storage, "ko", "2026-07-01")[0]["tagger_version"] == "tagging-roberta-test"
+
+
+def test_local_tagger_tags_articles_without_mentions(tmp_path):
+    """WHY(ALPHA-1456): mentions 게이트는 LLM 비용 가드다. 로컬 태거 경로에서 걸면 종목명 부분문자열
+    탐지가 못 잡은 기사(약칭·다른 표기·비상장 대상)의 사건을 모델이 보기도 전에 버린다 — 조립은 모델이
+    뽑은 회사를 표기 매칭기로 해소하므로 이 기사들도 태깅돼야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1"), _article("a2", mentions="[]")])
+    roberta = _CountingTagger("tagging-roberta-test")
+
+    assert tag_news.run(storage, "R1", tagger=roberta) == 0
+
+    assert roberta.calls == 2
+    assert [r["article_id"] for r in _read_feature(storage, "ko", "2026-07-01")] == ["a1", "a2"]
+    keys = [k for k in storage.list_keys("operations_archive/") if k.endswith("log.json")]
+    assert json.loads(storage.get_bytes(keys[0]).decode("utf-8"))["articles_skipped_no_mention"] == 0
+
+
+def test_run_without_any_tagger_refuses_to_start(tmp_path):
+    """WHY(ALPHA-1446): LLM·로컬 태거가 둘 다 없으면 모든 기사가 llm_error 로 저장되고 런은 성공으로
+    끝난다(기존 판정을 오류 행으로 덮을 수도 있다) — 아무것도 쓰기 전에 막아야 한다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article()])
+    with pytest.raises(ValueError, match="하나가 필요하다"):
+        tag_news.run(storage, "R1")
+    assert _read_feature(storage, "ko", "2026-07-01") == []
 
 
 def test_english_articles_are_not_tagged(tmp_path):
@@ -901,3 +958,28 @@ def test_windowed_run_absorbs_in_window_mirror_without_canonical(tmp_path):
 
     assert storage.list_keys(mirror_key) == []
     assert [r["article_id"] for r in _read_feature(storage, "ko", "2026-07-02")] == ["a-장중만"]
+
+
+def test_current_results_returns_only_reusable_judgements_of_that_tagger(tmp_path):
+    """WHY(ALPHA-1449): assemble 이 재사용하는 판정은 같은 태거 버전이어야 하고(다른 모델의 판정을
+    로컬 모델 판정으로 쓰면 계보 출처가 거짓이 된다), llm_error 는 판정이 아니라 재사용하면 안 된다."""
+    storage = LocalStorage(tmp_path / "lake")
+    _write_canonical(storage, "ko", "2026-07-01", [_article("a1"), _article("a2")])
+    tagger = _CountingTagger("tagging-roberta-test")
+    assert tag_news.run(storage, "R1", tagger=tagger) == 0
+
+    got = tag_news.current_results(storage, "ko", "2026-07-01", "tagging-roberta-test")
+    assert set(got) == {"a1", "a2"}
+    assert got["a1"]["fingerprint"] == tag_news.input_fingerprint(_article("a1"))
+    assert got["a1"]["result"]["assertions"][0]["event_type_code"] == "COMPANY.CONTRACT.SIGNING"
+    assert tag_news.current_results(storage, "ko", "2026-07-01", "tagging-v1") == {}
+
+
+    class _Broken(_CountingTagger):
+        def parse(self, title, lead):
+            raise RuntimeError("down")
+
+    other = LocalStorage(tmp_path / "lake2")
+    _write_canonical(other, "ko", "2026-07-01", [_article("a1")])
+    tag_news.run(other, "R1", tagger=_Broken("tagging-roberta-test"))
+    assert tag_news.current_results(other, "ko", "2026-07-01", "tagging-roberta-test") == {}

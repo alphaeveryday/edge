@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 from data_pipeline.minute import event_assembly
-from data_pipeline.minute.event_assembly import NewsEventAssembler
 
 _CONTRACT = "COMPANY.CONTRACT.SIGNING"
 
@@ -18,21 +17,15 @@ _RESOLUTION = {"삼성전자": "inst_SAMSUNG", "한화솔루션": "inst_HANWHA"}
 _ENTITY_INDEX = {"005930": "inst_SAMSUNG", "009830": "inst_HANWHA"}
 
 
-def _fake_resolve(index, text):
+def _fake_resolve(index, text, *, allow_aliases=False):
     entity = _RESOLUTION.get(str(text).strip())
     return (entity, "matched" if entity else "unmatched")
-
-
-def _assembler() -> NewsEventAssembler:
-    from data_pipeline.config import DbConfig
-    return NewsEventAssembler(db=DbConfig(host="x", port=5432, name="x", user="x",
-                                          password="x", sslmode="disable"))
 
 
 def _cls(monkeypatch, assertion: dict) -> dict | None:
     monkeypatch.setattr(event_assembly, "resolve", _fake_resolve)
     view = event_assembly._process_registry()
-    return _assembler()._to_classification(
+    return event_assembly.to_classification(
         assertion, article_id="a1", view=view, entity_index=_ENTITY_INDEX,
         ticker_by_entity={v: k for k, v in _ENTITY_INDEX.items()},
         res_index=object(),
@@ -109,17 +102,18 @@ def test_unknown_event_type_is_dropped(monkeypatch):
     }) is None
 
 
-def test_institution_partner_resolves_without_enabling_realtime_instrument_aliases():
-    # WHY: 장중 writer도 기관 ID를 보존하되 기존 별칭 비활성화 정책은 유지한다.
+def test_institution_partner_and_company_alias_resolve_in_minute_lane():
+    # WHY: 장중 writer도 기관 ID를 보존하고, 모델이 참여자로 뽑은 회사의 별칭 표기(현대자동차)를
+    # 그 종목에 붙인다(ALPHA-850) — 예전엔 기사 종목 범위가 없다는 이유로 막아 사건 주체가 버려졌다.
     from data_pipeline.entity_resolution import ResolutionIndex
 
     index = ResolutionIndex(
-        by_key={"삼성전자": "inst_SAMSUNG", "현대차": "inst_HYUNDAI"},
+        by_key={"삼성전자": "inst_SAMSUNG", "현대차": "inst_HYUNDAI", "현대자동차": "inst_HYUNDAI"},
         by_ticker={"005930": "inst_SAMSUNG", "005380": "inst_HYUNDAI"},
         alias_ticker_by_key={"현대자동차": "005380"},
         alias_keys=frozenset({"현대자동차"}),
     )
-    cls = _assembler()._to_classification(
+    cls = event_assembly.to_classification(
         {
             "event_type_code": "COMPANY.ALLIANCE.PARTNERSHIP",
             "predicate_code": "FORM",
@@ -137,6 +131,36 @@ def test_institution_partner_resolves_without_enabling_realtime_instrument_alias
     assert cls is not None
     by_mention = {a["mention_text"]: a["entity_id"] for a in cls["arguments"]}
     assert by_mention == {
-        "삼성전자": "inst_SAMSUNG", "금융감독원": "actor_auth_kr_fss", "현대자동차": None,
+        "삼성전자": "inst_SAMSUNG", "금융감독원": "actor_auth_kr_fss", "현대자동차": "inst_HYUNDAI",
     }
     assert cls["primary_ticker"] == "005930"
+
+
+def test_thread_event_carries_analyst_firm_text_for_the_news_key():
+    """WHY(ALPHA-508): 뉴스 스레드 키는 증권사 리포트를 증권사 원문으로 가른다 — 1분 경로가 그 원문을
+    안 실으면 배치(fetch_unthreaded_events, event_argument.mention_text)와 키가 갈려 같은 리포트가
+    두 스레드가 된다. 해소 안 된 증권사여도 원문은 실린다."""
+    cls = {"event_type_code": "MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE", "predicate_code": "RAISE",
+           "lifecycle_stage": None, "anchor_role": None,
+           "arguments": [{"role_code": "RATED_ENTITY", "entity_id": "inst_SAMSUNG",
+                          "mention_text": "삼성전자"},
+                         {"role_code": "ANALYST_FIRM", "entity_id": None,
+                          "mention_text": "대신증권"}]}
+    created = {"source_event_id": "evt_1", "entity_id": "inst_SAMSUNG",
+               "available_at": "2026-07-15T09:00:00+09:00"}
+    event = event_assembly._thread_event(created, cls, "2026-07-15T09:00:00+09:00")
+    assert event["analyst_firm"] == "대신증권"
+    assert event["role_values"] == {"RATED_ENTITY": "inst_SAMSUNG"}
+
+
+def test_thread_event_picks_the_analyst_firm_the_batch_will_read():
+    """WHY: 같은 증권사(같은 entity)로 해소된 인자가 둘이면 저장은 첫 원문만 남긴다 — 1분 경로가
+    버려질 원문까지 후보로 쓰면 배치(저장된 행)와 다른 증권사 키를 골라 스레드가 갈린다."""
+    cls = {"event_type_code": "MARKET_INFO.ANALYST.TARGET_PRICE_CHANGE", "predicate_code": "RAISE",
+           "lifecycle_stage": None, "anchor_role": None,
+           "arguments": [{"role_code": "ANALYST_FIRM", "entity_id": "actor_nh", "mention_text": "NH투자증권"},
+                         {"role_code": "ANALYST_FIRM", "entity_id": "actor_nh", "mention_text": "A NH"}]}
+    created = {"source_event_id": "evt_2", "entity_id": "inst_SAMSUNG",
+               "available_at": "2026-07-15T09:00:00+09:00"}
+    event = event_assembly._thread_event(created, cls, "2026-07-15T09:00:00+09:00")
+    assert event["analyst_firm"] == "NH투자증권"   # 저장되는 첫 원문 — 정규화 최소값("anh")이 아니다

@@ -1,5 +1,6 @@
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+import { CancelledError } from '@tanstack/react-query';
 
 // 키체인과 웹 저장소에 두는 토큰과 기기 상태
 const KEYS = { access: 'etforca.access', refresh: 'etforca.refresh', device: 'etforca.device', onboarded: 'etforca.onboarded', disclaimed: 'etforca.disclaimed', theme: 'etforca.theme' } as const;
@@ -25,20 +26,47 @@ const load = () => (loading ??= (async () => ({ access: await get('access'), ref
 
 const randomId = () => (globalThis.crypto?.randomUUID?.() ?? Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16)).join(''));
 
-export const tokens = {
-  async access() { return (await load()).access; },
-  async refresh() { return (await load()).refresh; },
-  async save(access: string, refresh: string) {
-    const c = await load();
-    c.access = access; c.refresh = refresh;
+type SessionChange = 'login' | 'logout' | 'expired';
+let version = 0;
+const listeners = new Set<(change: SessionChange, version: number) => Promise<void>>();
+// SecureStore 쓰기 순서도 메모리의 세션 전환 순서를 따른다.
+let writing: Promise<void> = Promise.resolve();
+const persist = (access: string | null, refresh: string | null) => {
+  const next = writing.catch(() => undefined).then(async () => {
     await set('access', access);
     await set('refresh', refresh);
+  });
+  writing = next;
+  return next;
+};
+
+export const tokens = {
+  version: () => version,
+  assertCurrent(expected: number) { if (expected !== version) throw new CancelledError(); },
+  subscribe(listener: (change: SessionChange, version: number) => Promise<void>) {
+    listeners.add(listener);
+    return () => { listeners.delete(listener); };
   },
-  async clear() {
+  async access() { return (await load()).access; },
+  async refresh() { return (await load()).refresh; },
+  async save(access: string, refresh: string, expected = version) {
     const c = await load();
-    c.access = null; c.refresh = null;
-    await set('access', null);
-    await set('refresh', null);
+    tokens.assertCurrent(expected);
+    c.access = access; c.refresh = refresh;
+    await persist(access, refresh);
+    tokens.assertCurrent(expected);
+  },
+  async replace(access: string | null, refresh: string | null, change: SessionChange, expected = version) {
+    const c = await load();
+    tokens.assertCurrent(expected);
+    const current = ++version;
+    c.access = access; c.refresh = refresh;
+    const saved = persist(access, refresh);
+    await Promise.all([saved, ...Array.from(listeners, (listener) => listener(change, current))]);
+    tokens.assertCurrent(current);
+  },
+  clear(change: 'logout' | 'expired' = 'logout', expected = version) {
+    return tokens.replace(null, null, change, expected);
   },
 };
 

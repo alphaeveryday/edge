@@ -33,6 +33,14 @@ public interface PostRepository extends JpaRepository<Post, Long> {
             @Param("code") String code, @Param("byCodes") boolean byCodes, @Param("codes") Collection<String> codes,
             @Param("viewer") long viewer, Limit limit);
 
+    /** 관심 ETF 변경과 무관한 본인 작성 글의 최신순 키셋 조회 */
+    @Query("""
+            select p from Post p where p.authorId = :author and p.deletedAt is null
+              and (p.createdAt < :at or (p.createdAt = :at and p.id < :id))
+            order by p.createdAt desc, p.id desc
+            """)
+    List<Post> authored(@Param("author") long author, @Param("at") Instant at, @Param("id") long id, Limit limit);
+
     /** 커서 없이 좋아요 수로 정렬한 인기순 첫 페이지 */
     @Query("""
             select p from Post p where p.deletedAt is null

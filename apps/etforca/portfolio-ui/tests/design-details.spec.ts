@@ -1,4 +1,5 @@
 ﻿import { test, expect } from '@playwright/test';
+import { addCash, addHolding } from './holdings';
 
 test('Korean text and financial figures use the bundled font without a font CDN', async ({ page }) => {
   const externalFonts: string[] = [];
@@ -29,40 +30,38 @@ test('financial column headings align with their values and chart headings share
   await expect(page.getByRole('button', { name: /^2027-09 예상/ }).first()).toHaveAttribute('aria-pressed', 'true');
 });
 
-test('input guidance describes the current decision and the optional selection limit is visible', async ({ page }) => {
+// 막힌 '다음' 아래에는 지금 무엇을 해야 넘어가는지 한 줄로 적는다(버튼만 회색이면 왜 막혔는지 모른다).
+test('input guidance describes the current decision on each step', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
-  await page.getByRole('button', { name: '비율', exact: true }).click();
-  await page.getByLabel('현금 비율').fill('100');
-  await page.getByRole('combobox', { name: '일반 계좌에 담은 ETF 찾기' }).fill('VOO');
-  await page.getByRole('option').filter({ hasText: 'Vanguard S&P 500 ETF' }).click();
+  await addCash(page);
+  await page.getByRole('button', { name: '비중', exact: true }).click();
+  await page.getByLabel('현금 비중').fill('100');
+  await addHolding(page, 'VOO', 'Vanguard S&P 500 ETF');
   await expect(page.locator('#step-guidance')).toHaveText('각 종목의 비중을 입력해 주세요.');
-  await page.getByLabel('Vanguard S&P 500 ETF 비율', { exact: true }).fill('1');
-  await expect(page.locator('#step-guidance')).toHaveText('비중 합계를 100%로 맞춰 주세요.');
+  await page.getByLabel('Vanguard S&P 500 ETF 비중', { exact: true }).fill('1');
+  await expect(page.locator('#step-guidance')).toHaveText('비중 합계가 100%가 되면 넘어갈 수 있어요. 지금 101%예요.');
   await page.getByRole('button', { name: 'Vanguard S&P 500 ETF 빼기' }).click();
+  // 비중만으로는 사고팔 금액을 못 정한다 — 전체 금액이 없는 분석은 없다.
+  await page.locator('#total').fill('');
+  await expect(page.locator('#step-guidance')).toHaveText('전체 금액을 적으면 넘어갈 수 있어요');
+  await page.locator('#total').fill('100');
   await page.getByRole('button', { name: '다음', exact: true }).click();
-  await expect(page.locator('#step-guidance')).toHaveText('투자 방법을 골라 주세요.');
+  await expect(page.locator('#step-guidance')).toHaveText('매달 넣을 돈을 골라 주세요');
   await expect(page.getByRole('button', { name: '다음', exact: true })).toBeDisabled();
-  await page.getByRole('button', { name: '매달 꾸준히', exact: true }).click();
-  await expect(page.locator('#step-guidance')).toHaveText('매달 투자할 금액을 입력해 주세요.');
-  await page.getByLabel('추가 투자금액').fill('100');
+  await page.getByRole('button', { name: '직접', exact: true }).click();
+  await expect(page.locator('#step-guidance')).toHaveText('0보다 큰 금액을 적어 주세요');
+  await page.getByLabel('매달 넣을 돈(만 원)').fill('100');
+  await expect(page.locator('#step-guidance')).toHaveText('언제쯤 쓸지 골라 주세요');
+  await page.getByRole('button', { name: /^정한 때 없어요/ }).click();
   await page.getByRole('button', { name: '다음', exact: true }).click();
-  await expect(page.locator('#step-guidance')).toHaveText('투자 기간을 골라 주세요.');
-  await page.getByRole('button', { name: '정한 때 없어요' }).click();
-  await page.getByRole('button', { name: '다음', exact: true }).click();
-  await expect(page.getByRole('button', { name: '다음', exact: true })).toBeEnabled();
-  const choices = page.locator('.q .chip[aria-pressed]');
-  for (let i = 0; i < 10; i++) await choices.nth(i).click();
-  await expect(page.getByRole('status')).toContainText('10/10개 선택');
-  await expect(choices.nth(10)).toBeDisabled();
-  await choices.first().click();
-  await expect(choices.nth(10)).toBeEnabled();
+  await expect(page.getByRole('button', { name: '분석 시작하기' })).toBeEnabled();
 });
 
 test('adding and editing a holding have distinct titles and a saved result', async ({ page }) => {
   await page.goto('/portfolio/?preview=dashboard');
   await page.getByRole('button', { name: '종목 추가', exact: true }).click();
   await expect(page.getByRole('heading', { name: '보유 자산 추가' })).toBeVisible();
-  await page.getByRole('dialog').getByRole('combobox', { name: /ETF 찾기/ }).fill('069500');
+  await page.getByRole('dialog').getByRole('combobox', { name: /종목 찾기/ }).fill('069500');
   await page.getByRole('option', { name: /KODEX 200/ }).click();
   await page.getByLabel('보유 수량', { exact: true }).fill('2');
   await page.getByRole('button', { name: '저장', exact: true }).last().click();
@@ -71,34 +70,34 @@ test('adding and editing a holding have distinct titles and a saved result', asy
   await expect(page.getByRole('heading', { name: '보유 자산 수정' })).toBeVisible();
 });
 
-test('the desktop action follows the form while the mobile action leaves scroll space', async ({ page }) => {
+// 행동 버튼은 화면에 붙어 있되(sticky), 맨 아래까지 내려도 입력 내용을 덮지 않는다.
+// 모바일은 아래 고정 막대라 폼 끝이 막대 위에서 끝나야 하고, PC 는 옆 열(입력 요약 패널)이라 폼과 가로로 겹치지 않아야 한다.
+test('the action stays reachable and never covers the end of the form', async ({ page }) => {
   await page.goto('/portfolio/?preview=input');
-  await expect(page.locator('.holdings-layout')).toBeVisible();
+  await addCash(page);
   await page.evaluate(() => document.fonts.ready);
-  if (page.viewportSize()!.width >= 1100) {
-    expect(await page.evaluate(() => document.querySelector('.bar')!.getBoundingClientRect().top >= document.querySelector('.step')!.getBoundingClientRect().bottom)).toBe(true);
-  } else {
-    await expect(page.locator('.bar')).toHaveCSS('position', 'fixed');
-    await page.locator('.askbox').scrollIntoViewIfNeeded();
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-    const form = await page.locator('.step').boundingBox();
-    const bar = await page.locator('.bar').boundingBox();
-    expect(form!.y + form!.height).toBeLessThanOrEqual(bar!.y);
-  }
+  await expect(page.locator('.fl-cta')).toHaveCSS('position', 'sticky');
+  await expect(page.getByRole('button', { name: '다음', exact: true })).toBeInViewport();
+  await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const form = await page.locator('.fl-step').boundingBox();
+  const bar = await page.locator('.fl-cta').boundingBox();
+  const beside = bar!.x >= form!.x + form!.width - 1;
+  if (!beside) expect(form!.y + form!.height).toBeLessThanOrEqual(bar!.y + 1);
+  expect(beside).toBe((page.viewportSize()?.width ?? 0) >= 1080);
 });
 
 test('a wide performance chart stays readable and pointer selection tracks the same data after resizing', async ({ page }) => {
-  await page.goto('/portfolio/?preview=result');
-  await page.locator('.performance').scrollIntoViewIfNeeded();
-  if (await page.locator('.report-feedback').isVisible()) await page.getByLabel('평가 팝업 닫기').click();
+  // 결과 화면은 8차 지난 기간 칸으로 바뀌었고 백테스트는 없앴다. 같은 성과 그래프(PerformanceChart)는 대시보드 수익 기록에 남는다.
+  await page.goto('/portfolio/?preview=dashboard');
+  await page.getByRole('button', { name: '수익 기록', exact: true }).click();
   const chart = page.locator('.report-history svg');
   const box = await chart.boundingBox();
   expect(box!.height).toBeLessThanOrEqual(301);
   await chart.hover({ position: { x: box!.width - 18, y: 60 } });
-  await expect(page.locator('.history-date')).toHaveText('2026-10-01');
+  await expect(page.locator('.history-date')).toHaveText('2026-10-18');
   await page.setViewportSize({ width: 320, height: 900 });
   await expect.poll(async () => chart.evaluate((el: SVGSVGElement) => Math.abs(el.viewBox.baseVal.width - el.getBoundingClientRect().width))).toBeLessThan(2);
   await chart.hover({ position: { x: 0, y: 60 } });
-  await expect(page.locator('.history-date')).toHaveText('2024-11-01');
+  await expect(page.locator('.history-date')).toHaveText('2026-10-16');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 });

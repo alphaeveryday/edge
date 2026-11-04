@@ -20,4 +20,10 @@ public class MemberQueryService implements MemberFinder {
         return memberRepository.findByIdAndDeletedAtIsNull(memberId)
                 .orElseThrow(() -> new GeneralException(ErrorStatus._UNAUTHORIZED));
     }
+
+    @Override
+    @Transactional(readOnly = true)
+    public boolean isActive(long memberId) {
+        return memberRepository.existsByIdAndDeletedAtIsNull(memberId);
+    }
 }

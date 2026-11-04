@@ -16,6 +16,8 @@ import os
 from pathlib import Path
 import sys
 
+from .session import SKILLS  # 도구 목록을 낼 수 있는 세션 종류 = 지침 파일이 있는 종류
+
 
 def _tool(name: str) -> int:
     """도구 하나. 도구 오류는 종료 코드 2, 내부 오류는 3 — 확장이 그 글을 모델에게 오류로 보여준다."""
@@ -47,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     tool = sub.add_parser("tool", help="에이전트 도구 하나 실행 (pi 확장용)")
     tool.add_argument("name")
     spec = sub.add_parser("tool-specs", help="도구 목록 JSON (pi 확장용)")
-    spec.add_argument("--mode", choices=["update", "discover"], required=True)
+    spec.add_argument("--mode", choices=sorted(SKILLS), required=True)
     spec.add_argument("--web", choices=["0", "1"], default="0")
     args = parser.parse_args(argv)
 
@@ -67,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
         except RunBusy as busy:
             logging.info(json.dumps({"event": "run_skipped", "reason": str(busy)}, ensure_ascii=False))
             return 0
-        # 반영되지 못한 사건이 있으면 실패로 끝내 운영 알림(ECS 실패 규칙)이 울리게 한다. 저장·게시된 것은 그대로 둔다.
+        # 반영되지 못한 사건이 있으면 실패 코드로 끝내 ECS 태스크 상태에 남긴다(알림은 보내지 않는다). 저장·게시된 것은 그대로 둔다.
         return 1 if report["failed"] or report["dropped"] else 0
 
     from . import site

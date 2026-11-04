@@ -48,3 +48,8 @@ MySQL 이 나은 점도 있다. Redis 장애 실험이 MySQL 기준 실측이고
 ## 후속(2026-10-06)
 - write-behind 모드 제거(ALPHA-1179)에 따른 VoteWarmer·VoteFlusher 삭제
 - ShedLock 대상 스케줄 작업은 VoteReconciler와 SyncService 두 개
+
+## 후속(2026-10-29)
+- 동기화의 별도 Spring Batch 이관에 따른 API의 ShedLock 대상 재조정 단일화
+- 스케줄·재연결·관리자 요청의 DB 조회부터 Redis 교체까지 공통 JDBC 잠금 적용
+- 기존 4분 리스 유지와 만료 후 중복 실행 가능성 및 자동 연장 미적용

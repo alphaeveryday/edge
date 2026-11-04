@@ -5,7 +5,7 @@ export const jobKey = preview ? 'edge-preview-job' : 'edge-portfolio-job';
 export const pendingKey = preview ? 'edge-preview-pending' : 'edge-portfolio-pending';
 const workbookKey = preview === 'empty' ? 'edge-preview-empty-workbook' : 'edge-preview-workbook';
 const startedAt = new Date(Date.now() - 45000).toISOString();
-const section = { paragraphs: ['미국 주식의 성장 방향을 유지하면서 채권과 현금으로 추가매수 여력을 확보하세요.'], evidence: [], limitations: [] };
+const section = { paragraphs: ['미국 주식의 성장 방향을 유지하면서 현금 30%로 추가매수 여력을 남겨 두세요.'], evidence: [], limitations: [] };
 export const sample: Workbook = {
   title: '내 포트폴리오', fx: 1360,
   assets: [
@@ -24,20 +24,19 @@ const report: Report = {
   recommendation: { title: '성장 방향을 유지하는 분산 구성', total_krw: '25586400', evaluation: { scores: { leadership: 4, profitability: 4, stability: 3 }, overall: 4, method: '예시', reason: section },
     allocations: [{ instrument_id: 'US:VOO', name: '미국시장 ETF 예시', ticker: 'VOO', kind: 'etf', account: 'ISA', weight_pct: 70, amount_krw: '17910480' }, { instrument_id: 'CASH:KRW', name: '현금', ticker: 'KRW', kind: 'cash', account: '일반 계좌', weight_pct: 30, amount_krw: '7675920' }],
     actions: [{ instrument_id: 'US:VOO', name: '미국시장 ETF 예시', ticker: 'VOO', account: 'ISA', before_pct: 60, after_pct: 70, action: '비중 확대', buy_krw: '1000000' }], expected_return_1y: null, dividend_yield_1y: 1.5, unavailable_reason: '',
-    historical_performance: { basis: '화면 확인용 가상 성과 · 분배금 재투자', source_url: '', points: Array.from({ length: 24 }, (_, i) => ({ date: new Date(Date.UTC(2024, 10 + i, 1)).toISOString().slice(0, 10), recommended: 1000000 + i * 15000, current: 1000000 + i * 11000 })) } },
+    historical_performance: { basis: '예시 데이터로 그린 성과 · 분배금 재투자', source_url: '', points: Array.from({ length: 24 }, (_, i) => ({ date: new Date(Date.UTC(2024, 10 + i, 1)).toISOString().slice(0, 10), recommended: 1000000 + i * 15000, current: 1000000 + i * 11000 })) } },
 };
 sample.assets.forEach((a, i) => { a.instrument_id = ['KR:360750', 'US:SCHD', 'KR:114260', 'KR:132030', 'KR:441640', 'CASH:KRW'][i]; });
+const previewChats: unknown[] = [];
 export async function previewRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const body = init?.body ? JSON.parse(String(init.body)) : null;
   let result: unknown;
   if (path === '/session') result = {};
-  else if (path === '/catalog') result = { fetched_at: report.as_of, counts: { KR: 1, US: 1 }, instruments: [{ id: 'KR:069500', market: 'KR', ticker: '069500', code: '069500', name: 'KODEX 200', kind: 'etf' }, { id: 'US:VOO', market: 'US', ticker: 'VOO', code: 'VOO', name: 'Vanguard S&P 500 ETF', kind: 'etf' }, { id: 'CASH:KRW', market: 'KR', ticker: 'KRW', code: 'KRW', name: '현금', kind: 'cash' }] };
+  else if (path === '/catalog' || path === '/workbook/catalog') result = { fetched_at: report.as_of, counts: { KR: path === '/catalog' ? 1 : 2, US: path === '/catalog' ? 1 : 2 }, instruments: [{ id: 'KR:069500', market: 'KR', ticker: '069500', code: '069500', name: 'KODEX 200', kind: 'etf' }, { id: 'US:VOO', market: 'US', ticker: 'VOO', code: 'VOO', name: 'Vanguard S&P 500 ETF', kind: 'etf' }, { id: 'CASH:KRW', market: 'KR', ticker: 'KRW', code: 'KRW', name: '현금', kind: 'cash' }, ...(path === '/workbook/catalog' ? [{ id: 'KR:005930', market: 'KR', ticker: '005930', code: '005930', name: '삼성전자', kind: 'stock' }, { id: 'US:AAPL', market: 'US', ticker: 'AAPL', code: 'AAPL', name: 'Apple Inc. - Common Stock', kind: 'stock' }] : [])] };
   else if (path.startsWith('/drafts/')) result = { status: 'saved' };
   else if (path === '/workbook/newsletter' && !body) result = { subscribed: false };
   else if (path.endsWith('/newsletter')) result = { status: 'pending', delivery_ready: true };
   else if (path === '/newsletter/confirm') result = { status: 'confirmed', delivery_ready: true };
-  else if (path === '/backtests') result = { id: 'preview-backtest' };
-  else if (path.startsWith('/backtests/')) result = { state: 'succeeded', result: { history: report.recommendation!.historical_performance, return_pct: 34.5, excluded: [] } };
   else if (path === '/workbook/tracking') {
     const saved = await previewRequest<Saved>('/workbook');
     const w = saved.workbook;
@@ -56,10 +55,12 @@ export async function previewRequest<T>(path: string, init?: RequestInit): Promi
     else result = saved.workbook ? saved : { version: 0, workbook: preview === 'empty' ? null : sample };
   } else if (path.endsWith('/workbook')) result = sample;
   else if (path.endsWith('/report-request')) result = { status: 'received', delivery_status: 'not_scheduled' };
+  else if (path.endsWith('/chats')) result = { limit: 5, items: previewChats };
   else if (path.endsWith('/chat') || path.startsWith('/analyses/preview-chat-')) {
-    result = { id: path.endsWith('/chat') ? 'preview-chat-' + crypto.randomUUID() : path.split('/').at(-1), state: 'succeeded', result: { answer: { paragraphs: ['테스트 답변: 기존 테마를 유지하고 추가 투자금을 목표 비중에 맞춰 나누세요.'], evidence: [], limitations: [] }, revision: report, status: 'complete' } };
+    result = { id: path.endsWith('/chat') ? 'preview-chat-' + crypto.randomUUID() : path.split('/').at(-1), state: 'succeeded', input: body, created_at: new Date().toISOString(), result: { answer: { paragraphs: ['테스트 답변: 기존 테마를 유지하고 추가 투자금을 목표 비중에 맞춰 나누세요.'], evidence: [], limitations: [] }, revision: report, status: 'complete' } };
+    if (path.endsWith('/chat') && body?.mode !== 'recovery') previewChats.push(result);
   }
-  else if (path === '/analyses/latest' && preview === 'empty') result = null;
+  else if (path === '/analyses/latest' && (preview === 'empty' || preview === 'input')) result = null;
   else if (path.startsWith('/analyses')) {
     if (path === '/analyses' && body) localStorage.setItem('edge-preview-input', JSON.stringify(body as Input));
     const state = preview === 'queued' ? 'queued' : preview === 'running' ? 'running' : preview === 'failed' ? 'failed' : 'succeeded';

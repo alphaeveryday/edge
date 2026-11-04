@@ -22,7 +22,8 @@ test('first visit and tab changes do not count as a return; second visit offers 
   await page.waitForTimeout(3500);
   await expect(sheet(page)).not.toBeVisible();
   await page.reload();
-  await expect(sheet(page)).toBeVisible({ timeout: 8000 });
+  await page.waitForTimeout(3500);
+  await expect(sheet(page)).not.toBeVisible();
 });
 
 test('sheet waits for editing to finish and restores focus on dismissal', async ({ page }) => {
@@ -91,3 +92,30 @@ test('preview reset restores a first visit without clearing real dashboard histo
   await expect(sheet(page)).not.toBeVisible();
   expect(await page.evaluate(() => localStorage.getItem('edge-dashboard-visited'))).toBe('seen');
 });
+
+for (const closeWith of ['close', 'later', 'Escape', 'store']) {
+  test(`dismissal by ${closeWith} suppresses returns for exactly 24 hours`, async ({ page, context }) => {
+    const now = new Date('2026-10-21T12:00:00Z');
+    await page.clock.setFixedTime(now);
+    await page.addInitScript(() => localStorage.setItem('edge-preview-dashboard-visited', 'seen'));
+    await page.goto('/portfolio/?preview=dashboard');
+    await expect(sheet(page)).toBeVisible({ timeout: 8000 });
+    if (closeWith === 'Escape') await page.keyboard.press('Escape');
+    else if (closeWith === 'store') {
+      await context.route('https://apps.apple.com/**', route => route.fulfill({ body: '' }));
+      const popup = page.waitForEvent('popup');
+      await sheet(page).getByRole('link', { name: 'App Store에서 무료로 받기' }).click();
+      await (await popup).close();
+    } else await sheet(page).getByRole('button', { name: closeWith === 'close' ? '앱 다운로드 안내 닫기' : '나중에 볼게요' }).click();
+    await expect(sheet(page)).not.toBeVisible();
+    const until = now.getTime() + 86400000;
+    expect(await page.evaluate(() => localStorage.getItem('edge-preview-app-dismissed-until'))).toBe(String(until));
+    await page.clock.setFixedTime(until - 1);
+    await page.reload();
+    await page.waitForTimeout(3500);
+    await expect(sheet(page)).not.toBeVisible();
+    await page.clock.setFixedTime(until);
+    await page.reload();
+    await expect(sheet(page)).toBeVisible({ timeout: 8000 });
+  });
+}

@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 
 from .ontology import (
     DOC_CLASSES,
@@ -45,7 +46,16 @@ from .ontology import (
 
 logger = logging.getLogger(__name__)
 
-TAGGER_VERSION = "tagging-v1"
+LLM_TAGGER_VERSION = "tagging-v1"
+# 로컬 RoBERTa 태거(ALPHA-1446) — 모델 묶음 meta.json 의 version 과 같아야 한다(backend 가 확인).
+ROBERTA_TAGGER_VERSION = "tagging-roberta-y9-int8"
+# 활성 태거는 배포 설정이 정한다. 기본은 llm — 모델 묶음 업로드·태스크 크기 조정 전에 이 코드가
+# 배포돼도 동작이 바뀌지 않는다. TAGGER_VERSION 은 재태깅 축(tag_news._is_current)과 job 정체성
+# (news_worker 선언 ↔ consumer 실행)에 쓰여, 생산자·소비자·배치가 같은 env 로 같은 값을 본다.
+TAGGER_BACKEND = os.environ.get("TAGGER_BACKEND", "").strip() or "llm"
+if TAGGER_BACKEND not in ("llm", "roberta"):
+    raise RuntimeError(f"TAGGER_BACKEND 는 llm 또는 roberta 다: {TAGGER_BACKEND!r}")
+TAGGER_VERSION = ROBERTA_TAGGER_VERSION if TAGGER_BACKEND == "roberta" else LLM_TAGGER_VERSION
 
 # 이 프롬프트를 씌워도 되는 언어. 아래 `_SYSTEM` 이 한국 금융 뉴스 전용이라 ko 만이다 —
 # 다른 언어 기사에 씌우면 호출은 성공하고 status 도 ok 라 **품질만 조용히 무너진다**.
@@ -195,8 +205,12 @@ def _validate_event(raw: object) -> tuple[dict | None, list[str]]:
     return assertion, reasons
 
 
-def extract_assertions(article: dict, *, complete_fn) -> dict:
+def extract_assertions(article: dict, *, complete_fn=None, tagger=None) -> dict:
     """canonical 뉴스행 1건 → 태깅 결과.
+
+    `tagger`(로컬 RoBERTa, `tagging.backend`)가 주어지면 그걸로, 아니면 `complete_fn`(LLM)으로
+    뽑는다. 검증은 둘 다 같은 `_validate_event` 를 지난다. 태거 실패는 LLM 호출 실패와 같은
+    llm_error 다(재시도 대상 — 물어보지도 못했다).
 
     반환: {status, doc_class, assertions[], reasons[], ontology_version, tagger_version}
     status 는 이 기사에 무슨 일이 있었는지 드러낸다(Rule 12 — 조용한 0건 금지):
@@ -212,7 +226,7 @@ def extract_assertions(article: dict, *, complete_fn) -> dict:
     base = {
         "article_id": article.get("article_id"),
         "ontology_version": ontology_version(),
-        "tagger_version": TAGGER_VERSION,
+        "tagger_version": tagger.version if tagger is not None else LLM_TAGGER_VERSION,
         "doc_class": None,
         "assertions": [],
         "reasons": [],
@@ -223,19 +237,26 @@ def extract_assertions(article: dict, *, complete_fn) -> dict:
         # 제목이 없으면 뽑을 근거가 없다 — 호출 낭비 없이 사유로 드러낸다.
         return {**base, "status": "no_title"}
 
-    system, user = build_prompt(title, article.get("lead_text"), article.get("published_at"))
-    try:
-        response = complete_fn(system, user)
-    except Exception as exc:
-        # 한 기사의 LLM 실패가 배치를 죽이지 않게 격리하되, 조용히 성공으로 만들지 않는다.
-        logger.warning("태깅 LLM 실패(격리): article_id=%s %s", article.get("article_id"), exc)
-        return {**base, "status": "llm_error", "reasons": [str(exc)]}
+    if tagger is not None:
+        try:
+            parsed = tagger.parse(title, article.get("lead_text"))
+        except Exception as exc:
+            logger.warning("태거 실패(격리): article_id=%s %s", article.get("article_id"), exc)
+            return {**base, "status": "llm_error", "reasons": [str(exc)]}
+    else:
+        system, user = build_prompt(title, article.get("lead_text"), article.get("published_at"))
+        try:
+            response = complete_fn(system, user)
+        except Exception as exc:
+            # 한 기사의 LLM 실패가 배치를 죽이지 않게 격리하되, 조용히 성공으로 만들지 않는다.
+            logger.warning("태깅 LLM 실패(격리): article_id=%s %s", article.get("article_id"), exc)
+            return {**base, "status": "llm_error", "reasons": [str(exc)]}
 
-    try:
-        parsed = _parse_response(response)
-    except (ValueError, IndexError) as exc:
-        logger.warning("태깅 응답 파싱 실패: article_id=%s %s", article.get("article_id"), exc)
-        return {**base, "status": "llm_unparseable", "reasons": [str(exc)]}
+        try:
+            parsed = _parse_response(response)
+        except (ValueError, IndexError) as exc:
+            logger.warning("태깅 응답 파싱 실패: article_id=%s %s", article.get("article_id"), exc)
+            return {**base, "status": "llm_unparseable", "reasons": [str(exc)]}
 
     doc_class = parsed.get("doc_class")
     if doc_class not in DOC_CLASSES:

@@ -2,21 +2,25 @@ import type { WatchGroup } from '@/api';
 import { Dialog } from '@/components/ui';
 import { useToast } from '@/store/toast';
 import { useWatchGroup } from '@/store/watch';
+import { useSession } from '@/store/session';
 import { useDeleteGroup } from './queries';
 
 export function DeleteGroupDialog({ group, onClose }: { group: WatchGroup | null; onClose: () => void }) {
   const del = useDeleteGroup();
   const setGroup = useWatchGroup((s) => s.setGroup);
   const toast = useToast((s) => s.show);
-  const run = () =>
-    group &&
+  const run = () => {
+    if (!group) return;
+    const revision = useSession.getState().revision;
     del.mutate(group.key, {
       onSuccess: () => {
+        if (revision !== useSession.getState().revision) return;
         setGroup('base');
         onClose();
         toast('그룹을 지웠어요');
       },
     });
+  };
   return (
     <Dialog
       open={!!group}

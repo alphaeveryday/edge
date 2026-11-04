@@ -18,17 +18,20 @@ flowchart LR
     app[app-ui<br/>모바일 앱] -->|/api/v1| api[app-api<br/>1~N 인스턴스]
     api -->|투표 원본| pg[(PostgreSQL<br/>앱 전용 RDS)]
     api -->|투표 집계| redis[(Redis<br/>ElastiCache)]
-    engine[EDGE 엔진<br/>분석 결과 DB] -->|읽기 전용 동기화| api
+    engine[EDGE 엔진<br/>분석 결과 DB] -->|10분 주기 동기화| batch[batch<br/>예약 태스크]
+    batch -->|ETF·분석| pg
     api -.->|재조정| redis
 ```
 
 - 투표 원본은 PostgreSQL, 집계는 Redis에 둔다.
-- ETF·분석 데이터는 엔진 DB에서 읽기 전용으로 동기화한다.
+- ETF·분석 데이터는 `batch` 예약 태스크가 엔진 DB에서 읽어 앱 DB로 동기화한다.
 
 ## 투표 흐름
 
-DB에 먼저 저장하고, 커밋이 끝난 뒤 Redis 집계를 갱신한다.
-둘이 어긋나면 재조정이 DB 기준으로 맞춘다.
+ETF 존재 확인과 투표 저장을 한 SQL로 처리하고, 커밋이 끝난 뒤 Redis 집계를 갱신한다.
+없는 ETF의 투표·재투표는 `404 / ETF4001`로 거절한다.
+선별 목록에서 제거된 ETF의 기존 투표는 보존하며 조회·철회가 가능하다.
+DB와 Redis가 어긋나면 재조정이 DB 기준으로 맞춘다.
 
 | API | 동작 |
 |---|---|
@@ -39,7 +42,7 @@ DB에 먼저 저장하고, 커밋이 끝난 뒤 Redis 집계를 갱신한다.
 | `POST /api/v1/admin/votes/reconcile` | 수동 재조정 (`X-Admin-Token`) |
 
 ```
-PUT ─▶ VoteFacade ─▶ VoteService.vote()          @Transactional upsert
+PUT ─▶ VoteFacade ─▶ VoteService.vote()          @Transactional ETF 존재 확인·upsert
                 │       (커밋·커넥션 반납)
                 └──▶ VoteCountRepository.vote()   vote.lua, 실패는 로그만 남기고 응답은 성공
 
@@ -49,9 +52,12 @@ GET count ─▶ VoteService.counts()   Redis 집계, 실패하면 DB 집계 (so
 ```
 
 - **원본.** 사용자당 1행은 `UNIQUE(etf_code, member_id)` 제약이 강제한다. 신규·변경 판정은 `INSERT ... ON CONFLICT DO UPDATE` 한 문장으로 한다.
+- **ETF 삭제 경합.** `FOR KEY SHARE`로 ETF 행을 커밋까지 보호한다. 삭제가 먼저 잠금을 얻어 커밋하면 투표를 거절하고, 투표가 먼저 잠금을 얻으면 삭제가 투표 커밋을 기다린다. 서로 다른 회원의 투표는 이 잠금을 공유한다.
 - **멱등 Lua.** `vote.lua`는 이전 선택과 같으면 아무것도 하지 않는다. 다르면 이전 카운터를 빼고 새 카운터를 더한다.
 - **응답에 집계 없음.** 쓰기 응답은 집계를 담지 않는다. 앱은 투표가 성공하면 집계를 따로 조회한다. 쓰기 요청 하나가 Redis를 한 번만 호출하게 하려는 것이다.
-- **재조정 시점.** 기동 1초 후, 5분마다, Lettuce가 재연결될 때, 관리자가 호출할 때 돈다. 동시에 들어온 요청은 한 번으로 합친다.
+- **재조정 대상.** 등록 ETF에 투표를 LEFT JOIN하고, ETF 행이 없는 기존 투표도 UNION ALL로 포함한 단일 스냅샷을 ETF별로 묶는다. 투표가 0건인 ETF도 집계를 0으로 교체하고 회원별 선택 기록을 비운다.
+- **재조정 시점.** 기동 1초 후, 5분마다, Lettuce가 재연결될 때, 관리자가 호출할 때 요청한다. 같은 인스턴스의 진행 중 요청은 한 번으로 합친다.
+- **재조정 잠금.** 모든 요청은 작업 스레드에서 JDBC ShedLock을 획득한 뒤 DB 조회부터 마지막 Redis 교체까지 실행한다. 다른 인스턴스가 잠금을 보유하면 건너뛴다. 관리자 응답의 `true`는 비동기 요청 접수를 뜻하며 실제 실행·완료를 보장하지 않는다.
 - **탈퇴.** `VoteCacheListener`가 영향받은 ETF의 집계를 남은 표 기준으로 교체한다.
 - **빈 집계.** Redis에 키가 없으면 0을 돌려주고 다음 재조정이 채운다.
 
@@ -219,7 +225,8 @@ Redis Cluster 개념은 [블로그](https://choyoungseo20.github.io/posts/redis-
 
 - 같은 사용자의 서로 다른 선택이 동시에 들어오면 커밋 순서와 Redis 반영 순서가 다를 수 있다. 다음 재조정까지 DB와 Redis가 어긋난다. 같은 선택을 동시에 다시 투표하는 경우는 no-op이라 문제가 없다.
 - 재조정 스냅샷 이후 커밋된 표는 그 재조정의 교체에 덮일 수 있다. 다음 주기까지 집계에서 빠진다. 복구 경로에서만 생기는 틈이라 버전 검사는 두지 않았다.
-- 재조정은 ETF 하나의 전체 사용자 목록을 메모리와 Lua로 처리한다. 실험 규모를 넘는 성능은 검증하지 않았다.
+- 재조정은 등록 ETF와 ETF 행이 없는 기존 투표 전체를 메모리에 읽고 ETF별로 Lua 교체를 수행한다. 투표가 없는 ETF도 대상이다. LEFT JOIN·UNION ALL 변경 후 대규모 성능은 측정하지 않았다.
+- 재조정의 잠금 리스는 기존과 같은 4분이며 자동 연장하지 않는다. 실행이 4분을 넘으면 잠금이 만료돼 다른 인스턴스가 동시에 실행할 수 있다.
 - 미측정: Sentinel 네트워크 분리(S4)와 복제본 읽기(S5), PostgreSQL 기준 replica 승격.
 
 ## 실행
@@ -277,6 +284,9 @@ HOT=failed FAULT=kill python3 run-cluster.py C4    # Cluster: C1~C4 (docker-comp
 - 종료 후 데이터 확인을 위해 컨테이너를 남긴다. 출력된 down 명령으로 정리한다.
 - 결과는 `experiments/runs`에 기록한다.
 - `token.js`가 compose와 같은 `APP_JWT_SECRET`으로 회원별 액세스 JWT를 서명해 투표한다.
+- 실험 러너가 부하 실행 전에 대상 ETF를 로컬 DB에 등록한다.
+- 러너가 부하 시작 전에 `members.py`로 해당 ID의 활동 회원을 로컬 DB에 준비한다. k6를 직접 실행할 때도 같은 회원 준비가 필요하다.
+- 현재 인증에는 요청마다 회원 상태 DB 조회가 추가된다. 기존 실험 결과를 현재 코드의 성능 측정값으로 사용하지 않는다.
 
 **판정**
 - 수집: k6 samples의 응답 코드·투표 지연, threads.json의 최대 busy, fault.json과 sentinel.log의 +switch-master 차이, DB와 Redis의 선택지별 차이, app.log의 재조정 delta·duration.
@@ -290,10 +300,10 @@ HOT=failed FAULT=kill python3 run-cluster.py C4    # Cluster: C1~C4 (docker-comp
 ## 코드 구조
 
 헥사고날 아키텍처를 따른다.
-controller는 provided 포트만 호출한다.
+controller는 application의 provided 패키지(포트와 그 입출력 타입)만 의존한다.
 서비스는 저장소와 외부 연동을 required 포트를 통해 호출한다.
 같은 application 안의 호출은 허용한다(`VoteFacade` → `VoteService`, `MemberModifyService` → `MemberFinder`).
-`sync`만 예외적으로 adapter의 저장소를 직접 사용한다.
+계층 방향(domain ← application ← adapter)과 슬라이스 순환 금지는 `HexagonalArchitectureTest`(ArchUnit)가 빌드에서 강제한다.
 
 ```
 app-api/
@@ -302,7 +312,7 @@ app-api/
 ├── docker-compose.yaml             PostgreSQL + Redis Sentinel
 ├── docker-compose.cluster.yaml     Redis Cluster 부분 장애 실험
 ├── experiments/                    장애 주입 실험 (k6·러너·결과 기록)
-├── batch/                          Spring Batch 하위 프로젝트 (예약 태스크 진입점)
+├── batch/                          Spring Batch 하위 프로젝트 (sync 잡)
 └── src/main/
     ├── resources/
     │   ├── vote.lua · reconcile.lua · withdraw.lua   집계 Lua
@@ -316,7 +326,7 @@ app-api/
         │   └── required/           서비스가 부르는 포트 (저장소, 외부 연동)
         ├── adapter/
         │   ├── webapi/<기능>/      controller와 응답 DTO
-        │   ├── persistence/        Redis 집계, 파이프라인 동기화 저장소
+        │   ├── persistence/        Redis 집계
         │   ├── integration/        메일, 푸시, 소셜 로그인
         │   └── security/           인증 필터와 principal 해석
         └── support/                설정, 커서, 에러 코드, JSON
@@ -345,7 +355,7 @@ app-api/
 ### 계약과 공통 규칙
 
 - **계약.** API 계약의 기준은 [openapi.yaml](openapi.yaml)이다(ADR-0056). springdoc의 `/v3/api-docs`는 yaml과 대조하는 검증용으로만 쓴다.
-- **인증.** 회원은 `Authorization: Bearer` 액세스 JWT와 DB 저장 리프레시, 게스트는 `X-Device-Id`다. 둘 다 있으면 토큰이 우선한다. `adapter/security`의 `AuthFilter`가 해석하고 리졸버가 인자 타입으로 넘긴다. 필터는 DB를 보지 않는다.
+- **인증.** 회원은 `Authorization: Bearer` 액세스 JWT와 DB 저장 리프레시, 게스트는 `X-Device-Id`다. 둘 다 있으면 토큰이 우선한다. `adapter/security`의 `AuthFilter`가 서명·만료를 검증하고 `MemberFinder`를 통해 DB의 활동 회원 여부를 확인한다. 없거나 탈퇴한 회원은 COMMON401이며 게스트로 전환하지 않는다. DB 조회 실패는 인증 거절로 바꾸지 않고 서버 오류로 전파한다. 게스트·익명 요청은 회원 상태를 조회하지 않는다.
 - **principal.** `MemberPrincipal`은 회원만, `AppPrincipal`은 회원 또는 게스트를 받는다. 익명이면 COMMON401이다.
 - **에러 코드.** `AppErrorStatus`가 도메인 코드를 소유하고 openapi.yaml의 `x-error-codes`와 1:1이다. 형식은 `{도메인}{HTTP}{일련}`(예 `ETF4001`, `ANALYSIS4001`)이다. 앱은 이 code 값을 그대로 보고 분기한다.
 - **구현 순서.** 계약의 operation 전부를 controller·DTO로 먼저 만들고 서비스는 고정 예시를 반환한다. 도메인을 구현하면 그 서비스 본문을 교체한다. 앱 쪽 mock 클라이언트가 이미 모든 도메인을 다루고 있어서 서버에는 mock 모드를 두지 않는다.
@@ -353,16 +363,16 @@ app-api/
 ### 데이터
 
 - 이 모듈이 직접 쓰는 데이터: 사용자·관심·게시물·투표·알림.
-- 동기화 테이블(ETF·분석·순위)의 쓰기는 `sync` 하나만 한다. 다른 기능은 읽기만 한다.
-- `sync` 저장소는 JdbcTemplate이다. 파이프라인 테이블에 엔티티가 없고 쓰기가 일괄 upsert이기 때문이다.
-- 파이프라인 접속 env는 `APP_PIPELINE_URL`·`APP_PIPELINE_USERNAME`·`APP_PIPELINE_PASSWORD`다. 없으면 동기화가 돌지 않는다.
+- 동기화 테이블(ETF·분석·순위)의 쓰기는 `batch` 의 sync 잡 하나만 한다([ADR-0063](../../../docs/adr/0063-app-sync-batch-scheduled-task.md)). app-api 는 읽기만 한다.
+- sync 잡의 저장소는 JdbcTemplate이다. 파이프라인 테이블에 엔티티가 없고 쓰기가 일괄 upsert이기 때문이다.
+- 파이프라인 접속 env(`APP_PIPELINE_URL`·`APP_PIPELINE_USERNAME`·`APP_PIPELINE_PASSWORD`)는 `batch` 만 받는다.
 - 원천 없는 값(선별 목록·테마·운용사)은 `etf_curation`·`theme` 마이그레이션이 넣는다.
 - 스키마는 `db/etf-migration` Flyway(별도 history table)가 소유하고, Hibernate는 `validate` 모드로 스키마를 검증만 한다.
 - `batch`의 `BATCH_*` 메타 테이블도 이 Flyway가 만든다.
 
 ### 운영
 
-- `@Scheduled` 작업은 ShedLock 리스(`shedlock` 테이블)로 다중 인스턴스에서 한 대만 실행한다.
+- 재조정의 스케줄·재연결·관리자 요청은 ShedLock 리스(`shedlock` 테이블)로 실제 작업 구간을 보호한다. 잠금 시각은 DB 시계를 사용한다.
 - ElastiCache에는 `SPRING_DATA_REDIS_SSL_ENABLED=true` 설정으로 TLS 연결한다.
 
 ## 이력

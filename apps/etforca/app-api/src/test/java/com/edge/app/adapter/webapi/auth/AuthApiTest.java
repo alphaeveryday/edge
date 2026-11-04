@@ -246,10 +246,26 @@ record AuthApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper, JdbcTempl
         var auth = signup("d@example.com");
         String bearer = "Bearer " + auth.get("accessToken");
         String handle = (String) ((Map<?, ?>) auth.get("me")).get("handle");
+        long memberId = jdbc.queryForObject("select id from member where handle = ?", Long.class, handle);
+        String votePath = "/api/v1/etfs/949990/vote";
+        jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key, hot) "
+                + "values ('949990', 'e-949990', 'XKRX', '탈퇴 검증', 'semicon', false)");
+        assertThat(call(HttpMethod.PUT, votePath, Map.of("choice", "buy"), "Authorization", bearer)).hasStatusOk();
         assertThat(call(HttpMethod.DELETE, "/api/v1/me", null, "Authorization", bearer)).hasStatusOk();
         // 만료 전 토큰이라도 회원이 없으므로 COMMON401 응답과 리프레시 차단
         assertThat(call(HttpMethod.GET, "/api/v1/me", null, "Authorization", bearer)).hasStatus(401);
         assertThat(call(HttpMethod.POST, "/api/v1/auth/refresh", Map.of("refreshToken", auth.get("refreshToken")))).hasStatus(400);
+        // 회원 조회가 없던 읽기·쓰기도 탈퇴 토큰을 거절하고 삭제한 투표가 되살아나지 않는다.
+        assertThat(call(HttpMethod.GET, votePath, null, "Authorization", bearer))
+                .hasStatus(401).bodyJson().extractingPath("$.code").isEqualTo("COMMON401");
+        assertThat(call(HttpMethod.PUT, votePath, Map.of("choice", "sell"), "Authorization", bearer))
+                .hasStatus(401).bodyJson().extractingPath("$.code").isEqualTo("COMMON401");
+        assertThat(jdbc.queryForObject("select count(*) from vote where member_id = ?", Integer.class, memberId)).isZero();
+        // 기기 헤더가 같이 있어도 탈퇴 토큰을 게스트로 강등하지 않는다.
+        assertThat(call(HttpMethod.GET, "/api/v1/watch-groups", null,
+                "Authorization", bearer, "X-Device-Id", "withdrawn-device"))
+                .hasStatus(401).bodyJson().extractingPath("$.code").isEqualTo("COMMON401");
+        assertThat(call(HttpMethod.GET, "/api/v1/watch-groups", null, "X-Device-Id", "withdrawn-device")).hasStatusOk();
         // 행은 남기고 식별 정보만 비운 상태의 같은 이메일 재가입 허용
         assertThat(jdbc.queryForObject("select count(*) from member where deleted_at is not null and email is null and handle = ?", Integer.class, handle))
                 .isEqualTo(1);

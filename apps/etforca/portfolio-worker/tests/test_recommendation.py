@@ -29,22 +29,6 @@ def test_amounts_and_score_are_computed_and_current_input_is_not_the_recommendat
     assert plan['expected_return_1y'] is None and plan['historical_performance'] is None
 
 
-def test_unchanged_percentage_does_not_hide_a_required_top_up():
-    from edge_portfolio.decision import Decision
-    request = AnalysisInput(holdings=[{'name': key, 'instrument_id': key, 'amount_krw': 500000} for key in ['US:VOO', 'US:QQQ']],
-                            horizon='10년 이상', question='추가 100만원')
-    raw = final_payload()
-    raw['recommendation']['allocations'] = [{'instrument_id': key, 'account': '일반 계좌', 'weight_pct': weight}
-        for key, weight in [('US:VOO', 50), ('US:QQQ', 30), ('US:VTI', 20)]]
-    decision = Decision(kind='rebalance', funding_text='추가 100만원')
-    plan = publish_recommendation(FinalReport.model_validate(raw), request, calculate(request), SOURCES, decision)['recommendation']
-    voo = next(action for action in plan['actions'] if action['instrument_id'] == 'US:VOO')
-    assert voo['before_pct'] == voo['after_pct'] == 50
-    assert voo['buy_krw'] == '500000'
-    assert voo['action'] == '추가 매수'
-    assert plan['total_krw'] == '2000000'
-
-
 def test_recommended_rating_is_required():
     raw = final_payload()
     raw['recommendation']['evaluation']['scores'] = None
@@ -52,13 +36,23 @@ def test_recommended_rating_is_required():
         FinalReport.model_validate(raw)
 
 
-def test_suitable_recommendation_keeps_honest_scores_below_four():
+def test_recommendation_below_four_is_published_not_blocked():
+    # 4~5점은 프롬프트 지침일 뿐이다. 모델이 4점 아래로 매겨도 서버가 막으면 고객은 추천을 못 받는다(8차 결정)
     raw = final_payload()
-    scores = {'leadership': 3, 'profitability': 3.5, 'stability': 4.5}
-    raw['recommendation']['evaluation']['scores'] = scores
-    result = publish(raw)
-    assert result['recommendation']['evaluation']['scores'] == scores
-    assert result['recommendation']['evaluation']['overall'] == 3.7
+    raw['recommendation']['evaluation']['scores'] = {'leadership': 3, 'profitability': 3.5, 'stability': 4.5}
+    assert publish(raw)['recommendation']['evaluation']['overall'] == 3.7
+    for scores, overall in (({'leadership': 4, 'profitability': 4, 'stability': 4}, 4),
+                            ({'leadership': 5, 'profitability': 4.5, 'stability': 3.5}, 4.3),
+                            ({'leadership': 5, 'profitability': 5, 'stability': 5}, 5)):
+        raw['recommendation']['evaluation']['scores'] = scores
+        assert publish(raw)['recommendation']['evaluation']['overall'] == overall
+
+
+def test_current_portfolio_keeps_scores_below_four():
+    # 하한은 추천 구성에만 있다. 사용자가 지금 가진 구성은 근거대로 낮게 매길 수 있어야 비교가 된다.
+    raw = final_payload()
+    raw['current_evaluation']['scores'] = {'leadership': 1, 'profitability': 1.5, 'stability': 2}
+    assert publish(raw)['current_evaluation']['overall'] == 1.5
 
 
 def test_cash_current_rating_can_be_absent_without_hiding_recommended_stars():
@@ -132,3 +126,36 @@ def test_sentence_boundary_preserves_etf_initialisms_and_decimal_values():
     assert multiple_sentences('올라요. 내려요.')
     assert multiple_sentences('“올라요.” 내려요.')
     assert not multiple_sentences('결론은 “유지해요.”')
+
+
+def test_a_held_stock_can_be_kept_or_reduced_but_never_bought_and_no_new_stock_is_published():
+    # 고객이 넣은 개별주는 분석·유지·축소할 수 있다. AI가 새 개별주를 담거나 보유 개별주를 더 사게 하면 안 된다.
+    from edge_portfolio.catalog import canonicalize
+    def plan(rows, funded=False):
+        holdings = [('US:AAPL', 500000), ('US:VOO', 500000), *([('CASH:KRW', 1000000)] if funded else [])]
+        request = canonicalize(AnalysisInput(holdings=[{'name': 'x', 'instrument_id': key, 'amount_krw': amount, 'kind': 'cash' if key == 'CASH:KRW' else 'etf'}
+                                                       for key, amount in holdings], horizon='10년 이상'))
+        raw = final_payload()
+        raw['recommendation']['allocations'] = [{'instrument_id': key, 'account': '일반 계좌', 'weight_pct': weight} for key, weight in rows]
+        return publish_recommendation(FinalReport.model_validate(raw), request, calculate(request), SOURCES, None)['recommendation']
+    kept = plan([('US:AAPL', 25), ('US:VOO', 75)], funded=True)
+    assert next(row for row in kept['allocations'] if row['instrument_id'] == 'US:AAPL')['kind'] == 'stock'
+    assert next(r for r in kept['execution']['rows'] if r['instrument_id'] == 'US:AAPL')['buy_krw'] == '0', 'new cash goes to the ETF'
+    with pytest.raises(ValueError, match='never bought more'):
+        plan([('US:AAPL', 40), ('US:VOO', 60)], funded=True)
+    with pytest.raises(ValueError, match='never bought more'):
+        plan([('US:AAPL', 60), ('US:VOO', 40)])
+    assert plan([('US:AAPL', 30), ('US:VOO', 70)])['allocations'][0]['weight_pct'] == 30
+    with pytest.raises(ValueError, match='stock the customer already holds'):
+        plan([('US:MSFT', 20), ('US:VOO', 80)])
+
+
+def test_unknown_current_weights_do_not_force_selling_a_held_stock():
+    # 이름만 입력해 현재 비중을 모르면 '늘렸다'고 판단할 기준이 없다. 보유 개별주를 유지하는 안을 막지 않는다.
+    from edge_portfolio.catalog import canonicalize
+    request = canonicalize(AnalysisInput(holdings=[{'name': 'x', 'instrument_id': key} for key in ['US:AAPL', 'US:VOO']],
+                                         horizon='10년 이상', input_mode='names'))
+    raw = final_payload()
+    raw['recommendation']['allocations'] = [{'instrument_id': 'US:AAPL', 'account': '일반 계좌', 'weight_pct': 50},
+                                            {'instrument_id': 'US:VOO', 'account': '일반 계좌', 'weight_pct': 50}]
+    assert publish_recommendation(FinalReport.model_validate(raw), request, calculate(request), SOURCES)['recommendation']['allocations'][0]['kind'] == 'stock'

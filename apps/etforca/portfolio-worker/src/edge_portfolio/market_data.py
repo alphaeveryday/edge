@@ -3,15 +3,13 @@ import asyncio
 import logging
 import math
 import json
-import sys
-import subprocess
 import tempfile
 from contextlib import asynccontextmanager
-from threading import BoundedSemaphore
+from threading import BoundedSemaphore, Lock
 from pathlib import Path
 from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from functools import lru_cache
 from numbers import Real
 from urllib.parse import quote
@@ -20,21 +18,27 @@ import pandas as pd
 import yfinance as yf
 import exchange_calendars as calendars
 
-from .catalog import directory
+from .catalog import analysis_catalog, price_symbol
 
 log = logging.getLogger(__name__)
 # The analysis process and price libraries share one container memory limit.
 _PRICE_SLOTS = BoundedSemaphore(1)
+# Callers waiting in price_slot (the newsletter's quotes). The collector's warm process holds the slot between
+# fetches and hands it over while this is non-zero.
+_SLOT_WAITERS = 0
+_WAITERS_LOCK = Lock()
 # KRX notice (2026 local election / Constitution Day), absent in calendars 4.13.2:
 # https://stock.mk.co.kr/news/disclosure/template/1029043
 KRX_EXTRA_CLOSURES = pd.DatetimeIndex(['2026-06-03', '2026-07-17'])
 PRICE_FAILURES = {'PRICE_UNAVAILABLE', 'PRICE_STALE', 'PRICE_INVALID', 'PRICE_PROVIDER_UNAVAILABLE',
                   'PRICE_PROVIDER_TIMEOUT', 'PRICE_COLLECTION_TIMEOUT', 'PRICE_QUEUE_TIMEOUT', 'PRICE_PROVIDER_RATE_LIMIT', 'PRICE_RESPONSE_INVALID',
+                  'PRICE_NOT_STORED', 'PRICE_READ_FAILED', 'PRICE_HISTORY_INCOMPLETE',
                   'MISSING_TRADING_SESSIONS', 'MISSING_FX_SESSIONS', 'NO_COMMON_PRICE_HISTORY',
                   'UNSUPPORTED_CURRENCY', 'INSUFFICIENT_COMPARISON_SESSIONS', 'TOTAL_RETURN_UNAVAILABLE'}
 TRANSIENT_PRICE_FAILURES = {'PRICE_UNAVAILABLE', 'PRICE_PROVIDER_UNAVAILABLE', 'PRICE_PROVIDER_TIMEOUT',
                             'PRICE_COLLECTION_TIMEOUT', 'PRICE_QUEUE_TIMEOUT',
-                            'PRICE_PROVIDER_RATE_LIMIT', 'PRICE_RESPONSE_INVALID'}
+                            'PRICE_PROVIDER_RATE_LIMIT', 'PRICE_RESPONSE_INVALID',
+                            'PRICE_NOT_STORED', 'PRICE_READ_FAILED', 'PRICE_HISTORY_INCOMPLETE'}
 
 
 def price_failure(error):
@@ -74,7 +78,7 @@ def positive_price(value):
 
 def repair_prices(ticker, frame, symbol, as_of, currency, *, since=None):
     columns = ['Adj Close', 'Close']
-    instrument = ('KR:' if symbol.endswith('.KS') else 'US:') + symbol
+    instrument = ('KR:' if symbol.endswith(('.KS', '.KQ')) else 'US:') + symbol
     start = pd.Timestamp(since) if since is not None else max(frame.index[0], pd.Timestamp(year_before(as_of, 2)))
     expected = expected_sessions(instrument, start, as_of - timedelta(days=1))
     valid = frame[columns].map(positive_price).all(axis=1)
@@ -141,7 +145,7 @@ def load_prices(symbol, as_of, *, on_raw=None, repair_since=None, history_start=
     if history_start:
         repair_since = repair_start = max(history_start, repair_start)
     original = {'frame': frame, 'currency': metadata.get('currency'), 'symbol': symbol, 'repair_since': repair_since.isoformat(),
-                'history_complete': history_start is None,
+                'history_start': history_start.isoformat() if history_start else None,
                 'pending_splits': pending_splits,
                 'source_url': f'https://finance.yahoo.com/quote/{quote(symbol, safe="")}/history/'}
     if on_raw:
@@ -171,75 +175,19 @@ def with_actual_prices(returns, actual):
 @asynccontextmanager
 async def price_slot():
     # Admission is separate from provider timeouts; a busy worker is not a bad source.
-    while not _PRICE_SLOTS.acquire(blocking=False):
-        await asyncio.sleep(.05)
+    global _SLOT_WAITERS
+    with _WAITERS_LOCK:
+        _SLOT_WAITERS += 1
+    try:
+        while not _PRICE_SLOTS.acquire(blocking=False):
+            await asyncio.sleep(.05)
+    finally:
+        with _WAITERS_LOCK:
+            _SLOT_WAITERS -= 1
     try:
         yield
     finally:
         _PRICE_SLOTS.release()
-
-
-async def fetch_prices(symbol, as_of, *, on_raw=None, on_primary=None, provider_timeout=None, repair_since=None, history_start=None):
-    async with price_slot():
-        try:
-            options = {k: v for k, v in {'repair_since': repair_since, 'history_start': history_start}.items() if v is not None}
-            original = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, **options), timeout=provider_timeout)
-            if on_primary:
-                on_primary(original)
-            primary_failure = price_status(original, as_of)
-            if primary_failure is None:
-                return original
-        except (ValueError, TimeoutError) as error:
-            primary_failure = price_failure(error)
-        record = await asyncio.wait_for(_fetch_prices(symbol, as_of, on_raw=on_raw, provider='fallback'), timeout=provider_timeout)
-        record['primary_failure'] = primary_failure
-        return record
-
-
-async def _fetch_prices(symbol, as_of, *, on_raw=None, provider='yahoo', repair_since=None, history_start=None):
-    with tempfile.TemporaryDirectory(prefix='portfolio-prices-') as directory:
-        options = {k: v for k, v in {'repair_since': repair_since, 'history_start': history_start}.items() if v is not None}
-        return await _fetch_prices_with_checkpoint(symbol, as_of, Path(directory) / 'original.json', on_raw, provider, **options)
-
-
-async def _fetch_prices_with_checkpoint(symbol, as_of, checkpoint, on_raw=None, provider='yahoo', *, repair_since=None, history_start=None):
-    """A cancellable process bounds library calls that can block beyond HTTP timeout."""
-    options = [repair_since.isoformat() if repair_since else '-', history_start.isoformat()] if history_start else ([repair_since.isoformat()] if repair_since else [])
-    process = await asyncio.create_subprocess_exec(sys.executable, '-m', 'edge_portfolio.price_fetch', symbol, as_of.isoformat(), str(checkpoint), provider, *options,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL,
-        creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0)
-    try:
-        repair_failure = None
-        try:
-            async with asyncio.timeout(25):
-                stdout, _ = await process.communicate()
-        except TimeoutError:
-            if not checkpoint.is_file():
-                raise
-            stdout = checkpoint.read_bytes()
-            repair_failure = 'PRICE_PROVIDER_TIMEOUT'
-        if process.returncode and checkpoint.is_file():
-            stdout = checkpoint.read_bytes()
-            repair_failure = 'PRICE_PROVIDER_UNAVAILABLE'
-        record = decode_prices(stdout)
-        if process.returncode and not repair_failure:
-            raise ValueError('PRICE_PROVIDER_UNAVAILABLE')
-        if repair_failure:
-            record['price_recovery'] = {'status': 'unavailable', 'reason': repair_failure, 'dates': []}
-        return record
-    except asyncio.CancelledError:
-        if on_raw and checkpoint.is_file():
-            try:
-                record = decode_prices(checkpoint.read_bytes())
-                record['price_recovery'] = {'status': 'unavailable', 'reason': 'PRICE_REPAIR_INTERRUPTED', 'dates': []}
-                on_raw(record)
-            except Exception as error:
-                log.warning('Price checkpoint unavailable: %s', type(error).__name__)
-        raise  # Preserve whole-analysis cancellation; the collector may use saved prices.
-    finally:
-        if process.returncode is None:
-            process.kill()
-            await process.wait()
 
 
 def decode_prices(body):
@@ -409,6 +357,75 @@ def history_returns(history):
     return {'return_period_pct': period, 'return_1y_pct': annual}
 
 
+def past_amounts(history, total):
+    """4번 칸: 비교 기간 첫날 지금 총액을 넣었다면의 끝 금액과, 가장 크게 떨어졌을 때 잃는 금액(원, 양수).
+    historical_performance 와 같은 점·같은 계산을 원 단위로 바꾼 것이다."""
+    points = history['points']
+    total = Decimal(str(total))
+    def amounts(name):
+        values = [point.get(name) for point in points]
+        if any(value is None for value in values):
+            return None, None
+        peak, drawdown = values[0], 0.0
+        for value in values:
+            peak = max(peak, value)
+            drawdown = max(drawdown, 1 - value / peak)
+        end = total * Decimal(str(values[-1])) / Decimal(str(values[0]))
+        return (str(end.to_integral_value(rounding=ROUND_HALF_UP)),
+                str((total * Decimal(str(round(drawdown, 10)))).to_integral_value(rounding=ROUND_HALF_UP)))
+    rec_end, rec_loss = amounts('recommended')
+    cur_end, cur_loss = amounts('current')
+    return {'rec_end_krw': rec_end, 'cur_end_krw': cur_end, 'rec_max_loss_krw': rec_loss, 'cur_max_loss_krw': cur_loss}
+
+
+def comparison_period(history, records):
+    """비교 기간과 그 기간을 정한 가장 짧은 기록의 종목. 모든 기록은 상장 첫날부터 받으므로(period=max) 가장 늦게 시작한 종목이 기간을 정한다."""
+    start, end = date.fromisoformat(history['start_date']), date.fromisoformat(history['end_date'])
+    firsts = {}
+    for source in history.get('sources', []):
+        record = records.get(source['instrument_id'])
+        if record is not None:
+            column = record['frame']['Adj Close']
+            first = column.where(column.map(positive_price)).first_valid_index()
+            if first is not None:
+                firsts[source['instrument_id']] = first.date()
+    shortest = max(firsts, key=firsts.get) if firsts else None
+    if shortest and firsts[shortest] < start - timedelta(days=7):
+        shortest = None  # 환율 등 다른 자료가 기간을 정했다
+    days = (end - start).days
+    if days >= 365:
+        label = f'최근 {days // 365}년'
+    else:
+        span = f'{days // 30}개월' if days >= 30 else f'{max(days, 1)}일'
+        label = ('상장 뒤 ' if shortest else '최근 ') + span
+    return {'start': start.isoformat(), 'end': end.isoformat(), 'label': label, 'shortest_instrument_id': shortest}
+
+
+def upper_sigma_scenario(history):
+    points = history.get('points', [])
+    if len(points) < 3:
+        return None
+    cutoff = year_before(date.fromisoformat(points[-1]['date']))
+    bases = [i for i, point in enumerate(points) if date.fromisoformat(point['date']) <= cutoff]
+    if not bases:
+        return None
+    window = points[bases[-1]:]
+    values = pd.Series([point['recommended'] for point in window], dtype=float)
+    if len(values) < 3 or not values.map(positive_price).all():
+        return None
+    returns = values.pct_change().dropna()
+    # The common KR/US daily calendar can have more than 252 observations in a year.
+    variance = float(returns.var(ddof=1)) * len(returns)
+    annual_return = float(values.iloc[-1] / values.iloc[0] - 1) * 100
+    sigma = math.sqrt(variance) * 100
+    return {'kind': 'upper_sigma_1y', 'percent': round(annual_return + sigma, 2),
+            'historical_return_pct': round(annual_return, 2), 'annualized_sigma_pct': round(sigma, 2),
+            'annualized_variance': variance, 'observations': len(returns),
+            'start_date': window[0]['date'], 'end_date': window[-1]['date'],
+            'reason': f'과거 1년 수익률 {annual_return:.2f}%에 연환산 표준편차 {sigma:.2f}%p를 더한 1σ 상단 시나리오예요.',
+            'method': '원화·분배금 재투자 포트폴리오 일별 수익률의 표본분산 × 해당 1년 관측 수의 제곱근을 사용해요. 종목 간 동행을 반영한 과거 기반 시나리오이며 미래 수익률이나 달성 확률을 보장하지 않아요.'}
+
+
 def comparison(target, current, records, as_of, *, bounds=None):
     active = set(target) | set(current or {}) | {'FX'}
     records = {key: record for key, record in records.items() if key in active}
@@ -437,10 +454,9 @@ class MarketData:
         self.results = {}
         self.queried = set()
         self.calls = 0
-        # Repair imports SciPy/sklearn in each child; three leave no usable 512 MiB headroom.
-        self.semaphore = asyncio.Semaphore(2)
-        self.catalog = {r['id']: r for r in directory()['instruments']}
+        self.catalog = analysis_catalog(request)
         total = sum(h.amount_krw or 0 for h in request.holdings)
+        self.total = total if request.input_mode == 'amount' and total else None  # 지난 기간을 원으로 말할 지금 총액
         self.current = None
         self.baseline_kind = 'unknown_weights'
         if request.input_mode != 'names' and total and all(h.instrument_id for h in request.holdings):
@@ -449,6 +465,21 @@ class MarketData:
         elif request.planning and not request.holdings:
             self.current = {'CASH:KRW': 1}
             self.baseline_kind = 'new_cash'
+
+    async def load(self, needed):
+        """Prices for {instrument: symbol}, in order: the collector's store (never the provider), or an injected loader."""
+        keys = [key for key in needed if key not in self.records]
+        if self.loader is None:
+            from .market_preload import stored_prices
+            await stored_prices(keys, self.as_of, self.records, self.failures)
+            return
+        for key in keys:
+            try:
+                self.records[key] = self.loader(needed[key], self.as_of)
+                self.failures.pop(key, None)
+            except Exception as error:
+                self.failures[key] = price_failure(error)
+                log.warning('Price loader failed for %s: %s', key, self.failures[key])
 
     async def get(self, rows):
         target = weights(rows)
@@ -461,34 +492,23 @@ class MarketData:
         ids = set(target) | set(self.current or {})
         if any(i != 'CASH:KRW' and i not in self.catalog for i in ids):
             raise ValueError('UNREGISTERED_INSTRUMENT')
-        needed = {i: self.catalog[i]['ticker'] + ('.KS' if self.catalog[i]['market'] == 'KR' else '') for i in ids - {'CASH:KRW'}}
+        needed = {i: price_symbol(i) for i in ids - {'CASH:KRW'}}
         if any(self.catalog[i]['market'] == 'US' for i in ids - {'CASH:KRW'}):
             needed['FX'] = 'KRW=X'
         try:
-            async def fetch(instrument, symbol):
-                if instrument not in self.records:
-                    self.failures.pop(instrument, None)
-                    async with self.semaphore:
-                        try:
-                            self.records[instrument] = self.loader(symbol, self.as_of) if self.loader else await fetch_prices(symbol, self.as_of,
-                                on_raw=lambda record: self.records.__setitem__(instrument, record))
-                            self.failures.pop(instrument, None)
-                        except Exception as error:
-                            self.failures[instrument] = price_failure(error)
-                            log.warning('Price provider failed for %s: %s', instrument, self.failures[instrument])
             primary = set(target) - {'CASH:KRW'}
             if any(self.catalog[i]['market'] == 'US' for i in primary):
                 primary.add('FX')
             try:
                 async with asyncio.timeout(65):
-                    await asyncio.gather(*(fetch(i, needed[i]) for i in sorted(primary)))
-                    await asyncio.gather(*(fetch(i, symbol) for i, symbol in needed.items() if i not in primary))
+                    # The target's own prices are requested first.
+                    await self.load({i: needed[i] for i in sorted(needed, key=lambda i: (i not in primary, i))})
             except TimeoutError:
                 # A slow optional comparison must not discard ready recommendation data.
                 log.warning('Price collection deadline; publishing only complete series')
                 for instrument in needed:
                     if instrument not in self.records:
-                        self.failures.setdefault(instrument, 'PRICE_PROVIDER_TIMEOUT')
+                        self.failures.setdefault(instrument, 'PRICE_QUEUE_TIMEOUT')
             if self.current:
                 try:
                     history = comparison(target, self.current, self.records, self.as_of)
@@ -517,6 +537,8 @@ class MarketData:
             'start_date': result['history']['start_date'], 'end_date': result['history']['end_date'],
             'method': result['history']['method'], 'sources': result['history']['sources'],
             'dividends': [self.dividends(i) for i in weights(args['allocations']) if i != 'CASH:KRW'],
+            # answer 문장이 지난 기간 금액을 이 값 그대로 쓰게 한다(서버가 report.past 와 대조한다)
+            **({'past_krw': past_amounts(result['history'], self.total)} if self.total else {}),
             'instruction': '과거 수익률은 미래 예상 수익률이 아닙니다. 시장 근거를 대조해 추정 근거를 설명하고 양수로 보정하지 마세요.'}
 
     def dividends(self, instrument_id):
@@ -570,9 +592,8 @@ async def enrich_report(published, final, market, sources):
     plan = published['recommendation']
     dividends = {}
     target = weights(plan['allocations'])
-    queried = tuple(sorted(target.items())) in market.queried
-    # An ungrounded optional forecast must not discard the validated allocation.
-    forecast_evidence = cited(final.return_forecast.evidence, sources) if final.return_forecast and queried else []
+    plan['expected_return_1y'] = None
+    plan.pop('return_forecast', None)
     result = await market.get(plan['allocations'])
     plan['target_return_1y'] = 7
     # Web research informs the analysis, but numeric yields use identified cash events.
@@ -587,13 +608,17 @@ async def enrich_report(published, final, market, sources):
     plan['dividend_basis'] = '최근 12개월 세전 분배금 수익률 · 추천 비중 가중 평균 · 미래 배당 보장 아님' if covered else '추천 ETF의 최근 12개월 배당률을 웹 자료에서 모두 확인하지 못했어요.'
     if result['status'] == 'available':
         plan['historical_performance'] = {**result['history'], 'baseline_kind': market.baseline_kind}
+        if result['history'].get('start_date') and result['history'].get('points'):  # 실제 비교 결과에는 늘 있다
+            published['period'] = comparison_period(result['history'], market.records)
+            if market.total:
+                published['past'] = past_amounts(result['history'], market.total)
         plan['historical_return_1y'] = result['return_1y_pct']
         plan['historical_return_period'] = result.get('return_period_pct')
         plan['unavailable_reason'] = ''
-        if final.return_forecast and queried:
-            plan['expected_return_1y'] = final.return_forecast.percent
-            plan['return_forecast'] = {'reason': final.return_forecast.reason, 'evidence': forecast_evidence,
-                                       'method': '표시된 공통 기간의 과거 성과와 시장 근거를 고려한 AI 추정 · 수익 보장 아님'}
+        scenario = upper_sigma_scenario(result['history'])
+        if scenario:
+            plan['expected_return_1y'] = scenario['percent']
+            plan['return_forecast'] = scenario
     else:
         plan['unavailable_reason'] = '비교할 공통 기간의 유효한 일별 가격·환율을 확보하지 못해 과거 성과를 표시하지 못했어요.'
         plan['market_data_failure'] = result['reason']

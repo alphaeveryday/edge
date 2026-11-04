@@ -12,8 +12,8 @@ def _obj(props: dict, required: list[str]) -> dict:
 SPECS = [
     ("view_case", "지금 사건 전체를 '경로 = 값' 줄로 본다. 고치기 전에 반드시 먼저 본다.", _obj({}, []), ("update", "discover")),
     ("view_news", "기사(news-…)나 가져온 웹 원문(web-…) 한 건을 읽는다. 출처로 쓰려면 먼저 읽어야 한다.",
-     _obj({"id": {**_STR, "description": "news-… 또는 web-… id"}}, ["id"]), ("update", "discover")),
-    ("search_news", "찾기 창구 ①: 기존 뉴스 수집분(제목·요약)을 최근 기간에서 찾는다. 낱말을 모두 포함한 기사를 최신순으로.",
+     _obj({"id": {**_STR, "description": "news-… 또는 web-… id"}}, ["id"]), ("update", "discover", "plan")),
+    ("search_news", "찾기 창구 ①: 빅카인즈 뉴스 수집분(제목·요약, 최근 21일)에서 찾는다. 낱말을 모두 포함한 기사를 최신순으로.",
      _obj({"query": {**_STR, "description": "찾을 낱말들 (예: '하이브 송치')"},
            "days": {"type": "integer", "minimum": 1, "maximum": 365, "description": "최근 며칠 (기본 30)"}}, ["query"]),
      ("update", "discover")),
@@ -42,14 +42,22 @@ SPECS = [
            "subject": _STR, "speaker": _STR, "audience": _STR,
            "instruments": {"type": "array", "minItems": 1, "items": _obj({"code": _STR, "name": _STR}, ["code", "name"])}},
           ["id", "subject", "speaker", "audience", "instruments"]), ("discover",)),
+    ("write_notes", "이 사건 조사 노트를 갱신한다. next 는 다음 세션이 찾아볼 것 목록(통째로 바뀜), record 는 이번 조사 기록 한 항목. 끝내기 전에 반드시 한 번.",
+     _obj({"next": {"type": "array", "maxItems": 8, "items": {**_STR, "description": "한 줄: 무엇을 어디서 확인할지"}},
+           "record": {**_STR, "description": "이번에 확인한 것·바꾼 것·막힌 것 (800자 이내)"}}, ["next", "record"]), ("update",)),
+    ("set_plan", "이번 실행에서 조사할 사건 순서(order)와 이번에 볼 필요 없는 후보(skip)를 정한다.",
+     _obj({"order": {"type": "array", "items": _obj({"case": {**_STR, "description": "후보 사건 id"},
+                                                    "reason": {**_STR, "description": "왜 이 순서인지 한 문장"}}, ["case", "reason"])},
+           "skip": {"type": "array", "items": {**_STR, "description": "새 기사가 무관·반복이라 볼 필요 없는 후보 id"}}},
+          ["order"]), ("plan",)),
     ("check", "계약 검사와 실제 화면 렌더를 한다. '통과' 가 나와야 finish 할 수 있다.", _obj({}, []), ("update", "discover")),
     ("finish", "세션을 끝낸다. 바꿀 것이 없었으면 그렇게 적고 끝내도 된다. 바꾼 내용은 검사를 통과해야 끝난다.",
-     _obj({"summary": {**_STR, "description": "무엇을 왜 바꿨는지 한두 문장"}}, ["summary"]), ("update", "discover")),
+     _obj({"summary": {**_STR, "description": "무엇을 왜 바꿨는지 한두 문장"}}, ["summary"]), ("update", "discover", "plan")),
 ]
 
 
 def specs(mode: str, *, web: bool) -> list[dict]:
-    """세션 종류(update·discover)와 웹 사용 여부에 맞는 도구 목록."""
+    """세션 종류(plan·update·discover)와 웹 사용 여부에 맞는 도구 목록."""
     return [{"name": name, "description": desc, "parameters": params}
             for name, desc, params, modes in SPECS
             if mode in modes and (web or name not in ("web_search", "web_fetch"))]

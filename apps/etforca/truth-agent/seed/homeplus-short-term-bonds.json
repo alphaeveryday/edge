@@ -46,8 +46,8 @@
   "beneficiary": "주관·판매 증권사와 홈플러스·MBK의 이익과 책임 범위는 확인되지 않았습니다. 패션플랫폼은 관련 채권 19.7억원을 전액 충당했다고 공시했습니다.",
   "impact": 70,
   "impactReason": "개인 판매상품 손실과 신영증권·하나금융지주 등 상장 금융사의 배상·충당 위험으로 연결됩니다.",
-  "cover": null,
-  "video": null,
+  "cover": "https://i.ytimg.com/vi/qduTrP0XshQ/hqdefault.jpg",
+  "video": {"youtube": "qduTrP0XshQ", "title": "홈플러스 믿고 투자했는데‥원금도 못 받아 (2025.03.12/뉴스투데이/MBC)"},
   "body": [
     { "h": "만기 숫자보다 설명에서 빠진 의무가 쟁점입니다" },
     {

@@ -11,8 +11,10 @@
         [--limit N] [--window-days N]
         [--interval-sec N]
 
-태깅(tag-news)은 LLM 설정을 **env** 로 받는다 — `LLM_API_KEY`(필수)·`LLM_BASE_URL`·`LLM_MODEL`
-(analysis-engine analyze_daily.py 와 같은 관례). 수집 설정(`DATA_PIPELINE_*`)이 아니다.
+태깅(tag-news·assemble-events·news-consumer)은 태거를 **env** 로 고른다 — `TAGGER_BACKEND=llm`(기본)이면
+LLM 설정 `LLM_API_KEY`(필수)·`LLM_BASE_URL`·`LLM_MODEL`(analysis-engine analyze_daily.py 와 같은 관례),
+`roberta` 면 로컬 모델 묶음(레이크 `models/tagger/<버전>/`, 로컬은 `TAGGER_MODEL_DIR`)을 쓰고 LLM 키가
+필요 없다(ALPHA-1446). 수집 설정(`DATA_PIPELINE_*`)이 아니다.
 
 수집 날짜창(--from/--to) — 뉴스·가격·공시와 KRX ETF 단일 거래일 백필에 사용한다.
 FMP ETF holdings 는 현재 스냅샷이라 창이 없다.
@@ -123,6 +125,7 @@ from .steps import (
 )
 from .sources import dart_fundamental, macro_series
 from .sources.kis_inav import DEFAULT_INTERVAL_SEC
+from .tagging.backend import load_relevance, load_tagger
 from .tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_complete_fn
 from .ops import entry as ops_entry
 from .quality.disclosure import split_failures
@@ -248,6 +251,9 @@ def main(argv: list[str] | None = None) -> int:
                  # 운영 원장(ALPHA-530): plan-run=EventBridge→Planner(원장 기록+SFN 시작),
                  # reconcile=주기 대조. 둘 다 원장 DB 필수, storage/수집창과 무관.
                  "plan-run", "reconcile",
+                 # 장전 레인 실행 누락 감시만 단독으로(ALPHA-1431) — reconcile 도 매 주기 부른다.
+                 # 원장 DB 를 안 쓴다(실환경 시험용).
+                 "premarket-watch",
                  # 1분 파이프라인(ALPHA-670): relay=outbox→SQS 발행 상주 루프. 원장 DB +
                  # minute_relay 큐 매핑 필수, storage/수집창과 무관.
                  "relay",
@@ -621,6 +627,8 @@ def main(argv: list[str] | None = None) -> int:
         return ops_entry.plan_run_cli(settings)
     if args.step == "reconcile":
         return ops_entry.reconcile_cli(settings)
+    if args.step == "premarket-watch":
+        return ops_entry.premarket_watch_cli()
     if args.step == "relay":
         return relay_cli(settings, max_ticks=args.max_ticks)
     if args.step == "dlq-reconcile":
@@ -1230,20 +1238,26 @@ def _dispatch(args, settings, storage, run_id) -> int:
     # LLM 설정은 tag-news 와 같은 관례(LLM_* env), DB 는 적재 스텝 공통. 창 미지정 =
     # **오늘(KST) 하루**(분류 비용이 기사 수 비례 — 전체 스캔 기본이 아니다).
     if args.step == "assemble-events":
-        api_key = os.environ.get("LLM_API_KEY", "")
-        if not api_key:
-            # 조용히 0건 조립하고 성공으로 끝나면 이벤트 부재가 안 보인다(Rule 12).
-            raise SystemExit("LLM_API_KEY 가 없다 — assemble-events 는 분류 LLM 호출이 필수다")
-        complete_fn = openai_compatible_complete_fn(
-            api_key=api_key,
-            base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
-            model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
-        )
+        # TAGGER_BACKEND=roberta 면 기사마다 로컬 모델로 분류·추출한다(ALPHA-1446).
+        tagger = load_tagger(storage)
+        complete_fn = None
+        if tagger is None:
+            api_key = os.environ.get("LLM_API_KEY", "")
+            if not api_key:
+                # 조용히 0건 조립하고 성공으로 끝나면 이벤트 부재가 안 보인다(Rule 12).
+                raise SystemExit("LLM_API_KEY 가 없다 — assemble-events 는 분류 LLM 호출이 필수다")
+            complete_fn = openai_compatible_complete_fn(
+                api_key=api_key,
+                base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
+                model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
+            )
         # 분류 LLM 병렬도도 tag-news 와 같은 LLM_CONCURRENCY env(미지정=기본, 상한은 스텝이 클램프).
         concurrency = int(os.environ.get("LLM_CONCURRENCY", assemble_events.DEFAULT_CLASSIFY_CONCURRENCY))
+        # RELEVANCE_FILTER=on 이면 스레드 전에 관련성 판정기로 무관 기사를 거른다(ALPHA-1476), 꺼져 있으면 None.
+        relevance = load_relevance(storage)
         return assemble_events.run(
-            storage, run_id, db=db_config_from_env(settings.db), complete_fn=complete_fn,
-            from_date=args.from_date, to_date=args.to_date,
+            storage, run_id, db=db_config_from_env(settings.db), complete_fn=complete_fn, tagger=tagger,
+            relevance=relevance, from_date=args.from_date, to_date=args.to_date,
             window_days=args.window_days, concurrency=concurrency,
         )
 
@@ -1308,18 +1322,22 @@ def _dispatch(args, settings, storage, run_id) -> int:
         # LLM 설정은 **여기서** env 로 읽는다. llm.py 는 인자만 받고 env 를 모른다 —
         # DATA_PIPELINE_* 는 수집 설정(load_settings) 네임스페이스인데 LLM 은 수집 소스가
         # 아니라 거기 안 든다. 관례는 analysis-engine analyze_daily.py 와 같은 LLM_* 키다.
-        api_key = os.environ.get("LLM_API_KEY", "")
-        if not api_key:
-            # 조용히 0건 태깅하고 성공으로 끝나면 커버리지 저하가 안 보인다(Rule 12).
-            raise SystemExit("LLM_API_KEY 가 없다 — tag-news 는 LLM 호출이 필수다")
-        complete_fn = openai_compatible_complete_fn(
-            api_key=api_key,
-            base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
-            model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
-        )
+        # TAGGER_BACKEND=roberta 면 로컬 모델로 태깅한다(ALPHA-1446) — LLM 키가 필요 없다.
+        tagger = load_tagger(storage)
+        complete_fn = None
+        if tagger is None:
+            api_key = os.environ.get("LLM_API_KEY", "")
+            if not api_key:
+                # 조용히 0건 태깅하고 성공으로 끝나면 커버리지 저하가 안 보인다(Rule 12).
+                raise SystemExit("LLM_API_KEY 가 없다 — tag-news 는 LLM 호출이 필수다")
+            complete_fn = openai_compatible_complete_fn(
+                api_key=api_key,
+                base_url=os.environ.get("LLM_BASE_URL", DEFAULT_BASE_URL),
+                model=os.environ.get("LLM_MODEL", DEFAULT_MODEL),
+            )
         # LLM 호출 병렬도도 LLM_* env 관례로 받는다(미지정=기본, 상한은 tag_news 가 클램프).
         concurrency = int(os.environ.get("LLM_CONCURRENCY", tag_news.DEFAULT_TAG_CONCURRENCY))
-        return tag_news.run(storage, run_id, complete_fn=complete_fn,
+        return tag_news.run(storage, run_id, complete_fn=complete_fn, tagger=tagger,
                             input_run_id=args.input_run_id,
                             from_date=args.from_date, to_date=args.to_date, limit=args.limit,
                             concurrency=concurrency)

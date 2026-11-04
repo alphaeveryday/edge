@@ -350,3 +350,56 @@ def test_event_doc_class_without_events_is_flagged():
     assert result["status"] == "ok"
     assert result["doc_class"] == "EVENT"
     assert "event_doc_class_without_events" in result["reasons"]
+
+
+# ── 로컬 태거 경로 (ALPHA-1446) ────────────────────────────
+
+class _FakeTagger:
+    """RobertaTagger 대역 — parse 가 LLM 응답과 같은 모양의 dict 를 낸다."""
+
+    version = "tagging-roberta-test"
+
+    def __init__(self, parsed=None, error=None):
+        self.parsed, self.error, self.calls = parsed, error, []
+
+    def parse(self, title, lead):
+        """고정 결과를 내거나 고정 예외를 던진다."""
+        self.calls.append((title, lead))
+        if self.error:
+            raise self.error
+        return self.parsed
+
+
+def test_tagger_output_passes_the_same_validation_as_llm():
+    # WHY: 태거를 바꿔도 온톨로지 계약은 같아야 한다 — 허용 밖 역할은 LLM 경로처럼 떨어지고,
+    # 모델이 안 내는 술어는 온톨로지 기본값으로 채워져 출처가 남아야 적재(NOT NULL)가 된다.
+    tagger = _FakeTagger({"doc_class": "EVENT", "events": [_event(
+        predicate_code=None,
+        arguments=[{"role_code": "SUPPLIER", "text": "에코프로비엠"},
+                   {"role_code": "REPORT_DATE", "text": "1일"}])]})
+    out = extract.extract_assertions(_article(), tagger=tagger)
+    assert out["status"] == "ok"
+    assert tagger.calls == [("에코프로비엠, 북미 완성차와 양극재 공급계약 체결", "2조원 규모다.")]
+    (a,) = out["assertions"]
+    assert [x["role_code"] for x in a["arguments"]] == ["SUPPLIER"]
+    assert "role_not_allowed" in out["reasons"]
+    assert a["predicate_source"] == "ontology_default" and a["predicate_code"]
+
+
+def test_result_records_which_tagger_produced_it():
+    # WHY: tagger_version 은 재태깅 축이자 감사 근거다 — 결과가 실제로 만든 쪽을 말해야
+    # DeepSeek 판정과 로컬 모델 판정이 섞여도 구분된다.
+    by_tagger = extract.extract_assertions(
+        _article(), tagger=_FakeTagger({"doc_class": "OPINION_OR_ANALYSIS", "events": []}))
+    by_llm = extract.extract_assertions(
+        _article(), complete_fn=_fn({"doc_class": "OPINION_OR_ANALYSIS", "events": []}))
+    assert by_tagger["tagger_version"] == "tagging-roberta-test"
+    assert by_llm["tagger_version"] == extract.LLM_TAGGER_VERSION
+
+
+def test_tagger_failure_is_retryable_not_a_verdict():
+    # WHY: 모델 로드·추론 실패는 '물어보지도 못했다'다 — ok 로 접으면 그 기사가 사건 없음으로
+    # 영구히 굳는다. LLM 호출 실패와 같은 llm_error 라 소비자·배치가 재시도한다.
+    out = extract.extract_assertions(_article(), tagger=_FakeTagger(error=RuntimeError("oom")))
+    assert out["status"] == "llm_error"
+    assert out["assertions"] == []
