@@ -25,11 +25,10 @@ raw disclosures(메타 ndjson + 본문 ZIP, ALPHA-344)를 읽어 **단일판매�
 
 ⚠️ 정정 supersession(point-in-time)은 이 스텝 범위 밖이다 — 원본과 정정본([기재정정]…체결)은
 서로 다른 rcept_no 라 canonical 에 각각 파일링당 fact 로 남는다. 어느 정정본이 어느 원본을
-대체하는지의 링크는 list.json 행에 없고(정정 관련 필드·문서 파싱 필요), 원본이 정정 이전에
-수집되면 rm 마커조차 없다 — 즉 정정↔원본 collapse 는 정체성 해소/point-in-time(SCD) 문제라
-후속 트랙 소관이다(계획 Q4: fact 는 원자 필드만, point-in-time 은 다운스트림). 이 스텝은
-파일링당 fact 를 충실히 투영하고, 정정 collapse·이중계산 해소는 다운스트림이 맡는다(뉴스가
-near-dup 클러스터링을 news_dedup_cluster 로 미루는 것과 동형).
+대체하는지는 list.json 행에 없다. 이 스텝은 정정본 본문의 정정 머리표에서 **원공시 제출일·정정사유**를
+읽어 fact 에 싣고(`is_correction`·`correction_target_filed_date`·`correction_reason`, supply-v2),
+그 단서로 원공시를 찾아 한 계약 계보로 묶는 일은 공시 이벤트 조립(`assemble_disclosure_events.
+resolve_lineage`)이 한다. 정정 전 값을 지우거나 덮지 않는다(파일링당 fact 를 충실히 투영).
 """
 
 from __future__ import annotations
@@ -50,7 +49,7 @@ from ..lake import (
     parse_raw_disclosure_key,
     quality_log_key,
 )
-from ..parse_dart_supply import extract_document_html, parse_supply
+from ..parse_dart_supply import extract_document_html, parse_correction, parse_supply
 from ..quality import BLOCKING_REASONS_DISCLOSURE, validate_supply_fact
 from . import disclosure_raw_manifest
 
@@ -61,7 +60,7 @@ DATASET = "supply_contract_fact"
 _PARTIAL_EXIT_CODE = 2
 
 # 파서 버전 — 재파싱 추적용(파서 로직이 바뀌면 올린다). 이식 시점의 supply 파서 = v1.
-PARSER_VERSION = "supply-v1"
+PARSER_VERSION = "supply-v2"
 
 # report_date 상한 여유 — 검증 실행일 기준 이 일수까지의 미래 접수일은 허용(수집 지연·TZ 여유).
 _FUTURE_SLACK_DAYS = 2
@@ -109,7 +108,7 @@ def _norm_report_date(rcept_dt: object) -> str | None:
     return parsed.isoformat()
 
 
-def _to_fact(record: dict, parsed: dict, vendor: str) -> dict:
+def _to_fact(record: dict, parsed: dict, vendor: str, correction: dict | None = None) -> dict:
     """파서 출력 + raw 메타 provenance → 공통 공급계약 fact 행.
 
     corp_name 은 raw 메타(권위 provenance)를 쓴다(파서도 title 에서 뽑지만 raw 가 SSOT).
@@ -118,6 +117,11 @@ def _to_fact(record: dict, parsed: dict, vendor: str) -> dict:
     단독이나 다른 공시 소스 추가·canonical↔raw 감사에 provenance 가 필요하다(가격·뉴스 동형)."""
     start = parsed.get("start")
     end = parsed.get("end")
+    contract_date = parsed.get("contract_date")
+    report_nm = _text(record, "report_nm")
+    # 정정 여부는 본문 정정 머리표로 판정하고, 머리표를 못 읽어도 보고서명이 정정이면 정정으로 둔다
+    # (원공시를 못 찾을 뿐 새 계약은 아니다). 원공시 제출일은 머리표에만 있다.
+    target = (correction or {}).get("target_filed_date")
     return {
         "rcept_no": _text(record, "rcept_no"),
         "source_vendor": vendor,
@@ -132,6 +136,11 @@ def _to_fact(record: dict, parsed: dict, vendor: str) -> dict:
         "ratio_pct": parsed.get("ratio_pct"),
         "contract_start": start.isoformat() if start is not None else None,
         "contract_end": end.isoformat() if end is not None else None,
+        "contract_date": contract_date.isoformat() if contract_date is not None else None,
+        "report_nm": report_nm,
+        "is_correction": correction is not None or "정정" in unicodedata.normalize("NFKC", report_nm or ""),
+        "correction_target_filed_date": target.isoformat() if target is not None else None,
+        "correction_reason": (correction or {}).get("reason"),
         "confidence": parsed.get("confidence"),
         "report_date": _norm_report_date(record.get("rcept_dt")),
         "source_url": _text(record, "source_url"),
@@ -147,7 +156,8 @@ _CANONICAL_COLUMNS = (
     "rcept_no", "source_vendor", "corp_code", "ticker", "corp_name", "counterparty",
     "counterparty_raw", "counterparty_withheld", "object", "amount_krw", "ratio_pct",
     "contract_start", "contract_end", "confidence", "report_date", "source_url",
-    "parser_version", "fetched_at",
+    "parser_version", "fetched_at", "contract_date", "report_nm", "is_correction",
+    "correction_target_filed_date", "correction_reason",
 )
 
 _OLDEST = datetime.min.replace(tzinfo=timezone.utc)
@@ -165,6 +175,8 @@ def _canonical_schema():
         ("contract_start", pa.string()), ("contract_end", pa.string()),
         ("confidence", pa.string()), ("report_date", pa.string()),
         ("source_url", pa.string()), ("parser_version", pa.string()), ("fetched_at", pa.string()),
+        ("contract_date", pa.string()), ("report_nm", pa.string()), ("is_correction", pa.bool_()),
+        ("correction_target_filed_date", pa.string()), ("correction_reason", pa.string()),
     ])
 
 
@@ -393,7 +405,7 @@ def run(
             try:
                 html = extract_document_html(storage.get_bytes(doc_path))
                 parsed = parse_supply(html)
-                fact = _to_fact(record, parsed, vendor)
+                fact = _to_fact(record, parsed, vendor, parse_correction(html))
                 reasons = validate_supply_fact(fact, max_report_date=max_report_date)
             except Exception as exc:
                 logger.exception("공급계약 본문 파싱 실패(격리): %s", ref)
