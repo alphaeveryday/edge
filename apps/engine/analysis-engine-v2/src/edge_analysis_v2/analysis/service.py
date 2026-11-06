@@ -451,7 +451,8 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                     '요약·결론·요인·이슈 상세의 기존 문구 정정은 최종 JSON의 text_replacements를 우선 사용한다. '
                     'field와 배열 항목의 item_number(1부터), 바뀌는 부분의 old_text/new_text를 지정한다. '
                     '모든 치환은 직전 발행본 기준이며 대상 밖 문구는 유지한다. 같은 필드나 상위 배열을 일반 수정과 함께 보내지 않는다. '
-                    '이슈 항목·결론 키워드에는 유지할 유효한 기존 근거와 새 근거를 모두 tool_run_ids로 함께 보낸다.')
+                    '이슈 항목·결론 키워드에는 유지할 유효한 기존 근거와 새 근거를 모두 tool_run_ids로 함께 보낸다. '
+                    '요약 카드·요인·결론 문장·제목·헤드라인 치환에는 근거 목록이 없으므로 tool_run_ids를 보내지 않는다.')
             response = swap_references(asyncio.run(model_call(initial=initial,prompt=prompt,
                 schemas=schemas,call=cited_call,output_schema=MOVEMENT if kind=='movement' else revision_schema if previous_fields is not None else OUTLOOK,
                 artifacts=artifacts,key=key,model=model,skills=REVISION_SKILLS if previous else MOVEMENT_SKILLS if kind == 'movement' else TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,timeout_seconds=600 if kind=='outlook' else MOVEMENT_SECONDS,

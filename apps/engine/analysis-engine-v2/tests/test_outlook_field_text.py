@@ -67,9 +67,25 @@ def test_same_items_citation_lists_must_agree_and_nonreferenced_fields_cannot_ac
     title['tool_run_ids'] = edit()['tool_run_ids']
     result = merge_outlook_revision(previous(), {'text_replacements': [edit(), title]})
     assert result['issue_detail']['items'][0]['title_keyword'] == '일정 발표'
-    with pytest.raises(ValueError, match='does not have tool_run_ids'):
+
+
+def test_evidence_sent_with_an_uncited_field_is_dropped_instead_of_failing_the_outlook():
+    # deepseek-flash attached citations to summary, factor and conclusion sentences in 47 of 58 failed runs
+    # (10-28..11-06). Those fields store no citation list, so the edit is applied and the list goes nowhere.
+    base = previous()
+    result = merge_outlook_revision(base, {'text_replacements': [
+        {'field': 'summary_card.summary', 'old_text': '예정', 'new_text': '확정', 'tool_run_ids': ['f9']}]})
+    assert result['summary_card'] == {'title': '기존 제목', 'summary': '확정이에요.'}
+    assert result['issue_detail'] == base['issue_detail']
+    assert 'f9' not in str(result)
+
+
+def test_refusal_names_the_replacement_and_its_target():
+    # The model repairs from the message alone; a bare refusal was read as "evidence is missing" and repeated.
+    missing = {key: value for key, value in edit().items() if key != 'tool_run_ids'}
+    with pytest.raises(ValueError, match=r'^text_replacements\[2\] \(field=issue_detail\.items\.sentence, item_number=1\): Referenced'):
         merge_outlook_revision(previous(), {'text_replacements': [
-            {'field': 'summary_card.summary', 'old_text': '예정', 'new_text': '확정', 'tool_run_ids': ['run']}]})
+            {'field': 'summary_card.title', 'old_text': '기존', 'new_text': '새'}, missing]})
 
 
 def test_keyword_and_factor_text_are_editable_but_labels_and_sentiment_are_not():
