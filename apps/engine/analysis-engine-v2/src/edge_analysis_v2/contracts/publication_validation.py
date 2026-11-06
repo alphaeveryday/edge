@@ -39,9 +39,10 @@ def movement(response):
     if decision == "revise" and not selected:
         raise ValueError("decision=revise requires the full selected_item_ids and summary; "
                          "send decision=keep to keep the previous publication")
-    if selected and (not isinstance(response["summary"], str) or not response["summary"].strip()):
-        # Named, because the model repairs from this text (0167A0 sent its selection without a summary).
-        raise ValueError("selected_item_ids requires a nonempty summary")
+    if selected:
+        if not isinstance(response["summary"], str) or not response["summary"].strip():
+            # Named, because the model repairs from this text (0167A0 sent its selection without a summary).
+            raise ValueError("selected_item_ids requires a nonempty summary")
     elif response["summary"] is not None:
         raise ValueError("Empty selection requires null summary")
     if not isinstance(items, list):
