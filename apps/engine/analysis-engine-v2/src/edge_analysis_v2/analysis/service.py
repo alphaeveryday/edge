@@ -14,10 +14,11 @@ from psycopg import sql
 from psycopg.rows import dict_row
 from jsonschema import Draft202012Validator
 
-from edge_analysis_v2.agent.output_schema import EDIT_SCHEMAS, FIELDS, INVESTIGATION, MOVEMENT, OUTLOOK, OUTLOOK_REVISION, UNCITED_FIELDS_TEXT, WRITING, merge_outlook_revision
+from edge_analysis_v2.agent.output_schema import EDIT_SCHEMAS, FIELDS, INVESTIGATION, MOVEMENT, MOVEMENT_REVISION, OUTLOOK, OUTLOOK_REVISION, UNCITED_FIELDS_TEXT, WRITING, merge_outlook_revision
 from edge_analysis_v2.analysis.current_flow import current_flow
 from edge_analysis_v2.tools.execution import AuditedExecution, ToolInputError
 from edge_analysis_v2.analysis.body_editor import BodyEditor
+from edge_analysis_v2.contracts import publication_validation as publication_shape
 from edge_analysis_v2.contracts.outlook_limits import movement_violations, violations
 from edge_analysis_v2.storage.factors import read_factor_details, project_factor_metrics
 from edge_analysis_v2.tools.fixture_data import FixtureTools
@@ -432,6 +433,12 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                 if previous_fields is not None:
                     for error in Draft202012Validator(OUTLOOK).iter_errors(candidate):
                         message += f'직전 값과 병합한 응답을 고쳐 주세요: {error.json_path}: {error.validator}={error.validator_value}\n'
+                if kind == 'movement':
+                    # Checked again at publication, where a refusal had no repair left (selection without summary).
+                    try:
+                        publication_shape.movement(final)
+                    except ValueError as error:
+                        message += f'발행 형식에 맞지 않습니다: {error}\n'
                 long = movement_violations(final, previous_items) if kind == 'movement' else []
                 if long:
                     message += '글자 수 상한을 넘은 곳이 있습니다. 내용을 버리지 말고 가장 중요한 것만 남겨 줄이세요.\n' + '\n'.join(long) + '\n'
@@ -441,6 +448,10 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                 return message + retry if message else None
             prompt_name = 'movement_revision' if kind == 'movement' and previous else kind
             prompt = system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(prompt_name+'.yaml'))
+            if kind == 'movement' and previous and 'decision' not in prompt:
+                # A pinned prompt older than the decision field still answers the schema that requires it.
+                prompt += ('\n수정 응답에는 decision을 반드시 보낸다. 바뀐 것이 없으면 keep과 빈 new_items·selected_item_ids, null summary를 보내고, '
+                           '항목을 고치거나 더하면 revise와 표시할 전체 selected_item_ids·summary를 보낸다.')
             if previous_fields is not None:
                 prompt = prompt.replace('전망·요약·5요인·결론·이슈 상세는 각각 완성 객체로 보낸다.', '') + (
                     '\n이번 실행은 전망 수정이다. 위의 완성 응답 지시보다 다음 제출 규칙을 우선한다. '
@@ -454,7 +465,7 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                     '이슈 항목·결론 키워드에는 유지할 유효한 기존 근거와 새 근거를 모두 tool_run_ids로 함께 보낸다. '
                     f'그 밖의 field({UNCITED_FIELDS_TEXT}) 치환에는 근거 목록이 없으므로 tool_run_ids를 보내지 않는다.')
             response = swap_references(asyncio.run(model_call(initial=initial,prompt=prompt,
-                schemas=schemas,call=cited_call,output_schema=MOVEMENT if kind=='movement' else revision_schema if previous_fields is not None else OUTLOOK,
+                schemas=schemas,call=cited_call,output_schema=(MOVEMENT_REVISION if previous else MOVEMENT) if kind=='movement' else revision_schema if previous_fields is not None else OUTLOOK,
                 artifacts=artifacts,key=key,model=model,skills=REVISION_SKILLS if previous else MOVEMENT_SKILLS if kind == 'movement' else TASK_SKILLS,optional_skills=OPTIONAL_SKILLS,timeout_seconds=600 if kind=='outlook' else MOVEMENT_SECONDS,
                 compare_explanations=kind=='outlook' and not previous, final_check=unciteable,
                 effort='low' if kind == 'movement' else 'high', cache_scope=cache_scope)), references)

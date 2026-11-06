@@ -43,6 +43,11 @@ MOVEMENT = obj({
     'selected_item_ids': {'type': 'array', 'maxItems': 5, 'uniqueItems': True, 'items': TEXT},
     'summary': {'type': ['string', 'null'], 'description': f"공백·문장부호 포함 최대 {MOVEMENT_LIMITS['summary']}자의 한 문장. 그날 가장 중요한 일 하나와 그것이 이 ETF에 뜻하는 것을 쉬운 말로. 수치는 쓰지 않음."},
 })
+# A revision names its decision: an empty answer otherwise means both "checked, nothing changed" and
+# "produced nothing", and a kept selection sent without its summary failed publication (0167A0, 11-06).
+MOVEMENT_REVISION = obj(MOVEMENT['properties'] | {
+    'decision': {'enum': ['keep', 'revise'], 'description': 'keep: 확인 결과 직전 선정과 요약을 그대로 둡니다. new_items·selected_item_ids는 빈 배열, summary는 null로 보내며 서버가 직전 발행본을 유지합니다. revise: 항목을 고치거나 더합니다. 표시할 전체 selected_item_ids와 summary를 보냅니다.'},
+})
 def keywords(side):
     return {'type': 'array', 'items': obj({'label': limited(f'conclusion.{side}[].label'), 'tool_run_ids': REFS})}
 # A staged outlook answers in three parts: the investigator's report, what the writer decides with the body,

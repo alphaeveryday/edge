@@ -24,13 +24,25 @@ def references(value):
 
 def movement(response):
     """Validate movement selection, leaving meaning and ranking to the agent."""
-    if set(response) != {"new_items", "selected_item_ids", "summary"}:
+    if set(response) - {"decision"} != {"new_items", "selected_item_ids", "summary"}:
         raise ValueError("Unexpected movement fields")
     selected, items = response["selected_item_ids"], response["new_items"]
     if not isinstance(selected, list) or len(selected) > 5 or any(not isinstance(v, str) for v in selected) or len(set(selected)) != len(selected):
         raise ValueError("Expected at most five unique selections")
+    # Only a revision carries a decision; the first publication of the day has nothing to keep.
+    decision = response.get("decision")
+    if "decision" in response and decision not in ("keep", "revise"):
+        raise ValueError("decision must be keep or revise")
+    if decision == "keep" and (items or selected or response["summary"] is not None):
+        raise ValueError("decision=keep requires empty new_items and selected_item_ids and null summary; "
+                         "the previous selection and summary are kept")
+    if decision == "revise" and not selected:
+        raise ValueError("decision=revise requires the full selected_item_ids and summary; "
+                         "send decision=keep to keep the previous publication")
     if selected:
-        text(response["summary"])
+        if not isinstance(response["summary"], str) or not response["summary"].strip():
+            # Named, because the model repairs from this text (0167A0 sent its selection without a summary).
+            raise ValueError("selected_item_ids requires a nonempty summary")
     elif response["summary"] is not None:
         raise ValueError("Empty selection requires null summary")
     if not isinstance(items, list):
