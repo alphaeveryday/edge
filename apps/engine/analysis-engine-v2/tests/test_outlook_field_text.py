@@ -48,7 +48,9 @@ def test_same_scalar_submission_conflicts_but_sibling_does_not():
 
 
 @pytest.mark.parametrize('change', [edit(item_number=True), edit(item_number=0), edit(item_number=3), edit(field='outlook.direction'),
-    edit(old_text='없는 원문'), edit(tool_run_ids=[]), {key: value for key, value in edit().items() if key != 'tool_run_ids'}])
+    edit(old_text='없는 원문'), edit(tool_run_ids=[]), {key: value for key, value in edit().items() if key != 'tool_run_ids'},
+    # The answer schema no longer checks citation lists; the merge is the gate for a cited field.
+    edit(tool_run_ids=['old', 'old']), edit(tool_run_ids=['']), edit(tool_run_ids='old')])
 def test_invalid_target_or_missing_evidence_rejected(change):
     with pytest.raises(ValueError):
         merge_outlook_revision(previous(), {'text_replacements': [change]})
@@ -85,12 +87,13 @@ def test_every_uncited_field_is_named_where_the_model_reads_the_rule():
     # "제목" alone also reads as an issue title, which does need evidence; the rule names fields exactly.
     from edge_analysis_v2.agent.output_schema import FIELD_TEXT_PATHS, OUTLOOK_REVISION, REFERENCED_TEXT_FIELDS
     edit_schema = OUTLOOK_REVISION['properties']['text_replacements']['items']['properties']['tool_run_ids']
-    uncited = set(FIELD_TEXT_PATHS) - REFERENCED_TEXT_FIELDS
-    assert uncited and all(field in edit_schema['description'] for field in uncited)
-    assert not uncited & {'issue_detail.items.title_keyword', 'conclusion.supports.label'}
-    # An empty or repeated list on an uncited field is dropped by the merge, so the answer schema must not refuse it.
-    Draft202012Validator(edit_schema).validate([])
-    Draft202012Validator(edit_schema).validate(['f3', 'f3'])
+    uncited = {'summary_card.title', 'summary_card.summary', 'factors.sentence', 'conclusion.title', 'conclusion.sentence',
+               'conclusion.change_condition', 'issue_detail.headline'}
+    assert set(FIELD_TEXT_PATHS) - REFERENCED_TEXT_FIELDS == uncited
+    assert all(field in edit_schema['description'] for field in uncited)
+    # Whatever is sent with an uncited field is dropped by the merge, so the answer schema must not refuse it.
+    for dropped in ([], ['f3', 'f3'], 'f3', None):
+        Draft202012Validator(edit_schema).validate(dropped)
 
 
 def test_refusal_names_the_replacement_and_its_target():
