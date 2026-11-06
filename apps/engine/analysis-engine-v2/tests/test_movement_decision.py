@@ -29,7 +29,7 @@ def test_keep_is_the_empty_answer_and_names_what_to_send_otherwise():
 def test_revise_must_carry_the_selection_it_publishes():
     with pytest.raises(ValueError, match='send decision=keep'):
         movement(KEEP | {'decision': 'revise'})
-    with pytest.raises(ValueError, match='Expected nonempty text'):
+    with pytest.raises(ValueError, match='selected_item_ids requires a nonempty summary'):
         movement(KEEP | {'decision': 'revise', 'selected_item_ids': ['a']})
     movement(KEEP | {'decision': 'revise', 'selected_item_ids': ['a'], 'summary': '계약이 미뤄졌어요.'})
     with pytest.raises(ValueError, match='keep or revise'):
