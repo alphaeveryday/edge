@@ -362,6 +362,22 @@ def test_movement_revision_keeps_the_previous_publication_only_on_an_explicit_ke
         return final
     after, _ = request('movement', keep, later, previous_analysis_id=parent)
     assert after == before
+    # A revise that re-sends the same items with a corrected summary publishes that summary.
+    async def resummarize(**kwargs):
+        return {'decision': 'revise', 'new_items': [], 'summary': '공급 물량 확보가 확정됐어요.',
+                'selected_item_ids': kwargs['initial']['previous_selected_item_ids']}
+    later['context']['analysis_at'] = (datetime.fromisoformat(later['context']['analysis_at']) + timedelta(minutes=1)).isoformat()
+    corrected, _ = request('movement', resummarize, later)
+    assert corrected == before | {'summary': '공급 물량 확보가 확정됐어요.'}
+    # Keep with nothing published earlier today would publish an empty day under a "kept" label.
+    tomorrow = deepcopy(fixture)
+    tomorrow.pop('price_snapshot', None)
+    tomorrow.pop('price_snapshots', None)
+    tomorrow['context']['analysis_at'] = (datetime.fromisoformat(fixture['context']['analysis_at']) + timedelta(days=1)).isoformat()
+    async def keep_nothing(**kwargs):
+        return {'decision': 'keep', 'new_items': [], 'selected_item_ids': [], 'summary': None}
+    with pytest.raises(ValueError, match='decision=keep requires a completed publication'):
+        request('movement', keep_nothing, tomorrow)
 
 
 def test_movement_revision_distinguishes_published_order_from_retired_candidates(run_context):

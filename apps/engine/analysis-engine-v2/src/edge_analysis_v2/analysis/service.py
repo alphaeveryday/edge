@@ -448,6 +448,10 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
                 return message + retry if message else None
             prompt_name = 'movement_revision' if kind == 'movement' and previous else kind
             prompt = system_prompt if system_prompt is not None else load_prompt(Path(__file__).parents[1]/'prompts'/(prompt_name+'.yaml'))
+            if kind == 'movement' and previous and 'decision' not in prompt:
+                # A pinned prompt older than the decision field still answers the schema that requires it.
+                prompt += ('\n수정 응답에는 decision을 반드시 보낸다. 바뀐 것이 없으면 keep과 빈 new_items·selected_item_ids, null summary를 보내고, '
+                           '항목을 고치거나 더하면 revise와 표시할 전체 selected_item_ids·summary를 보낸다.')
             if previous_fields is not None:
                 prompt = prompt.replace('전망·요약·5요인·결론·이슈 상세는 각각 완성 객체로 보낸다.', '') + (
                     '\n이번 실행은 전망 수정이다. 위의 완성 응답 지시보다 다음 제출 규칙을 우선한다. '

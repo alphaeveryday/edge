@@ -244,9 +244,16 @@ class PublicationStore:
             cur.execute("""SELECT * FROM movement_analyses WHERE analysis_id=%s AND trading_date=%s
                 AND status='completed'""", (analysis["previous_analysis_id"], analysis["trading_date"]))
             previous = cur.fetchone()
-            if response.get("decision") == "keep" and not previous:
+            decision = response.get("decision")
+            if decision == "keep" and not previous:
                 raise ValueError("decision=keep requires a completed publication of the same day")
-            unchanged = previous and (selected == previous["selected_item_ids"] or not selected)
+            if decision is None:
+                # An answer without a decision (first publication, or a caller that skips the response schema).
+                unchanged = previous and (selected == previous["selected_item_ids"] or not selected)
+            else:
+                # A revise that re-sends the same selection may still correct the summary.
+                unchanged = decision == "keep" or bool(previous) and (
+                    selected == previous["selected_item_ids"] and response["summary"] == previous["summary"])
             if unchanged:
                 selected, summary, published = previous["selected_item_ids"], previous["summary"], previous["published_at"]
             else:
