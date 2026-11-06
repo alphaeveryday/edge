@@ -223,7 +223,11 @@ def client_for(message):
         async def __aexit__(self, *args):
             return False
         async def query(self, text):
-            assert json.loads(text)['input']['available_sources']['news'] == {'rows': 0}
+            payload = json.loads(text)
+            if 'input' in payload:
+                assert payload['input']['available_sources']['news'] == {'rows': 0}
+            else:
+                assert payload['rule'] == 'required' and payload['expected'] == ['summary']
         async def receive_response(self):
             if message:
                 state = self.options.hooks['PostToolUse'][0].hooks[0].__self__
@@ -396,13 +400,13 @@ def test_an_overlong_final_answer_is_never_accepted(tmp_path):
         async def receive_response(self):
             self.options.hooks['PostToolUse'][0].hooks[0].__self__.update_tasks([{'content': 'Answer', 'status': 'completed', **ANSWERED}])
             yield ResultMessage(structured_output={'summary': 'far too long'})
-    with pytest.raises(ValidationError):
+    with pytest.raises(ValueError, match="maxLength"):
         asyncio.run(run_model(initial={'news': []}, prompt='system', schemas=[], call=lambda *a: None,
             output_schema=schema, artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client))
     assert not (tmp_path/'response.json').exists()
 
 
-def test_a_final_answer_the_caller_rejects_is_sent_back_twice_at_most_then_returned_for_the_caller_to_fail(tmp_path):
+def test_rejected_final_answers_get_two_repairs_and_never_escape_invalid(tmp_path):
     # WHY: three benchmark runs were lost because one of ten claims cited a mistyped evidence ID.
     queries = []
     class Client:
@@ -422,6 +426,8 @@ def test_a_final_answer_the_caller_rejects_is_sent_back_twice_at_most_then_retur
         artifacts=tmp_path, key='test-secret', model='deepseek-flash', client_factory=Client, final_check=check))
     assert result == {'summary': 'fixed'} and queries[1] == 'claims[3] cites an unknown ID'
     queries.clear()
-    stubborn = asyncio.run(run_model(initial={'news': []}, prompt='system', schemas=[], call=lambda *a: None, output_schema=SCHEMA,
-        artifacts=tmp_path / 'again', key='test-secret', model='deepseek-flash', client_factory=Client, final_check=lambda final: 'still wrong'))
-    assert len(queries) == 3 and stubborn == {'summary': 'bad id'}   # the caller's own check then fails the run
+    with pytest.raises(ValueError, match='Final response failed after repair: still wrong'):
+        asyncio.run(run_model(initial={'news': []}, prompt='system', schemas=[], call=lambda *a: None, output_schema=SCHEMA,
+            artifacts=tmp_path / 'again', key='test-secret', model='deepseek-flash', client_factory=Client, final_check=lambda final: 'still wrong'))
+    assert len(queries) == 3
+    assert not (tmp_path / 'again' / 'response.json').exists()

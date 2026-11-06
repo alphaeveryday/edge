@@ -62,12 +62,12 @@ def test_duplicate_target_and_missing_legacy_target_rejected():
 
 def test_same_items_citation_lists_must_agree_and_nonreferenced_fields_cannot_accept_them():
     title = edit(field='issue_detail.items.title_keyword', old_text='실적', new_text='일정', tool_run_ids=['different'])
-    with pytest.raises(ValueError, match='Conflicting tool_run_ids'):
+    with pytest.raises(ValueError, match='conflict'):
         merge_outlook_revision(previous(), {'text_replacements': [edit(), title]})
     title['tool_run_ids'] = edit()['tool_run_ids']
     result = merge_outlook_revision(previous(), {'text_replacements': [edit(), title]})
     assert result['issue_detail']['items'][0]['title_keyword'] == '일정 발표'
-    with pytest.raises(ValueError, match='does not have tool_run_ids'):
+    with pytest.raises(ValueError, match='forbidden'):
         merge_outlook_revision(previous(), {'text_replacements': [
             {'field': 'summary_card.summary', 'old_text': '예정', 'new_text': '확정', 'tool_run_ids': ['run']}]})
 

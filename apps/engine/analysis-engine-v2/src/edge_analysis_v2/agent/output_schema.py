@@ -1,5 +1,6 @@
 """Agent response schemas; body text is submitted through editing tools."""
 from copy import deepcopy
+from edge_analysis_v2.contracts.response_errors import ResponseError, validate
 from edge_analysis_v2.analysis.text_replacement import replace_exact
 
 from edge_analysis_v2.contracts.outlook_limits import MAX_BULLETS_PER_TOPIC, MAX_TOPICS, MOVEMENT_LIMITS, TEXT_LIMITS, TITLE_MAX_LENGTH
@@ -105,52 +106,51 @@ def merge_outlook_revision(previous, changes):
         result[key] = (merge_outlook_revision(result.get(key, {}), value)
                        if isinstance(value, dict) else deepcopy(value))
     edits = changes.get('text_replacements', [])
-    if not isinstance(edits, list) or ('text_replacements' in changes and not edits):
-        raise ValueError('text_replacements requires a nonempty list')
+    if 'text_replacements' in changes:
+        validate(edits, OUTLOOK_REVISION['properties']['text_replacements'], '$.text_replacements')
     targets, reference_updates = set(), {}
-    for edit in edits:
-        if not isinstance(edit, dict) or not isinstance(edit.get('field'), str) or edit['field'] not in FIELD_TEXT_PATHS:
-            raise ValueError('Unknown text replacement field')
+    for index, edit in enumerate(edits):
+        location = f'$.text_replacements[{index}]'
         field = edit['field']
         path = FIELD_TEXT_PATHS[field]
-        number = edit.get('item_number')
+        for key, needed in (('item_number', None in path), ('tool_run_ids', field in REFERENCED_TEXT_FIELDS)):
+            if needed and key not in edit:
+                raise ResponseError(location, 'required', [key], edit, target=field)
+            if not needed and key in edit:
+                raise ResponseError(location + '.' + key, 'forbidden', 'property absent', edit[key], target=field)
         if None in path:
-            if type(number) is not int or number < 1:
-                raise ValueError('Array text replacement requires a positive item_number')
-            path = tuple(number - 1 if part is None else part for part in path)
-        elif 'item_number' in edit:
-            raise ValueError('item_number is only allowed for array fields')
+            path = tuple(int(edit['item_number']) - 1 if part is None else part for part in path)
         if path in targets:
-            raise ValueError('Duplicate text replacement target')
+            raise ResponseError(location + '.field', 'unique', 'one replacement per target', field, target=path)
         targets.add(path)
         submitted = changes
         for part in path:
             if not isinstance(submitted, dict):
-                raise ValueError('Text replacement conflicts with submitted parent array or value')
+                raise ResponseError(location, 'conflict', 'submit either replacement or parent value', edit, target=path)
             if part not in submitted:
                 break
             submitted = submitted[part]
         else:
-            raise ValueError('Text replacement conflicts with submitted field')
+            raise ResponseError(location, 'conflict', 'submit either replacement or field value', edit, target=path)
         source, destination = previous, result
         try:
             for part in path[:-1]:
                 source, destination = source[part], destination[part]
             original = source[path[-1]]
         except (KeyError, IndexError, TypeError):
-            raise ValueError('Text replacement requires an existing field') from None
-        destination[path[-1]] = replace_exact(original, edit.get('old_text'), edit.get('new_text'))
+            raise ResponseError(location + '.field', 'exists', 'a field in the previous publication', field, target=path) from None
+        try:
+            destination[path[-1]] = replace_exact(original, edit['old_text'], edit['new_text'])
+        except ValueError:
+            raise ResponseError(location, 'exactMatch', {'source': original, 'occurrences': 1},
+                                {'old_text': edit['old_text'], 'new_text': edit['new_text']}, target=field) from None
         if field in REFERENCED_TEXT_FIELDS:
-            refs = edit.get('tool_run_ids')
-            if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) or not ref for ref in refs) or len(set(refs)) != len(refs):
-                raise ValueError('Referenced text replacement requires unique nonempty tool_run_ids')
+            refs = edit['tool_run_ids']
             parent = path[:-1]
             if parent in reference_updates and reference_updates[parent] != refs:
-                raise ValueError('Conflicting tool_run_ids for the same item')
+                raise ResponseError(location + '.tool_run_ids', 'conflict', reference_updates[parent], refs, target=field)
             reference_updates[parent] = refs
             destination['tool_run_ids'] = deepcopy(refs)
-        elif 'tool_run_ids' in edit:
-            raise ValueError('This text field does not have tool_run_ids')
     return result
 
 

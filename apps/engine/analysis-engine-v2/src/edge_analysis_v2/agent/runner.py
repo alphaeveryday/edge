@@ -11,6 +11,7 @@ from time import monotonic
 
 from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient, HookMatcher, create_sdk_mcp_server, tool
 from jsonschema import Draft202012Validator, FormatChecker
+from edge_analysis_v2.contracts.response_errors import ResponseError, validate
 import yaml
 
 from edge_analysis_v2.tools.model_schema import agent_tool_schemas
@@ -150,9 +151,8 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
         Validated final response. Meaning is reviewed separately by a reviewer.
 
     Raises:
-        ValueError: Missing credentials, failed SDK result, or missing final JSON.
+        ValueError: Missing credentials, failed SDK result, missing final JSON, or exhausted response repairs.
         TimeoutError: Conversation deadline exceeded.
-        jsonschema.ValidationError: Final JSON violates the output contract.
     """
     if not key or type(timeout_seconds) is not int or not 1 <= timeout_seconds <= 600:
         raise ValueError('API key and a 1..600 second deadline are required')
@@ -253,17 +253,22 @@ async def run_model(*, initial: dict, prompt: str, schemas: list[dict], call,
                         value = event.get('structured_output')
                         if value is None:
                             value = json.loads(event.get('result') or '')
-                        Draft202012Validator(output_schema).validate(value)
                         final = value
                     failure_state.check()
                     if final is None:
                         raise ValueError('SDK ended without a final result')
-                    problem = final_check(final) if final_check else None
+                    try:
+                        validate(final, output_schema, '$')
+                        problem = final_check(final) if final_check else None
+                    except ResponseError as error:
+                        problem = str(error)
                     if problem and repairs < 2:
                         # One mistyped evidence ID should cost a correction, not the whole investigation.
                         repairs += 1
                         await client.query(problem)
                         continue
+                    if problem:
+                        raise ValueError("Final response failed after repair: " + problem)
                     continuation = session.continuation() if session else None
                     if continuation is None:
                         if session:

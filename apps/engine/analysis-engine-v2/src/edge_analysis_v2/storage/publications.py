@@ -227,10 +227,9 @@ class PublicationStore:
                 WHERE a.etf_code=%s AND a.trading_date=%s AND a.status='completed' AND a.analysis_at<=%s AND a.data_source=%s""",
                         (analysis["previous_analysis_id"], analysis["etf_code"], analysis["trading_date"], analysis["analysis_at"], analysis["data_source"]))
             existing = {row["item_id"] for row in cur.fetchall()}
+            schemas.movement_selection(response, existing)
             mapped = {}
             for item in response["new_items"]:
-                if item["candidate_id"] in existing:
-                    raise ValueError("Candidate ID collides with existing item")
                 self._evidence(cur, item["tool_run_ids"], analysis)
                 mapped[item["candidate_id"]] = uuid4().hex
                 cur.execute("""INSERT INTO movement_items
@@ -238,8 +237,6 @@ class PublicationStore:
                     VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
                     (mapped[item["candidate_id"]], identity, item["type"], item["title_keyword"], item["sentence"],
                      item["sentiment"], analysis["analysis_at"], item["tool_run_ids"]))
-            if any(ref not in existing and ref not in mapped for ref in response["selected_item_ids"]):
-                raise ValueError("Selection contains unknown or other-day item")
             selected = [mapped.get(ref, ref) for ref in response["selected_item_ids"]]
             cur.execute("""SELECT * FROM movement_analyses WHERE analysis_id=%s AND trading_date=%s
                 AND status='completed'""", (analysis["previous_analysis_id"], analysis["trading_date"]))

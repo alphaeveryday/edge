@@ -49,3 +49,17 @@
 - RSI14와 역방향 Williams14를 임시 지수로 사용. 확률이나 모델 점수로 표현하지 않음.
 - 5년 PER 밴드는 문서대로 계산 보류, 카드 생략. 누락을 0으로 채우지 않음.
 - 성공·실패·누락·미래 공개자료·상충 뉴스·후속 기사·중요도 역전 시나리오를 따로 검증.
+
+
+### Response validation and repair
+
+Final JSON schema errors and revision validation errors use a shared diagnostic containing
+`path`, `rule`, `expected`, `actual`, and `repair` (plus `target` for a text replacement).
+The model receives the error in the same conversation and can resubmit up to twice. An
+invalid response after those attempts terminates the run before publication; it is never
+returned as an accepted `response.json`.
+
+Movement selection IDs are checked against this response's candidate IDs and the completed
+same-day predecessor lineage before returning the final response. Publication repeats the
+same selection validator against database rows. This preserves the storage boundary while
+letting the model correct an unknown ID during its original conversation.
