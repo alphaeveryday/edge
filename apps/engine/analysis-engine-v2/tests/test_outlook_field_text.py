@@ -2,6 +2,7 @@
 from copy import deepcopy
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from edge_analysis_v2.agent.output_schema import merge_outlook_revision
 
@@ -83,15 +84,19 @@ def test_evidence_sent_with_an_uncited_field_is_dropped_instead_of_failing_the_o
 def test_every_uncited_field_is_named_where_the_model_reads_the_rule():
     # "제목" alone also reads as an issue title, which does need evidence; the rule names fields exactly.
     from edge_analysis_v2.agent.output_schema import FIELD_TEXT_PATHS, OUTLOOK_REVISION, REFERENCED_TEXT_FIELDS
-    rule = OUTLOOK_REVISION['properties']['text_replacements']['items']['properties']['tool_run_ids']['description']
+    edit_schema = OUTLOOK_REVISION['properties']['text_replacements']['items']['properties']['tool_run_ids']
     uncited = set(FIELD_TEXT_PATHS) - REFERENCED_TEXT_FIELDS
-    assert uncited and all(field in rule for field in uncited)
+    assert uncited and all(field in edit_schema['description'] for field in uncited)
+    assert not uncited & {'issue_detail.items.title_keyword', 'conclusion.supports.label'}
+    # An empty or repeated list on an uncited field is dropped by the merge, so the answer schema must not refuse it.
+    Draft202012Validator(edit_schema).validate([])
+    Draft202012Validator(edit_schema).validate(['f3', 'f3'])
 
 
 def test_refusal_names_the_replacement_and_its_target():
     # The model repairs from the message alone; a bare refusal was read as "evidence is missing" and repeated.
     missing = {key: value for key, value in edit().items() if key != 'tool_run_ids'}
-    with pytest.raises(ValueError, match=r'^text_replacements\[2\] \(field=issue_detail\.items\.sentence, item_number=1\): Referenced'):
+    with pytest.raises(ValueError, match=r'^text_replacements 2번째 치환\(field=issue_detail\.items\.sentence, item_number=1\): Referenced'):
         merge_outlook_revision(previous(), {'text_replacements': [
             {'field': 'summary_card.title', 'old_text': '기존', 'new_text': '새'}, missing]})
 

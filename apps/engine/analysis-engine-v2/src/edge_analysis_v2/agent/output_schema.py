@@ -87,12 +87,15 @@ FIELD_TEXT_PATHS = {
 }
 REFERENCED_TEXT_FIELDS = {field for field in FIELD_TEXT_PATHS
                           if field.startswith(('conclusion.supports.', 'conclusion.burdens.', 'issue_detail.items.'))}
+UNREFERENCED_TEXT_FIELDS = ', '.join(field for field in FIELD_TEXT_PATHS if field not in REFERENCED_TEXT_FIELDS)
 OUTLOOK_REVISION = _optional_object(OUTLOOK)
 OUTLOOK_REVISION['properties']['text_replacements'] = {'type': 'array', 'minItems': 1, 'items': obj({
     'field': {'type': 'string', 'enum': list(FIELD_TEXT_PATHS)},
     'item_number': {'type': 'integer', 'minimum': 1, 'description': '배열의 기존 항목 번호. 1부터 시작하며 배열 필드에만 필요합니다.'},
     'old_text': TEXT, 'new_text': {'type': 'string'},
-    'tool_run_ids': REFS | {'description': '이슈 항목(issue_detail.items.*)·결론 키워드(conclusion.supports.label, conclusion.burdens.label) 치환에만 보내며 그때는 필수입니다. 유지할 유효한 기존 근거와 새 근거를 모두 포함한 해당 항목의 전체 근거 목록입니다. 그 밖의 field(summary_card.title, summary_card.summary, factors.sentence, conclusion.title, conclusion.sentence, conclusion.change_condition, issue_detail.headline)에는 근거 목록이 없으므로 보내지 않습니다.'},
+    # Not REFS: a list sent with an uncited field is dropped by the merge, so its shape must not fail the answer.
+    # The merge checks the list of a cited field.
+    'tool_run_ids': {'type': 'array', 'items': {'type': 'string'}, 'description': f'이슈 항목(issue_detail.items.*)·결론 키워드(conclusion.supports.label, conclusion.burdens.label) 치환에만 보내며 그때는 필수입니다. 유지할 유효한 기존 근거와 새 근거를 모두 포함한 해당 항목의 전체 근거 목록입니다. 그 밖의 field({UNREFERENCED_TEXT_FIELDS})에는 근거 목록이 없으므로 보내지 않습니다.'},
 }, ['field', 'old_text', 'new_text'])}
 
 
@@ -116,7 +119,7 @@ def merge_outlook_revision(previous, changes):
             field = edit.get('field') if isinstance(edit, dict) else None
             number = edit.get('item_number') if isinstance(edit, dict) else None
             target = f"field={field}" + (f", item_number={number}" if number is not None else '')
-            raise type(error)(f'text_replacements[{index}] ({target}): {error}') from None
+            raise type(error)(f'text_replacements {index}번째 치환({target}): {error}') from None
     return result
 
 
