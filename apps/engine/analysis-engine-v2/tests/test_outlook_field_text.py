@@ -2,6 +2,7 @@
 from copy import deepcopy
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from edge_analysis_v2.agent.output_schema import merge_outlook_revision
 
@@ -47,7 +48,9 @@ def test_same_scalar_submission_conflicts_but_sibling_does_not():
 
 
 @pytest.mark.parametrize('change', [edit(item_number=True), edit(item_number=0), edit(item_number=3), edit(field='outlook.direction'),
-    edit(old_text='없는 원문'), edit(tool_run_ids=[]), {key: value for key, value in edit().items() if key != 'tool_run_ids'}])
+    edit(old_text='없는 원문'), edit(tool_run_ids=[]), {key: value for key, value in edit().items() if key != 'tool_run_ids'},
+    # The answer schema no longer checks citation lists; the merge is the gate for a cited field.
+    edit(tool_run_ids=['old', 'old']), edit(tool_run_ids=['']), edit(tool_run_ids='old')])
 def test_invalid_target_or_missing_evidence_rejected(change):
     with pytest.raises(ValueError):
         merge_outlook_revision(previous(), {'text_replacements': [change]})
@@ -60,16 +63,45 @@ def test_duplicate_target_and_missing_legacy_target_rejected():
         merge_outlook_revision({}, {'text_replacements': [edit()]})
 
 
-def test_same_items_citation_lists_must_agree_and_nonreferenced_fields_cannot_accept_them():
+def test_same_items_citation_lists_must_agree():
     title = edit(field='issue_detail.items.title_keyword', old_text='실적', new_text='일정', tool_run_ids=['different'])
     with pytest.raises(ValueError, match='Conflicting tool_run_ids'):
         merge_outlook_revision(previous(), {'text_replacements': [edit(), title]})
     title['tool_run_ids'] = edit()['tool_run_ids']
     result = merge_outlook_revision(previous(), {'text_replacements': [edit(), title]})
     assert result['issue_detail']['items'][0]['title_keyword'] == '일정 발표'
-    with pytest.raises(ValueError, match='does not have tool_run_ids'):
+
+
+def test_evidence_sent_with_an_uncited_field_is_dropped_instead_of_failing_the_outlook():
+    # deepseek-flash attached citations to summary, factor and conclusion sentences in 47 of 58 failed runs
+    # (10-28..11-06). Those fields store no citation list, so the edit is applied and the list goes nowhere.
+    base = previous()
+    result = merge_outlook_revision(base, {'text_replacements': [
+        {'field': 'summary_card.summary', 'old_text': '예정', 'new_text': '확정', 'tool_run_ids': ['f9']}]})
+    assert result['summary_card'] == {'title': '기존 제목', 'summary': '확정이에요.'}
+    assert result['issue_detail'] == base['issue_detail']
+    assert 'f9' not in str(result)
+
+
+def test_every_uncited_field_is_named_where_the_model_reads_the_rule():
+    # "제목" alone also reads as an issue title, which does need evidence; the rule names fields exactly.
+    from edge_analysis_v2.agent.output_schema import FIELD_TEXT_PATHS, OUTLOOK_REVISION, REFERENCED_TEXT_FIELDS
+    edit_schema = OUTLOOK_REVISION['properties']['text_replacements']['items']['properties']['tool_run_ids']
+    uncited = {'summary_card.title', 'summary_card.summary', 'factors.sentence', 'conclusion.title', 'conclusion.sentence',
+               'conclusion.change_condition', 'issue_detail.headline'}
+    assert set(FIELD_TEXT_PATHS) - REFERENCED_TEXT_FIELDS == uncited
+    assert all(field in edit_schema['description'] for field in uncited)
+    # Whatever is sent with an uncited field is dropped by the merge, so the answer schema must not refuse it.
+    for dropped in ([], ['f3', 'f3'], 'f3', None):
+        Draft202012Validator(edit_schema).validate(dropped)
+
+
+def test_refusal_names_the_replacement_and_its_target():
+    # The model repairs from the message alone; a bare refusal was read as "evidence is missing" and repeated.
+    missing = {key: value for key, value in edit().items() if key != 'tool_run_ids'}
+    with pytest.raises(ValueError, match=r'^text_replacements 2번째 치환\(field=issue_detail\.items\.sentence, item_number=1\): Referenced'):
         merge_outlook_revision(previous(), {'text_replacements': [
-            {'field': 'summary_card.summary', 'old_text': '예정', 'new_text': '확정', 'tool_run_ids': ['run']}]})
+            {'field': 'summary_card.title', 'old_text': '기존', 'new_text': '새'}, missing]})
 
 
 def test_keyword_and_factor_text_are_editable_but_labels_and_sentiment_are_not():
