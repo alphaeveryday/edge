@@ -92,12 +92,15 @@ FIELD_TEXT_PATHS = {
 }
 REFERENCED_TEXT_FIELDS = {field for field in FIELD_TEXT_PATHS
                           if field.startswith(('conclusion.supports.', 'conclusion.burdens.', 'issue_detail.items.'))}
+UNCITED_FIELDS_TEXT = ', '.join(field for field in FIELD_TEXT_PATHS if field not in REFERENCED_TEXT_FIELDS)
 OUTLOOK_REVISION = _optional_object(OUTLOOK)
 OUTLOOK_REVISION['properties']['text_replacements'] = {'type': 'array', 'minItems': 1, 'items': obj({
     'field': {'type': 'string', 'enum': list(FIELD_TEXT_PATHS)},
     'item_number': {'type': 'integer', 'minimum': 1, 'description': '배열의 기존 항목 번호. 1부터 시작하며 배열 필드에만 필요합니다.'},
     'old_text': TEXT, 'new_text': {'type': 'string'},
-    'tool_run_ids': REFS | {'description': '이슈 항목·결론 키워드 치환에 필수. 유지할 유효한 기존 근거와 새 근거를 모두 포함한 해당 항목의 전체 근거 목록입니다.'},
+    # Loose: what is sent with an uncited field is dropped by the merge, so its shape must not fail the answer.
+    # The merge checks the list of a cited field.
+    'tool_run_ids': {'type': ['array', 'string', 'null'], 'items': {'type': 'string'}, 'description': f'이슈 항목(issue_detail.items.*)·결론 키워드(conclusion.supports.label, conclusion.burdens.label) 치환에만 보내며 그때는 필수입니다. 유지할 유효한 기존 근거와 새 근거를 모두 포함한 해당 항목의 전체 근거 목록입니다. 그 밖의 field({UNCITED_FIELDS_TEXT})에는 근거 목록이 없으므로 보내지 않습니다.'},
 }, ['field', 'old_text', 'new_text'])}
 
 
@@ -113,50 +116,61 @@ def merge_outlook_revision(previous, changes):
     if not isinstance(edits, list) or ('text_replacements' in changes and not edits):
         raise ValueError('text_replacements requires a nonempty list')
     targets, reference_updates = set(), {}
-    for edit in edits:
-        if not isinstance(edit, dict) or not isinstance(edit.get('field'), str) or edit['field'] not in FIELD_TEXT_PATHS:
-            raise ValueError('Unknown text replacement field')
-        field = edit['field']
-        path = FIELD_TEXT_PATHS[field]
-        number = edit.get('item_number')
-        if None in path:
-            if type(number) is not int or number < 1:
-                raise ValueError('Array text replacement requires a positive item_number')
-            path = tuple(number - 1 if part is None else part for part in path)
-        elif 'item_number' in edit:
-            raise ValueError('item_number is only allowed for array fields')
-        if path in targets:
-            raise ValueError('Duplicate text replacement target')
-        targets.add(path)
-        submitted = changes
-        for part in path:
-            if not isinstance(submitted, dict):
-                raise ValueError('Text replacement conflicts with submitted parent array or value')
-            if part not in submitted:
-                break
-            submitted = submitted[part]
-        else:
-            raise ValueError('Text replacement conflicts with submitted field')
-        source, destination = previous, result
+    for index, edit in enumerate(edits, 1):
         try:
-            for part in path[:-1]:
-                source, destination = source[part], destination[part]
-            original = source[path[-1]]
-        except (KeyError, IndexError, TypeError):
-            raise ValueError('Text replacement requires an existing field') from None
-        destination[path[-1]] = replace_exact(original, edit.get('old_text'), edit.get('new_text'))
-        if field in REFERENCED_TEXT_FIELDS:
-            refs = edit.get('tool_run_ids')
-            if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) or not ref for ref in refs) or len(set(refs)) != len(refs):
-                raise ValueError('Referenced text replacement requires unique nonempty tool_run_ids')
-            parent = path[:-1]
-            if parent in reference_updates and reference_updates[parent] != refs:
-                raise ValueError('Conflicting tool_run_ids for the same item')
-            reference_updates[parent] = refs
-            destination['tool_run_ids'] = deepcopy(refs)
-        elif 'tool_run_ids' in edit:
-            raise ValueError('This text field does not have tool_run_ids')
+            _apply_text_replacement(previous, changes, result, edit, targets, reference_updates)
+        except ValueError as error:
+            # The model repairs from this text alone; without the target it reads a refusal as missing evidence.
+            field = edit.get('field') if isinstance(edit, dict) else None
+            number = edit.get('item_number') if isinstance(edit, dict) else None
+            target = f"field={field}" + (f", item_number={number}" if number is not None else '')
+            raise type(error)(f'text_replacements {index}번째 치환({target}): {error}') from None
     return result
+
+
+def _apply_text_replacement(previous, changes, result, edit, targets, reference_updates):
+    if not isinstance(edit, dict) or not isinstance(edit.get('field'), str) or edit['field'] not in FIELD_TEXT_PATHS:
+        raise ValueError('Unknown text replacement field')
+    field = edit['field']
+    path = FIELD_TEXT_PATHS[field]
+    number = edit.get('item_number')
+    if None in path:
+        if type(number) is not int or number < 1:
+            raise ValueError('Array text replacement requires a positive item_number')
+        path = tuple(number - 1 if part is None else part for part in path)
+    elif 'item_number' in edit:
+        raise ValueError('item_number is only allowed for array fields')
+    if path in targets:
+        raise ValueError('Duplicate text replacement target')
+    targets.add(path)
+    submitted = changes
+    for part in path:
+        if not isinstance(submitted, dict):
+            raise ValueError('Text replacement conflicts with submitted parent array or value')
+        if part not in submitted:
+            break
+        submitted = submitted[part]
+    else:
+        raise ValueError('Text replacement conflicts with submitted field')
+    source, destination = previous, result
+    try:
+        for part in path[:-1]:
+            source, destination = source[part], destination[part]
+        original = source[path[-1]]
+    except (KeyError, IndexError, TypeError):
+        raise ValueError('Text replacement requires an existing field') from None
+    destination[path[-1]] = replace_exact(original, edit.get('old_text'), edit.get('new_text'))
+    if field in REFERENCED_TEXT_FIELDS:
+        refs = edit.get('tool_run_ids')
+        if not isinstance(refs, list) or not refs or any(not isinstance(ref, str) or not ref for ref in refs) or len(set(refs)) != len(refs):
+            raise ValueError('Referenced text replacement requires unique nonempty tool_run_ids')
+        parent = path[:-1]
+        if parent in reference_updates and reference_updates[parent] != refs:
+            raise ValueError('Conflicting tool_run_ids for the same item')
+        reference_updates[parent] = refs
+        destination['tool_run_ids'] = deepcopy(refs)
+    # Other fields store no citation list, so evidence sent with them changes nothing and is dropped
+    # (47 of 58 failures 10-28..11-06 were refusals of such lists).
 
 
 EDIT_SCHEMAS = [
