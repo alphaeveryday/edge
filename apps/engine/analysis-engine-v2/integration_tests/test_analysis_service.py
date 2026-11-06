@@ -336,6 +336,34 @@ def test_movement_revision_does_not_receive_first_publication_selection_rules(ru
     request('movement', first, tomorrow)
 
 
+def test_movement_revision_keeps_the_previous_publication_only_on_an_explicit_keep(run_context):
+    # 0167A0 11-06 12:29 judged "nothing changed, keep four items", sent the four ids with a null summary and
+    # failed at publication with no repair. Keep is now a named decision and the shape is checked before return.
+    from copy import deepcopy
+    from datetime import datetime, timedelta
+    request, _ = run_context
+    fixture = make_fixture()
+    async def first(**kwargs):
+        assert 'decision' not in kwargs['output_schema']['properties']
+        reference = news_reference(kwargs)
+        return {'new_items': [dict(candidate_id='kept', type='이슈', title_keyword='공급 계약',
+            sentence='공급 물량을 확보했어요.', sentiment='positive', tool_run_ids=[reference])],
+            'selected_item_ids': ['kept'], 'summary': '공급 물량을 확보했어요.'}
+    before, parent = request('movement', first, fixture, previous_analysis_id=None)
+    later = deepcopy(fixture)
+    later['context']['analysis_at'] = (datetime.fromisoformat(fixture['context']['analysis_at']) + timedelta(minutes=1)).isoformat()
+    async def keep(**kwargs):
+        assert 'decision' in kwargs['output_schema']['required']
+        ids = kwargs['initial']['previous_selected_item_ids']
+        problem = kwargs['final_check']({'decision': 'keep', 'new_items': [], 'selected_item_ids': ids, 'summary': None})
+        assert 'decision=keep requires empty' in problem
+        final = {'decision': 'keep', 'new_items': [], 'selected_item_ids': [], 'summary': None}
+        assert kwargs['final_check'](final) is None
+        return final
+    after, _ = request('movement', keep, later, previous_analysis_id=parent)
+    assert after == before
+
+
 def test_movement_revision_distinguishes_published_order_from_retired_candidates(run_context):
     from copy import deepcopy
     from datetime import datetime, timedelta
