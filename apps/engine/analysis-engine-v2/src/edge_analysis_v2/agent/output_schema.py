@@ -92,7 +92,7 @@ OUTLOOK_REVISION['properties']['text_replacements'] = {'type': 'array', 'minItem
     'field': {'type': 'string', 'enum': list(FIELD_TEXT_PATHS)},
     'item_number': {'type': 'integer', 'minimum': 1, 'description': '배열의 기존 항목 번호. 1부터 시작하며 배열 필드에만 필요합니다.'},
     'old_text': TEXT, 'new_text': {'type': 'string'},
-    'tool_run_ids': REFS | {'description': '이슈 항목(issue_detail.items.*)·결론 키워드(conclusion.supports.label, conclusion.burdens.label) 치환에만 보내며 그때는 필수입니다. 유지할 유효한 기존 근거와 새 근거를 모두 포함한 해당 항목의 전체 근거 목록입니다. 요약 카드·요인·결론 문장·제목·헤드라인에는 근거 목록이 없으므로 보내지 않습니다.'},
+    'tool_run_ids': REFS | {'description': '이슈 항목(issue_detail.items.*)·결론 키워드(conclusion.supports.label, conclusion.burdens.label) 치환에만 보내며 그때는 필수입니다. 유지할 유효한 기존 근거와 새 근거를 모두 포함한 해당 항목의 전체 근거 목록입니다. 그 밖의 field(summary_card.title, summary_card.summary, factors.sentence, conclusion.title, conclusion.sentence, conclusion.change_condition, issue_detail.headline)에는 근거 목록이 없으므로 보내지 않습니다.'},
 }, ['field', 'old_text', 'new_text'])}
 
 

@@ -60,7 +60,7 @@ def test_duplicate_target_and_missing_legacy_target_rejected():
         merge_outlook_revision({}, {'text_replacements': [edit()]})
 
 
-def test_same_items_citation_lists_must_agree_and_nonreferenced_fields_cannot_accept_them():
+def test_same_items_citation_lists_must_agree():
     title = edit(field='issue_detail.items.title_keyword', old_text='실적', new_text='일정', tool_run_ids=['different'])
     with pytest.raises(ValueError, match='Conflicting tool_run_ids'):
         merge_outlook_revision(previous(), {'text_replacements': [edit(), title]})
@@ -78,6 +78,14 @@ def test_evidence_sent_with_an_uncited_field_is_dropped_instead_of_failing_the_o
     assert result['summary_card'] == {'title': '기존 제목', 'summary': '확정이에요.'}
     assert result['issue_detail'] == base['issue_detail']
     assert 'f9' not in str(result)
+
+
+def test_every_uncited_field_is_named_where_the_model_reads_the_rule():
+    # "제목" alone also reads as an issue title, which does need evidence; the rule names fields exactly.
+    from edge_analysis_v2.agent.output_schema import FIELD_TEXT_PATHS, OUTLOOK_REVISION, REFERENCED_TEXT_FIELDS
+    rule = OUTLOOK_REVISION['properties']['text_replacements']['items']['properties']['tool_run_ids']['description']
+    uncited = set(FIELD_TEXT_PATHS) - REFERENCED_TEXT_FIELDS
+    assert uncited and all(field in rule for field in uncited)
 
 
 def test_refusal_names_the_replacement_and_its_target():
