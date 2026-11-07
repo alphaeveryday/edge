@@ -58,6 +58,8 @@ def initialize(db):
         PRIMARY KEY(owner,day))''')
     db.execute('''CREATE TABLE IF NOT EXISTS portfolio_dashboard_prices (
         instrument text PRIMARY KEY, day date NOT NULL, payload jsonb NOT NULL)''')
+    from . import price_ledger
+    price_ledger.initialize(db)
 
 
 def tracking(owner):
@@ -104,7 +106,8 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
     observed_on = last_close(record)[1]
     if collector_lease is not None and not db.execute('SELECT 1 FROM portfolio_quote_refresh WHERE instrument=%s AND lease_until=%s FOR UPDATE', (key, collector_lease)).fetchone():
         return False
-    # Each fetch is a whole window (a year, or from the oldest holding): it replaces the stored record, never merges.
+    # Each fetch is a whole window (a year, or from the oldest holding): it replaces the stored record, never merges
+    # (price_ledger keeps the days it drops).
     db.execute('SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))', ('portfolio-price:' + key,))
     # A split announced for a coming session stays flagged even if a later response omits it (the split is unproven
     # until its session closes); only this list is read from the stored record.
@@ -125,6 +128,15 @@ def publish_prices(db, key, end, record, *, collector_lease=None):
             AND (coalesce(excluded.payload->>'provider','') NOT LIKE 'FinanceDataReader:NAVER:%%'
                 OR coalesce(portfolio_dashboard_prices.payload->>'provider','') LIKE 'FinanceDataReader:NAVER:%%')
         RETURNING instrument''', (key, end, serialize(record))).fetchone()
+    if updated:
+        # The record above keeps only its window; the ledger keeps every day it has seen. A ledger failure must
+        # not withhold current prices, so it runs in a savepoint and only its own rows are lost.
+        from . import price_ledger
+        try:
+            with db.transaction():
+                price_ledger.record(db, key, record)
+        except Exception as error:
+            log.warning('price ledger instrument=%s failure=%s', key, type(error).__name__)
     return bool(updated)
 
 
