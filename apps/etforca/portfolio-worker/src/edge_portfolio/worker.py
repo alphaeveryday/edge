@@ -99,7 +99,9 @@ async def work_once(stopping=None):
     checkpoint_writer = asyncio.create_task(write_checkpoints())
     try:
         if job["kind"] == "chat":
-            store.stage(job["id"], "question")  # 질문도 질문 해석부터 네 단계를 다시 돈다. 화면이 이 값으로 단계를 보여 준다.
+            question_mode = job['input'].get('mode', 'question') == 'question'
+            # 추가 질문은 저장된 보고서로 바로 답할 수 있는지부터 본다('light'). 다시 분석하면 question 부터 네 단계로 바뀐다. 화면이 이 값으로 단계를 보여 준다.
+            store.stage(job["id"], "light" if question_mode else "question")
             parent = store.read(job["parent_id"], job["owner"])
             saved = parent.get('result') or {}
             report = saved.get('partial_report', {}) if parent['state'] == 'failed' else saved
@@ -111,10 +113,10 @@ async def work_once(stopping=None):
                                 if ((row['result'].get('revision') or {}).get('recommendation') or {}).get('allocations') else {})}
                             for row in store.chats(job['parent_id'], job['owner'])
                             if row['state'] == 'succeeded' and row['created_at'] < job['created_at']
-                            ] if job['input'].get('mode', 'question') == 'question' else []
+                            ] if question_mode else []
             result = await answer_question(job["input"]["question"], report, os.environ["DEEPSEEK_API_KEY"],
                 on_stage=lambda role: store.stage(job['id'], role), on_event=on_event,
-                on_checkpoint=on_checkpoint, revision_id=job['id'], conversation=conversation)
+                on_checkpoint=on_checkpoint, revision_id=job['id'], conversation=conversation, light=question_mode)
         else:
             result = await run_analysis(AnalysisInput.model_validate(job["input"], context={'persisted_input': True}), os.environ["DEEPSEEK_API_KEY"],
                                         lambda role: store.stage(job["id"], role), on_event=on_event, on_checkpoint=on_checkpoint)
