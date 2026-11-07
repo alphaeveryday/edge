@@ -3,17 +3,36 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { Catalog, Instrument } from './api';
 import { trackAction } from './analytics';
 
+// 한글을 자판에서 치는 낱자로 푼다('삼' → ㅅㅏㅁ, '젅' → ㅈㅓㄴㅈ). 조합 중인 입력칸 값('삼ㅅ', '현댗')도 낱자로는 완성된 이름의 앞부분이다.
+const LEAD = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ', VOWEL = 'ㅏㅐㅑㅒㅓㅔㅕㅖㅗㅘㅙㅚㅛㅜㅝㅞㅟㅠㅡㅢㅣ', TAIL = ' ㄱㄲㄳㄴㄵㄶㄷㄹㄺㄻㄼㄽㄾㄿㅀㅁㅂㅄㅅㅆㅇㅈㅊㅋㅌㅍㅎ';
+const SPLIT: Record<string, string> = { ㅘ: 'ㅗㅏ', ㅙ: 'ㅗㅐ', ㅚ: 'ㅗㅣ', ㅝ: 'ㅜㅓ', ㅞ: 'ㅜㅔ', ㅟ: 'ㅜㅣ', ㅢ: 'ㅡㅣ', ㄳ: 'ㄱㅅ', ㄵ: 'ㄴㅈ', ㄶ: 'ㄴㅎ', ㄺ: 'ㄹㄱ', ㄻ: 'ㄹㅁ', ㄼ: 'ㄹㅂ', ㄽ: 'ㄹㅅ', ㄾ: 'ㄹㅌ', ㄿ: 'ㄹㅍ', ㅀ: 'ㄹㅎ', ㅄ: 'ㅂㅅ' };
+const split = (jamo: string) => SPLIT[jamo] ?? jamo.trim();
+function keystrokes(text: string) {
+  return [...text].map(ch => {
+    const c = ch.charCodeAt(0) - 0xac00;
+    return c >= 0 && c < 11172 ? LEAD[Math.floor(c / 588)] + split(VOWEL[Math.floor(c % 588 / 28)]) + split(TAIL[c % 28]) : split(ch);
+  }).join('');
+}
+const norm = (text: string) => text.toLocaleUpperCase().replace(/\s/g, '');
+const keyCache = new WeakMap<Instrument, { name: string; all: string }>();
+const keysOf = (r: Instrument) => {
+  let k = keyCache.get(r);
+  if (!k) { const name = keystrokes(norm(r.name)); keyCache.set(r, k = { name, all: name + keystrokes(norm(r.ticker + r.code + (r.symbol ?? ''))) }); }
+  return k;
+};
 // 이름·티커·코드 어디에 들어 있어도 찾는다. 순서는 정확히 같은 것 → 이름이 그 글자로 시작하는 것 → 나머지.
 // '삼성전자'를 치면 이름에 삼성전자가 든 ETF 16개보다 삼성전자 주식이 먼저 보여야 한다(8개만 보여 준다).
+// 낱자로 맞춰서 다 치기 전에도 결과가 비지 않는다 — 예전에는 'ㅅ'·'삼ㅅ'에서 0건이 깜빡여 검색 0건 이벤트 절반이 바로 담기로 이어졌다.
 export function matchInstruments(rows: Instrument[], query: string, limit = 20) {
-  const norm = (text: string) => text.toLocaleUpperCase().replace(/\s/g, '');
-  const q = norm(query);
+  const q = norm(query), qk = keystrokes(q);
   const rank = (r: Instrument) => {
     const name = norm(r.name);
     if ([name, r.ticker, r.code, r.symbol].some(value => value != null && norm(value) === q)) return 0;
-    return name.startsWith(q) || norm(r.ticker).startsWith(q) ? 1 : 2;
+    if (name.startsWith(q) || norm(r.ticker).startsWith(q)) return 1;
+    if (norm(r.name + r.ticker + r.code + (r.symbol ?? '')).includes(q)) return 2;
+    return keysOf(r).name.startsWith(qk) ? 3 : 4;  // 낱자로만 맞는 것(조합 중이거나 '삼'에 '사마…')은 글자로 맞는 것 뒤
   };
-  return rows.filter(r => norm(r.name + r.ticker + r.code + (r.symbol ?? '')).includes(q))
+  return rows.filter(r => keysOf(r).all.includes(qk))
     .map(r => ({ r, rank: rank(r) })).sort((a, b) => a.rank - b.rank).map(({ r }) => r).slice(0, limit);
 }
 export const cashInstrument: Instrument = { id: 'CASH:KRW', market: 'CASH', ticker: 'KRW', code: 'KRW', name: '현금', kind: 'cash' };
