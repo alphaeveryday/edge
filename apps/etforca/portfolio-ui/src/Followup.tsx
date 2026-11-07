@@ -1,10 +1,10 @@
 import { Button, TextInput, TextArea } from './design-system/components';
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { request, type Section, type Report } from './api';
+import { request, roles, type Section, type Report } from './api';
 import { ReportView } from './ReportView';
 import { trackAction } from './analytics';
 
-type ChatJob = { id: string; state: string; input?: { question: string }; created_at?: string; started_at?: string | null; result: { answer: Section; revision?: Report; status?: string } | null };
+type ChatJob = { id: string; state: string; stage?: string | null; input?: { question: string }; created_at?: string; started_at?: string | null; result: { answer: Section; revision?: Report; status?: string } | null };
 type Chats = { limit: number; items: ChatJob[] };
 export const waiting = (chat: ChatJob) => chat.state === 'queued' || chat.state === 'running';
 
@@ -135,8 +135,8 @@ export function ChatScreen({ chat }: { chat: Conversation }) {
           {item.input && <Button disabled={blocked} onClick={() => void chat.send(item.input!.question)}>같은 질문 다시 보내기</Button>}
         </div> : <div className="chat-bubble chat-bubble--ai chat-bubble--waiting">
           <span className="chat-dots" aria-hidden="true"><i /><i /><i /></span>
-          <p>계좌 자료와 근거를 다시 확인하며 답을 쓰고 있어요<span aria-hidden="true">{elapsed(item, now)}</span></p>
-          <small>보통 2~5분 걸려요. 분석 결과로 돌아가도 답은 계속 만들어져요.</small>
+          <p>{progress(item)}<span aria-hidden="true">{elapsed(item, now)}</span></p>
+          <small>보통 5분쯤, 길면 9분까지 걸려요. 분석 결과로 돌아가도 답은 계속 만들어져요.</small>
         </div>}
       </div>)}
       {chat.error && <p className="chat-screen__error" role="alert">{chat.error}</p>}
@@ -148,6 +148,14 @@ export function ChatScreen({ chat }: { chat: Conversation }) {
       <Button variant="primary" aria-label="이어서 질문 보내기" disabled={blocked || !draft.trim()}>↑</Button>
     </form>
   </dialog>;
+}
+
+// 추가 질문도 첫 분석과 같은 네 단계를 다시 돈다(2026-11 실측 p50 5분, p90 8.6분). 지금 어느 단계인지 보여 줘야 멈춘 것으로 오해하지 않는다.
+const chatSteps = ['질문을 다시 읽고 있어요', '구성과 금액을 다시 계산하고 있어요', '시장 전망을 다시 확인하고 있어요', '답을 정리하고 있어요'];
+function progress(chat: ChatJob) {
+  if (chat.state === 'queued') return '앞선 분석이 끝나면 바로 시작해요';
+  const step = Math.max(0, roles.indexOf(chat.stage as typeof roles[number]));
+  return `${chatSteps[step]} (${step + 1}/${roles.length})`;
 }
 
 function elapsed(chat: ChatJob, now: number) {

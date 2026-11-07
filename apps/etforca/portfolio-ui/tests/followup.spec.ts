@@ -142,13 +142,13 @@ test('asking opens a chat that keeps the conversation and returns to the same pl
   // 고객은 답을 받고 "그럼 …?" 하고 이어 묻는다. 대화는 한 화면에 쌓이고, 돌아가면 보던 분석 위치 그대로여야 한다.
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(() => localStorage.setItem('edge-portfolio-job', 'parent'));
-  const turns: { id: string; state: string; input: { question: string }; created_at: string; result: unknown }[] = [];
+  const turns: { id: string; state: string; stage?: string; input: { question: string }; created_at: string; result: unknown }[] = [];
   await page.route('**/api/portfolio/**', route => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/session')) return route.fulfill({ json: {} });
     if (path.endsWith('/chats')) return route.fulfill({ json: { limit: 5, items: turns } });
     if (path.endsWith('/chat')) {
-      const turn = { id: `turn-${turns.length}`, state: 'running', input: { question: route.request().postDataJSON().question }, created_at: new Date().toISOString(), result: null };
+      const turn = { id: `turn-${turns.length}`, state: 'queued', input: { question: route.request().postDataJSON().question }, created_at: new Date().toISOString(), result: null };
       turns.push(turn); return route.fulfill({ status: 202, json: turn });
     }
     return route.fulfill({ json: { id: 'parent', state: 'succeeded', result: report } });
@@ -160,7 +160,11 @@ test('asking opens a chat that keeps the conversation and returns to the same pl
   await page.getByRole('button', { name: '질문 보내기' }).click();
   const chat = page.getByRole('dialog', { name: '더 물어보기' });
   await expect(chat.locator('.chat-bubble--me')).toHaveText(['리밸런싱은 어떻게 해요?']);
-  await expect(chat.locator('.chat-bubble--waiting')).toContainText('답을 쓰고 있어요');
+  // 답은 네 단계를 다시 돌아 몇 분 걸린다. 대기열인지, 지금 어느 단계인지 보여야 멈춘 화면으로 보지 않는다.
+  await expect(chat.locator('.chat-bubble--waiting')).toContainText('앞선 분석이 끝나면 바로 시작해요');
+  await expect(chat.locator('.chat-bubble--waiting')).toContainText('보통 5분쯤, 길면 9분까지 걸려요');
+  Object.assign(turns[0], { state: 'running', stage: 'portfolio' });
+  await expect(chat.locator('.chat-bubble--waiting')).toContainText('구성과 금액을 다시 계산하고 있어요 (2/4)', { timeout: 8000 });
   await expect(page.getByLabel('직접 물어보기', { exact: true })).toBeDisabled(); // 결과 화면에서도 답이 끝날 때까지 다음 질문을 막는다
   await expect(chat.getByRole('button', { name: '이어서 질문 보내기' })).toBeDisabled();
   Object.assign(turns[0], { state: 'succeeded', result: { answer: { ...section, paragraphs: ['나스닥100 비중을 30%로 줄여요.'] } } });
