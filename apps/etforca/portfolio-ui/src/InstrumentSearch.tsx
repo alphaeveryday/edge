@@ -3,11 +3,18 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { Catalog, Instrument } from './api';
 import { trackAction } from './analytics';
 
-// 이름·티커·코드 어디에 들어 있어도 찾고, 티커가 정확히 같으면 맨 위로.
+// 이름·티커·코드 어디에 들어 있어도 찾는다. 순서는 정확히 같은 것 → 이름이 그 글자로 시작하는 것 → 나머지.
+// '삼성전자'를 치면 이름에 삼성전자가 든 ETF 16개보다 삼성전자 주식이 먼저 보여야 한다(8개만 보여 준다).
 export function matchInstruments(rows: Instrument[], query: string, limit = 20) {
-  const q = query.toLocaleUpperCase().replace(/\s/g, '');
-  return rows.filter(r => (r.name + r.ticker + r.code + (r.symbol ?? '')).toLocaleUpperCase().replace(/\s/g, '').includes(q))
-    .sort((a, b) => Number(b.ticker === q) - Number(a.ticker === q)).slice(0, limit);
+  const norm = (text: string) => text.toLocaleUpperCase().replace(/\s/g, '');
+  const q = norm(query);
+  const rank = (r: Instrument) => {
+    const name = norm(r.name);
+    if ([name, r.ticker, r.code, r.symbol].some(value => value != null && norm(value) === q)) return 0;
+    return name.startsWith(q) || norm(r.ticker).startsWith(q) ? 1 : 2;
+  };
+  return rows.filter(r => norm(r.name + r.ticker + r.code + (r.symbol ?? '')).includes(q))
+    .map(r => ({ r, rank: rank(r) })).sort((a, b) => a.rank - b.rank).map(({ r }) => r).slice(0, limit);
 }
 export const cashInstrument: Instrument = { id: 'CASH:KRW', market: 'CASH', ticker: 'KRW', code: 'KRW', name: '현금', kind: 'cash' };
 export function InstrumentSearch({ account, catalog, onAdd, onOpen, includeStocks = false }: { account: string; catalog: Catalog | null; onAdd: (item: Instrument) => string | void; onOpen?: () => void; includeStocks?: boolean }) {
