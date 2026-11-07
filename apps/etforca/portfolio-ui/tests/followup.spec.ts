@@ -170,7 +170,7 @@ test('asking opens a chat that keeps the conversation and returns to the same pl
   await expect(waitingBubble).not.toContainText('5분');
   Object.assign(turns[0], { state: 'running', stage: 'portfolio' });
   await expect(waitingBubble).toContainText('구성과 금액을 다시 계산하고 있어요 (2/4)', { timeout: 8000 });
-  await expect(waitingBubble).toContainText('처음부터 다시 분석해서 보통 5분쯤, 길면 9분까지 걸려요');
+  await expect(waitingBubble).toContainText('처음부터 다시 분석해서 보통 5분쯤, 길면 10분까지 걸려요');
   await expect(page.getByLabel('직접 물어보기', { exact: true })).toBeDisabled(); // 결과 화면에서도 답이 끝날 때까지 다음 질문을 막는다
   await expect(chat.getByRole('button', { name: '이어서 질문 보내기' })).toBeDisabled();
   Object.assign(turns[0], { state: 'succeeded', result: { answer: { ...section, paragraphs: ['나스닥100 비중을 30%로 줄여요.'] } } });

@@ -136,7 +136,7 @@ export function ChatScreen({ chat }: { chat: Conversation }) {
         </div> : <div className="chat-bubble chat-bubble--ai chat-bubble--waiting">
           <span className="chat-dots" aria-hidden="true"><i /><i /><i /></span>
           <p>{progress(item)}<span aria-hidden="true">{elapsed(item, now)}</span></p>
-          <small>{rerunning(item) ? '처음부터 다시 분석해서 보통 5분쯤, 길면 9분까지 걸려요. ' : ''}분석 결과로 돌아가도 답은 계속 만들어져요.</small>
+          <small>{rerunning(item) ? '처음부터 다시 분석해서 보통 5분쯤, 길면 10분까지 걸려요. ' : ''}분석 결과로 돌아가도 답은 계속 만들어져요.</small>
         </div>}
       </div>)}
       {chat.error && <p className="chat-screen__error" role="alert">{chat.error}</p>}
