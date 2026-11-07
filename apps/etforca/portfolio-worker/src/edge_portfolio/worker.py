@@ -99,7 +99,7 @@ async def work_once(stopping=None):
     checkpoint_writer = asyncio.create_task(write_checkpoints())
     try:
         if job["kind"] == "chat":
-            store.stage(job["id"], "opinion")
+            store.stage(job["id"], "question")  # 질문도 질문 해석부터 네 단계를 다시 돈다. 화면이 이 값으로 단계를 보여 준다.
             parent = store.read(job["parent_id"], job["owner"])
             saved = parent.get('result') or {}
             report = saved.get('partial_report', {}) if parent['state'] == 'failed' else saved
