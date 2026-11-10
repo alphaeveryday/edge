@@ -4,8 +4,26 @@ import { SectorLogo } from '../components/SectorLogo';
 import type { History } from './history.ts';
 import { etfByCode, type Phase } from './useCallListener.ts';
 
-/** 오른쪽 통화 내역 — 통화 → 종목 구간 → 문장. 버전 2 답변은 질문 바로 아래에 붙는다. */
-export function CallPanel(p: { history: History; phase: Phase; ver: 1 | 2; onPick: (code: string) => void; onClose: () => void }) {
+function mmss(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/**
+ * 통화 내역 — 통화 → 종목 구간 → 문장. 버전 2 답변은 질문 바로 아래에 붙는다.
+ * 넓은 화면에서는 오른쪽 패널, 휴대폰에서는 화면 전체 채팅창(call.css 의 760px 이하 규칙)이다.
+ * hidden 은 휴대폰에서 리포트를 보느라 채팅창을 접은 상태다.
+ */
+export function CallPanel(p: {
+  history: History;
+  phase: Phase;
+  ver: 1 | 2;
+  elapsed: number;
+  hidden: boolean;
+  onPick: (code: string) => void;
+  onStop: () => void;
+  onClose: () => void;
+}) {
   const end = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -16,9 +34,18 @@ export function CallPanel(p: { history: History; phase: Phase; ver: 1 | 2; onPic
 
   const { segments, partial } = p.history;
   return (
-    <section className="call-panel">
+    <section className={`call-panel${p.hidden ? ' chat-hidden' : ''}`}>
       <div className="cp-head">
         <span className="t-label">통화 내역</span>
+        {p.phase === 'live' && (
+          <span className="cp-live">
+            <span className="rec" />
+            통화 중 {mmss(p.elapsed)} · {p.ver === 1 ? '종목 이동' : '답변 추천'}
+            <button type="button" className="cp-stop" onClick={p.onStop}>
+              종료
+            </button>
+          </span>
+        )}
         {p.phase !== 'live' && (
           <button type="button" className="cp-close" onClick={p.onClose} aria-label="통화 내역 닫기">
             ×
@@ -50,6 +77,7 @@ export function CallPanel(p: { history: History; phase: Phase; ver: 1 | 2; onPic
                     <SectorLogo theme={r.theme} size={20} />
                     <b>{r.name}</b>
                     <span>{hhmm(seg.at)}</span>
+                    <em className="cp-open">리포트 보기</em>
                   </button>
                 ) : (
                   seg.sentences.length > 0 && <div className="cp-topic none">종목 언급 전</div>

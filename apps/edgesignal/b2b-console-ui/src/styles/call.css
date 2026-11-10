@@ -37,31 +37,57 @@
 .cp-wait { color: var(--fg-4); }
 .cp-partial { margin: 0 16px; padding: 4px 0 0 42px; font-size: 13px; line-height: 20px; color: var(--fg-4); }
 
-/* ── "이동할까요?" 탭 ── */
-.call-prompt { position: fixed; z-index: 50; top: calc(var(--header-h) + 44px); right: 384px; width: 380px; padding: 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-surface); box-shadow: 0 12px 40px rgba(15, 23, 42, 0.18); animation: prompt-in 0.2s ease-out; }
+/* ── "이동할까요?" 탭 — 통화 중에 한눈에 보이게 크게 띄운다 ── */
+.call-prompt { position: fixed; z-index: 50; top: calc(var(--header-h) + 44px); right: 384px; width: 560px; max-width: calc(100vw - 420px); padding: 24px; border: 2px solid #3182f6; border-radius: 18px; background: var(--bg-surface); box-shadow: 0 20px 60px rgba(15, 23, 42, 0.28); animation: prompt-in 0.2s ease-out; }
 @keyframes prompt-in { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
-.pr-etf { display: flex; align-items: center; gap: 10px; }
+.pr-etf { display: flex; align-items: center; gap: 14px; }
 .pr-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.pr-name b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pr-name span { font-size: 11px; color: var(--fg-4); }
-.pr-q { margin: 14px 0 12px; font-size: 17px; line-height: 24px; font-weight: 700; letter-spacing: -0.02em; }
-.say { margin-bottom: 12px; padding: 12px 14px; border-radius: 10px; background: #f2f6ff; }
-.say-head { margin-bottom: 4px; font-size: 11px; font-weight: 700; color: #1b64da; }
-.say p { margin: 0; min-height: 44px; font-size: 14.5px; line-height: 22px; font-weight: 500; }
+.pr-name b { font-size: 18px; line-height: 24px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pr-name span { font-size: 13px; color: var(--fg-4); }
+.pr-q { margin: 20px 0 16px; font-size: 26px; line-height: 34px; font-weight: 800; letter-spacing: -0.02em; }
+.say { margin-bottom: 16px; padding: 16px 18px; border-radius: 12px; background: #f2f6ff; }
+.say-head { margin-bottom: 6px; font-size: 13px; font-weight: 700; color: #1b64da; }
+.say p { margin: 0; min-height: 56px; font-size: 18px; line-height: 28px; font-weight: 500; }
 .say-wait { color: var(--fg-4); font-weight: 400; }
-.caret { display: inline-block; width: 2px; height: 15px; margin-left: 2px; vertical-align: -2px; background: #1b64da; animation: blink 0.9s steps(1) infinite; }
+.caret { display: inline-block; width: 2px; height: 18px; margin-left: 2px; vertical-align: -3px; background: #1b64da; animation: blink 0.9s steps(1) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
-.pr-actions { display: flex; gap: 8px; }
-.pr-actions button { height: 40px; border: 0; border-radius: 10px; font: inherit; font-size: 14px; font-weight: 700; cursor: pointer; }
+.pr-actions { display: flex; gap: 10px; }
+.pr-actions button { height: 56px; border: 0; border-radius: 12px; font: inherit; font-size: 17px; font-weight: 700; cursor: pointer; }
 .pr-close { flex: 1; background: var(--bg-sunken); color: var(--fg-2); }
-.pr-go { flex: 1; background: #3182f6; color: #fff; }
+.pr-go { flex: 1.4; background: #3182f6; color: #fff; }
 
 @media (max-width: 1100px) {
   .content.with-call { grid-template-columns: 260px 1fr 320px; }
-  .call-prompt { right: 336px; }
+  .call-prompt { right: 336px; max-width: calc(100vw - 360px); }
 }
+/* 넓은 화면 전용 요소 — 휴대폰 채팅창에서만 보인다 */
+.cp-live, .cp-open, .chat-pill { display: none; }
+
+/* ── 휴대폰: 통화 내역 = 화면 전체 채팅창, "이동할까요?" = 아래에서 올라오는 큰 시트 ── */
 @media (max-width: 760px) {
+  header .pill, header .user, .call-live { display: none; }
+  header { padding: 0 12px; }
   .content.with-call { grid-template-columns: 1fr; }
-  .call-panel { max-height: 40vh; border-left: 0; border-top: 1px solid var(--border); }
-  .call-prompt { left: 12px; right: 12px; width: auto; }
+  .call-panel { position: fixed; inset: 0; z-index: 40; border: 0; }
+  .call-panel.chat-hidden { display: none; }
+  .cp-head { height: 56px; padding: 0 12px 0 16px; }
+  .cp-head .t-label { display: none; }
+  .cp-live { display: flex; align-items: center; gap: 8px; width: 100%; font-size: 15px; font-weight: 700; color: #c62828; font-variant-numeric: tabular-nums; }
+  .cp-live .rec { width: 9px; height: 9px; border-radius: 50%; background: #e53935; animation: rec 1.2s ease-in-out infinite; }
+  .cp-stop { margin-left: auto; height: 34px; padding: 0 14px; border: 0; border-radius: 999px; background: #ff3b30; color: #fff; font: inherit; font-size: 14px; font-weight: 700; }
+  .cp-body { padding-bottom: 40vh; }
+  .cp-seg { margin: 8px 12px 12px; padding: 12px; border-radius: 14px; }
+  .cp-topic b { font-size: 16px; }
+  .cp-open { display: inline; margin-left: 6px; font-style: normal; font-size: 13px; font-weight: 700; color: #3182f6; }
+  .cp-time { display: none; }
+  .cp-text { font-size: 17px; line-height: 26px; }
+  .cp-line { padding: 6px 0; }
+  .cp-answer { margin-top: 8px; padding: 12px 14px; border-radius: 14px; font-size: 17px; line-height: 27px; }
+  .cp-answer-head { font-size: 12px; }
+  .cp-partial { padding-left: 0; font-size: 16px; }
+  .chat-pill { display: block; position: fixed; z-index: 45; left: 12px; right: 12px; top: 8px; height: 44px; border: 0; border-radius: 999px; background: #34c759; color: #fff; font: inherit; font-size: 15px; font-weight: 700; box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2); }
+  .call-prompt { top: auto; bottom: 0; left: 0; right: 0; width: auto; max-width: none; padding: 20px 18px max(18px, env(safe-area-inset-bottom)); border-width: 2px 0 0; border-radius: 22px 22px 0 0; animation: sheet-up 0.24s ease-out; }
+  .pr-q { font-size: 23px; line-height: 31px; }
+  .say p { font-size: 17px; line-height: 27px; }
 }
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: none; } }
