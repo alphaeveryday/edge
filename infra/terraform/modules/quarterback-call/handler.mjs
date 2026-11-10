@@ -163,9 +163,10 @@ export function parseRoomEvents(body) {
 }
 
 // 방 저장소 — 배포에선 DynamoDB(ROOMS_TABLE, 키: room + seq). 테스트·로컬 확인은 setRoomStore 로 메모리 저장소를 끼운다.
-// seq 는 서버 시각(µs 단위로 늘린 ms) + 실행 환경 안 순번이라, 한 휴대폰이 차례로 올린 순서가 그대로 남는다.
-let counter = 0;
-const nextSeq = () => Date.now() * 1000 + (counter++ % 1000);
+// seq 는 서버 시각(ms × 1000)이되 실행 환경 안에서 늘 앞 값보다 크게 준다 — 한 묶음이 같은 ms 에 들어와도
+// 올린 순서가 그대로 남는다. 휴대폰은 앞 요청이 끝나야 다음을 보내 실행 환경이 바뀌어도 순서가 지켜진다.
+let lastSeq = 0;
+export const nextSeq = () => (lastSeq = Math.max(lastSeq + 1, Date.now() * 1000));
 
 let roomStore = {
   async append(room, events) {

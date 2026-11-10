@@ -122,3 +122,8 @@ test('방 기록 입력 검사 — 잘못된 종류·긴 글·짧은 방 코드�
   await mod.route(event('/api/call/room/abc', { events: [{ type: 'start' }] }), s);
   assert.equal(s.meta.statusCode, 404);
 });
+
+test('한 묶음이 같은 ms 에 들어와도 순번은 늘 커진다 — 종료가 뒤따르는 조각보다 앞서지 않게', () => {
+  const seqs = Array.from({ length: 2500 }, () => mod.nextSeq());
+  for (let i = 1; i < seqs.length; i++) assert.ok(seqs[i] > seqs[i - 1], `${i}: ${seqs[i - 1]} → ${seqs[i]}`);
+});

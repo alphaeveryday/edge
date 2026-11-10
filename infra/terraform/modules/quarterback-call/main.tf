@@ -4,7 +4,7 @@
 # 키 값은 Terraform 상태에 두지 않는다 — 시크릿은 콘솔·CLI 로 만든 것을 이름으로 읽기만 한다.
 # 함수 URL 은 공개(NONE)다. CloudFront(/api/*)가 오리진 헤더(origin_header_value)를 붙여 보내고, 함수는 그 헤더가
 # 없는 호출(함수 URL·람다 직접 호출)을 거른다. 사이트를 거친 호출을 사람 단위로 막는 장치(요청 수 제한)는 없다 —
-# 동시 실행 5는 동시에 도는 함수 수만 묶고, 발급된 전사 세션 비용은 묶지 못한다.
+# 동시 실행 10은 동시에 도는 함수 수만 묶고, 발급된 전사 세션 비용은 묶지 못한다.
 data "aws_secretsmanager_secret" "openai" { name = var.openai_secret_name }
 data "aws_secretsmanager_secret" "deepseek" { name = var.deepseek_secret_name }
 
@@ -74,7 +74,7 @@ resource "aws_lambda_function" "this" {
   memory_size      = 256
   # 답변 스트리밍은 몇 초면 끝난다(첫 글자 ~2초). CloudFront 오리진 응답 제한(30초)과 맞춘다.
   timeout                        = 30
-  reserved_concurrent_executions = 5
+  reserved_concurrent_executions = 10
   environment {
     variables = {
       OPENAI_SECRET_ID   = data.aws_secretsmanager_secret.openai.arn

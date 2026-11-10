@@ -102,7 +102,9 @@ export function useCallListener(selectedCode: string | null, onCallStart?: () =>
     heard.current = null;
     setHistory((h) => startCall(h, Date.now()));
   };
+  // phaseRef 를 바로 맞춘다 — 한 번에 읽은 [시작, 조각…]에서 조각이 다음 렌더를 기다리다 버려지지 않게.
   const goLive = () => {
+    phaseRef.current = 'live';
     setStartedAt(Date.now());
     setNow(Date.now());
     setPhase('live');
@@ -115,6 +117,7 @@ export function useCallListener(selectedCode: string | null, onCallStart?: () =>
     settle.current = setTimeout(detect, DETECT_SETTLE_MS);
   };
   const endCall = () => {
+    phaseRef.current = 'idle';
     answering.current?.abort();
     clearTimeout(settle.current);
     setHistory((h) => flush(h, Date.now()));
@@ -167,6 +170,9 @@ export function useCallListener(selectedCode: string | null, onCallStart?: () =>
           if (stopped) return;
           after = Math.max(after, e.seq);
           if (e.type === 'start') {
+            // 노트북 마이크로 듣던 중이면 끄고 휴대폰 통화로 넘어간다 — 두 소리가 한 내역에 섞이지 않게.
+            session.current?.stop();
+            session.current = null;
             beginCall();
             goLive();
             onStartRef.current?.();

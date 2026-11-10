@@ -35,13 +35,22 @@ export function PhoneApp({ room }: { room: string }) {
 
   useEffect(() => {
     mounted.current = true;
+    // 화면을 닫거나 다른 앱으로 넘어가 페이지가 내려가면 언마운트가 돌지 않는다 — 종료를 비콘으로 남긴다.
+    const leave = () => {
+      if (!session.current) return;
+      session.current.stop();
+      session.current = null;
+      navigator.sendBeacon(`/api/call/room/${room}`, JSON.stringify({ events: [{ type: 'stop' }] }));
+    };
+    addEventListener('pagehide', leave);
     return () => {
       mounted.current = false;
+      removeEventListener('pagehide', leave);
       session.current?.stop();
       sender.current?.push({ type: 'stop' });
       void sender.current?.close();
     };
-  }, []);
+  }, [room]);
 
   useEffect(() => {
     if (phase !== 'live') return;
@@ -64,7 +73,11 @@ export function PhoneApp({ room }: { room: string }) {
           setHeard((h) => (h + delta).slice(-120));
         },
         onCompleted: () => {},
-        onError: setError,
+        // 전사 연결이 끊기면 통화를 끝내 콘솔이 "통화 중"으로 남지 않게 한다.
+        onError: (message) => {
+          setError(message);
+          if (sender.current === out) void hangUp();
+        },
       });
       if (!mounted.current) return s.stop();
       session.current = s;
@@ -81,13 +94,16 @@ export function PhoneApp({ room }: { room: string }) {
     }
   };
 
+  // 이 통화의 보내기만 닫는다 — 닫는 사이 다시 [통화 시작]을 눌러 생긴 새 보내기를 건드리지 않게.
   const hangUp = async () => {
+    const out = sender.current;
+    sender.current = null;
     session.current?.stop();
     session.current = null;
-    sender.current?.push({ type: 'stop' });
     setPhase('idle');
-    await sender.current?.close();
-    sender.current = null;
+    if (!out) return;
+    out.push({ type: 'stop' });
+    await out.close();
   };
 
   const live = phase === 'live';
