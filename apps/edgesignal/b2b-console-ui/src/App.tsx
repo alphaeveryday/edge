@@ -5,6 +5,10 @@ import { QUEUE, REPORTS } from './data/reports.ts';
 import { DEMO_BASE, MIN, direction, relative, type FeedItem } from './report.ts';
 import { ReportDetail } from './components/ReportDetail';
 import { SectorLogo } from './components/SectorLogo';
+import { CallPanel } from './call/CallPanel';
+import { CallPrompt } from './call/CallPrompt';
+import { latestAnswer } from './call/history.ts';
+import { etfByCode, useCallListener } from './call/useCallListener.ts';
 
 /** 시연 중 새 리포트가 도착하는 간격 */
 const ARRIVAL_MS = 25_000;
@@ -57,17 +61,29 @@ const NAV_NOTICE: Record<string, string> = {
   guide: '고객 안내 기준은 시범 운영 때 함께 정리합니다.',
 };
 
+function mmss(ms: number): string {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+}
+
 export function App() {
   const [items, setItems] = useState<FeedItem[]>(initialItems);
   const [selected, setSelected] = useState(items[0].id);
   const [now, setNow] = useState(clock);
   const queued = useRef(0);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const detailRef = useRef<HTMLElement>(null);
+  // 통화 듣기(ALPHA-1488) — 상담사는 실제 전화로 통화하고, 콘솔이 노트북 마이크로 듣는다.
+  const call = useCallListener(items.find((r) => r.id === selected)?.code ?? null);
+  const [panel, setPanel] = useState(false);
 
   useEffect(() => {
     const arrive = setInterval(() => {
       if (queued.current >= QUEUE.length) return;
       const i = queued.current++;
+      // 통화에서 먼저 열어 목록에 이미 들어온 종목이면 다시 넣지 않는다.
+      if (itemsRef.current.some((x) => x.code === QUEUE[i].code)) return;
       const r: FeedItem = { ...QUEUE[i], id: 'q' + i, recv: clock(), fresh: true, read: false };
       setItems((prev) => [r, ...prev]);
       setNow(clock());
@@ -91,6 +107,23 @@ export function App() {
     setSelected(id);
     setItems((prev) => prev.map((r) => (r.id === id && !r.read ? { ...r, read: true } : r)));
     detailRef.current?.scrollTo({ top: 0 });
+  };
+
+  /** 통화에서 들린 종목 열기 — 아직 도착 전인 리포트(시연 대기열)면 목록 맨 위에 넣고 연다. */
+  const openCode = (code: string) => {
+    const hit = items.find((r) => r.code === code);
+    if (hit) return select(hit.id);
+    const r = etfByCode(code);
+    if (!r) return;
+    const item: FeedItem = { ...r, id: 'c' + code, recv: clock(), read: true, fresh: true };
+    setItems((prev) => [item, ...prev]);
+    setSelected(item.id);
+    detailRef.current?.scrollTo({ top: 0 });
+  };
+
+  const startCall = () => {
+    setPanel(true);
+    call.start();
   };
 
   const unread = items.filter((r) => !r.read).length;
@@ -138,6 +171,32 @@ export function App() {
             <span>수신 정상</span>
             <span style={{ color: 'var(--fg-4)' }}>· 최근 수신 {relative(now, latest)}</span>
           </div>
+          {call.phase === 'live' ? (
+            <div className="call-live">
+              <span className="rec" />
+              <span className="num">통화 중 {mmss(call.elapsed)}</span>
+              <span className="call-ver">버전 {call.ver}</span>
+              <button type="button" className="btn btn-sm" onClick={call.stop}>
+                듣기 종료
+              </button>
+            </div>
+          ) : (
+            <div className="call-start">
+              <div className="seg" role="tablist" aria-label="통화 듣기 버전">
+                {([1, 2] as const).map((v) => (
+                  <button key={v} type="button" role="tab" aria-selected={call.ver === v} className={call.ver === v ? 'on' : ''} onClick={() => call.setVer(v)}>
+                    {v === 1 ? '종목 이동' : '답변 추천'}
+                  </button>
+                ))}
+              </div>
+              <button type="button" className="btn btn-primary btn-sm call-btn" onClick={startCall} disabled={call.phase === 'connecting'}>
+                <svg viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1A17 17 0 0 1 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1z" />
+                </svg>
+                {call.phase === 'connecting' ? '연결 중…' : '통화 듣기'}
+              </button>
+            </div>
+          )}
           <div className="user">
             <div className="avatar">Q</div>
             <span className="user-name">데모 QFA</span>
@@ -154,7 +213,8 @@ export function App() {
             데이터입니다.
           </span>
         </div>
-        <div className="content">
+        {call.error && <div className="call-error">{call.error}</div>}
+        <div className={`content${panel ? ' with-call' : ''}`}>
           <section className="feed">
             <div className="feed-list">
               {items.map((r) => (
@@ -174,8 +234,22 @@ export function App() {
           <section className="detail" ref={detailRef}>
             {report && <ReportDetail key={report.id} report={report} />}
           </section>
+          {panel && <CallPanel history={call.history} phase={call.phase} ver={call.ver} onPick={openCode} onClose={() => setPanel(false)} />}
         </div>
       </div>
+      {call.card && call.phase === 'live' && (
+        <CallPrompt
+          key={call.card}
+          report={etfByCode(call.card)!}
+          ver={call.ver}
+          answer={latestAnswer(call.history, call.card)}
+          onGo={() => {
+            const code = call.go();
+            if (code) openCode(code);
+          }}
+          onDismiss={call.dismiss}
+        />
+      )}
       <Toaster />
     </div>
   );
