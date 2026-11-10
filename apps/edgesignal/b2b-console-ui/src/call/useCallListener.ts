@@ -4,6 +4,7 @@ import type { QueuedReport } from '../report.ts';
 import { EMPTY, addText, flush, pendingQuestion, setAnswer, startCall, type History } from './history.ts';
 import { findEtf, transcribeKeywords } from './keywords.ts';
 import { startTranscription, type TranscriptSession } from './realtime.ts';
+import { readRoom } from './room.ts';
 import { streamSuggestion } from './suggest.ts';
 
 // 콘솔이 노트북 마이크로 상담사의 전화 통화를 듣는다. 상담사는 실제 전화로 통화하고, 이 훅은
@@ -32,7 +33,14 @@ function callText(h: History): string {
   return [...said, h.partial].join(' ').slice(-SUGGEST_CONTEXT);
 }
 
-export function useCallListener(selectedCode: string | null) {
+/** 휴대폰 방을 읽는 간격 — 휴대폰은 0.3초마다 올린다 */
+const ROOM_POLL_MS = 600;
+
+/**
+ * selectedCode: 지금 열린 리포트(그 종목은 탭을 안 띄운다).
+ * onCallStart: 휴대폰에서 통화가 시작돼 콘솔이 듣기 시작할 때(화면이 통화 내역을 연다).
+ */
+export function useCallListener(selectedCode: string | null, onCallStart?: () => void) {
   const [ver, setVer] = useState<1 | 2>(1);
   const [phase, setPhase] = useState<Phase>('idle');
   const [error, setError] = useState('');
@@ -41,6 +49,12 @@ export function useCallListener(selectedCode: string | null) {
   const [history, setHistory] = useState<History>(EMPTY);
   const [card, setCard] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
+  /** 연결된 휴대폰 방 — 있으면 이 콘솔은 노트북 마이크 대신 휴대폰이 보낸 말을 듣는다(ALPHA-1490) */
+  const [room, setRoom] = useState<string | null>(null);
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
+  const onStartRef = useRef(onCallStart);
+  onStartRef.current = onCallStart;
 
   const session = useRef<TranscriptSession | null>(null);
   /** 최근 전사 꼬리 — 비우지 않고 밀어낸다. 조각이 이름 중간에서 끊겨 와도("K방산&우" | "주는") 이어서 읽는다. */
@@ -79,30 +93,47 @@ export function useCallListener(selectedCode: string | null) {
     setCard(code);
   };
 
-  const start = async () => {
-    setPhase('connecting');
+  /** 새 통화 준비 — 탭·닫기·이름 꼬리를 비우고 내역에 통화 구간을 연다. */
+  const beginCall = () => {
     setError('');
     setCard(null);
     setDismissed(false);
     recent.current = '';
     heard.current = null;
     setHistory((h) => startCall(h, Date.now()));
+  };
+  const goLive = () => {
+    setStartedAt(Date.now());
+    setNow(Date.now());
+    setPhase('live');
+  };
+  /** 전사 조각 하나 — 내역에 쌓고, 잠깐 뒤 종목 이름을 찾는다. 노트북 마이크·휴대폰 방 어느 쪽이든 같다. */
+  const hear = (delta: string) => {
+    setHistory((h) => addText(h, delta, Date.now()));
+    recent.current = (recent.current + delta).slice(-RECENT_CHARS);
+    clearTimeout(settle.current);
+    settle.current = setTimeout(detect, DETECT_SETTLE_MS);
+  };
+  const endCall = () => {
+    answering.current?.abort();
+    clearTimeout(settle.current);
+    setHistory((h) => flush(h, Date.now()));
+    setPhase('idle');
+    setCard(null);
+  };
+
+  const start = async () => {
+    setPhase('connecting');
+    beginCall();
     try {
       const s = await startTranscription(KEYWORDS, {
-        onDelta: (_id, delta) => {
-          setHistory((h) => addText(h, delta, Date.now()));
-          recent.current = (recent.current + delta).slice(-RECENT_CHARS);
-          clearTimeout(settle.current);
-          settle.current = setTimeout(detect, DETECT_SETTLE_MS);
-        },
+        onDelta: (_id, delta) => hear(delta),
         onCompleted: () => {},
         onError: (message) => setError(message),
       });
       if (!mounted.current) return s.stop();
       session.current = s;
-      setStartedAt(Date.now());
-      setNow(Date.now());
-      setPhase('live');
+      goLive();
     } catch (err) {
       if (!mounted.current) return;
       // 연결이 안 된 통화는 내역에 빈 구간으로 남기지 않는다.
@@ -118,12 +149,43 @@ export function useCallListener(selectedCode: string | null) {
   const stop = () => {
     session.current?.stop();
     session.current = null;
-    answering.current?.abort();
-    clearTimeout(settle.current);
-    setHistory((h) => flush(h, Date.now()));
-    setPhase('idle');
-    setCard(null);
+    endCall();
   };
+
+  // 휴대폰 방 읽기 — 연결한 뒤에 올라온 것만 순서대로 받아 시작·조각·종료를 그대로 처리한다.
+  useEffect(() => {
+    if (!room) return;
+    let after = Date.now() * 1000;
+    let busy = false;
+    let stopped = false;
+    const poll = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        for (const e of await readRoom(room, after)) {
+          if (stopped) return;
+          after = Math.max(after, e.seq);
+          if (e.type === 'start') {
+            beginCall();
+            goLive();
+            onStartRef.current?.();
+          } else if (e.type === 'delta' && phaseRef.current === 'live') hear(e.text);
+          else if (e.type === 'stop' && phaseRef.current === 'live') endCall();
+        }
+      } catch (err) {
+        setError((err as Error).message);
+      } finally {
+        busy = false;
+      }
+    };
+    const t = setInterval(poll, ROOM_POLL_MS);
+    return () => {
+      stopped = true;
+      clearInterval(t);
+    };
+    // beginCall·hear·endCall 은 ref 와 상태 설정 함수만 쓴다 — 방이 바뀔 때만 다시 건다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [room]);
 
   // 버전 2: 종목이 정해진 구간에서 새 질문이 끝나면 답변을 만든다. 한 번에 하나 — 끝나면 내역이 바뀌어
   // 이 효과가 다시 돌고, 그사이 쌓인 질문 중 가장 최근 것을 고른다. 실패·빈 답변은 리포트 고객 안내 문구로 대신한다.
@@ -167,6 +229,12 @@ export function useCallListener(selectedCode: string | null) {
     card,
     start,
     stop,
+    room,
+    /** 휴대폰 방 연결·해제 — 해제하면 진행 중 통화도 끝낸다 */
+    link: (id: string | null) => {
+      if (!id && phaseRef.current === 'live') endCall();
+      setRoom(id);
+    },
     /** [이동] — 탭을 닫고 그 종목 코드를 돌려준다(목록 선택은 화면이 한다). */
     go: () => {
       const code = card;
