@@ -69,6 +69,7 @@ Raw Event Store, 정책 평가와 게시 상태의 물리 구조는 [온프렘 �
 | tenant-sync-api | JVM | EDGE Cloud 환경 (edge-cloud) | Sync Agent Pull 표면 |
 | super-admin-api | JVM | EDGE Cloud 환경 (edge-cloud) | 플랫폼 운영자 API |
 | super-admin-ui | Node | EDGE Cloud 환경 (edge-cloud) | 플랫폼 운영자 콘솔 |
+| b2b-console-ui | Node | EDGE Cloud 환경 (edge-cloud) | 고객사 제안용 콘솔 데모(b2b.etforca.com, 가상 데이터·API 없음) |
 | sync-agent | JVM | 증권사 Cloud 환경 (edge-onprem) | DMZ의 Cloud Pull과 내부망 무변형 릴레이 |
 | intake | JVM | 증권사 Cloud 환경 (edge-onprem) | 내부망 Raw Event Store 적재 |
 | screening-worker | JVM | 증권사 Cloud 환경 (edge-onprem) | 정책 평가와 상태 분기 |

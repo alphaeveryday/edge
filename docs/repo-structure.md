@@ -21,6 +21,7 @@ edge/
 │   │   ├── tenant-sync-api/  # JVM    · Sync Agent Pull 표면 (cursor delta)
 │   │   ├── super-admin-api/  # JVM    · 운영자용 · cross-tenant · 최고 권한
 │   │   ├── super-admin-ui/   # Node   · 플랫폼 운영자 콘솔 (cross-tenant)
+│   │   ├── b2b-console-ui/   # Node   · 고객사 제안용 콘솔 데모 (b2b.etforca.com, 가상 데이터)
 │   │   ├── tenant-console-ui/  # Node · 테넌트 검수·정책 콘솔
 │   │   ├── tenant-console-api/ # JVM  · 테넌트용 · 읽기/쓰기
 │   │   ├── sync-agent/         # JVM  · DMZ — Cloud pull + 내부망 무변형 릴레이 (ADR-0036·0040)
@@ -61,7 +62,7 @@ JVM은 `settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs
 |---|---|---|
 | JVM | `settings.gradle` | schema · jvm-common · tenant-console-api · tenant-sync-api · publication-api · super-admin-api · sync-agent · intake · screening-worker |
 | JVM (ETF Orca) | `apps/etforca/app-api/settings.gradle` | app-api · batch |
-| Node | `pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · ui-kit |
+| Node | `pnpm-workspace.yaml` | tenant-console-ui · super-admin-ui · b2b-console-ui · ui-kit |
 | Python | `pyproject.toml` | analysis-engine-v2 · db-query · data-pipeline · ontology · truth-agent · truth-research |
 
 ## apps — 배포 단위
@@ -75,6 +76,7 @@ JVM은 `settings.gradle`(Groovy DSL) 단일 멀티모듈 빌드다. 현재 `libs
 | `tenant-console-ui` | Node | **edge-onprem** | 테넌트 검수·정책 콘솔 (증권사 관리 환경 배포, 디자인 v0.2 기준 재구축 — [console-ia](console-ia/tenant-console.md)와의 IA 정렬은 후속). 전 도메인이 tenant-console-api 호출 — UI 자체 mock 레이어 없음 |
 | `super-admin-ui` | Node | **edge-cloud** | 플랫폼 운영자용 콘솔 (**cross-tenant**). 전 도메인이 super-admin-api 호출 — 데이터 경로에 mock 없음. 단 `src/mock/preview.ts` 는 **실 데이터가 0건일 때 화면을 검수하기 위한 미리보기 픽스처**로 별도다(repository 를 대체하지 않는다, ALPHA-738) |
 | `tenant-console-api` | JVM | **edge-onprem** | 테넌트용 API — 검수 표면(Review Queue 목록·승인·반려, 승인=전이+재발행 단일 트랜잭션) + 인증·인가(데모 자체 계정·세션·매 요청 원장 재검증 fail-closed, [permission-matrix](console-ia/permission-matrix.md)) + 사용자 관리(등록·목록·비활성화, 실 DB + 감사 로그 `console_action_log` — ALPHA-119) + 가격 변동 설명(explanations 목록·상세·수신 상태 원장 실조회 — ALPHA-607, 사후 운영 쓰기 — ALPHA-613) + 점검 정책(ALPHA-438)·제공 범위(ALPHA-606). ALPHA-513 의 mock 표면은 도메인별 DB 전환으로 전부 소멸했다 |
+| `b2b-console-ui` | Node | **edge-cloud** (`b2b.etforca.com`, S3·CloudFront) | 고객사 제안용 콘솔 데모(ETF 가격 변동 리포트 콘솔, 첫 화면은 쿼터백자산운용 테넌트 가정). 시연용 가상 데이터를 번들에 담은 정적 화면이고 API 를 부르지 않는다. dev 머지 시 `deploy-b2b-console-ui.yml` 이 `deploy-ui.yml` 로 올린다(ALPHA-1486) |
 | `tenant-sync-api` | JVM | **edge-cloud** | Sync Agent가 Pull하는 Event Bundle 제공 — cursor 기반 delta ([contracts/sync-protocol.md](contracts/sync-protocol.md)). tenant_delivery(outbox) 조회로 번들 조립, mTLS 인가는 후속 |
 | `sync-agent` | JVM | **edge-onprem** | DMZ — tenant-sync-api outbound Pull(mTLS 클라이언트 인증서는 후속), 내부망 무변형 전달. 앱 수준 체크섬 검증은 서명 계약으로 이관([ADR-0040](adr/0040-sync-integrity-mvp-to-signing.md)). DB 접근 없음 ([ADR-0036](adr/0036-sync-agent-intake-topology.md)) |
 | `intake` | JVM | **edge-onprem** | 내부망 — sync-agent 가 릴레이한 번들을 Raw Event Store(`received_bundle`)에 멱등 적재, committed cursor 권위 |

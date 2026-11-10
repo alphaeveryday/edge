@@ -84,6 +84,12 @@ variable "admin_api_domain" {
   default     = "admin-api-dev.edgesignal.dev"
 }
 
+variable "b2b_domain" {
+  description = "B2B 제안용 콘솔 데모(b2b-console-ui) 도메인. etforca.com 영역의 서브도메인."
+  type        = string
+  default     = "b2b.etforca.com"
+}
+
 variable "landing_domain" {
   description = "ETF Orca 랜딩페이지 도메인. 영역 이름과 같은 루트 도메인이다(www 는 서빙하지 않는다)."
   type        = string
