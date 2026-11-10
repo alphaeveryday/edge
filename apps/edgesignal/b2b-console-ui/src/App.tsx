@@ -113,11 +113,14 @@ export function App() {
 
   /** 통화에서 들린 종목 열기 — 아직 도착 전인 리포트(시연 대기열)면 목록 맨 위에 넣고 연다. */
   const openCode = (code: string) => {
-    setChatHidden(true);
     const hit = items.find((r) => r.code === code);
-    if (hit) return select(hit.id);
+    if (hit) {
+      setChatHidden(true);
+      return select(hit.id);
+    }
     const r = etfByCode(code);
     if (!r) return;
+    setChatHidden(true);
     const item: FeedItem = { ...r, id: 'c' + code, recv: clock(), read: true, fresh: true };
     setItems((prev) => [item, ...prev]);
     setSelected(item.id);
@@ -245,14 +248,15 @@ export function App() {
               ver={call.ver}
               elapsed={call.elapsed}
               hidden={chatHidden}
+              error={call.error}
               onPick={openCode}
               onStop={call.stop}
               onClose={() => setPanel(false)}
             />
           )}
-          {panel && chatHidden && (
+          {panel && chatHidden && call.phase === 'live' && (
             <button type="button" className="chat-pill" onClick={() => setChatHidden(false)}>
-              {call.phase === 'live' ? `통화 중 ${mmss(call.elapsed)}` : '통화 내역'} · 채팅 보기
+              통화 중 {mmss(call.elapsed)} · 채팅 보기
             </button>
           )}
         </div>

@@ -20,6 +20,7 @@ export function CallPanel(p: {
   ver: 1 | 2;
   elapsed: number;
   hidden: boolean;
+  error: string;
   onPick: (code: string) => void;
   onStop: () => void;
   onClose: () => void;
@@ -46,7 +47,8 @@ export function CallPanel(p: {
             </button>
           </span>
         )}
-        {p.phase !== 'live' && (
+        {/* 연결 중에 닫으면 휴대폰에서는 종료 버튼이 사라진다 — 듣지 않을 때만 닫을 수 있다. */}
+        {p.phase === 'idle' && (
           <button type="button" className="cp-close" onClick={p.onClose} aria-label="통화 내역 닫기">
             ×
           </button>
@@ -60,6 +62,7 @@ export function CallPanel(p: {
           stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         }}
       >
+        {p.error && <div className="cp-error">{p.error}</div>}
         {segments.length === 0 && <div className="cp-empty">통화를 들으면 여기에 내용이 쌓여요.</div>}
         {segments.map((seg, i) => {
           const r = seg.code ? etfByCode(seg.code) : undefined;
