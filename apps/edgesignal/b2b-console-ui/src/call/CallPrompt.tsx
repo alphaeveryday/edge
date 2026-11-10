@@ -9,12 +9,12 @@ export function CallPrompt(p: { report: QueuedReport; ver: 1 | 2; answer: Senten
   return (
     <div className="call-prompt" role="dialog" aria-label={`${r.name}로 이동할까요?`}>
       <div className="pr-etf">
-        <SectorLogo theme={r.theme} size={32} />
+        <SectorLogo theme={r.theme} size={44} />
         <div className="pr-name">
           <b>{r.name}</b>
           <span>{r.code} · 통화에서 들렸어요</span>
         </div>
-        <Delta direction={direction(r.pct)} pct={Math.abs(r.pct)} style={{ fontSize: 15 }} />
+        <Delta direction={direction(r.pct)} pct={Math.abs(r.pct)} style={{ fontSize: 20 }} />
       </div>
       <div className="pr-q">{r.name}로 이동할까요?</div>
       {p.ver === 2 && (

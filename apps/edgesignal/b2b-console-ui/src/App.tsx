@@ -77,6 +77,8 @@ export function App() {
   // 통화 듣기(ALPHA-1488) — 상담사는 실제 전화로 통화하고, 콘솔이 노트북 마이크로 듣는다.
   const call = useCallListener(items.find((r) => r.id === selected)?.code ?? null);
   const [panel, setPanel] = useState(false);
+  // 휴대폰(좁은 화면)에서는 통화 내역이 화면 전체 채팅창으로 뜬다. 리포트로 이동하면 접고, 위 띠로 다시 연다.
+  const [chatHidden, setChatHidden] = useState(false);
 
   useEffect(() => {
     const arrive = setInterval(() => {
@@ -112,9 +114,13 @@ export function App() {
   /** 통화에서 들린 종목 열기 — 아직 도착 전인 리포트(시연 대기열)면 목록 맨 위에 넣고 연다. */
   const openCode = (code: string) => {
     const hit = items.find((r) => r.code === code);
-    if (hit) return select(hit.id);
+    if (hit) {
+      setChatHidden(true);
+      return select(hit.id);
+    }
     const r = etfByCode(code);
     if (!r) return;
+    setChatHidden(true);
     const item: FeedItem = { ...r, id: 'c' + code, recv: clock(), read: true, fresh: true };
     setItems((prev) => [item, ...prev]);
     setSelected(item.id);
@@ -123,6 +129,7 @@ export function App() {
 
   const startCall = () => {
     setPanel(true);
+    setChatHidden(false);
     call.start();
   };
 
@@ -234,7 +241,24 @@ export function App() {
           <section className="detail" ref={detailRef}>
             {report && <ReportDetail key={report.id} report={report} />}
           </section>
-          {panel && <CallPanel history={call.history} phase={call.phase} ver={call.ver} onPick={openCode} onClose={() => setPanel(false)} />}
+          {panel && (
+            <CallPanel
+              history={call.history}
+              phase={call.phase}
+              ver={call.ver}
+              elapsed={call.elapsed}
+              hidden={chatHidden}
+              error={call.error}
+              onPick={openCode}
+              onStop={call.stop}
+              onClose={() => setPanel(false)}
+            />
+          )}
+          {panel && chatHidden && call.phase === 'live' && (
+            <button type="button" className="chat-pill" onClick={() => setChatHidden(false)}>
+              통화 중 {mmss(call.elapsed)} · 채팅 보기
+            </button>
+          )}
         </div>
       </div>
       {call.card && call.phase === 'live' && (
