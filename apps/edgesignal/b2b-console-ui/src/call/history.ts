@@ -109,9 +109,10 @@ export function currentCode(h: History): string | null {
 // 맞장구·인사처럼 답할 거리가 없는 짧은 말 — 답변 단위에서 뺀다.
 const BACKCHANNEL = /^(네+|넵|예|응|음+|어+|아+|아아|그렇군요|그렇구나|그래요|알겠습니다|알겠어요|감사합니다|고맙습니다|여보세요|좋아요|맞아요|네네)[.?!~,\s]*$/;
 
-/** 답할 거리가 있는 말인지 — 문장부호·띄어쓰기를 뺀 6글자 이상이고 맞장구가 아니다. */
+/** 답할 거리가 있는 말인지 — 맞장구·인사가 아니고, 질문이면 3글자 이상("더 사도 돼요?"), 아니면 6글자 이상. */
 export function meaningful(text: string): boolean {
-  return text.replace(/[\s.?!,~…]/g, '').length >= 6 && !BACKCHANNEL.test(text.trim());
+  const core = text.replace(/[\s.?!,~…]/g, '').length;
+  return !BACKCHANNEL.test(text.trim()) && core >= (/[?？]\s*$/.test(text) ? 3 : 6);
 }
 
 /**

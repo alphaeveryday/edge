@@ -219,8 +219,13 @@ export function useCallListener(selectedCode: string | null, onCallStart?: () =>
     const report = turn.code ? etfByCode(turn.code) : undefined;
     const context = report ? reportContext(report) : marketContext(ETFS);
     const id = turn.sentence.id;
-    // 직전 답변을 함께 넘겨 같은 말을 되풀이하지 않게 한다.
-    const prev = [...historyRef.current.segments].reverse().flatMap((seg) => [...seg.sentences].reverse()).find((x) => x.answer);
+    // 이번 통화의 직전 답변을 함께 넘겨 같은 말을 되풀이하지 않게 한다(지난 고객 답변은 넘기지 않는다).
+    const cur = historyRef.current;
+    const prev = cur.segments
+      .filter((seg) => seg.call === cur.calls)
+      .reverse()
+      .flatMap((seg) => [...seg.sentences].reverse())
+      .find((x) => x.answer);
     const transcript = callText(historyRef.current) + `\n[이번에 답할 고객 말] ${turn.text}` + (prev?.answer ? `\n[직전에 추천한 답변] ${prev.answer}` : '');
     running.current = true;
     setHistory((h) => setAnswer(h, id, { answer: '', answering: true }));

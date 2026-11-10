@@ -61,11 +61,14 @@ test('답변 단위 — 종목이 없어도 답할 말이면 차례가 되고, �
   assert.equal(t2.code, '445290');
   assert.equal(t2.asked, false, '질문이 없으면 화면이 말이 멈추길 기다린다');
   assert.equal(t2.text, '로봇 쪽도 좀 궁금해서요. 요즘 뉴스를 보니까 많이 나오더라고요.', '차례 전체를 한 번에 넘긴다');
+  h = setAnswer(h, t2.sentence.id, { answer: '답', answering: false });
+  h = addText(h, '더 사도 돼요? ', 4);
+  assert.equal(pendingTurn(h)?.sentence.text, '더 사도 돼요?', '짧은 후속 질문도 답한다');
 });
 
 test('맞장구 판정', () => {
   for (const x of ['네.', '아, 그렇군요.', '감사합니다!', '여보세요?', '음...']) assert.equal(meaningful(x), false, x);
-  for (const x of ['수수료는 얼마예요?', '지금 더 사도 괜찮을까요?']) assert.equal(meaningful(x), true, x);
+  for (const x of ['수수료는 얼마예요?', '지금 더 사도 괜찮을까요?', '더 사도 돼요?', '왜 올랐어요?']) assert.equal(meaningful(x), true, x);
 });
 
 test('지난 통화에서 답한 말은 이번 통화 차례에 섞이지 않는다', () => {
