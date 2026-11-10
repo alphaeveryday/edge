@@ -45,7 +45,7 @@ export function useCallListener(selectedCode: string | null) {
   const session = useRef<TranscriptSession | null>(null);
   /** 최근 전사 꼬리 — 비우지 않고 밀어낸다. 조각이 이름 중간에서 끊겨 와도("K방산&우" | "주는") 이어서 읽는다. */
   const recent = useRef('');
-  /** 마지막으로 들린 종목 — 같은 종목이 꼬리에 남아 있는 동안 탭을 다시 띄우지 않는다. */
+  /** 마지막으로 탭을 띄운 종목 — 그 이름이 최근 전사에 남아 있는 동안 다시 띄우지 않는다. */
   const heard = useRef<string | null>(null);
   const settle = useRef<ReturnType<typeof setTimeout>>(undefined);
   const live = useRef({ card, dismissed, selectedCode });
@@ -69,6 +69,8 @@ export function useCallListener(selectedCode: string | null) {
 
   const detect = () => {
     const code = findEtf(recent.current);
+    // 최근 전사에서 이름이 빠지면 같은 종목도 다시 띄울 수 있다 — 이동 후 다른 리포트를 보다가 다시 나오는 경우.
+    if (!code) heard.current = null;
     if (!code || code === heard.current) return;
     const s = live.current;
     if (s.dismissed || code === s.selectedCode) return;
