@@ -4,6 +4,8 @@
 //   POST /api/call/suggest — 고객 발화 + 종목 리포트로 상담사가 할 말을 DeepSeek 로 만들어 글자 단위로 흘려보낸다
 // 응답 스트리밍 모드(RESPONSE_STREAM)로 돈다 — 두 경로 모두 같은 스트림 핸들러를 쓴다.
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? '').split(',').filter(Boolean);
+/** CloudFront 가 붙이는 오리진 헤더 — 값은 Terraform 이 만든다(main.tf origin_header_value). */
+const ORIGIN_HEADER = 'x-qb-origin';
 const TRANSCRIBE_MODEL = 'gpt-live-transcribe';
 const SUGGEST_MODEL = 'deepseek-flash';
 const MAX_KEYWORDS = 80;
@@ -99,7 +101,7 @@ async function suggest(stream, req) {
   const res = await fetch('https://api.deepseek.com/chat/completions', {
     method: 'POST',
     headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: SUGGEST_MODEL, reasoning_effort: 'low', stream: true, max_tokens: 400, messages: suggestMessages(req) }),
+    body: JSON.stringify({ model: SUGGEST_MODEL, reasoning_effort: 'low', stream: true, max_tokens: 800, messages: suggestMessages(req) }),
   });
   if (!res.ok || !res.body) {
     console.error('deepseek 실패', res.status, (await res.text().catch(() => '')).slice(0, 500));
@@ -144,6 +146,9 @@ export function sseContent(line) {
 const ROUTES = { '/api/call/token': [parseTokenRequest, mintToken], '/api/call/suggest': [parseSuggestRequest, suggest] };
 
 export async function route(event, stream) {
+  // CloudFront 를 거치지 않은 호출(함수 URL·람다 직접 호출)은 경로를 알려 주지 않고 거절한다. 값이 비어 있으면 모두 거절.
+  const secret = process.env.ORIGIN_SECRET;
+  if (!secret || event.headers?.[ORIGIN_HEADER] !== secret) return send(stream, 403, { error: 'forbidden' });
   const method = event.requestContext?.http?.method;
   const entry = ROUTES[event.rawPath];
   if (!entry) return send(stream, 404, { error: 'not found' });

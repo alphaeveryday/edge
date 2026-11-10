@@ -1,10 +1,11 @@
-// node --test infra/terraform/modules/quarterback-call/tests/ — 람다 전역(awslambda)과 fetch·시크릿을 가짜로 바꿔 경로를 돈다.
+// node --test infra/terraform/modules/quarterback-call/tests/handler.test.mjs — 람다 전역(awslambda)과 fetch·시크릿을 가짜로 바꿔 경로를 돈다.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
 process.env.ALLOWED_ORIGINS = 'https://quarterback.etforca.com';
 process.env.OPENAI_SECRET_ID = 'openai';
 process.env.DEEPSEEK_SECRET_ID = 'deepseek';
+process.env.ORIGIN_SECRET = 'cf-secret';
 
 // 응답 스트림: 상태·머리와 쓴 글자를 모은다.
 globalThis.awslambda = {
@@ -15,10 +16,10 @@ const stream = () => ({ chunks: [], write(c) { this.chunks.push(c); }, end() { t
 
 const mod = await import('../handler.mjs');
 
-const event = (path, body, origin = 'https://quarterback.etforca.com') => ({
+const event = (path, body, origin = 'https://quarterback.etforca.com', cf = 'cf-secret') => ({
   rawPath: path,
   requestContext: { http: { method: 'POST' } },
-  headers: { origin },
+  headers: { origin, 'x-qb-origin': cf },
   body: JSON.stringify(body),
 });
 
@@ -37,6 +38,14 @@ test('SSE 줄에서 답변 글자만 뽑는다', () => {
   assert.equal(mod.sseContent('data: {"choices":[{"delta":{"reasoning_content":"생각"}}]}'), '');
   assert.equal(mod.sseContent('data: [DONE]'), '');
   assert.equal(mod.sseContent(': keep-alive'), '');
+});
+
+test('CloudFront 를 거치지 않은 호출은 경로·Origin 이 맞아도 거절한다 — 키 비용을 사이트 밖에서 못 쓰게', async () => {
+  for (const cf of [null, '', 'guess']) {
+    const s = stream();
+    await mod.route(event('/api/call/token', { keywords: [] }, 'https://quarterback.etforca.com', cf), s);
+    assert.equal(s.meta.statusCode, 403);
+  }
 });
 
 test('사이트 밖 Origin·없는 경로·GET 은 거절한다', async () => {

@@ -17,7 +17,9 @@ export async function startTranscription(keywords: string[], ev: TranscriptEvent
   // 마이크 권한을 먼저 받는다 — 거절되면 토큰을 만들 이유가 없다.
   const mic = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
   const pc = new RTCPeerConnection();
+  let stopped = false;
   const stop = () => {
+    stopped = true;
     mic.getTracks().forEach((t) => t.stop());
     pc.close();
   };
@@ -38,9 +40,12 @@ export async function startTranscription(keywords: string[], ev: TranscriptEvent
       else if (e.type === 'conversation.item.input_audio_transcription.completed') ev.onCompleted(e.item_id, e.transcript ?? '');
       else if (e.type === 'error') ev.onError(e.error?.message ?? '전사 오류');
     };
+    // 우리가 끊은 게 아닌데 연결·채널이 닫히면(망 끊김, 세션 만료) 화면에 알린다 — 조용히 멈춘 채 통화 중으로 남지 않게.
+    const lost = () => !stopped && ev.onError('전사 연결이 끊겼습니다. 통화를 끊고 다시 시작해 주세요.');
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === 'failed') ev.onError('전사 연결이 끊겼습니다');
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') lost();
     };
+    dc.onclose = lost;
 
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);

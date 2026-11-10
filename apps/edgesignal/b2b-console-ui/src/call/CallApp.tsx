@@ -18,8 +18,11 @@ const byCode = (code: string) => ETFS.find((r) => r.code === code)!;
 const KEYWORDS = transcribeKeywords(ETFS.map((r) => r.name));
 /** 이름이 다 들릴 때까지 잠깐 기다린다 — "K방산"까지만 듣고 "K방산&우주"를 SOL K방산으로 띄우지 않게. */
 const DETECT_SETTLE_MS = 400;
-/** 버전 2: 고객 말이 이만큼 늘면 답변을 다시 만든다 */
-const RESUGGEST_CHARS = 12;
+/**
+ * 버전 2: 새 질문(전사에 "?")이 들리면 답변을 다시 만든다. 글자 수로 다시 만들면 상담사가 추천 답변을
+ * 읽는 소리(마이크가 같이 듣는다)에 답변이 읽는 도중 계속 바뀐다.
+ */
+const askedSince = (text: string, from: number) => text.slice(from).includes('?');
 const CUSTOMER = { name: '김지현 고객님', phone: '010-••••-2847' };
 
 type Phase = 'idle' | 'connecting' | 'live';
@@ -79,7 +82,15 @@ export function CallApp() {
     return () => clearInterval(t);
   }, [phase]);
 
-  useEffect(() => () => session.current?.stop(), []);
+  // 연결 중에 화면을 떠나도 마이크·전사 세션이 남지 않게 — 연결이 늦게 끝나면 start 가 이 값을 보고 바로 끊는다.
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true; // StrictMode 는 마운트→정리→마운트를 한 번 더 돈다
+    return () => {
+      mounted.current = false;
+      session.current?.stop();
+    };
+  }, []);
 
   const detect = () => {
     const code = findEtf(pending.current);
@@ -127,10 +138,15 @@ export function CallApp() {
         },
         onError: (message) => setError(message),
       });
+      if (!mounted.current) {
+        session.current.stop();
+        return;
+      }
       setStartedAt(Date.now());
       setNow(Date.now());
       setPhase('live');
     } catch (err) {
+      if (!mounted.current) return;
       setPhase('idle');
       setError(err instanceof DOMException && err.name === 'NotAllowedError' ? '마이크 권한이 필요합니다.' : String((err as Error).message ?? err));
     }
@@ -275,22 +291,23 @@ function Card(p: {
   const r = p.report;
   const { setSuggestion } = p;
 
-  // 버전 2: 카드가 뜨면 바로 한 번, 이후 고객 말이 늘 때마다 다시 만든다. 한 번에 하나만 돌리고,
-  // 도는 사이 말이 늘었으면 끝난 뒤 이어서 한 번 더 돈다(도중에 끊으면 말하는 내내 아무것도 안 보인다).
+  // 버전 2: 카드가 뜨면 바로 한 번, 이후 고객이 새로 물을 때마다 다시 만든다. 한 번에 하나만 돌리고,
+  // 도는 사이 새 질문이 들렸으면 끝난 뒤 이어서 한 번 더 돈다(도중에 끊으면 말하는 내내 아무것도 안 보인다).
+  // 답변이 비면(생성 실패·빈 응답) 리포트의 고객 안내 문구로 대신한다.
   useEffect(() => {
     if (p.ver !== 2) return;
     const ac = new AbortController();
-    let usedLen = -RESUGGEST_CHARS;
+    let usedLen = -1;
     let running = false;
     const run = async () => {
       const text = p.transcript.current ?? '';
-      if (running || text.length - usedLen < RESUGGEST_CHARS) return;
+      if (running || (usedLen >= 0 && !askedSince(text, usedLen))) return;
       running = true;
       usedLen = text.length;
       setSuggestion((s) => ({ ...s, busy: true, failed: false }));
       try {
-        await streamSuggestion(text.slice(-600), r, (t) => setSuggestion({ text: t, busy: true, failed: false }), ac.signal);
-        setSuggestion((s) => ({ ...s, busy: false }));
+        const out = await streamSuggestion(text.slice(-600), r, (t) => setSuggestion({ text: t, busy: true, failed: false }), ac.signal);
+        setSuggestion((s) => ({ ...s, busy: false, failed: !out.trim() && !s.text }));
       } catch {
         if (!ac.signal.aborted) setSuggestion((s) => ({ ...s, busy: false, failed: !s.text }));
       } finally {
