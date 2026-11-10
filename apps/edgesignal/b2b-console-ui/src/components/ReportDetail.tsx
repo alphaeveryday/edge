@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Delta, deltaClass, toast } from 'ui-kit';
-import { DEMO_DATE, direction, formatPp, hhmm, orderContributions, type FactorDir, type FeedItem } from '../report.ts';
+import { DEMO_DATE, direction, formatPp, orderContributions, type FactorDir, type FeedItem } from '../report.ts';
 import { CandleChart } from './CandleChart';
 import { SectorLogo } from './SectorLogo';
 
@@ -63,7 +63,7 @@ export function ReportDetail({ report: r }: { report: FeedItem }) {
             <span className="top-code">{r.code}</span>
           </div>
           <div className="sub">
-            {DEMO_DATE} {hhmm(r.recv)} 기준 · 전일 종가 대비
+            {DEMO_DATE} 장 마감(15:30) 기준 · 전일 종가 대비
           </div>
         </div>
         <Delta direction={dir} pct={Math.abs(r.pct)} style={{ marginLeft: 'auto', fontSize: 28, lineHeight: '32px' }} />
@@ -129,13 +129,13 @@ export function ReportDetail({ report: r }: { report: FeedItem }) {
           <div className="blk-head">
             <span className="t-label">차트</span>
           </div>
-          <CandleChart code={r.code} pct={r.pct} recv={r.recv} />
+          <CandleChart bars={r.bars} />
         </div>
       </div>
 
       <div className="foot">
         EDGE가 제공하는 가격 변동 설명은 기준시각까지 확인된 사실을 정리한 것이며, 특정 금융투자상품의 매매를 권유하지
-        않습니다. 시연용 데모 화면으로, 표시된 수치·문구는 가상 데이터입니다.
+        않습니다. 시연용 데모 화면으로, 2026-11-10 실제 시장 데이터(종가·10분봉·구성종목·수급 잠정치·공개 기사)로 만들었습니다.
       </div>
     </div>
   );

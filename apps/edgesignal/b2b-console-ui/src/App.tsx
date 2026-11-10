@@ -216,8 +216,8 @@ export function App() {
             <path d="M12 16v-4M12 8h.01" />
           </svg>
           <span>
-            <b>EDGE 제안용 데모</b> — 쿼터백자산운용 테넌트를 가정한 화면입니다. 리포트의 수치·문구는 시연용 가상
-            데이터입니다.
+            <b>EDGE 제안용 데모</b> — 쿼터백자산운용 테넌트를 가정한 화면입니다. 리포트는 2026-11-10 실제 시장 데이터로
+            만들었습니다.
           </span>
         </div>
         {call.error && <div className="call-error">{call.error}</div>}

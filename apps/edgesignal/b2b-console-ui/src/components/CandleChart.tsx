@@ -1,4 +1,4 @@
-import { demoCandles, hhmm } from '../report.ts';
+import type { Candle } from '../report.ts';
 
 const W = 560;
 const H = 190;
@@ -9,9 +9,8 @@ const PB = 22;
 
 const signed = (v: number) => (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(2);
 
-/** 장 시작부터 수신 시각까지의 10분봉(전일 종가 대비 %) — 시연용 생성 데이터. */
-export function CandleChart({ code, pct, recv }: { code: string; pct: number; recv: number }) {
-  const cs = demoCandles(code, pct, recv);
+/** 장 시작부터 종가까지의 10분봉(전일 종가 대비 %) — 마지막 봉은 15:30 종가 단일가. */
+export function CandleChart({ bars: cs }: { bars: Candle[] }) {
   const n = cs.length;
   let lo = Math.min(0, ...cs.map((c) => c.l));
   let hi = Math.max(0, ...cs.map((c) => c.h));
@@ -55,7 +54,7 @@ export function CandleChart({ code, pct, recv }: { code: string; pct: number; re
           09:00
         </text>
         <text x={W - PR} y={H - 6} fontSize="10" fill="var(--fg-4)" textAnchor="end">
-          {hhmm(recv)}
+          15:30
         </text>
       </svg>
       <div className="chart-legend">

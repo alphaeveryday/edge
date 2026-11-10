@@ -29,6 +29,8 @@ export interface QueuedReport {
   title: string;
   groups: FactorGroup[];
   contrib: Contribution[];
+  /** 장 시작부터 종가까지 10분봉(전일 종가 대비 %) — 마지막 봉은 15:30 종가 단일가 */
+  bars: Candle[];
 }
 
 export interface DemoReport extends QueuedReport {
@@ -45,10 +47,8 @@ export interface FeedItem extends QueuedReport {
 }
 
 export const MIN = 60_000;
-/** 데모 기준 시각 2026-11-10 14:20 KST. 화면을 연 뒤 실제 경과 시간만큼 흐른다. */
-export const DEMO_BASE = Date.UTC(2026, 10, 10, 5, 20);
-/** 장 시작 2026-11-10 09:00 KST — 차트 가로축의 시작점. */
-export const SESSION_START = Date.UTC(2026, 10, 10, 0, 0);
+/** 데모 기준 시각 2026-11-10 15:40 KST(장 마감 뒤 — 리포트가 종가 기준이다). 화면을 연 뒤 실제 경과 시간만큼 흐른다. */
+export const DEMO_BASE = Date.UTC(2026, 10, 10, 6, 40);
 export const DEMO_DATE = '2026-11-10';
 
 export function direction(p: number): 1 | -1 | 0 {
@@ -112,37 +112,10 @@ export function sectorKind(theme: string): SectorKind {
   return 'etc';
 }
 
-// ── 10분봉 차트 (시연용 생성) ──
+// ── 10분봉 차트 ──
 export interface Candle {
   o: number;
   c: number;
   h: number;
   l: number;
-}
-
-/**
- * 종목 코드로 시드를 잡아 매번 같은 모양을 그리고, 마지막 종가가 리포트 등락률과 같아지게
- * 경로를 기울인다 — 차트 끝값이 화면 상단의 등락률과 어긋나면 데모가 스스로를 반박한다.
- */
-export function demoCandles(code: string, pct: number, recv: number): Candle[] {
-  let s = 0;
-  for (const ch of code) s = (s * 31 + ch.charCodeAt(0)) % 9973;
-  s = s || 7;
-  const rnd = () => {
-    s = (s * 16807) % 2147483647;
-    return s / 2147483647 - 0.5;
-  };
-  const mins = Math.max(30, Math.floor((recv - SESSION_START) / MIN));
-  const n = Math.min(40, Math.ceil(mins / 10));
-  const path = [0];
-  for (let i = 1; i <= n; i++) path.push(path[i - 1] + rnd() * 0.5);
-  const end = path[n];
-  for (let i = 0; i <= n; i++) path[i] += (pct - end) * (i / n) ** 1.3;
-  const cs: Candle[] = [];
-  for (let i = 0; i < n; i++) {
-    const o = path[i];
-    const c = path[i + 1];
-    cs.push({ o, c, h: Math.max(o, c) + Math.abs(rnd()) * 0.28, l: Math.min(o, c) - Math.abs(rnd()) * 0.28 });
-  }
-  return cs;
 }
