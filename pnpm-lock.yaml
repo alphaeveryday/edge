@@ -10,6 +10,9 @@ importers:
 
   apps/edgesignal/b2b-console-ui:
     dependencies:
+      qrcode-generator:
+        specifier: ^2.0.4
+        version: 2.0.4
       react:
         specifier: ^19.0.0
         version: 19.2.7
@@ -975,6 +978,9 @@ packages:
       preact-render-to-string:
         optional: true
 
+  qrcode-generator@2.0.4:
+    resolution: {integrity: sha512-mZSiP6RnbHl4xL2Ap5HfkjLnmxfKcPWpWe/c+5XxCuetEenqmNFf1FH/ftXPCtFG5/TDobjsjz6sSNL0Sr8Z9g==}
+
   query-selector-shadow-dom@1.0.1:
     resolution: {integrity: sha512-lT5yCqEBgfoMYpf3F2xQRK7zEr1rhIIZuceDK6+xRkJQ4NMbHTwXqk4NkwDwQMNqXgG9r9fyHnzwNVs6zV5KRw==}
 
@@ -1727,6 +1733,8 @@ snapshots:
       - preact-render-to-string
 
   preact@10.29.8: {}
+
+  qrcode-generator@2.0.4: {}
 
   query-selector-shadow-dom@1.0.1: {}
 

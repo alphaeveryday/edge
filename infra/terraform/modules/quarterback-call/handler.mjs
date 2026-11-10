@@ -2,6 +2,8 @@
 // 키는 Secrets Manager 에만 있고 브라우저로 내려가지 않는다. 하는 일은 두 가지뿐이다.
 //   POST /api/call/token   — OpenAI 실시간 전사(gpt-live-transcribe) 임시 토큰(60초) 발급
 //   POST /api/call/suggest — 고객 발화 + 종목 리포트로 상담사가 할 말을 DeepSeek 로 만들어 글자 단위로 흘려보낸다
+//   POST /api/call/room/{방} — 휴대폰 전화 화면이 받아 적은 말(시작·조각·종료)을 방에 쌓는다(ALPHA-1490)
+//   GET  /api/call/room/{방}?after=n — 콘솔이 방에 쌓인 것 중 n 이후를 가져간다
 // 응답 스트리밍 모드(RESPONSE_STREAM)로 돈다 — 두 경로 모두 같은 스트림 핸들러를 쓴다.
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS ?? '').split(',').filter(Boolean);
 /** CloudFront 가 붙이는 오리진 헤더 — 값은 Terraform 이 만든다(main.tf origin_header_value). */
@@ -12,6 +14,13 @@ const MAX_KEYWORDS = 80;
 const MAX_KEYWORD_LEN = 40;
 const MAX_TRANSCRIPT = 1500;
 const MAX_REPORT = 3000;
+/** 방 코드 — 콘솔이 무작위로 만든다. 방을 아는 사람만 그 통화를 읽고 쓴다. */
+const ROOM_RE = /^\/api\/call\/room\/([A-Za-z0-9]{8,32})$/;
+const ROOM_EVENT_TYPES = new Set(['start', 'delta', 'stop']);
+const MAX_ROOM_EVENTS = 50;
+const MAX_ROOM_TEXT = 500;
+/** 방 기록은 하루 뒤 DynamoDB TTL 로 지워진다 */
+const ROOM_TTL_SEC = 24 * 3600;
 
 export const SYSTEM_PROMPT = [
   '너는 자산운용사 상담사(QFA)의 통화 보조다. 상담사는 지금 고객과 전화 중이다.',
@@ -143,6 +152,68 @@ export function sseContent(line) {
   }
 }
 
+export function parseRoomEvents(body) {
+  const events = body?.events;
+  if (!Array.isArray(events) || events.length === 0 || events.length > MAX_ROOM_EVENTS) return 'events 는 1~50개 배열이어야 합니다';
+  for (const e of events) {
+    if (!ROOM_EVENT_TYPES.has(e?.type)) return 'type 은 start·delta·stop 중 하나여야 합니다';
+    if (e.type === 'delta' && (typeof e.text !== 'string' || !e.text || e.text.length > MAX_ROOM_TEXT)) return 'delta 의 text 는 1~500자여야 합니다';
+  }
+  return events.map((e) => (e.type === 'delta' ? { type: 'delta', text: e.text } : { type: e.type }));
+}
+
+// 방 저장소 — 배포에선 DynamoDB(ROOMS_TABLE, 키: room + seq). 테스트·로컬 확인은 setRoomStore 로 메모리 저장소를 끼운다.
+// seq 는 서버 시각(ms × 1000)이되 실행 환경 안에서 늘 앞 값보다 크게 준다 — 한 묶음이 같은 ms 에 들어와도
+// 올린 순서가 그대로 남는다. 휴대폰은 앞 요청이 끝나야 다음을 보내 실행 환경이 바뀌어도 순서가 지켜진다.
+let lastSeq = 0;
+export const nextSeq = () => (lastSeq = Math.max(lastSeq + 1, Date.now() * 1000));
+
+let roomStore = {
+  async append(room, events) {
+    const { DynamoDBClient, BatchWriteItemCommand } = await import('@aws-sdk/client-dynamodb');
+    ddb ??= new DynamoDBClient({});
+    const expires = String(Math.floor(Date.now() / 1000) + ROOM_TTL_SEC);
+    const items = events.map((e) => ({
+      PutRequest: {
+        Item: { room: { S: room }, seq: { N: String(nextSeq()) }, type: { S: e.type }, expires: { N: expires }, ...(e.text ? { text: { S: e.text } } : {}) },
+      },
+    }));
+    for (let i = 0; i < items.length; i += 25) {
+      const out = await ddb.send(new BatchWriteItemCommand({ RequestItems: { [process.env.ROOMS_TABLE]: items.slice(i, i + 25) } }));
+      if (Object.keys(out.UnprocessedItems ?? {}).length) throw new Error('방 기록 일부를 쓰지 못했다');
+    }
+  },
+  async after(room, seq) {
+    const { DynamoDBClient, QueryCommand } = await import('@aws-sdk/client-dynamodb');
+    ddb ??= new DynamoDBClient({});
+    const out = await ddb.send(
+      new QueryCommand({
+        TableName: process.env.ROOMS_TABLE,
+        KeyConditionExpression: 'room = :r AND seq > :s',
+        ExpressionAttributeValues: { ':r': { S: room }, ':s': { N: String(seq) } },
+        ConsistentRead: true,
+        Limit: 200,
+      }),
+    );
+    return (out.Items ?? []).map((it) => ({ seq: Number(it.seq.N), type: it.type.S, ...(it.text ? { text: it.text.S } : {}) }));
+  },
+};
+let ddb;
+export function setRoomStore(store) {
+  roomStore = store;
+}
+
+async function roomAppend(stream, room, events) {
+  await roomStore.append(room, events);
+  return send(stream, 200, { ok: true });
+}
+
+async function roomRead(stream, room, query) {
+  const after = Number(query?.after ?? 0);
+  if (!Number.isFinite(after) || after < 0) return send(stream, 400, { error: 'after 는 0 이상 숫자여야 합니다' });
+  return send(stream, 200, { events: await roomStore.after(room, after) });
+}
+
 const ROUTES = { '/api/call/token': [parseTokenRequest, mintToken], '/api/call/suggest': [parseSuggestRequest, suggest] };
 
 export async function route(event, stream) {
@@ -150,7 +221,10 @@ export async function route(event, stream) {
   const secret = process.env.ORIGIN_SECRET;
   if (!secret || event.headers?.[ORIGIN_HEADER] !== secret) return send(stream, 403, { error: 'forbidden' });
   const method = event.requestContext?.http?.method;
-  const entry = ROUTES[event.rawPath];
+  const room = ROOM_RE.exec(event.rawPath ?? '')?.[1];
+  // 콘솔이 방을 읽는 GET 은 같은 사이트 요청이라 브라우저가 Origin 을 안 붙인다 — 방 코드가 열쇠다.
+  if (room && method === 'GET') return guarded(event, () => roomRead(stream, room, event.queryStringParameters), stream);
+  const entry = room ? [parseRoomEvents, (st, events) => roomAppend(st, room, events)] : ROUTES[event.rawPath];
   if (!entry) return send(stream, 404, { error: 'not found' });
   if (method !== 'POST') return send(stream, 405, { error: 'POST only' });
   // 같은 사이트의 화면에서 온 요청만 받는다(브라우저는 POST 에 Origin 을 붙인다).
@@ -164,8 +238,12 @@ export async function route(event, stream) {
   const [parse, run] = entry;
   const req = parse(body);
   if (typeof req === 'string') return send(stream, 400, { error: req });
+  return guarded(event, () => run(stream, req), stream);
+}
+
+async function guarded(event, fn, stream) {
   try {
-    return await run(stream, req);
+    return await fn();
   } catch (err) {
     console.error(event.rawPath, '실패', err);
     return send(stream, 500, { error: '처리 중 오류가 났습니다' });

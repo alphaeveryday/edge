@@ -9,6 +9,8 @@ import { CallPanel } from './call/CallPanel';
 import { CallPrompt } from './call/CallPrompt';
 import { latestAnswer } from './call/history.ts';
 import { etfByCode, useCallListener } from './call/useCallListener.ts';
+import { PairDialog } from './call/PairDialog';
+import { newRoomId } from './call/room.ts';
 
 /** 시연 중 새 리포트가 도착하는 간격 */
 const ARRIVAL_MS = 25_000;
@@ -75,8 +77,17 @@ export function App() {
   itemsRef.current = items;
   const detailRef = useRef<HTMLElement>(null);
   // 통화 듣기(ALPHA-1488) — 상담사는 실제 전화로 통화하고, 콘솔이 노트북 마이크로 듣는다.
-  const call = useCallListener(items.find((r) => r.id === selected)?.code ?? null);
   const [panel, setPanel] = useState(false);
+  // 휴대폰에서 통화가 시작되면 통화 내역을 연다(휴대폰 연결, ALPHA-1490).
+  const call = useCallListener(items.find((r) => r.id === selected)?.code ?? null, () => {
+    setPanel(true);
+    setChatHidden(false);
+  });
+  const [pairOpen, setPairOpen] = useState(false);
+  const pair = () => {
+    if (!call.room) call.link(newRoomId());
+    setPairOpen(true);
+  };
   // 휴대폰(좁은 화면)에서는 통화 내역이 화면 전체 채팅창으로 뜬다. 리포트로 이동하면 접고, 위 띠로 다시 연다.
   const [chatHidden, setChatHidden] = useState(false);
 
@@ -182,7 +193,7 @@ export function App() {
             <div className="call-live">
               <span className="rec" />
               <span className="num">통화 중 {mmss(call.elapsed)}</span>
-              <span className="call-ver">버전 {call.ver}</span>
+              <span className="call-ver">{call.room ? '휴대폰 · ' : ''}버전 {call.ver}</span>
               <button type="button" className="btn btn-sm" onClick={call.stop}>
                 듣기 종료
               </button>
@@ -196,6 +207,9 @@ export function App() {
                   </button>
                 ))}
               </div>
+              <button type="button" className={`btn btn-sm pair-btn${call.room ? ' on' : ''}`} onClick={pair}>
+                {call.room ? '휴대폰 연결됨' : '휴대폰 연결'}
+              </button>
               <button type="button" className="btn btn-primary btn-sm call-btn" onClick={startCall} disabled={call.phase === 'connecting'}>
                 <svg viewBox="0 0 24 24" fill="currentColor">
                   <path d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2c.3-.3.7-.4 1-.2 1.1.4 2.3.6 3.6.6.6 0 1 .4 1 1V20c0 .6-.4 1-1 1A17 17 0 0 1 3 4c0-.6.4-1 1-1h3.5c.6 0 1 .4 1 1 0 1.3.2 2.5.6 3.6.1.3 0 .7-.2 1z" />
@@ -272,6 +286,16 @@ export function App() {
             if (code) openCode(code);
           }}
           onDismiss={call.dismiss}
+        />
+      )}
+      {pairOpen && call.room && (
+        <PairDialog
+          room={call.room}
+          onClose={() => setPairOpen(false)}
+          onUnlink={() => {
+            call.link(null);
+            setPairOpen(false);
+          }}
         />
       )}
       <Toaster />
