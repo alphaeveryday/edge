@@ -70,16 +70,10 @@ resource "aws_lambda_function_url" "this" {
 }
 
 # 공개 함수 URL 은 InvokeFunctionUrl 과 InvokeFunction 두 권한이 다 있어야 열린다.
+# InvokeFunctionUrl(FunctionURLAllowPublicAccess)은 AWS 가 NONE 함수 URL 을 만들 때 스스로 붙인다 — 같은 이름으로
+# 또 만들면 409 로 apply 가 깨진다(2026-11-10 첫 apply). 그래서 InvokeFunction 만 둔다.
 # InvokeFunction 을 함수 URL 경유로만 좁히는 조건(InvokedViaFunctionUrl)은 지금 provider(5.x)에 없다 —
 # 직접 호출은 오리진 헤더가 없어 403 으로 끝난다(handler.mjs route).
-resource "aws_lambda_permission" "url" {
-  statement_id           = "FunctionURLAllowPublicAccess"
-  action                 = "lambda:InvokeFunctionUrl"
-  function_name          = aws_lambda_function.this.function_name
-  principal              = "*"
-  function_url_auth_type = "NONE"
-}
-
 resource "aws_lambda_permission" "invoke" {
   statement_id  = "FunctionURLAllowInvokeAction"
   action        = "lambda:InvokeFunction"
