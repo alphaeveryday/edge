@@ -32,6 +32,7 @@ infra/terraform/
     ├── airflow/            # Airflow 실행 환경(ECS on EC2: 전용 클러스터·t4g ASG·capacity provider, api-server·scheduler·dag-processor 서비스, 마이그레이션 one-off, 운영 중단 경보(stop.tf)·호스트 메모리 표본(host_mem.tf)·관리 태스크(dbadmin), 격리 검증 자원) — ALPHA-1119. 메타DB 는 별도 인스턴스가 아니라 기존 업무 RDS(`modules/rds`, `edge-dev`) 안의 DB `airflow`·역할 `airflow_meta`(관리 태스크가 만든다)
     ├── data-pipeline/      # Step Functions 배치 5종 — 시장 + 장전 유니버스 + 뉴스 + 공시(평일 19:30 보충) + 장중 수급(Airflow 실행 중, 롤백용 보존) — 및 가격·뉴스·공시·iNAV·업종지수 1분 서비스 (data-pipeline·analysis-engine 이미지·S3 lake·시크릿·스케줄러)
     ├── static-site/        # S3(프라이빗)+CloudFront(OAC)+Route53 alias — 클라우드 프론트 CDN
+    ├── quarterback-call/   # 쿼터백 통화 데모 API: OpenAI 실시간 전사 임시 토큰 발급 + DeepSeek 상담 답변 스트리밍 Lambda(함수 URL, quarterback.etforca.com/api/* 오리진). 키는 Secrets Manager edge/quarterback-call/openai·edge/analysis-v2/deepseek — ALPHA-1487
     ├── landing-export/     # 랜딩 전망 내보내기: 매일 08:00 KST 에 분석 v2 조회 API 로 그날 전망을 읽어 랜딩 버킷 outlook/<코드>.json 과 검색용 etf/<코드> 페이지·etf/sitemap.xml 에 쓰는 Lambda(zip)·스케줄·실패 경보 — ALPHA-1267·1454
     ├── truth-agent/        # 투자정보 기만 검증 에이전트: 매시 예약 Fargate 태스크(스케줄러 → RunTask)·비공개 저장 버킷·키 시크릿 그릇(실패 알림 없음 — 로그·runs/ 보고로 본다), 결과는 랜딩 버킷 truth/data/ 에 게시 — ADR-0062, ALPHA-1415
     ├── truth-research/     # 오늘의 급등주 조사 에이전트: 장중 매시 예약 Fargate 태스크(국내 KST·미국 America/New_York)와 매분 가격 갱신, 저장 버킷·키 시크릿은 truth-agent 것을 함께 쓴다 — ALPHA-1438
