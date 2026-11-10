@@ -837,9 +837,6 @@ module "super_admin_site" {
   api_origin_domain   = var.admin_api_domain
   api_origin_protocol = "https-only"
   api_allowed_methods = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
-  # 함수는 이 헤더가 없는 호출을 거른다 — 함수 URL 을 알아도 CloudFront 를 거치지 않으면 못 부른다.
-  api_origin_header_name  = "x-qb-origin"
-  api_origin_header_value = module.quarterback_call.origin_header_value
 }
 
 # 모듈 rename 은 state 상 이동으로 처리 — CloudFront 배포를 재생성하지 않고 보존한다.
@@ -902,6 +899,9 @@ module "b2b_console_site" {
   api_origin_domain   = module.quarterback_call.function_url_domain
   api_origin_protocol = "https-only"
   api_allowed_methods = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+  # 함수는 이 헤더가 없는 호출을 거른다 — 함수 URL 을 알아도 CloudFront 를 거치지 않으면 못 부른다.
+  api_origin_header_name  = "x-qb-origin"
+  api_origin_header_value = module.quarterback_call.origin_header_value
 }
 
 # 통화 데모 API — 전사 임시 토큰 발급(OpenAI)과 상담 답변 스트리밍(DeepSeek). 키는 Secrets Manager 에만 있다.
