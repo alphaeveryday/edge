@@ -152,10 +152,11 @@ export function useCallListener(selectedCode: string | null, onCallStart?: () =>
     endCall();
   };
 
-  // 휴대폰 방 읽기 — 연결한 뒤에 올라온 것만 순서대로 받아 시작·조각·종료를 그대로 처리한다.
+  // 휴대폰 방 읽기 — 순서대로 받아 시작·조각·종료를 그대로 처리한다. 방은 연결할 때 새로 만든 무작위 코드라
+  // 처음부터(0) 읽는다 — 노트북 시계로 자르면 시계가 서버보다 빠를 때 앞부분을 놓친다.
   useEffect(() => {
     if (!room) return;
-    let after = Date.now() * 1000;
+    let after = 0;
     let busy = false;
     let stopped = false;
     const poll = async () => {
