@@ -106,18 +106,32 @@ export function currentCode(h: History): string | null {
   return h.segments[h.segments.length - 1]?.code ?? null;
 }
 
+// 맞장구·인사처럼 답할 거리가 없는 짧은 말 — 답변 단위에서 뺀다.
+const BACKCHANNEL = /^(네+|넵|예|응|음+|어+|아+|아아|그렇군요|그렇구나|그래요|알겠습니다|알겠어요|감사합니다|고맙습니다|여보세요|좋아요|맞아요|네네)[.?!~,\s]*$/;
+
+/** 답할 거리가 있는 말인지 — 문장부호·띄어쓰기를 뺀 6글자 이상이고 맞장구가 아니다. */
+export function meaningful(text: string): boolean {
+  return text.replace(/[\s.?!,~…]/g, '').length >= 6 && !BACKCHANNEL.test(text.trim());
+}
+
 /**
- * 답변이 필요한 질문 — 지금 통화의 가장 최근 질문 하나. 이미 답했거나 종목이 안 정해진 구간의 질문이면 없다.
- * 질문 뒤에 다른 종목 이야기가 이어져도 그 질문은 원래 종목으로 답한다.
+ * 답변 단위(차례) — 지금 통화에서 마지막으로 답한 말 뒤에 쌓인, 답할 거리가 있는 말들.
+ * 질문이 끝나면 바로, 아니면 말이 잠깐 멈췄을 때(화면이 판단) 이 차례 전체에 한 번 답한다.
+ * 종목은 그 차례 마지막 말이 속한 구간의 종목(없으면 null — 시장 전체 요약으로 답한다).
  */
-export function pendingQuestion(h: History): { sentence: Sentence; code: string } | null {
-  for (let i = h.segments.length - 1; i >= 0 && h.segments[i].call === h.calls; i--) {
-    const seg = h.segments[i];
-    const q = [...seg.sentences].reverse().find((s) => s.question);
-    if (!q) continue;
-    return q.answer === undefined && seg.code ? { sentence: q, code: seg.code } : null;
+export function pendingTurn(h: History): { sentence: Sentence; code: string | null; asked: boolean; text: string } | null {
+  const said = h.segments.filter((seg) => seg.call === h.calls).flatMap((seg) => seg.sentences.map((s) => ({ s, code: seg.code })));
+  let from = 0;
+  for (let i = said.length - 1; i >= 0; i--) {
+    if (said[i].s.answer !== undefined) {
+      from = i + 1;
+      break;
+    }
   }
-  return null;
+  const turn = said.slice(from).filter((x) => meaningful(x.s.text));
+  if (!turn.length) return null;
+  const last = turn[turn.length - 1];
+  return { sentence: last.s, code: last.code, asked: turn.some((x) => x.s.question), text: turn.map((x) => x.s.text).join(' ') };
 }
 
 export function setAnswer(h: History, id: number, patch: Pick<Sentence, 'answer' | 'answering' | 'fallback'>): History {

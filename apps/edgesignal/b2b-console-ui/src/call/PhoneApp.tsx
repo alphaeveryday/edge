@@ -118,7 +118,7 @@ export function PhoneApp({ room }: { room: string }) {
         <div className="ph-who">
           <div className="ph-avatar">김</div>
           <div className="ph-name">{CUSTOMER.name}</div>
-          <div className="ph-sub">{live ? mmss(now - startedAt) : phase === 'connecting' ? '연결 중…' : CUSTOMER.phone}</div>
+          <div className="ph-sub">{live ? mmss(now - startedAt) : phase === 'connecting' ? '연결 중… 잠시만 기다려 주세요' : CUSTOMER.phone}</div>
         </div>
         <div className="ph-live">
           {live && (
@@ -129,7 +129,7 @@ export function PhoneApp({ room }: { room: string }) {
                   <i />
                   <i />
                 </span>
-                듣는 중 · 종목 탭은 콘솔에 떠요
+                지금 말씀하세요 · 탭은 콘솔에 떠요
               </div>
               <div className="ph-lines">
                 <p>{heard.length > 60 ? '…' + heard.slice(-60) : heard}</p>

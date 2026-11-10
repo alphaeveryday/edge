@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { QUEUE, REPORTS } from '../data/reports.ts';
 import type { QueuedReport } from '../report.ts';
-import { EMPTY, addText, flush, pendingQuestion, setAnswer, startCall, type History } from './history.ts';
+import { EMPTY, addText, currentCode, flush, pendingTurn, setAnswer, startCall, type History } from './history.ts';
 import { findEtf, transcribeKeywords } from './keywords.ts';
 import { startTranscription, type TranscriptSession } from './realtime.ts';
 import { readRoom } from './room.ts';
-import { streamSuggestion } from './suggest.ts';
+import { marketContext, reportContext, streamSuggestion } from './suggest.ts';
 
 // 콘솔이 노트북 마이크로 상담사의 전화 통화를 듣는다. 상담사는 실제 전화로 통화하고, 이 훅은
 //   - 종목 이름이 들리면 "○○로 이동할까요?" 탭(card)을 띄우고
@@ -18,6 +18,8 @@ export const etfByCode = (code: string) => ETFS.find((r) => r.code === code);
 const KEYWORDS = transcribeKeywords(ETFS.map((r) => r.name));
 /** 이름이 다 들릴 때까지 잠깐 기다린다 — "K방산"까지만 듣고 "K방산&우주"를 SOL K방산으로 띄우지 않게. */
 const DETECT_SETTLE_MS = 400;
+/** 질문이 없으면 말이 이만큼 멈췄을 때 그 차례에 답한다 */
+const PAUSE_MS = 1500;
 /** 답변이 이 안에 끝나지 않으면 끊고 리포트 고객 안내 문구로 대신한다 */
 const SUGGEST_TIMEOUT_MS = 15_000;
 /** 종목 이름을 찾는 최근 전사 길이 — 가장 긴 이름보다 넉넉하게 */
@@ -49,6 +51,10 @@ export function useCallListener(selectedCode: string | null, onCallStart?: () =>
   const [history, setHistory] = useState<History>(EMPTY);
   const [card, setCard] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState(false);
+  /** 말이 멈출 때마다 늘려 답변 효과를 다시 돌린다 */
+  const [quiet, setQuiet] = useState(0);
+  const lastHeardAt = useRef(0);
+  const pauseTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   /** 연결된 휴대폰 방 — 있으면 이 콘솔은 노트북 마이크 대신 휴대폰이 보낸 말을 듣는다(ALPHA-1490) */
   const [room, setRoom] = useState<string | null>(null);
   const phaseRef = useRef(phase);
@@ -111,6 +117,9 @@ export function useCallListener(selectedCode: string | null, onCallStart?: () =>
   };
   /** 전사 조각 하나 — 내역에 쌓고, 잠깐 뒤 종목 이름을 찾는다. 노트북 마이크·휴대폰 방 어느 쪽이든 같다. */
   const hear = (delta: string) => {
+    lastHeardAt.current = Date.now();
+    clearTimeout(pauseTimer.current);
+    pauseTimer.current = setTimeout(() => setQuiet((n) => n + 1), PAUSE_MS);
     setHistory((h) => addText(h, delta, Date.now()));
     recent.current = (recent.current + delta).slice(-RECENT_CHARS);
     clearTimeout(settle.current);
@@ -194,32 +203,54 @@ export function useCallListener(selectedCode: string | null, onCallStart?: () =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [room]);
 
-  // 버전 2: 종목이 정해진 구간에서 새 질문이 끝나면 답변을 만든다. 한 번에 하나 — 끝나면 내역이 바뀌어
-  // 이 효과가 다시 돌고, 그사이 쌓인 질문 중 가장 최근 것을 고른다. 실패·빈 답변은 리포트 고객 안내 문구로 대신한다.
+  // 버전 2(답변 추천): 고객 차례마다 상담사가 이어 할 말을 만든다(history.ts pendingTurn). 질문이 끝나면 바로,
+  // 아니면 말이 1.5초 멈췄을 때 그 차례 전체에 한 번. 종목이 나온 구간은 그 리포트, 아니면 시장 전체 요약을 근거로 한다.
+  // 한 번에 하나만 돌리고, 끝나면 내역이 바뀌어 이 효과가 다시 돌며 그사이 쌓인 차례를 고른다.
+  // 실패·빈 답변은 종목 구간이면 리포트 고객 안내 문구로 대신하고, 아니면 "만들지 못했어요"로 둔다.
   const running = useRef(false);
   const answering = useRef<AbortController | null>(null);
   const historyRef = useRef(history);
   historyRef.current = history;
   useEffect(() => {
     if (ver !== 2 || phase !== 'live' || running.current) return;
-    const q = pendingQuestion(history);
-    const report = q && etfByCode(q.code);
-    if (!q || !report) return;
+    const turn = pendingTurn(history);
+    if (!turn) return;
+    if (!turn.asked && Date.now() - lastHeardAt.current < PAUSE_MS) return;
+    const report = turn.code ? etfByCode(turn.code) : undefined;
+    const context = report ? reportContext(report) : marketContext(ETFS);
+    const id = turn.sentence.id;
+    // 직전 답변을 함께 넘겨 같은 말을 되풀이하지 않게 한다.
+    const prev = [...historyRef.current.segments].reverse().flatMap((seg) => [...seg.sentences].reverse()).find((x) => x.answer);
+    const transcript = callText(historyRef.current) + `\n[이번에 답할 고객 말] ${turn.text}` + (prev?.answer ? `\n[직전에 추천한 답변] ${prev.answer}` : '');
     running.current = true;
-    const id = q.sentence.id;
     setHistory((h) => setAnswer(h, id, { answer: '', answering: true }));
     const ac = new AbortController();
     answering.current = ac;
     const timer = setTimeout(() => ac.abort(), SUGGEST_TIMEOUT_MS);
-    streamSuggestion(callText(historyRef.current), report, (t) => setHistory((h) => setAnswer(h, id, { answer: t, answering: true })), ac.signal)
-      .then((out) => setHistory((h) => setAnswer(h, id, out.trim() ? { answer: out, answering: false } : { answer: report.say, answering: false, fallback: true })))
-      .catch(() => setHistory((h) => setAnswer(h, id, { answer: report.say, answering: false, fallback: true })))
+    const fallback = { answer: report?.say ?? '', answering: false, fallback: true };
+    streamSuggestion(transcript, context, (t) => setHistory((h) => setAnswer(h, id, { answer: t, answering: true })), ac.signal)
+      .then((out) => setHistory((h) => setAnswer(h, id, out.trim() ? { answer: out, answering: false } : fallback)))
+      .catch(() => setHistory((h) => setAnswer(h, id, fallback)))
       .finally(() => {
         clearTimeout(timer);
         answering.current = null;
         running.current = false;
       });
-  }, [history, ver, phase]);
+  }, [history, ver, phase, quiet]);
+
+  // 종목 이름 놓침 방지 — 조각 단위 탐지(detect)에 더해, 끝난 문장에서 새 종목 구간이 열리면 그 구간당 한 번 탭을 띄운다.
+  const alerted = useRef('');
+  useEffect(() => {
+    if (phase !== 'live') return;
+    const code = currentCode(history);
+    const key = `${history.calls}:${history.segments.length}`;
+    if (!code || alerted.current === key) return;
+    alerted.current = key;
+    const s = live.current;
+    if (s.dismissed || code === s.selectedCode || code === s.card || code === heard.current) return;
+    heard.current = code;
+    setCard(code);
+  }, [history, phase]);
 
   // 상담사가 목록에서 그 종목을 직접 열었으면 "이동할까요?"는 이미 답이 났다.
   useEffect(() => {
