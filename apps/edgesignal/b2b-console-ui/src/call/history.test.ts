@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { EMPTY, addText, currentCode, flush, latestAnswer, pendingQuestion, setAnswer, splitSentences, startCall } from './history.ts';
+import { EMPTY, addText, currentCode, flush, latestAnswer, meaningful, pendingTurn, setAnswer, splitSentences, startCall } from './history.ts';
 
 test('문장이 끝나야 내역에 올라가고, 끝나지 않은 꼬리는 남겨 둔다', () => {
   assert.deepEqual(splitSentences('안녕하세요. 오늘 왜 올랐어요? 지금 더'), { done: ['안녕하세요.', '오늘 왜 올랐어요?'], rest: '지금 더' });
@@ -47,17 +47,36 @@ test('통화마다 구간이 새로 시작된다 — 지난 통화 내역은 남
   );
 });
 
-test('버전 2 — 종목이 정해진 구간의 새 질문만 답변 대상이고, 답한 질문은 다시 고르지 않는다', () => {
-  let h = addText(startCall(EMPTY, 0), '여보세요? ', 1);
-  assert.equal(pendingQuestion(h), null, '종목 없는 질문엔 답할 리포트가 없다');
-  h = addText(h, '로봇 왜 올랐어요? ', 2);
-  const q = pendingQuestion(h)!;
-  assert.equal(q.code, '445290');
-  h = setAnswer(h, q.sentence.id, { answer: '반도체 반등 영향이에요.', answering: false });
-  assert.equal(pendingQuestion(h), null);
-  assert.equal(latestAnswer(h, '445290')?.answer, '반도체 반등 영향이에요.');
-  h = addText(h, '더 사도 돼요? ', 3);
-  assert.equal(pendingQuestion(h)?.sentence.text, '더 사도 돼요?');
+test('답변 단위 — 종목이 없어도 답할 말이면 차례가 되고, 맞장구는 빠진다', () => {
+  let h = addText(startCall(EMPTY, 0), '여보세요? 네. ', 1);
+  assert.equal(pendingTurn(h), null, '인사·맞장구에는 답하지 않는다');
+  h = addText(h, '요즘 시장이 많이 오르던데 수수료는 얼마예요? ', 2);
+  const t = pendingTurn(h)!;
+  assert.equal(t.code, null, '종목이 없으면 시장 전체로 답한다');
+  assert.ok(t.asked);
+  h = setAnswer(h, t.sentence.id, { answer: '답', answering: false });
+  assert.equal(pendingTurn(h), null, '답한 뒤엔 새 말이 쌓일 때까지 차례가 없다');
+  h = addText(h, '아 그렇군요. 로봇 쪽도 좀 궁금해서요. 요즘 뉴스를 보니까 많이 나오더라고요. ', 3);
+  const t2 = pendingTurn(h)!;
+  assert.equal(t2.code, '445290');
+  assert.equal(t2.asked, false, '질문이 없으면 화면이 말이 멈추길 기다린다');
+  assert.equal(t2.text, '로봇 쪽도 좀 궁금해서요. 요즘 뉴스를 보니까 많이 나오더라고요.', '차례 전체를 한 번에 넘긴다');
+  h = setAnswer(h, t2.sentence.id, { answer: '답', answering: false });
+  h = addText(h, '더 사도 돼요? ', 4);
+  assert.equal(pendingTurn(h)?.sentence.text, '더 사도 돼요?', '짧은 후속 질문도 답한다');
+});
+
+test('맞장구 판정', () => {
+  for (const x of ['네.', '아, 그렇군요.', '감사합니다!', '여보세요?', '음...']) assert.equal(meaningful(x), false, x);
+  for (const x of ['수수료는 얼마예요?', '지금 더 사도 괜찮을까요?', '더 사도 돼요?', '왜 올랐어요?']) assert.equal(meaningful(x), true, x);
+});
+
+test('지난 통화에서 답한 말은 이번 통화 차례에 섞이지 않는다', () => {
+  let h = addText(startCall(EMPTY, 0), '로봇 왜 올랐어요? ', 1);
+  h = startCall(h, 10);
+  assert.equal(pendingTurn(h), null);
+  h = addText(h, '바이오는 어때요? ', 11);
+  assert.equal(pendingTurn(h)?.code, '261070');
 });
 
 test('숫자의 점("1.5%")에서 문장을 끊지 않는다 — 조각이 "1." 에서 끊겨 와도', () => {
@@ -76,12 +95,8 @@ test('통화가 끝나면 문장부호 없이 남은 말도 내역에 남는다'
 
 test('두 번째 통화의 탭에는 지난 고객에게 추천한 답변을 보여 주지 않는다', () => {
   let h = addText(startCall(EMPTY, 0), '로봇 왜 올랐어요? ', 1);
-  h = setAnswer(h, pendingQuestion(h)!.sentence.id, { answer: '지난 고객 답변', answering: false });
+  h = setAnswer(h, pendingTurn(h)!.sentence.id, { answer: '지난 고객 답변', answering: false });
   h = addText(startCall(h, 10), '로봇 얘기 좀 해 주세요. ', 11);
   assert.equal(latestAnswer(h, '445290'), null);
 });
 
-test('질문 뒤에 다른 종목 이야기가 이어져도 그 질문은 원래 종목으로 답한다', () => {
-  const h = addText(startCall(EMPTY, 0), '로봇 왜 올랐어요? 방산도 봤어요. ', 1);
-  assert.equal(pendingQuestion(h)?.code, '445290');
-});

@@ -8,16 +8,21 @@ export function reportContext(r: QueuedReport): string {
   return lines.join('\n');
 }
 
+/** 종목이 안 나온 말에 답할 때 넘기는 시장 전체 요약 — 리포트 10종의 등락과 한 줄 이유. */
+export function marketContext(reports: QueuedReport[]): string {
+  return ['[오늘 시장 — 리포트 전체 요약]', ...reports.map((x) => `- ${x.name}(${x.code}) ${x.pct > 0 ? '+' : ''}${x.pct.toFixed(2)}%: ${x.title}`)].join('\n');
+}
+
 export async function streamSuggestion(
   transcript: string,
-  report: QueuedReport,
+  context: string,
   onText: (soFar: string) => void,
   signal: AbortSignal,
 ): Promise<string> {
   const res = await fetch('/api/call/suggest', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ transcript, report: reportContext(report) }),
+    body: JSON.stringify({ transcript, report: context }),
     signal,
   });
   if (!res.ok || !res.body) throw new Error(`답변 생성 실패(${res.status})`);

@@ -92,8 +92,8 @@ export function CallPanel(p: {
                       {s.text}
                       {s.answer !== undefined && (
                         <div className={`cp-answer${s.fallback ? ' fallback' : ''}`}>
-                          <span className="cp-answer-head">{s.fallback ? '리포트 고객 안내' : '추천 답변'}</span>
-                          {s.answer || <span className="cp-wait">만드는 중…</span>}
+                          <span className="cp-answer-head">{s.fallback && s.answer ? '리포트 고객 안내' : '추천 답변'}</span>
+                          {s.answer || <span className="cp-wait">{s.answering ? '만드는 중…' : '답변을 만들지 못했어요'}</span>}
                           {s.answering && <span className="caret" />}
                         </div>
                       )}
