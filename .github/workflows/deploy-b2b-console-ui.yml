@@ -1,4 +1,4 @@
-# b2b-console-ui dev 배포 — B2B 제안용 콘솔 데모(b2b.etforca.com, ALPHA-1486). 자기 코드(또는
+# b2b-console-ui dev 배포 — B2B 제안용 콘솔 데모(quarterback.etforca.com, ALPHA-1486). 자기 코드(또는
 # 워크스페이스 공유 파일)가 바뀐 dev push 에서만 트리거되는 독립 배포. 절차는 deploy-ui.yml 한 벌을 재사용한다.
 #
 # workflow_dispatch: 버킷·배포는 terraform-apply 가 같은 dev push 에서 만든다. 처음 머지 때는 이 배포가

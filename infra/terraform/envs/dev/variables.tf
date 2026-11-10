@@ -87,7 +87,7 @@ variable "admin_api_domain" {
 variable "b2b_domain" {
   description = "B2B 제안용 콘솔 데모(b2b-console-ui) 도메인. etforca.com 영역의 서브도메인."
   type        = string
-  default     = "b2b.etforca.com"
+  default     = "quarterback.etforca.com"
 }
 
 variable "landing_domain" {

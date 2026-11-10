@@ -883,7 +883,7 @@ module "landing_site" {
   api_origin_header_value = var.portfolio_origin_header
 }
 
-# ── B2B 제안용 콘솔 데모 (b2b.etforca.com) ─────────────
+# ── B2B 제안용 콘솔 데모 (quarterback.etforca.com) ─────────────
 # 고객사 미팅에서 여는 정적 데모(가상 데이터, API 없음 — ALPHA-1486). 영역·인증서는 랜딩과 같은
 # etforca.com 것을 쓴다(인증서 SAN *.etforca.com). 파일은 apps/edgesignal/b2b-console-ui 를
 # deploy-b2b-console-ui.yml 이 빌드해 올린다.
