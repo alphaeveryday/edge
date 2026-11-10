@@ -174,3 +174,18 @@ output "airflow_autoscaling_group_name" {
 output "airflow_verify_bucket" {
   value = module.airflow.verify_bucket
 }
+
+# ── B2B 콘솔 데모 배포용 값 (GitHub repo vars — deploy-b2b-console-ui.yml 콜러가 with 로 전달) ──
+output "b2b_console_url" {
+  value = module.b2b_console_site.url
+}
+
+output "b2b_console_ui_bucket" {
+  description = "→ vars.B2B_CONSOLE_UI_BUCKET"
+  value       = module.b2b_console_site.bucket_name
+}
+
+output "b2b_console_ui_distribution_id" {
+  description = "→ vars.B2B_CONSOLE_UI_DISTRIBUTION_ID"
+  value       = module.b2b_console_site.distribution_id
+}

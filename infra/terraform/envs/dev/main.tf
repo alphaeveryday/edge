@@ -524,15 +524,17 @@ module "gha_deploy_dev" {
   ]
 
   # 정적 사이트 배포 권한 — S3 sync + CloudFront 무효화.
-  # super-admin UI(deploy-ui.yml)와 ETF Orca 랜딩페이지(deploy-app-landing.yml)가 쓴다.
+  # super-admin UI·B2B 콘솔 데모(deploy-ui.yml)와 ETF Orca 랜딩페이지(deploy-app-landing.yml)가 쓴다.
   # tenant-console 은 온프렘 플레인이라 cloud 배포처 없음(ADR-0032).
   ui_bucket_arns = [
     module.super_admin_site.bucket_arn,
     module.landing_site.bucket_arn,
+    module.b2b_console_site.bucket_arn,
   ]
   ui_distribution_arns = [
     module.super_admin_site.distribution_arn,
     module.landing_site.distribution_arn,
+    module.b2b_console_site.distribution_arn,
   ]
 }
 
@@ -879,6 +881,19 @@ module "landing_site" {
   api_allowed_methods     = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
   api_origin_header_name  = "X-Portfolio-Origin"
   api_origin_header_value = var.portfolio_origin_header
+}
+
+# ── B2B 제안용 콘솔 데모 (quarterback.etforca.com) ─────────────
+# 고객사 미팅에서 여는 정적 데모(가상 데이터, API 없음 — ALPHA-1486). 영역·인증서는 랜딩과 같은
+# etforca.com 것을 쓴다(인증서 SAN *.etforca.com). 파일은 apps/edgesignal/b2b-console-ui 를
+# deploy-b2b-console-ui.yml 이 빌드해 올린다.
+module "b2b_console_site" {
+  source = "../../modules/static-site"
+
+  name            = "${local.prefix}-b2b-console"
+  domain_name     = var.b2b_domain
+  zone_id         = data.aws_route53_zone.etforca.zone_id
+  certificate_arn = data.aws_acm_certificate.etforca_cdn.arn
 }
 
 # 랜딩 종목 검색이 읽는 전망 파일(outlook/<코드>.json)을 매일 08:00 KST 에 갱신한다(ALPHA-1267).
