@@ -884,9 +884,10 @@ module "landing_site" {
 }
 
 # ── B2B 제안용 콘솔 데모 (quarterback.etforca.com) ─────────────
-# 고객사 미팅에서 여는 정적 데모(가상 데이터, API 없음 — ALPHA-1486). 영역·인증서는 랜딩과 같은
+# 고객사 미팅에서 여는 데모(가상 데이터 — ALPHA-1486). 영역·인증서는 랜딩과 같은
 # etforca.com 것을 쓴다(인증서 SAN *.etforca.com). 파일은 apps/edgesignal/b2b-console-ui 를
-# deploy-b2b-console-ui.yml 이 빌드해 올린다.
+# deploy-b2b-console-ui.yml 이 빌드해 올린다. 통화 화면(#/call)이 부르는 /api/* 만
+# quarterback_call 함수로 보낸다(ALPHA-1487).
 module "b2b_console_site" {
   source = "../../modules/static-site"
 
@@ -894,6 +895,20 @@ module "b2b_console_site" {
   domain_name     = var.b2b_domain
   zone_id         = data.aws_route53_zone.etforca.zone_id
   certificate_arn = data.aws_acm_certificate.etforca_cdn.arn
+
+  api_origin_domain   = module.quarterback_call.function_url_domain
+  api_origin_protocol = "https-only"
+  api_allowed_methods = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+}
+
+# 통화 데모 API — 전사 임시 토큰 발급(OpenAI)과 상담 답변 스트리밍(DeepSeek). 키는 Secrets Manager 에만 있다.
+module "quarterback_call" {
+  source = "../../modules/quarterback-call"
+
+  name                 = "${local.prefix}-quarterback-call"
+  openai_secret_name   = "edge/quarterback-call/openai"
+  deepseek_secret_name = "edge/analysis-v2/deepseek"
+  allowed_origins      = ["https://${var.b2b_domain}", "http://localhost:5177"]
 }
 
 # 랜딩 종목 검색이 읽는 전망 파일(outlook/<코드>.json)을 매일 08:00 KST 에 갱신한다(ALPHA-1267).
