@@ -9,6 +9,7 @@ import psycopg
 from psycopg.conninfo import conninfo_to_dict
 import pytest
 
+from edge_analysis_v2.analysis.effort import movement_effort
 from edge_analysis_v2.analysis.service import execute_request
 from edge_analysis_v2.tools.fixture_data import make_fixture
 from edge_analysis_v2.storage.factors import HEADLINES, read_factor_details
@@ -125,7 +126,7 @@ def test_revision_receives_uncited_research_and_keeps_state_after_no_change(run_
         news_reference(kwargs)  # Consulted but not selected for publication: still research.
         assert 'cause-investigation' in kwargs['skills'] and 'revision-investigation' not in kwargs['skills']
         assert 'analysis-report-writing' not in kwargs['skills']
-        assert kwargs['effort'] == 'low'
+        assert kwargs['effort'] == movement_effort(fixture['context']['etf_code'])
         assert {'hypothesis-analysis-workflow', 'etf-hypothesis-analysis'} <= set(kwargs['skills'])
         assert not kwargs['optional_skills']
         return {'new_items': [], 'selected_item_ids': [], 'summary': None}
@@ -141,7 +142,7 @@ def test_revision_receives_uncited_research_and_keeps_state_after_no_change(run_
         assert kwargs['initial']['previous_analysis'] is not None
         assert 'revision-investigation' in kwargs['skills'] and 'cause-investigation' not in kwargs['skills']
         assert 'analysis-report-writing' not in kwargs['skills']
-        assert kwargs['effort'] == 'low'
+        assert kwargs['effort'] == movement_effort(fixture['context']['etf_code'])
         assert {'hypothesis-analysis-workflow', 'etf-hypothesis-analysis'} <= set(kwargs['skills'])
         assert not kwargs['optional_skills']
         return {'new_items': [], 'selected_item_ids': [], 'summary': None}
@@ -325,7 +326,7 @@ def test_movement_revision_does_not_receive_first_publication_selection_rules(ru
         assert '이번 실행은 가격변동 수정이다.' in kwargs['prompt']
         assert '순서는 오늘 가격이 움직인 쪽' not in kwargs['prompt']
         assert kwargs['initial']['previous_items']
-        assert 'revision-investigation' in kwargs['skills'] and kwargs['effort'] == 'low'
+        assert 'revision-investigation' in kwargs['skills'] and kwargs['effort'] == movement_effort(fixture['context']['etf_code'])
         return {'new_items': [], 'selected_item_ids': [], 'summary': None}
     after, _ = request('movement', revise, later, previous_analysis_id=parent)
     assert after == before
