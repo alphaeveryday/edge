@@ -31,6 +31,7 @@ import java.util.stream.Collectors;
  * band 의 score 반올림 값
  * changePct 의 산술평균 값
  * 그룹이 없을 때의 빈 브리프
+ * 관심 탭보다 홈을 먼저 연 경우의 기본 그룹 생성
  */
 @Service
 @RequiredArgsConstructor
@@ -46,6 +47,9 @@ public class HomeService implements HomeFinder {
     @Transactional
     public HomeBriefResponse brief(AppPrincipal principal, String group) {
         long principalId = principalRepository.resolve(principal);
+        if (groupRepository.findByPrincipalIdAndIsDefaultTrue(principalId).isEmpty()) {
+            groupRepository.save(WatchGroup.base(principalId));
+        }
         List<WatchGroup> groups = groupRepository.findByPrincipalIdOrderByPosition(principalId);
         String key = group == null ? WatchGroup.BASE_KEY : group;
         List<String> codes = groups.stream().filter(g -> g.getKey().equals(key)).findFirst()

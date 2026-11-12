@@ -20,6 +20,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * 홈 브리프의 그룹 집계 규칙
  * score 는 signal 서수 평균, band 는 그 반올림, changePct 는 산술평균, asOf 는 그룹 시세의 최댓값
  * 그룹이 없을 때의 빈 브리프
+ * 관심 탭보다 홈을 먼저 연 경우의 기본 그룹 생성
  */
 @WebApiAdapterTest
 record HomeApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper) {
@@ -67,9 +68,18 @@ record HomeApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper) {
         assertThat(((Number) brief.get("score")).doubleValue()).isEqualTo(2.0);
         assertThat(((Number) brief.get("changePct")).intValue()).isEqualTo(0);
         assertThat(brief.get("etfs")).isEqualTo(List.of());
-        assertThat(brief.get("groups")).isEqualTo(List.of());
         assertThat(brief.get("asOf")).isNotNull();
         assertThat(mvcTester.get().uri("/api/v1/home/brief").exchange()).hasStatus(401);
+    }
+
+    // 첫 화면인 홈의 그룹 칩과 카드 제목이 비지 않도록 기본 그룹 포함
+    @Test
+    void freshGuestBriefIncludesTheBaseGroup() {
+        Map<String, Object> brief = result(brief("h4", "/api/v1/home/brief"));
+        assertThat(brief.get("group")).isEqualTo("base");
+        assertThat(brief.get("groups")).isEqualTo(List.of(Map.of("key", "base", "label", "기본 관심", "count", 0)));
+        Map<String, Object> again = result(brief("h4", "/api/v1/home/brief"));
+        assertThat(again.get("groups")).as("두 번째 조회의 중복 생성 없음").isEqualTo(brief.get("groups"));
     }
 
     private MvcTestResult putBase(String device, List<String> codes) {
