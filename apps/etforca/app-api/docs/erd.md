@@ -138,7 +138,7 @@
 | is_default | boolean | principal 당 정확히 1개 |
 | created_at, updated_at | timestamptz | |
 
-제약: `UNIQUE(principal_id, key)`, 부분 유니크 `UNIQUE(principal_id) WHERE is_default`. 사용자 그룹 최대 10개(WATCH4002)는 서비스가 센다. 기본 그룹은 principal 생성 시 만들고 삭제 불가(WATCH4001). 첫 진입 시 전망 상위 3종을 담는다(PRD).
+제약: `UNIQUE(principal_id, key)`, 부분 유니크 `UNIQUE(principal_id) WHERE is_default`. 사용자 그룹 최대 10개(WATCH4002)는 서비스가 센다. 기본 그룹은 관심 그룹 조회·홈 브리핑 등 첫 사용 시 만들고 삭제 불가(WATCH4001). 첫 진입 시 전망 상위 3종을 담는다(PRD).
 
 ### watch_item
 | 컬럼 | 타입 | 비고 |
