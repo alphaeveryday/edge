@@ -151,7 +151,8 @@ class EtfProcessor implements ItemProcessor<Curation, EtfSnapshot> {
                 .forEach(f -> factors.put(f.type(), f));
         List<Map<String, Object>> detailItems = items.stream().filter(i -> i.section().equals("detail"))
                 .map(i -> map("title_keyword", i.titleKeyword(), "sentences", JSON.readTree(i.bulletsJson()))).toList();
-        List<String> updates = items.stream().filter(i -> i.section().equals("update"))
+        // 앱의 "오늘 추가된 것" 표시라 수정·삭제 항목 제외
+        List<String> updates = items.stream().filter(i -> i.section().equals("update") && "added".equals(i.changeType()))
                 .map(OutlookItem::titleKeyword).toList();
         List<Map<String, Object>> supports = new ArrayList<>();
         List<Map<String, Object>> burdens = new ArrayList<>();
