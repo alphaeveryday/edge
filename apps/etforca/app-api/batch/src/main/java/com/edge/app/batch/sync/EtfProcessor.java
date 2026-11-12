@@ -151,7 +151,10 @@ class EtfProcessor implements ItemProcessor<Curation, EtfSnapshot> {
                 .forEach(f -> factors.put(f.type(), f));
         List<Map<String, Object>> detailItems = items.stream().filter(i -> i.section().equals("detail"))
                 .map(i -> map("title_keyword", i.titleKeyword(), "sentences", JSON.readTree(i.bulletsJson()))).toList();
-        List<String> updates = items.stream().filter(i -> i.section().equals("update"))
+        // 사라진 주제의 제목만 남은 삭제 항목과 새 문장 없는 항목 제외
+        // 생산자가 직전 초안 기준으로 change_type 을 정해 오늘 추가 후 고친 항목도 modified 라 수정 항목 유지
+        List<String> updates = items.stream()
+                .filter(i -> i.section().equals("update") && !"deleted".equals(i.changeType()) && i.sentence() != null)
                 .map(OutlookItem::titleKeyword).toList();
         List<Map<String, Object>> supports = new ArrayList<>();
         List<Map<String, Object>> burdens = new ArrayList<>();

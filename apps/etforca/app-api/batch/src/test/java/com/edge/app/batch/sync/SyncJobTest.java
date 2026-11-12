@@ -75,7 +75,9 @@ class SyncJobTest {
                 + "now() - interval '1 day', '강력상승', '메모리 값 상승', '요약 문장', '근거', '결론', '결론 문장', '조건', '이슈 머리', 'database'), "
                 + "('o-syn', '091160', now() - interval '23 hours', 'completed', now() - interval '23 hours', '강력하락', '가상', '가상', null, null, null, null, null, 'synthetic')");
         pipeline.update("insert into outlook_items values ('r1', 'o-db', 'i1', 'detail', null, 0, '고정가', "
-                + "'[{\"sentence\":\"3개월 상승\",\"is_updated\":true}]', null), ('r2', 'o-db', 'i2', 'update', 'added', 0, '신규', null, '새 근거')");
+                + "'[{\"sentence\":\"3개월 상승\",\"is_updated\":true}]', null), ('r2', 'o-db', 'i2', 'update', 'added', 0, '신규', null, '새 근거'), "
+                + "('r3', 'o-db', 'i3', 'update', 'modified', 1, '수정', null, '바뀐 근거'), ('r4', 'o-db', 'i4', 'update', 'deleted', 2, '삭제', null, '빠진 근거'), "
+                + "('r5', 'o-db', 'i5', 'update', 'modified', 3, '제목만', null, null)");
         pipeline.update("insert into outlook_factors values ('f1', 'o-db', '이슈', '강력상승', '재료 확인'), ('f2', 'o-db', '차트', '하락', '추세 꺾임'), ('f3', 'o-db', '수급', '상승', '외국인 매수')");
         pipeline.update("insert into outlook_conclusion_keywords values ('k1', 'o-db', 'support', 0, 'HBM 공급'), ('k2', 'o-db', 'burden', 0, '환율')");
         pipeline.update("insert into outlook_factor_metrics(analysis_id, factor_type, metric_key, numeric_value, observed_at, position) values "
@@ -140,7 +142,7 @@ class SyncJobTest {
         JsonNode analysis = json("select payload::text from etf_analysis where etf_code = '091160'");
         assertThat(analysis.path("summary_card").path("title").asText()).isEqualTo("메모리 값 상승");
         assertThat(analysis.path("detail").path("items").get(0).path("sentences").get(0).path("sentence").asText()).isEqualTo("3개월 상승");
-        assertThat(analysis.path("detail").path("updates").path("items").toString()).as("오늘 추가된 것은 본문이 아닌 제목만").isEqualTo("[\"신규\"]");
+        assertThat(analysis.path("detail").path("updates").path("items").toString()).as("추가 후 고친 항목도 modified 라 수정 항목 유지, 사라진 주제와 새 문장 없는 항목 제외").isEqualTo("[\"신규\",\"수정\"]");
         assertThat(jdbc.queryForList("select axis || ':' || dir from etf_analysis_axis order by axis", String.class))
                 .as("이슈 항목·지표가 있는 축만, 요인 스티커의 방향 접기").containsExactly("chart:burden", "flow:help", "issue:help");
 

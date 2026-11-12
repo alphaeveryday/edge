@@ -136,9 +136,9 @@ public class PipelineRepository {
 
     public List<OutlookItem> outlookItems(String analysisId) {
         return jdbc.query("""
-                select section, title_keyword, bullets::text, sentence from outlook_items
+                select section, change_type, title_keyword, bullets::text, sentence from outlook_items
                  where analysis_id = ? order by section, position
-                """, (rs, n) -> new OutlookItem(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4)),
+                """, (rs, n) -> new OutlookItem(rs.getString(1), rs.getString(2), rs.getString(3), rs.getString(4), rs.getString(5)),
                 analysisId);
     }
 
@@ -194,7 +194,7 @@ public class PipelineRepository {
             String issueHeadline) {
     }
 
-    public record OutlookItem(String section, String titleKeyword, String bulletsJson, String sentence) {
+    public record OutlookItem(String section, String changeType, String titleKeyword, String bulletsJson, String sentence) {
     }
 
     public record Factor(String type, String sticker, String sentence) {
