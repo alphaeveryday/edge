@@ -1181,7 +1181,7 @@ components:
         groups: { type: array, items: { $ref: '#/components/schemas/WatchGroup' } }
         group: { type: string }
         band: { $ref: '#/components/schemas/Signal' }
-        score: { type: number, minimum: 0, maximum: 4, description: 그룹 signal 서수 평균(강력하락 0 ~ 강력상승 4), 소수 둘째 자리. band 는 이 값의 반올림 }
+        score: { type: number, minimum: 0, maximum: 4, description: 분석 있는 ETF 의 signal 서수 평균(강력하락 0 ~ 강력상승 4), 소수 둘째 자리. 분석 있는 ETF 가 없으면 2. band 는 이 값의 반올림 }
         changePct: { type: number }
         etfs: { type: array, items: { $ref: '#/components/schemas/EtfSummary' } }
     MarketIndex:
