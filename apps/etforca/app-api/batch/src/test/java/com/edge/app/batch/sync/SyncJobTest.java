@@ -81,6 +81,11 @@ class SyncJobTest {
         pipeline.update("insert into outlook_factor_metrics(analysis_id, factor_type, metric_key, numeric_value, observed_at, position) values "
                 + "('o-db', '차트', 'ma20_distance_pct', 8.6009, '2026-09-29T06:41:00Z', 0), ('o-db', '차트', 'unmapped_key', 1, '2026-09-29T06:41:00Z', 1), ('o-db', '수급', 'weighted_foreign_net_amount_20d', 12345678900, '2026-09-29T06:41:00Z', 0)");
         pipeline.update("insert into outlook_issue_items values ('o-db', 0, '고정가', '3개월 상승', 'positive')");
+        // 같은 기준 시각의 먼저 게시된 발행본(재실행 전 원본)은 나중에 게시된 쪽에 밀린다. ID 순이면 이쪽이 이기는 이름
+        pipeline.update("insert into outlook_analyses select 'o-zstale', etf_code, analysis_at, status, published_at - interval '1 hour', "
+                + "'강력하락', '옛 전망', '옛 요약', null, null, null, null, null, data_source from outlook_analyses where analysis_id = 'o-db'");
+        pipeline.update("insert into movement_analyses select 'm-zstale', etf_code, analysis_at, status, published_at - interval '1 hour', "
+                + "trading_date, '옛 요약', '{}', data_source from movement_analyses where analysis_id = 'm-db'");
 
         // 근거 문장 없는 상세 항목으로 변환이 실패하는 다른 선별 ETF
         broken = jdbc.queryForObject("select etf_code from etf_curation where etf_code <> '091160' order by etf_code limit 1", String.class);
@@ -110,7 +115,7 @@ class SyncJobTest {
         assertThat((BigDecimal) quote.get("price")).isEqualByComparingTo("142700");
         assertThat((BigDecimal) quote.get("change_pct")).as("등락률은 두 종가로 계산").isEqualByComparingTo("1.09");
         assertThat(jdbc.queryForList("select signal from etf_analysis where etf_code = '091160'", String.class))
-                .as("실데이터 전망만 반영(가상 강력하락 무시)").containsExactly("strongUp");
+                .as("실데이터 전망만, 같은 기준 시각이면 나중에 게시된 것(가상·옛 강력하락 무시)").containsExactly("strongUp");
 
         JsonNode detail = json("select payload::text from etf_detail where etf_code = '091160'");
         assertThat(detail.has("insight")).as("원천 없는 구성 해석은 생략").isFalse();
@@ -121,7 +126,7 @@ class SyncJobTest {
         assertThat(detail.path("info").toString()).contains("{\"k\":\"총보수\",\"v\":\"연 0.45%\"}");
 
         JsonNode move = json("select payload::text from etf_move where etf_code = '091160'");
-        assertThat(move.path("summary").asText()).as("회수된 발행본 제외").isEqualTo("실데이터 요약");
+        assertThat(move.path("summary").asText()).as("회수된 발행본과 같은 기준 시각의 먼저 게시된 발행본 제외").isEqualTo("실데이터 요약");
         assertThat(move.path("items").valueStream().map(i -> i.path("type").asText()).toList())
                 .as("이전 리비전 항목 포함 선택 항목만, 선택 순서대로").containsExactly("수급", "매크로", "이슈");
         assertThat(jdbc.queryForObject("select count(*) from etf_move where as_of = '2026-09-20'", Integer.class))
