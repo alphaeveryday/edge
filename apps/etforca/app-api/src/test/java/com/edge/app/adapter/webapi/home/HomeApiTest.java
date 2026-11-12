@@ -21,6 +21,7 @@ import static org.assertj.core.api.Assertions.assertThat;
  * score 는 signal 서수 평균, band 는 그 반올림, changePct 는 산술평균, asOf 는 그룹 시세의 최댓값
  * 그룹이 없을 때의 빈 브리프
  * 관심 탭보다 홈을 먼저 연 경우의 기본 그룹 생성
+ * 분석 없는 ETF 의 점수 평균 제외
  */
 @WebApiAdapterTest
 record HomeApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper) {
@@ -29,7 +30,7 @@ record HomeApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper) {
         jdbc.update("insert into etf(code, instrument_id, market_code, name, theme_key, sub, hot) values "
                 + "('940001','e-940001','XKRX','ORCA 홈1','semicon',null,false), ('940002','e-940002','XKRX','ORCA 홈2','semicon',null,false), "
                 + "('940003','e-940003','XKRX','ORCA 홈3','semicon',null,false), ('940004','e-940004','XKRX','ORCA 홈4','semicon',null,false), "
-                + "('940005','e-940005','XKRX','ORCA 홈5','semicon',null,false) on conflict (code) do nothing");
+                + "('940005','e-940005','XKRX','ORCA 홈5','semicon',null,false), ('940006','e-940006','XKRX','ORCA 홈6','semicon',null,false) on conflict (code) do nothing");
         jdbc.update("insert into etf_quote(etf_code, price, change_pct, as_of) values ('940001', 100, 2.0, '2026-09-25T00:30:00Z'), "
                 + "('940002', 200, -1.0, '2026-09-25T00:31:00Z') on conflict (etf_code) do update set change_pct = excluded.change_pct, as_of = excluded.as_of");
         jdbc.update("insert into etf_analysis(etf_code, as_of, published_at, signal, payload) values "
@@ -58,6 +59,21 @@ record HomeApiTest(MockMvcTester mvcTester, ObjectMapper objectMapper) {
         Map<String, Object> brief = result(brief("h3", "/api/v1/home/brief"));
         assertThat(brief.get("band")).as("(3+3+1)/3=2.33 → neutral").isEqualTo("neutral");
         assertThat(((Number) brief.get("score")).doubleValue()).isEqualTo(2.33);
+    }
+
+    // 분석 없는 ETF 를 중립으로 넣으면 그룹 점수가 중립 쪽으로 끌려감
+    @Test
+    void scoreSkipsEtfsWithoutAnalysis() {
+        assertThat(putBase("h5", List.of("940001", "940006"))).hasStatus2xxSuccessful();
+        Map<String, Object> brief = result(brief("h5", "/api/v1/home/brief"));
+        assertThat(((Number) brief.get("score")).doubleValue()).as("분석 있는 940001 만의 평균 4, 중립 포함 시 3").isEqualTo(4.0);
+        assertThat(brief.get("band")).isEqualTo("strongUp");
+        assertThat(((List<Map<String, Object>>) brief.get("etfs")).stream().map(e -> e.get("signal")).toList())
+                .as("목록의 분석 없는 ETF 는 중립 표시 유지").isEqualTo(List.of("strongUp", "neutral"));
+
+        assertThat(putBase("h6", List.of("940006"))).hasStatus2xxSuccessful();
+        Map<String, Object> unanalyzed = result(brief("h6", "/api/v1/home/brief"));
+        assertThat(((Number) unanalyzed.get("score")).doubleValue()).as("분석 있는 ETF 가 없으면 중립").isEqualTo(2.0);
     }
 
     @Test

@@ -40,6 +40,9 @@ public interface EtfRepository extends JpaRepository<Etf, String> {
     @Query(value = SUMMARY_SELECT + "where e.code in (:codes)", nativeQuery = true)
     List<SummaryRow> summaries(@Param("codes") Collection<String> codes);
 
+    @Query(value = "select distinct etf_code from etf_analysis where etf_code in (:codes)", nativeQuery = true)
+    List<String> analyzedCodes(@Param("codes") Collection<String> codes);
+
     /**
      * 대소문자·공백 무시의 이름 부분 일치와 코드 앞부분 일치 검색
      * 빈 q 의 전체 조회

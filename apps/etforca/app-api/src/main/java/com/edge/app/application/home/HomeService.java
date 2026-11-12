@@ -22,6 +22,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
@@ -32,6 +33,7 @@ import java.util.stream.Collectors;
  * changePct 의 산술평균 값
  * 그룹이 없을 때의 빈 브리프
  * 관심 탭보다 홈을 먼저 연 경우의 기본 그룹 생성
+ * score 평균에서 분석 없는 ETF 제외
  */
 @Service
 @RequiredArgsConstructor
@@ -57,7 +59,7 @@ public class HomeService implements HomeFinder {
                 .orElse(List.of());
         List<EtfSummaryResponse> etfs = summaries(codes);
         Instant asOf = codes.isEmpty() ? null : etfRepository.latestQuoteAsOf(codes);
-        double score = score(etfs);
+        double score = score(etfs, codes.isEmpty() ? Set.of() : Set.copyOf(etfRepository.analyzedCodes(codes)));
         return new HomeBriefResponse(asOf == null ? Instant.now() : asOf,
                 groups.stream().map(g -> new WatchGroupResponse(g.getKey(), g.getLabel(), (int) itemRepository.countByGroupId(g.getId()))).toList(),
                 key, Signal.values()[(int) Math.round(score)], score, changePct(etfs), etfs);
@@ -73,9 +75,11 @@ public class HomeService implements HomeFinder {
     }
 
     // 강력하락 0 부터 강력상승 4 까지의 서수
-    // 빈 그룹의 중립 처리
-    private static double score(List<EtfSummaryResponse> etfs) {
-        double mean = etfs.stream().mapToInt(e -> e.signal().ordinal()).average().orElse(Signal.NEUTRAL.ordinal());
+    // 분석 없는 ETF 는 목록에 중립으로 보여도 평균에서 제외
+    // 빈 그룹과 분석 없는 그룹의 중립 처리
+    private static double score(List<EtfSummaryResponse> etfs, Set<String> analyzed) {
+        double mean = etfs.stream().filter(e -> analyzed.contains(e.code()))
+                .mapToInt(e -> e.signal().ordinal()).average().orElse(Signal.NEUTRAL.ordinal());
         return Math.round(mean * 100) / 100.0;
     }
 
