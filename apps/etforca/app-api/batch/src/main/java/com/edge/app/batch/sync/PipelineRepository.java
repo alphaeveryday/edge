@@ -93,12 +93,12 @@ public class PipelineRepository {
                 instrumentId, instrumentId, prev, last);
     }
 
-    /** 거래일마다 회수되지 않은 최신 완료 발행본 1건 */
+    /** 거래일마다 회수되지 않은 최신 완료 발행본 1건, 같은 기준 시각이면 나중에 게시된 재실행본 */
     public List<Movement> movements(String code, Instant since) {
         return jdbc.query("""
                 select distinct on (trading_date) analysis_id, trading_date, published_at, summary, selected_item_ids
                   from movement_analyses where etf_code = ? and analysis_at >= ? and withdrawn_at is null and %s
-                 order by trading_date, analysis_at desc
+                 order by trading_date, analysis_at desc, published_at desc, analysis_id desc
                 """.formatted(DONE), (rs, n) -> new Movement(rs.getString(1), rs.getObject(2, LocalDate.class),
                         rs.getObject(3, OffsetDateTime.class).toInstant(), rs.getString(4), strings(rs.getArray(5))),
                 code, Timestamp.from(since));
@@ -120,14 +120,14 @@ public class PipelineRepository {
                         rs.getString(5)), (Object) itemIds.toArray(String[]::new));
     }
 
-    /** KST 날짜마다 최신 완료 전망 1건 */
+    /** KST 날짜마다 최신 완료 전망 1건, 같은 기준 시각이면 나중에 게시된 재실행본 */
     public List<Outlook> outlooks(String code, Instant since) {
         return jdbc.query("""
                 select distinct on ((analysis_at at time zone 'Asia/Seoul')::date) analysis_id,
                        (analysis_at at time zone 'Asia/Seoul')::date, published_at, outlook_sticker, summary_title, summary,
                        detail_title, conclusion_title, conclusion_sentence, change_condition, issue_headline
                   from outlook_analyses where etf_code = ? and analysis_at >= ? and %s
-                 order by (analysis_at at time zone 'Asia/Seoul')::date, analysis_at desc
+                 order by (analysis_at at time zone 'Asia/Seoul')::date, analysis_at desc, published_at desc, analysis_id desc
                 """.formatted(DONE), (rs, n) -> new Outlook(rs.getString(1), rs.getObject(2, LocalDate.class),
                         rs.getObject(3, OffsetDateTime.class).toInstant(), rs.getString(4), rs.getString(5), rs.getString(6), rs.getString(7),
                         rs.getString(8), rs.getString(9), rs.getString(10), rs.getString(11)),
