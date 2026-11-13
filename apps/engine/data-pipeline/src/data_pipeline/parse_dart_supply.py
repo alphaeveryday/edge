@@ -296,6 +296,7 @@ def parse_supply(html_or_xml_text: str) -> dict[str, Any]:
     amount_text = _find_first_nonnull(rows, "계약금액 총액(원)", "계약금액 총액", "확정 계약금액", "계약금액(원)", "계약금액")
     ratio_text = _find_value(rows, "매출액대비(%)", "매출액대비", "매출액 대비(%)", "매출액 대비")
     start, end = _find_period(rows)
+    contract_date = parse_date_value(_find_value(rows, "계약(수주)일자", "계약일자", "수주일자"))
     amount_krw = parse_krw_amount(amount_text)
     ratio_pct = parse_ratio_pct(ratio_text)
 
@@ -308,6 +309,7 @@ def parse_supply(html_or_xml_text: str) -> dict[str, Any]:
         "ratio_pct": ratio_pct,
         "start": start,
         "end": end,
+        "contract_date": contract_date,
         "object": object_text,
         "confidence": _confidence(corp_name, counterparty, amount_krw, ratio_pct, start, end, object_text),
         "evidence": {
@@ -315,6 +317,26 @@ def parse_supply(html_or_xml_text: str) -> dict[str, Any]:
             "ratio_text": ratio_text,
         },
     }
+
+
+def parse_correction(html_or_xml_text: str) -> dict[str, Any] | None:
+    """정정공시 머리표(정정신고)에서 정정 대상·사유를 읽는다. 정정 머리표가 없으면 None.
+
+    `[기재정정]` 본문은 맨 앞에 정정 머리표(정정일자·정정관련 공시서류·제출일·정정사유·정정사항)를
+    두고 그 아래에 정정 후 본문 전체를 다시 싣는다. 원공시와 정정공시는 접수번호가 달라 목록(list.json)
+    만으로는 이을 수 없다 — 머리표의 **정정관련 공시서류제출일**이 원공시를 찾는 유일한 단서다.
+    """
+    soup = BeautifulSoup(html_or_xml_text, "html.parser")
+    for rows in _table_rows(soup):
+        target = _find_value(rows, "정정관련 공시서류제출일", "정정관련공시서류제출일")
+        if target is None:
+            continue
+        return {
+            "target_filed_date": parse_date_value(target),
+            "reason": None if _is_nullish(_find_value(rows, "정정사유")) else _find_value(rows, "정정사유"),
+            "corrected_on": parse_date_value(_find_value(rows, "정정일자")),
+        }
+    return None
 
 
 # ── 본문 ZIP 추출·디코딩 (jy fetch.decode_document_bytes·_select_primary_member 이식) ──

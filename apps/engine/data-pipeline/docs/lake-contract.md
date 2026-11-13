@@ -346,8 +346,10 @@ bucket policy/KMS의 추가 제약으로 오독하지 않도록 현재 dev의 bu
   source_vendor 파티션이 없다(멱등). 파티션은 `report_date`(rcept_dt, 공시 접수일) 하나, rcept_no 는
   파티션 내 행 키다. 같은 rcept_no 재적재(정정본 재수집)는 최신 fetched_at 우선. `source_vendor`(dart)는
   현재 KR·DART 단독이라 컬럼(provenance)이지 파티션이 아니다. 파서 출력(계약상대방·금액·매출액대비·
-  계약기간·confidence)에 메타 provenance(corp_code·ticker·corp_name·source_url)를 조인한다. graph
-  투영·theme 링킹·event 는 범위 밖(analysis-engine 소관).
+  계약기간·confidence)에 메타 provenance(corp_code·ticker·corp_name·source_url)를 조인한다. supply-v2
+  부터 계약(수주)일자(`contract_date`)·보고서명(`report_nm`)과 정정공시 머리표(`is_correction`·
+  `correction_target_filed_date`=원공시 제출일·`correction_reason`)를 함께 싣는다 — 정정공시를 새 계약
+  체결로 세지 않고 원계약 계보에 붙이는 단서다. graph 투영·theme 링킹·event 는 범위 밖(analysis-engine 소관).
 - **canonical(공시 사업부문, 정제 Step2)** — `canonical/disclosures/business_segment_fact/report_date=…/part-*.parquet`
   에 게이트 통과 fact 를 **(rcept_no, segment_ordinal) 키로 멱등 병합**. 공급계약과 동형(멱등·report_date
   파티션·source_vendor 컬럼)이나 **1 문서 → N 부문**(fan-out)이라 행키에 파스 순서 `segment_ordinal` 을
