@@ -170,6 +170,15 @@ class ExaEvidence:
         return source_page(source)
 
 
+def json_error_location(error, schema):
+    """Where a report submission stopped being JSON: the parser's fixed message, offsets and the last contract key, never values."""
+    definition = schema.model_json_schema()
+    fields = {key for model in [definition, *definition.get('$defs', {}).values()] for key in model.get('properties', {})}
+    keys = re.findall(r'"([^"\\]{1,64})"\s*:', error.doc[:error.pos])
+    return {'json_error': error.msg, 'position': error.pos, 'length': len(error.doc),
+            'field': (keys[-1] if keys[-1] in fields else 'FIELD') if keys else None}
+
+
 async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None, observe=None, market=None,
                        on_event=None, on_checkpoint=None, prior_report=None, followup_question=None, conversation=None):
     started = time.monotonic()
@@ -719,7 +728,8 @@ async def run_analysis(request, key, on_stage, *, model_call=None, evidence=None
                         repairs += 1
                         attempt, limit = repairs, 2 if role == 'opinion' else 1
                     emit('validation_failed', role=role, attempt=attempt, validation_step=validation_step,
-                         code='OUTPUT_JSON' if isinstance(error, json.JSONDecodeError) else 'OUTPUT_SCHEMA' if isinstance(error, ValidationError) else 'OUTPUT_CONTRACT')
+                         code='OUTPUT_JSON' if isinstance(error, json.JSONDecodeError) else 'OUTPUT_SCHEMA' if isinstance(error, ValidationError) else 'OUTPUT_CONTRACT',
+                         **(json_error_location(error, schema) if isinstance(error, json.JSONDecodeError) else {}))
                     if attempt > limit:
                         raise ValueError("OUTPUT_INVALID: " + str(error)[:500]) from error
                     low, high = LIMITS[role]
