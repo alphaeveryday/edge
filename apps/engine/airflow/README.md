@@ -1303,7 +1303,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 **현재 상태: SFN 이 실행한다.** `edge_etf_daily` 는 pause 로 배포되고, dev `daily_orchestrator` 는 기본값 SFN 이다. 평일 15:40 슬롯은 SFN `edge-dev-data-pipeline` 이 그대로 돈다. SFN 과 같은 것·달라진 것은 DAG 도크스트링에 있다.
 
 - 스텝은 SFN 시장 레인과 같은 21개다(수집 7·정제 6·직렬 2·적재 5·트리거 1). 명령은 `statemachine.tf` 잡 목록과 직렬 state 가 정본이고 `tests/sfn_commands.py` 가 대조한다. SFN 시장 스텝 집합이 바뀌면 `tests/test_etf_daily_dag.py` 가 실패한다.
-- **원장 밖 스텝이 하나 있다.** `collect_dart_financial`(CollectDartFinancial)은 카탈로그에 없다(하류 소비자 0, `ops/catalog.py` 제외 표). 실행권·성공 skip 을 쓰지 않고, 보류는 Airflow 에만 남는다. 런 판정(verdict·report)에는 SFN 처럼 들어간다.
+- **원장 밖 스텝이 하나 있다.** `collect_dart_financial`(CollectDartFinancial)은 카탈로그에 없다(하류 소비자 0, `ops/catalog.py` 제외 표). 실행권·성공 skip 을 쓰지 않고, 보류는 Airflow 에만 남는다. 런 판정(verdict·report)에는 SFN 처럼 들어간다. ⚠️ report 가 원장에 판정을 남기지 못한 run(dagrun_timeout·report 실패)은 Reconciler 가 원장 작업 20개로만 판정을 투영하므로, 이 스텝만 실패한 run 이 원장에 SUCCEEDED 로 남을 수 있다. 그 실패는 run 실패 SNS 와 Airflow 화면으로만 드러난다(SFN 은 실행 상태가 FAILED 로 남았다). 막으려면 이 작업을 카탈로그에 등록해야 한다 — 이관과 별개 결정이다.
 - **SFN 과 다른 순서.** 정제는 자기 데이터셋 수집만 기다린다(SFN 은 수집 7개 전체를 기다렸다). 정제→적재 관문(`load_instruments`)은 같다. 가격·투자자 수집이 먼저 슬롯을 잡는다(priority_weight).
 - terraform 값 인자 `--deadline-sec`(`krx_etf_deadline_sec`)는 장전 레인과 같은 `EDGE_LANE_ARGS` 경로로 받는다. 위 "장전 유니버스 레인"의 배포 순서 주의가 같이 적용된다.
 - IAM: `enrich_corp_code` 가 `rds_dart` task-def 를 쓴다. `envs/dev/main.tf` `batch_task_definition_families` 에 있어야 RunTask 가 된다(없으면 AccessDenied).
@@ -1312,7 +1312,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 - **전환·롤백.** 위 "운영 전환·롤백 절차(장중 수급)"를 따르되, 아래만 바꿔 읽는다.
   - ①·⑥: `pipeline_type = 'etf-daily'`.
   - ②: 작업 키 20개(DAG `TASK_KEYS`, `collect_dart_financial` 제외).
-  - ③: `check3` 의 family 목록을 `kis krx dart bigkinds rds rds_dart ops` 로, grep 패턴을 `ingest-price-raw|ingest-raw-nav|ingest-raw-etf-profile|ingest-raw-investor|ingest-raw-sector-index-daily|ingest-raw-etf --source krx|ingest-raw-financial --source dart|normalize-(price|etf|investor|sector-index-daily)|load-instruments|enrich-corp-code|load-(etf-nav|price-daily|etf-holdings|etf-flow|market-series-daily|price-triggers)` 로 바꾼다. 이 패턴은 장중 수급(`ingest-raw-investor-estimate`·`normalize-investor-estimate`)과 장전(`ingest-raw-etf --source krx`)도 잡는다 — 이 레인 run_id 인 줄만 판단에 쓴다.
+  - ③: `check3` 의 family 목록을 `kis krx dart bigkinds rds rds_dart ops` 로, grep 패턴을 `ingest-price-raw|ingest-raw-nav|ingest-raw-etf-profile|ingest-raw-investor|ingest-raw-sector-index-daily|ingest-raw-etf --source krx|ingest-raw-financial --source dart|normalize-(price|etf|investor|sector-index-daily)|load-instruments|enrich-corp-code|load-(etf-nav|price-daily|etf-holdings|etf-flow|market-series-daily|price-triggers)|etf-daily` 로 바꾼다. 끝의 `etf-daily` 는 이 레인의 plan·report(ops task-def) 태스크를 env 값(`OPS_PIPELINE_TYPE`·`OPS_RUN_KEY`)으로 잡는다 — 업무 명령만 거르면 DAG 가 시간 초과로 끝난 뒤 남은 ops 컨테이너를 놓친다. SFN 경로의 Planner(EventBridge `plan-run`)는 `OPS_PIPELINE_TYPE` 없이 떠(기본 etf-daily) 이 패턴에 걸리지 않는다 — 15:40 직후에 확인하지 않는 이유 중 하나다(아래 경계). 이 패턴은 장중 수급(`ingest-raw-investor-estimate`·`normalize-investor-estimate`)과 장전(`ingest-raw-etf --source krx`)도 잡는다 — 이 레인 run_id 인 줄만 판단에 쓴다.
   - ④: SFN `edge-dev-data-pipeline`.
   - 전환 변수: `envs/dev/main.tf` 의 `daily_orchestrator`. `"AIRFLOW"` 면 스케줄 `edge-dev-data-pipeline-daily` 가 DISABLED 가 된다. 슬롯 대조(`OPS_DAILY_SCHED_HHMM`)는 스케줄 상태와 무관하게 주입된다. `schedule_state = "DISABLED"` 로 끄지 않는다 — 다른 레인과 장치를 맞추고 롤백을 한 줄로 둔다.
   - 롤백 순서: `edge_etf_daily` pause → 위 ③~⑤ 종료 확인(queued·running·ECS 0) → 이 줄을 지우는 PR → apply. apply 를 먼저 하면 두 주체가 같은 슬롯을 계획한다.

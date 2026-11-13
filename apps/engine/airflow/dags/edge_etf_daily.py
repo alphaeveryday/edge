@@ -10,6 +10,8 @@ state — tests 가 인자까지 대조), 분기 규칙(ASL):
 - 끝에서 21개 중 하나라도 exit 0 이 아니면 런을 FAILED 로 마감한다(RawPartialCheck).
 - CollectDartFinancial 은 원장 카탈로그에 없다(하류 소비자 0 — catalog.py 제외 표). 같은 명령으로 돌리되 실행권·
   성공 skip 을 쓰지 않고(지킬 기대 작업이 없다) 보류도 원장에 옮기지 않는다. 런 판정에는 SFN 처럼 넣는다.
+  ⚠️ report 가 판정을 남기지 못하면 Reconciler 는 원장 작업 20개로만 투영해, 이 스텝만 실패한 run 이 원장에
+  SUCCEEDED 로 남을 수 있다(run 실패 SNS·Airflow 화면에는 드러난다 — README "시장 마감 수집 레인").
 FMP 4스텝은 `us_fmp_enabled` 일 때만 SFN 에 들어간다 — dev 는 꺼져 있어 이 DAG 엔 없다(tests 가 켜짐을 감지하면
 실패한다).
 달라진 것(의도):
