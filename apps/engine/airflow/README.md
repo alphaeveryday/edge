@@ -69,7 +69,7 @@
 
 ## 재시도·재접속·보류 정책(초기 운영)
 
-**선택.** 이번 첫 이관은 CAS·fencing을 선행 조건으로 두지 않는다. 대신 실행 상태가 불명확하면 자동 재실행을 멈추고, 기존 작업의 종료를 확인한 뒤에만 다시 돌린다. 자동 복구 일부를 포기하고, 장애 시 수집 공백을 받아들이는 결정이다. 자동 복구·동시 실행을 늘리려면 ALPHA-1057(쓰기 세대·CAS)을 먼저 해결해야 한다.
+**선택.** 이번 첫 이관은 CAS·fencing을 선행 조건으로 두지 않는다. 대신 실행 상태가 불명확하면 자동 재실행을 멈추고, 기존 작업의 종료를 확인한 뒤에만 다시 돌린다. 자동 복구 일부를 포기하고, 장애 시 수집 공백을 받아들이는 결정이다. 자동 복구, 그리고 **같은 산출물을 쓰는 실행의 동시 실행**(같은 슬롯 재실행·`max_active_runs>1`)을 늘리려면 ALPHA-1057(쓰기 세대·CAS)을 먼저 해결해야 한다. 같은 run 안에서 서로 다른 산출물을 쓰는 형제 스텝의 병렬(PARALLELISM 3, 2026-11)은 여기에 들지 않는다. 대조 결과(2026-11-13, CLI 코드 기준): 뉴스 태깅(lake `news_assertions`)과 문서 적재(DB `document`·`news_document`), 공시 정제 2개(`supply_contract_fact`·`business_segment_fact`), 원천 관측 3계열(`macro_observation`·`sector_classification`·`financial_metric`+`financial_report_version`, raw·canonical·quality_log·DB 표 모두 계열별)이 쓰는 곳이 서로 겹치지 않는다. 같이 쓰는 것은 원장(`ops_*`, task_key 별 행)뿐이다.
 
 **provider 실제 경로(amazon 9.36.0 `EcsRunTaskOperator.execute`, 코드 확인).**
 - `reattach=True`면 제출 전에 `startedBy=uuid(dag_id, task_id, run_id, map_index)`로 `ListTasks(desiredStatus=RUNNING)`만 조회한다. 같은 task instance의 모든 try가 같은 `startedBy`를 쓴다.
@@ -1522,7 +1522,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
    - 코드 가드가 다루는 것: lock을 얻은 실행도 같은 task_key에 원장상 끝나지 않은 시도나 ECS 보류가 있으면 업무를 시작하지 않는다(76). 로컬 재현: 같은 조건에서 B(다른 슬롯·같은 슬롯)는 76, 업무 실행 0(`scenario-hold` V1). Airflow는 결과를 모르는 태스크 옆에 새 태스크를 띄우지 않는다.
    - 운영 절차가 다루는 것: SFN·수동 실행과의 겹침(한 주체만), 보류 해제(종료 증거 확인 뒤), 전환·롤백 시점.
    - **아직 없는 것:** 파티션 저장소가 오래된 작업자의 쓰기를 거부하는 장치. lock 커넥션을 잃고도 이미 업무를 시작한 작업자는 끝까지 쓴다. 새 실행이 그 옆에서 시작하지 않을 뿐이다.
-   - **ALPHA-1057 재검토 조건:** 자동 복구(보류 없는 재시도)나 동시 실행(스텝 병렬·`max_active_runs>1`)을 늘릴 때, 또는 SFN·수동 경로를 계속 함께 쓸 때 쓰기 세대·CAS를 먼저 해결한다.
+   - **ALPHA-1057 재검토 조건:** 자동 복구(보류 없는 재시도)나 같은 산출물을 쓰는 실행의 동시 실행(같은 슬롯 재실행·`max_active_runs>1`, 같은 산출물을 쓰는 스텝의 병렬)을 늘릴 때, 또는 SFN·수동 경로를 계속 함께 쓸 때 쓰기 세대·CAS를 먼저 해결한다.
 3. **알려진 한계(팀 확인).**
    - **전날 이전 슬롯의 재처리는 주기 대조를 받지 않는다.** 주기 Reconciler는 가장 최근 예정일의 슬롯만 본다(ALPHA-565 사각). 그래서 과거 슬롯 재처리 run이 `report` 전에 죽으면 앞 판정이 남는다. 그 run_key를 `OPS_RUN_KEY`로 지정해 `reconcile`을 한 번 돌려야 한다.
    - **과거 슬롯 재처리 중 R02가 잠깐 켠다.** 새 업무 시도가 결론 나기 전 주기 대조가 돌면 판정이 NULL(미귀결)이 된다. 그 슬롯은 hard deadline이 이미 지났으므로 `report` 전까지 R02 P1이 뜬다. 멈춘 재처리를 숨기지 않기 위한 선택이다. 경보 소음으로 볼지 결정한다.
