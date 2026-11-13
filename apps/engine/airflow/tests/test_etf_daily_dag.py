@@ -100,9 +100,13 @@ def test_branch_rules_follow_the_sfn(dag_module):
                 "normalize_etf_nav": "collect_nav", "normalize_sector_index": "collect_sector_index"}
     # 정제는 자기 수집만 기다리고 수집이 실패해도 돈다(ASL NotifyRawPartial → Normalize). plan 실패면 안 돈다.
     # 정제 exit 2 는 성공 winner 를 확정한 부분 실패라 적재로 넘긴다(normalize_*_continue_check).
+    # 예외: normalize_etf 는 canonical holdings 를 쓰는데 가격·투자자 수집이 시작할 때 그 스냅샷으로 수집 종목을 정한다 —
+    # 두 수집보다 먼저 끝나면 종목이 실행 순서에 따라 바뀐다(SFN 은 수집 전체 뒤에 정제했다).
+    universe_readers = {"collect_price", "collect_investor"}
     for task_id in m.NORMALIZE_STEPS:
         op = dag.get_task(task_id)
-        assert op.upstream_task_ids == {"plan", collects[task_id]}, task_id
+        extra = universe_readers if task_id == "normalize_etf" else set()
+        assert op.upstream_task_ids == {"plan", collects[task_id]} | extra, task_id
         assert op.trigger_rule == "all_done_min_one_success"
         assert op.partial_exit_codes == (2,)
     # 정제 6개가 모두 0·2 여야 마스터 적재 — 하나라도 그 밖이면 적재 전부가 upstream_failed(NormalizeCheckResults Default).

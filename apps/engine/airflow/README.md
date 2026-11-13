@@ -1304,7 +1304,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 - 스텝은 SFN 시장 레인과 같은 21개다(수집 7·정제 6·직렬 2·적재 5·트리거 1). 명령은 `statemachine.tf` 잡 목록과 직렬 state 가 정본이고 `tests/sfn_commands.py` 가 대조한다. SFN 시장 스텝 집합이 바뀌면 `tests/test_etf_daily_dag.py` 가 실패한다.
 - **원장 밖 스텝이 하나 있다.** `collect_dart_financial`(CollectDartFinancial)은 카탈로그에 없다(하류 소비자 0, `ops/catalog.py` 제외 표). 실행권·성공 skip 을 쓰지 않고, 보류는 Airflow 에만 남는다. 런 판정(verdict·report)에는 SFN 처럼 들어간다. ⚠️ report 가 원장에 판정을 남기지 못한 run(dagrun_timeout·report 실패)은 Reconciler 가 원장 작업 20개로만 판정을 투영하므로, 이 스텝만 실패한 run 이 원장에 SUCCEEDED 로 남을 수 있다. 그 실패는 run 실패 SNS 와 Airflow 화면으로만 드러난다(SFN 은 실행 상태가 FAILED 로 남았다). 막으려면 이 작업을 카탈로그에 등록해야 한다 — 이관과 별개 결정이다.
-- **SFN 과 다른 순서.** 정제는 자기 데이터셋 수집만 기다린다(SFN 은 수집 7개 전체를 기다렸다). 정제→적재 관문(`load_instruments`)은 같다. 가격·투자자 수집이 먼저 슬롯을 잡는다(priority_weight).
+- **SFN 과 다른 순서.** 정제는 자기 데이터셋 수집만 기다린다(SFN 은 수집 7개 전체를 기다렸다). 예외로 `normalize_etf` 는 가격·투자자 수집도 기다린다 — 두 수집이 canonical holdings 로 수집 종목을 정하므로, 그 스냅샷을 쓰는 정제가 먼저 끝나면 종목이 실행 순서에 따라 바뀐다. 정제→적재 관문(`load_instruments`)은 같다. 가격·투자자 수집이 먼저 슬롯을 잡는다(priority_weight).
 - terraform 값 인자 `--deadline-sec`(`krx_etf_deadline_sec`)는 장전 레인과 같은 `EDGE_LANE_ARGS` 경로로 받는다. 위 "장전 유니버스 레인"의 배포 순서 주의가 같이 적용된다.
 - IAM: `enrich_corp_code` 가 `rds_dart` task-def 를 쓴다. `envs/dev/main.tf` `batch_task_definition_families` 에 있어야 RunTask 가 된다(없으면 AccessDenied).
 - 시간 상한은 dagrun_timeout 2700초다(SFN 21600초). SFN 실측(원장 25회, 10-09~11-12): 시작~끝 중앙 824초·최대 1255초, 가장 긴 스텝은 가격 수집 최대 807초. PARALLELISM=1 이면 긴 날 이 상한을 넘는다고 추정한다 — 전환 전 PARALLELISM 상향과 동시 실행 메모리 실측이 선행 조건이다.

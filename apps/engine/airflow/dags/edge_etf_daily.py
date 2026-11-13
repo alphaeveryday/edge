@@ -18,6 +18,9 @@ FMP 4스텝은 `us_fmp_enabled` 일 때만 SFN 에 들어간다 — dev 는 꺼�
 - 실행 요청 = 이 DAG run. plan 은 원장만 쓰고 SFN 을 시작하지 않는다(OPS_ORCHESTRATOR=AIRFLOW).
 - 정제는 수집 7개 전체가 아니라 **자기 데이터셋 수집만** 기다린다. 정제는 `--input-run-id` 로 그 데이터셋 raw 만
   읽으므로 결과가 같고, 짧은 수집의 정제가 긴 가격 수집과 겹쳐 돈다. 정제→적재 관문(LoadInstruments)은 같다.
+  예외: normalize_etf 는 가격·투자자 수집도 기다린다. 두 수집이 시작할 때 canonical KR holdings 최신 스냅샷으로
+  수집 종목을 정하는데(ingest_price_raw·ingest_raw_investor `universe_from_holdings`), normalize_etf 가 그 스냅샷을
+  쓴다 — 먼저 끝나면 수집 종목이 실행 순서에 따라 SFN 과 달라진다.
 - 수집 하나가 보류되면(ECS 결과 미상) 그 정제가 시작하지 않고 skip 되고, skip 이 load_instruments 로 번져 그날
   적재가 모두 멈춘다(EdgeStep stop_on_upstream_hold). SFN 엔 보류가 없었다.
 - 업무 미시작이 확인된 경우와 도는 태스크 재접속만 재시도한다(EdgeStep). SFN 스케줄은 재시도 0 이었다.
@@ -297,6 +300,9 @@ def build_dag(dag_id: str, *, schedule, step=EdgeStep, ecs_target: dict | None =
         for collect_step, normalize_step in pairs:
             plan >> collect_step >> normalize_step >> load_instruments
             plan >> normalize_step
+        # 가격·투자자 수집은 canonical holdings 로 수집 종목을 정한다 — 그 스냅샷을 쓰는 normalize_etf 가 먼저 끝나면
+        # 실행 순서에 따라 종목이 바뀐다. SFN 은 수집 전체가 끝난 뒤 정제해 늘 앞 스냅샷을 읽었다.
+        [collect_price, collect_investor] >> normalize_etf
         plan >> collect_dart_financial
         loads = [load_etf_nav, load_price_daily, load_etf_holdings, load_etf_flow, load_market_series]
         load_instruments >> enrich_corp_code >> loads >> load_price_triggers
