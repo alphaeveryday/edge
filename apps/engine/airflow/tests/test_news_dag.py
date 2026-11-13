@@ -80,8 +80,9 @@ def test_branch_rules_follow_the_sfn(dag_module):
 
 
 def test_documents_load_before_tagging_and_the_run_ends_before_the_minute_grid(dag_module):
-    # PARALLELISM=1 이라 형제 스텝은 가중치 순으로 하나씩 돈다. 동률이면 태깅(00:10 에 14~20분)이 먼저 잡혀, run 이 시간
-    # 상한에 잘릴 때 06:00 전망이 읽는 기사까지 빠졌다(ALPHA-1475). 문서 적재는 태깅 결과를 쓰지 않는다.
+    # 슬롯이 모자라면(PARALLELISM=1 이던 때, 또는 다른 레인 run 과 겹칠 때) 형제 스텝은 가중치 순으로 잡힌다. 동률이면
+    # 태깅(00:10 에 14~20분)이 먼저 잡혀, run 이 시간 상한에 잘릴 때 06:00 전망이 읽는 기사까지 빠졌다(ALPHA-1475).
+    # 문서 적재는 태깅 결과를 쓰지 않는다.
     dag = dag_module.dag
 
     def scheduler_weight(task_id):          # 기본 weight_rule(downstream): 자기 + 모든 하류의 priority_weight

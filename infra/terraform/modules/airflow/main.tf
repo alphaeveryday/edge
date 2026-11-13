@@ -394,9 +394,10 @@ locals {
     AIRFLOW__CORE__DAGS_FOLDER                 = "/opt/edge/dags"
     AIRFLOW__CORE__LOAD_EXAMPLES               = "False"
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION = "True"
-    # 동시 task 상한 1 — 장중 수급은 직렬(max_active_runs=1). LocalExecutor 는 이 수만큼 워커를 미리 띄운다(4 면 약 120MiB).
-    # 검증 DAG 와 겹치면 차례로 돈다. 다른 레인을 옮길 때 다시 잰다.
-    AIRFLOW__CORE__PARALLELISM                        = "1"
+    # 동시 task 상한 3(호스트 전체) — 시장 마감 수집의 병렬 수집·정제용. 다른 레인의 형제 스텝(뉴스 태깅·문서 적재,
+    # 공시 정제 2개, 원천 관측 3계열)도 함께 돈다. LocalExecutor 는 이 수만큼 워커를 미리 띄운다(워커당 쉴 때 약 30MiB,
+    # 작업 중 약 +105MiB). 3 에서의 메모리는 아직 재지 않았다(envs/dev task_memory 주석).
+    AIRFLOW__CORE__PARALLELISM                        = "3"
     AIRFLOW__DAG_PROCESSOR__PARSING_PROCESSES         = "1"
     AIRFLOW__CORE__EXECUTION_API_SERVER_URL           = "http://localhost:${local.api_port}/execution/"
     AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_USERS          = "admin:admin"
