@@ -166,6 +166,19 @@ variable "schedule_state" {
   default     = "DISABLED"
 }
 
+variable "daily_orchestrator" {
+  # 레인별 SFN→Airflow 이관(news_orchestrator 와 같은 장치). AIRFLOW 면 시장 마감 수집 레인의 EventBridge 스케줄이
+  # 꺼진다(Planner·SFN 미시작). 슬롯 대조(OPS_DAILY_SCHED_HHMM)는 원래 스케줄 상태와 무관하게 주입된다(ops_ledger.tf).
+  # 이미 뜬 ECS 태스크는 멈추지 않는다 — 바꾸기 전에 README 의 종료 확인 절차를 따른다.
+  description = "시장 마감 수집 레인(etf-daily)의 실행 주체(SFN|AIRFLOW). AIRFLOW 면 SFN 스케줄 DISABLED, 슬롯 대조는 유지."
+  type        = string
+  default     = "SFN"
+  validation {
+    condition     = contains(["SFN", "AIRFLOW"], var.daily_orchestrator)
+    error_message = "daily_orchestrator 는 SFN 또는 AIRFLOW."
+  }
+}
+
 # 뉴스 SFN 스케줄(ALPHA-553). 키는 스케줄 이름 접미사, 값은 cron(Asia/Seoul, schedule_timezone 공유).
 # 00:10 = 어제 하루를 통째로 닫는다. 08:10 = 밤새 유입분을 장 시작 전에 배치 코퍼스로 확정한다.
 #

@@ -1203,7 +1203,7 @@ resource "aws_cloudwatch_metric_alarm" "execution_timed_out" {
 
 resource "aws_scheduler_schedule" "daily" {
   name                         = "${var.name}-daily"
-  state                        = var.schedule_state
+  state                        = var.daily_orchestrator == "AIRFLOW" ? "DISABLED" : var.schedule_state
   schedule_expression          = var.schedule_expression
   schedule_expression_timezone = var.schedule_timezone
 

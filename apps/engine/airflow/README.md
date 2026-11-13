@@ -14,6 +14,7 @@
 | `dags/edge_disclosure.py` | 공시 보충 배치 DAG(ALPHA-1407, 평일 19:30): `plan → collect → {정제 2개} → load → report → verdict`. 생성 시 pause. dev 는 10-21 전환으로 Airflow 가 실행한다(ALPHA-1425, SFN 스케줄 DISABLED) — 아래 "공시 보충 배치 레인" |
 | `dags/edge_premarket.py` | 장전 유니버스 DAG(ALPHA-1408, 평일 07:00, 원장 밖): `collect → normalize → universe → verdict`. 생성 시 pause. dev 는 10-23 전환으로 Airflow 가 실행한다(ALPHA-1429, SFN 스케줄 DISABLED) — 아래 "장전 유니버스 레인" |
 | `dags/edge_news.py` | 뉴스 DAG(ALPHA-1409, 매일 00:10·08:10): `plan → collect → normalize → {tag, load_documents} → load_assertions → assemble → report → verdict`. 생성 시 pause. dev 는 10-24 전환으로 Airflow 가 실행한다(ALPHA-1447, SFN 스케줄 DISABLED) — 아래 "뉴스 레인" |
+| `dags/edge_etf_daily.py` | 시장 마감 수집 DAG(평일 15:40): `plan → 수집 7개 → {각 수집의 정제 6개} → load_instruments → enrich_corp_code → {적재 5개} → load_price_triggers → report → verdict`. 생성 시 pause. dev 는 아직 SFN 이 실행한다(`daily_orchestrator` 기본 SFN) — 아래 "시장 마감 수집 레인" |
 | `dags/edge_dividend_daily.py` | 배당 갱신 전용 DAG: 03:00 KST, 기존 배치 종료 확인 → plan → collect → normalize → load → report. 생성 시 pause. run 실패 시 SNS 실패 통보, 03:00 슬롯 결측 판정은 `ops` 태스크 정의 `OPS_DIVIDEND_DAILY_SCHED_HHMM`(모듈 local `dividend_daily_schedule_hhmm`, ALPHA-1443). 수집·조회 범위 계약과 활성화 순서는 `docs/design/portfolio-dividend-ledger.md` |
 | `tests/` | DagBag 파싱, terraform(슬롯·명령) 대조, exit code·당일 수집·재처리·보고·활성화 규칙. CI `test-airflow.yml`이 공식 Airflow 이미지(다이제스트 고정) 안에서 실행한다 |
 | `dags/edge_investor_intraday_verify.py` | 격리 검증 DAG — 운영 DAG 와 같은 `build_dag`·EdgeStep, 검증 전용 클러스터·태스크 정의, conf 장애 주입. `EDGE_VERIFY_CLUSTER` 가 있을 때만 등록 |
@@ -1296,6 +1297,26 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
   - 전환 변수: `envs/dev/main.tf` 의 `news_orchestrator`. `"AIRFLOW"` 면 스케줄 2개가 DISABLED 가 된다. 슬롯 대조(`OPS_NEWS_SCHED_HHMM`)는 원래 스케줄 상태와 무관하게 주입된다.
   - 롤백 순서: `edge_news` pause → 위 ③~⑤ 종료 확인(queued·running·ECS 0) → 이 줄을 지우는 PR → apply. apply 를 먼저 하면 두 주체가 같은 슬롯을 계획한다.
   - 경계: 08:10 run 이 끝난 뒤, 그날 00:10 전에 바꾼다.
+
+## 시장 마감 수집 레인(etf-daily)
+
+**현재 상태: SFN 이 실행한다.** `edge_etf_daily` 는 pause 로 배포되고, dev `daily_orchestrator` 는 기본값 SFN 이다. 평일 15:40 슬롯은 SFN `edge-dev-data-pipeline` 이 그대로 돈다. SFN 과 같은 것·달라진 것은 DAG 도크스트링에 있다.
+
+- 스텝은 SFN 시장 레인과 같은 21개다(수집 7·정제 6·직렬 2·적재 5·트리거 1). 명령은 `statemachine.tf` 잡 목록과 직렬 state 가 정본이고 `tests/sfn_commands.py` 가 대조한다. SFN 시장 스텝 집합이 바뀌면 `tests/test_etf_daily_dag.py` 가 실패한다.
+- **원장 밖 스텝이 하나 있다.** `collect_dart_financial`(CollectDartFinancial)은 카탈로그에 없다(하류 소비자 0, `ops/catalog.py` 제외 표). 실행권·성공 skip 을 쓰지 않고, 보류는 Airflow 에만 남는다. 런 판정(verdict·report)에는 SFN 처럼 들어간다.
+- **SFN 과 다른 순서.** 정제는 자기 데이터셋 수집만 기다린다(SFN 은 수집 7개 전체를 기다렸다). 정제→적재 관문(`load_instruments`)은 같다. 가격·투자자 수집이 먼저 슬롯을 잡는다(priority_weight).
+- terraform 값 인자 `--deadline-sec`(`krx_etf_deadline_sec`)는 장전 레인과 같은 `EDGE_LANE_ARGS` 경로로 받는다. 위 "장전 유니버스 레인"의 배포 순서 주의가 같이 적용된다.
+- IAM: `enrich_corp_code` 가 `rds_dart` task-def 를 쓴다. `envs/dev/main.tf` `batch_task_definition_families` 에 있어야 RunTask 가 된다(없으면 AccessDenied).
+- 시간 상한은 dagrun_timeout 2700초다(SFN 21600초). SFN 실측(원장 25회, 10-09~11-12): 시작~끝 중앙 824초·최대 1255초, 가장 긴 스텝은 가격 수집 최대 807초. PARALLELISM=1 이면 긴 날 이 상한을 넘는다고 추정한다 — 전환 전 PARALLELISM 상향과 동시 실행 메모리 실측이 선행 조건이다.
+- 통보: SFN 의 부분 실패 즉시 통보 3종·NotifyFailure·시간 초과 알람 대신 run 실패 SNS 한 통(dagrun_timeout 포함)이다. 본문에 `pipeline_run_id` 를 싣는다. 실패 런의 raw 는 그 값으로 `--input-run-id` 재정제한다(`statemachine.tf` NormalizeParallel 앞 주석).
+- **전환·롤백.** 위 "운영 전환·롤백 절차(장중 수급)"를 따르되, 아래만 바꿔 읽는다.
+  - ①·⑥: `pipeline_type = 'etf-daily'`.
+  - ②: 작업 키 20개(DAG `TASK_KEYS`, `collect_dart_financial` 제외).
+  - ③: `check3` 의 family 목록을 `kis krx dart bigkinds rds rds_dart ops` 로, grep 패턴을 `ingest-price-raw|ingest-raw-nav|ingest-raw-etf-profile|ingest-raw-investor|ingest-raw-sector-index-daily|ingest-raw-etf --source krx|ingest-raw-financial --source dart|normalize-(price|etf|investor|sector-index-daily)|load-instruments|enrich-corp-code|load-(etf-nav|price-daily|etf-holdings|etf-flow|market-series-daily|price-triggers)` 로 바꾼다. 이 패턴은 장중 수급(`ingest-raw-investor-estimate`·`normalize-investor-estimate`)과 장전(`ingest-raw-etf --source krx`)도 잡는다 — 이 레인 run_id 인 줄만 판단에 쓴다.
+  - ④: SFN `edge-dev-data-pipeline`.
+  - 전환 변수: `envs/dev/main.tf` 의 `daily_orchestrator`. `"AIRFLOW"` 면 스케줄 `edge-dev-data-pipeline-daily` 가 DISABLED 가 된다. 슬롯 대조(`OPS_DAILY_SCHED_HHMM`)는 스케줄 상태와 무관하게 주입된다. `schedule_state = "DISABLED"` 로 끄지 않는다 — 다른 레인과 장치를 맞추고 롤백을 한 줄로 둔다.
+  - 롤백 순서: `edge_etf_daily` pause → 위 ③~⑤ 종료 확인(queued·running·ECS 0) → 이 줄을 지우는 PR → apply. apply 를 먼저 하면 두 주체가 같은 슬롯을 계획한다.
+  - 경계: 15:40 run 이 끝난 뒤, 다음 거래일 15:40 전에 바꾼다.
 
 ## 원천 관측 레인(source-daily, ALPHA-1130)
 

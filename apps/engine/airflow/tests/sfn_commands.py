@@ -31,7 +31,9 @@ def sfn_command(state: str) -> tuple[str, list[str]]:
     matches += re.findall(rf'^\s*{state} = merge\(local\.ecs_run_task_base, \{{.*?TaskDefinition = '
                           rf'aws_ecs_task_definition\.this\["(\w+)"\]\.arn.*?"Command\.\$" = "States\.Array\((.*?)\)"$',
                           tf, re.M | re.S)
-    assert len(matches) == 1, f"{state} 잡이 data-pipeline 모듈에 하나가 아니다: {len(matches)}"
+    # 같은 state 가 잡 목록과 직렬 state 둘 다에 있으면(시장 LoadPriceTriggers — 잡 목록 항목은 원장·CLI 정본으로 남고
+    # ASL 은 직렬 state 로 돈다) 두 정의가 같을 때만 받는다. 다르면 어느 쪽이 도는지 이 헬퍼가 정하지 않는다.
+    assert len(set(matches)) == 1, f"{state} 잡이 data-pipeline 모듈에 하나가 아니다: {matches}"
     taskdef, raw = matches[0]
     args = []
     for token in (a.strip().strip("'") for a in raw.split(",")):
