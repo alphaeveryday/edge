@@ -753,7 +753,9 @@ module "airflow" {
   # 실제 AWS 단기 검증(ALPHA-1119, 2026-09-29~30) 결과: micro 는 등록 916MiB·호스트 전역 OOM 으로 불가, small·1024 는
   # 업무 task 실행 중 태스크 cgroup OOM 으로 불가. 1408 은 유휴·재시작만 확인했다(업무 실행은 검증 도구 결함으로 미검증).
   # 근거: apps/engine/airflow/README.md "실제 AWS 단기 검증".
-  instance_type = "t4g.small"
+  # medium(4 GiB)은 시장 마감 수집 이관(동시 실행 3·태스크 2560MiB)을 위해서다. small 의 등록 메모리 1846MiB 에는 2560 이
+  # 안 들어간다. 이 값만 먼저 바꾸고 instance refresh 를 끝낸 뒤에 task_memory 를 올린다(README "구성과 선택 이유").
+  instance_type = "t4g.medium"
   task_memory   = 1408
   # ALPHA-1141 상시 운영(2026-10-03 승인) — 장중 수급의 실행 환경. 기간에 따라 내리는 장치는 두지 않는다.
   # 장애 대응은 중단 경보(modules/airflow/stop.tf)와 README 롤백 절차가 맡는다.

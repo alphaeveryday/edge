@@ -222,7 +222,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 |---|---|---|
 | 실행 방식 | 일반 ECS on EC2(ASG + Capacity Provider) | ECS Managed Instances 가 아니다(별도 관리 요금). MWAA 는 SCP 거부 |
 | 클러스터 | 전용 `edge-dev-airflow` | worker 클러스터의 capacity provider 목록은 `aws_ecs_cluster_capacity_providers` 가 통째로 소유한다. EC2 용량을 더하면 기존 리소스를 고치게 된다. 클러스터는 무료다 |
-| 호스트 | **t4g.small**(arm64, 2 vCPU·2 GiB) 1대, ASG `host_count`(1/0) | micro 는 로컬 사양 검증과 실제 EC2 검증 모두에서 불가였다(아래 "사양 검증"·"실제 AWS 단기 검증 결과"). medium 은 small 이 모자란 근거가 없다 |
+| 호스트 | **t4g.medium**(arm64, 2 vCPU·4 GiB) 1대, ASG `host_count`(1/0) | micro 는 로컬 사양 검증과 실제 EC2 검증 모두에서 불가였다(아래 "사양 검증"·"실제 AWS 단기 검증 결과"). 장중 수급 하나는 small(등록 1846MiB)·태스크 1408MiB 로 돌았다. 시장 마감 수집을 옮기려면 동시 실행 3·태스크 2560MiB 가 필요하고, 2560 은 small 에 배치되지 않는다. 그래서 medium 으로 올린다(2026-11). medium 의 등록 메모리는 아직 재지 않았다(약 3,800MiB 로 추정). ⚠️ 순서: 호스트 타입을 먼저 바꾸고 instance refresh(아래 "장애 범위와 호스트 교체")까지 끝낸 뒤 task_memory 를 올린다. 작은 호스트에 큰 태스크 리비전이 먼저 배포되면 옛 태스크만 멈추고 새 태스크는 자리를 못 잡는다 |
 | AMI | ECS 최적화 AL2023 arm64 **고정**(`ami_id`) | SSM recommended 를 data 로 읽으면 사람이 고르지 않은 시각(머지 = apply)에 교체가 준비된다 |
 | 서비스 | 서비스 1개·태스크 1개 안에 `api-server`·`scheduler`·`dag-processor`(awsvpc) | 세 컨테이너가 localhost 를 공유한다. LocalExecutor 의 task 프로세스가 Execution API 를 `http://localhost:8080/execution/` 로 부른다. 별도 서비스로 나누면 서비스 간 이름 해석(Service Connect 등)이 필요하다 |
 | Executor | LocalExecutor, `parallelism=1`, DAG 파싱 프로세스 1, `task_queued_timeout=3600` | 장중 수급은 직렬이다(`max_active_runs=1`). LocalExecutor 는 parallelism 만큼 워커를 미리 띄운다(4 면 약 120MiB). 검증 DAG 와 겹치면 차례로 돈다. Celery·Redis·Kubernetes 를 쓸 근거가 없다. 큐에 넣을 때 발급하는 작업 토큰의 수명이 `task_queued_timeout` 이라, 기본 600초면 앞 작업이 10분을 넘길 때 뒤 작업이 시작 순간 인증에 실패한다(ALPHA-1473). LocalExecutor 는 `revoke_task` 가 없어 대기 초과 재큐잉은 일어나지 않는다 |
@@ -750,27 +750,27 @@ aws ssm start-session --target "$iid" --document-name AWS-StartPortForwardingSes
 
 **늘어나는 비용 — 안별 비교(USD/월)**
 
-| 항목 | 단가 | #981 원안: medium + 별도 RDS | #981 2차안: small + 별도 RDS | **small + 기존 RDS(현재 Terraform)** | micro + 기존 RDS(실제 AWS 검증에서 불가) |
-|---|---|---|---|---|---|
-| EC2 | medium 0.0416·small 0.0208·micro 0.0104 /h | 30.37 | 15.18 | 15.18 | 7.59 |
-| EBS gp3 30GiB(ECS AMI 루트 최소) | 0.0912 /GB·월 | 2.74 | 2.74 | 2.74 | 2.74 |
-| RDS db.t4g.micro + gp3 20GB | 0.025 /h · 0.131 /GB·월 | 20.87 | 20.87 | 0(기존 인스턴스) | 0 |
-| Secrets Manager | 0.40 /개 | 0.80(2개) | 0.80 | 0.40(앱 1개 — DB 비밀번호 포함) | 0.40 |
-| CloudWatch Logs 수집(추정 2~4GB) | 0.76 /GB | 1.5~3.0 | 1.5~3.0 | 1.5~3.0 | 1.5~3.0 |
-| CloudWatch 알람 | 0.10 /개 | 0.20 | 0.20 | 0.10 | 0.10 |
-| ECR·NAT 처리량 | 0.10 /GB·0.059 /GB | 0.5~1.1 | 0.5~1.1 | 0.5~1.1 | 0.5~1.1 |
-| **합계** | | **약 57~59** | **약 42~44** | **약 20~23** | 약 13~15 |
+| 항목 | 단가 | #981 원안: medium + 별도 RDS | #981 2차안: small + 별도 RDS | small + 기존 RDS(2026-10~11 운영) | **medium + 기존 RDS(현재 Terraform)** | micro + 기존 RDS(실제 AWS 검증에서 불가) |
+|---|---|---|---|---|---|---|
+| EC2 | medium 0.0416·small 0.0208·micro 0.0104 /h | 30.37 | 15.18 | 15.18 | 30.37 | 7.59 |
+| EBS gp3 30GiB(ECS AMI 루트 최소) | 0.0912 /GB·월 | 2.74 | 2.74 | 2.74 | 2.74 | 2.74 |
+| RDS db.t4g.micro + gp3 20GB | 0.025 /h · 0.131 /GB·월 | 20.87 | 20.87 | 0(기존 인스턴스) | 0(기존 인스턴스) | 0 |
+| Secrets Manager | 0.40 /개 | 0.80(2개) | 0.80 | 0.40(앱 1개 — DB 비밀번호 포함) | 0.40 | 0.40 |
+| CloudWatch Logs 수집(추정 2~4GB) | 0.76 /GB | 1.5~3.0 | 1.5~3.0 | 1.5~3.0 | 1.5~3.0 | 1.5~3.0 |
+| CloudWatch 알람 | 0.10 /개 | 0.20 | 0.20 | 0.10 | 0.10 | 0.10 |
+| ECR·NAT 처리량 | 0.10 /GB·0.059 /GB | 0.5~1.1 | 0.5~1.1 | 0.5~1.1 | 0.5~1.1 | 0.5~1.1 |
+| **합계** | | **약 57~59** | **약 42~44** | 약 20~23 | **약 36~38** | 약 13~15 |
 
 - **CPU 크레딧:** 이 계정의 t4g 기본 크레딧 방식은 **unlimited** 다(`get-default-credit-specification` 확인). 평균 CPU 가 기준선을 넘으면 넘은 만큼 **0.04 USD/vCPU·시간**을 낸다(서울 가격표 `APN2-CPUCredits:t4g`).
-  - 기준선(인스턴스 전체)은 micro 0.2·small 0.4 vCPU 다(AWS 버스터블 문서 값).
-  - 예: small 에서 평균 0.5 vCPU 면 (0.5 − 0.4) × 730 × 0.04 ≈ 2.9 USD/월.
+  - 기준선(인스턴스 전체)은 micro 0.2·small 0.4·medium 0.4 vCPU 다(AWS 버스터블 문서 값). small 과 medium 은 vCPU 수와 기준선이 같아 크레딧 조건이 바뀌지 않는다(청구로는 미확인).
+  - 예: small·medium 에서 평균 0.5 vCPU 면 (0.5 − 0.4) × 730 × 0.04 ≈ 2.9 USD/월.
   - 로컬 C1 평균은 0.03~0.04 개발기 코어였다. Graviton2 에서의 값은 실제 AWS 검증에서 `CPUCreditUsage`·`CPUSurplusCreditsCharged`로 확인한다.
 - **할인·무료 혜택:** 반영하지 않았다(계정 적용을 확인하지 않았다).
 - **늘지 않는 것(0원):** 공인 IPv4 0개(private 서브넷·EIP 없음), ALB 없음, VPC 엔드포인트 추가 없음, SSM Session Manager 무료. ECS 관리 요금도 없다(ECS on EC2 는 EC2·EBS 만 과금한다, Managed Instances 아님).
 - **기존 RDS 재사용 안의 숨은 비용:** 인스턴스 요금은 0이지만, 영향이 크면 `edge-dev` 를 상향해야 할 수 있다. db.t4g.small → medium 이면 +37.23 USD/월(0.051 → 0.102 /h, 서울 공개 단가). 그러면 별도 micro(20.87)보다 비싸다. 그래서 재사용은 위 "기존 RDS 재사용 평가"의 실제 검증 뒤에 정했다(2026-10-02).
 
 **일시적으로 늘어나는 것**
-- 호스트 교체 때 두 번째 small: 약 15분 × 0.0208 ≈ 0.005/회.
+- 호스트 교체 때 두 번째 medium: 약 15분 × 0.0416 ≈ 0.01/회.
 - 배포마다 마이그레이션 Fargate ARM64 약 1분: 0.01 미만.
 - 격리 검증 태스크(Fargate x86 0.25 vCPU·0.5GB, 수백 회 × 1~2분): 합계 약 0.1~0.5.
 
