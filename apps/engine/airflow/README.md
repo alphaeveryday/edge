@@ -1302,14 +1302,14 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 **현재 상태(2026-11-14): Airflow 가 실행한다(ALPHA-1498).** dev `daily_orchestrator = "AIRFLOW"` — SFN `edge-dev-data-pipeline` 의 15:40 EventBridge 스케줄(`edge-dev-data-pipeline-daily`)은 DISABLED, 슬롯 대조(`OPS_DAILY_SCHED_HHMM`)는 그대로다. 평일 15:40 슬롯은 `edge_etf_daily`(unpause)가 돈다. 마지막 SFN 슬롯은 11-13 15:40(SUCCEEDED), 첫 Airflow 슬롯은 11-16 15:40 이다. SFN 상태 머신은 롤백용으로 남는다. SFN 과 같은 것·달라진 것은 DAG 도크스트링에 있다.
 
-- **전환 전 수동 시험은 업무를 돌리지 못했다.** 11-13 16:37 수동 run 은 `logical_date` 없이 trigger 해 `plan` 템플릿 렌더링에서 실패했다(ECS 0, 원장 행 0 — 아래 원천 관측 레인 표의 ④와 같은 원인). 동시 실행 3 의 메모리·소요 실측과 SFN 대조는 첫 정기 run(11-16 15:40)이 처음이다(사용자 결정 11-14).
+- **전환 전 수동 시험(11-13, 2회).** 16:37 첫 run 은 `logical_date` 없이 trigger 해 `plan` 템플릿 렌더링에서 실패했다(ECS 0, 원장 행 0 — 아래 원천 관측 레인 표의 ④와 같은 원인). 16:49 재시도 run(`--logical-date` 지정, run_key `etf-daily:2026-11-13T16:49`)은 1,514초에 성공했다. 원장 20/20 FULFILLED, 3개 동시 실행이 984초 겹쳤고, 메모리 기준(OOM 0·MemAvailable 최소 1,586 MiB·끝나고 30분 안 회복)을 넘지 않았다. 같은 날 15:40 SFN 과 작업별 records_out 은 20개 중 19개가 같다. `LOAD_PRICE_TRIGGERS` 만 10·1 인데, 이 값은 그 run 이 새로 만든 행 수라 SFN 이 먼저 만든 행을 건너뛴 결과다. 다른 날 반복(M2)은 하지 않았다 — 반복 run 의 메모리 누적과 정기 run 대조는 첫 정기 run(11-16 15:40)부터 본다(사용자 결정 11-14). 정기 run 의 SFN 대비 대조는 같은 요일끼리 한다 — 가격·수급 수집 창(오늘−5일)에 금요일만 거래일이 5개라 행 수가 다르다.
 
 - 스텝은 SFN 시장 레인과 같은 21개다(수집 7·정제 6·직렬 2·적재 5·트리거 1). 명령은 `statemachine.tf` 잡 목록과 직렬 state 가 정본이고 `tests/sfn_commands.py` 가 대조한다. SFN 시장 스텝 집합이 바뀌면 `tests/test_etf_daily_dag.py` 가 실패한다.
 - **원장 밖 스텝이 하나 있다.** `collect_dart_financial`(CollectDartFinancial)은 카탈로그에 없다(하류 소비자 0, `ops/catalog.py` 제외 표). 실행권·성공 skip 을 쓰지 않고, 보류는 Airflow 에만 남는다. 런 판정(verdict·report)에는 SFN 처럼 들어간다. ⚠️ report 가 원장에 판정을 남기지 못한 run(dagrun_timeout·report 실패)은 Reconciler 가 원장 작업 20개로만 판정을 투영하므로, 이 스텝만 실패한 run 이 원장에 SUCCEEDED 로 남을 수 있다. 그 실패는 run 실패 SNS 와 Airflow 화면으로만 드러난다(SFN 은 실행 상태가 FAILED 로 남았다). 막으려면 이 작업을 카탈로그에 등록해야 한다 — 이관과 별개 결정이다.
 - **SFN 과 다른 순서.** 정제는 자기 데이터셋 수집만 기다린다(SFN 은 수집 7개 전체를 기다렸다). 예외로 `normalize_etf` 는 가격·투자자 수집도 기다린다 — 두 수집이 canonical holdings 로 수집 종목을 정하므로, 그 스냅샷을 쓰는 정제가 먼저 끝나면 종목이 실행 순서에 따라 바뀐다. 정제→적재 관문(`load_instruments`)은 같다. 가격·투자자 수집이 먼저 슬롯을 잡는다(priority_weight).
 - terraform 값 인자 `--deadline-sec`(`krx_etf_deadline_sec`)는 장전 레인과 같은 `EDGE_LANE_ARGS` 경로로 받는다. 위 "장전 유니버스 레인"의 배포 순서 주의가 같이 적용된다.
 - IAM: `enrich_corp_code` 가 `rds_dart` task-def 를 쓴다. `envs/dev/main.tf` `batch_task_definition_families` 에 있어야 RunTask 가 된다(없으면 AccessDenied).
-- 시간 상한은 dagrun_timeout 2700초다(SFN 21600초). SFN 실측(원장 25회, 10-09~11-12): 시작~끝 중앙 824초·최대 1255초, 가장 긴 스텝은 가격 수집 최대 807초. PARALLELISM=1 이면 긴 날 이 상한을 넘는다고 추정한다(그래서 1 로 되돌리는 것은 이 레인의 롤백 수단이 아니다 — 롤백은 SFN 복귀). PARALLELISM 은 3 으로 올렸다(2026-11). 그 위의 동시 실행 메모리 실측은 첫 정기 run 이 한다(위 현재 상태).
+- 시간 상한은 dagrun_timeout 2700초다(SFN 21600초). SFN 실측(원장 25회, 10-09~11-12): 시작~끝 중앙 824초·최대 1255초, 가장 긴 스텝은 가격 수집 최대 807초. PARALLELISM=1 이면 긴 날 이 상한을 넘는다고 추정한다(그래서 1 로 되돌리는 것은 이 레인의 롤백 수단이 아니다 — 롤백은 SFN 복귀). PARALLELISM 은 3 으로 올렸다(2026-11). 그 위의 동시 실행 메모리는 수동 시험 1회로 쟀다(위 현재 상태).
 - 통보: SFN 의 부분 실패 즉시 통보 3종·NotifyFailure·시간 초과 알람 대신 run 실패 SNS 한 통(dagrun_timeout 포함)이다. 본문에 `pipeline_run_id` 를 싣는다. 실패 런의 raw 는 그 값으로 `--input-run-id` 재정제한다(`statemachine.tf` NormalizeParallel 앞 주석).
 - **전환·롤백.** 위 "운영 전환·롤백 절차(장중 수급)"를 따르되, 아래만 바꿔 읽는다.
   - ①·⑥: `pipeline_type = 'etf-daily'`.
