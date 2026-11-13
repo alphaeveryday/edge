@@ -69,7 +69,7 @@
 
 ## 재시도·재접속·보류 정책(초기 운영)
 
-**선택.** 이번 첫 이관은 CAS·fencing을 선행 조건으로 두지 않는다. 대신 실행 상태가 불명확하면 자동 재실행을 멈추고, 기존 작업의 종료를 확인한 뒤에만 다시 돌린다. 자동 복구 일부를 포기하고, 장애 시 수집 공백을 받아들이는 결정이다. 자동 복구·동시 실행을 늘리려면 ALPHA-1057(쓰기 세대·CAS)을 먼저 해결해야 한다.
+**선택.** 이번 첫 이관은 CAS·fencing을 선행 조건으로 두지 않는다. 대신 실행 상태가 불명확하면 자동 재실행을 멈추고, 기존 작업의 종료를 확인한 뒤에만 다시 돌린다. 자동 복구 일부를 포기하고, 장애 시 수집 공백을 받아들이는 결정이다. 자동 복구, 그리고 **같은 산출물을 쓰는 실행의 동시 실행**(같은 슬롯 재실행·`max_active_runs>1`)을 늘리려면 ALPHA-1057(쓰기 세대·CAS)을 먼저 해결해야 한다. 같은 run 안에서 서로 다른 산출물을 쓰는 형제 스텝의 병렬(PARALLELISM 3, 2026-11)은 여기에 들지 않는다. 대조 결과(2026-11-13, CLI 코드 기준): 뉴스 태깅(lake `news_assertions`)과 문서 적재(DB `document`·`news_document`), 공시 정제 2개(`supply_contract_fact`·`business_segment_fact`), 원천 관측 3계열(`macro_observation`·`sector_classification`·`financial_metric`+`financial_report_version`, raw·canonical·quality_log·DB 표 모두 계열별)이 쓰는 곳이 서로 겹치지 않는다. 같이 쓰는 것은 원장(`ops_*`, task_key 별 행)뿐이다.
 
 **provider 실제 경로(amazon 9.36.0 `EcsRunTaskOperator.execute`, 코드 확인).**
 - `reattach=True`면 제출 전에 `startedBy=uuid(dag_id, task_id, run_id, map_index)`로 `ListTasks(desiredStatus=RUNNING)`만 조회한다. 같은 task instance의 모든 try가 같은 `startedBy`를 쓴다.
@@ -225,7 +225,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 | 호스트 | **t4g.medium**(arm64, 2 vCPU·4 GiB) 1대, ASG `host_count`(1/0) | micro 는 로컬 사양 검증과 실제 EC2 검증 모두에서 불가였다(아래 "사양 검증"·"실제 AWS 단기 검증 결과"). 장중 수급 하나는 small(등록 1846MiB)·태스크 1408MiB 로 돌았다. 시장 마감 수집을 옮기려면 동시 실행 3·태스크 2560MiB 가 필요하고, 2560 은 small 에 배치되지 않는다. 그래서 medium 으로 올린다(2026-11). medium 의 등록 메모리는 아직 재지 않았다(약 3,800MiB 로 추정). ⚠️ 순서: 호스트 타입을 먼저 바꾸고 instance refresh(아래 "장애 범위와 호스트 교체")까지 끝낸 뒤 task_memory 를 올린다. 작은 호스트에 큰 태스크 리비전이 먼저 배포되면 옛 태스크만 멈추고 새 태스크는 자리를 못 잡는다 |
 | AMI | ECS 최적화 AL2023 arm64 **고정**(`ami_id`) | SSM recommended 를 data 로 읽으면 사람이 고르지 않은 시각(머지 = apply)에 교체가 준비된다 |
 | 서비스 | 서비스 1개·태스크 1개 안에 `api-server`·`scheduler`·`dag-processor`(awsvpc) | 세 컨테이너가 localhost 를 공유한다. LocalExecutor 의 task 프로세스가 Execution API 를 `http://localhost:8080/execution/` 로 부른다. 별도 서비스로 나누면 서비스 간 이름 해석(Service Connect 등)이 필요하다 |
-| Executor | LocalExecutor, `parallelism=1`, DAG 파싱 프로세스 1, `task_queued_timeout=3600` | 장중 수급은 직렬이다(`max_active_runs=1`). LocalExecutor 는 parallelism 만큼 워커를 미리 띄운다(4 면 약 120MiB). 검증 DAG 와 겹치면 차례로 돈다. Celery·Redis·Kubernetes 를 쓸 근거가 없다. 큐에 넣을 때 발급하는 작업 토큰의 수명이 `task_queued_timeout` 이라, 기본 600초면 앞 작업이 10분을 넘길 때 뒤 작업이 시작 순간 인증에 실패한다(ALPHA-1473). LocalExecutor 는 `revoke_task` 가 없어 대기 초과 재큐잉은 일어나지 않는다 |
+| Executor | LocalExecutor, `parallelism=3`, DAG 파싱 프로세스 1, `task_queued_timeout=3600` | 3 은 시장 마감 수집(수집·정제가 병렬)을 SFN 과 비슷한 시간(추정 약 1,400초) 안에 끝내기 위한 값이다(2026-11, 그 전에는 1). parallelism 은 호스트 전체 상한이라 다른 레인의 형제 스텝도 함께 돈다 — 뉴스 태깅·문서 적재, 공시 정제 2개, 원천 관측 3계열. 원천 관측은 처음 병렬이 된다. 레인별 `max_active_tasks` 는 두지 않는다. LocalExecutor 는 parallelism 만큼 워커를 미리 띄운다(워커당 쉴 때 약 30MiB, 작업 중 약 +105MiB). 3 에서의 메모리는 아직 재지 않았다. Celery·Redis·Kubernetes 를 쓸 근거가 없다. 큐에 넣을 때 발급하는 작업 토큰의 수명이 `task_queued_timeout` 이라, 기본 600초면 앞 작업이 10분을 넘길 때 뒤 작업이 시작 순간 인증에 실패한다(ALPHA-1473). LocalExecutor 는 `revoke_task` 가 없어 대기 초과 재큐잉은 일어나지 않는다 |
 | Triggerer | 없음 | `EdgeStep` 이 `deferrable=False` 로 고정돼 있다(defer 하면 재개가 provider 의 `execute_complete` 로 가서 판정을 건너뛴다). 다른 deferrable operator 도 없다 |
 | 버전 | Airflow 3.3.2 · amazon provider 9.36.0 (CI 와 같은 다이제스트) | 로컬·CI 에서 검증한 조합 그대로 |
 | 메타DB | **기존 업무 RDS(`edge-dev`) 안의 전용 DB `airflow`·역할 `airflow_meta`** | 아래 "메타DB"·"실제 AWS 단기 검증". 2026-10-02 상시 운영 구성으로 정했다("첫 운영 전환 실행안"의 "확정한 결정") |
@@ -233,7 +233,7 @@ Terraform: `infra/terraform/modules/airflow`(환경), `envs/dev/main.tf` `module
 | UI 접근 | SSM 포트 포워딩만 | ALB·공인 IP 없음. 태스크 SG 는 호스트 SG 에서 온 8080 만 받는다 |
 | 인증 | Airflow 3 기본 SimpleAuthManager, 사용자 `admin` 1명 | 비밀번호는 Secrets Manager. ⚠️ Airflow 문서는 SimpleAuthManager 를 개발·테스트용으로 분류한다. 여기서는 네트워크 경로가 SSM 뿐이고 사용자가 1명이라 받아들였다. 사용자가 늘면 FAB auth manager 로 바꾼다 |
 
-**자원(태스크 정의).** 태스크 메모리 **1408MiB 하나**(`envs/dev/main.tf` `task_memory`)를 세 컨테이너와 그 자식(LocalExecutor task 프로세스)이 함께 쓴다(태스크 cgroup). 컨테이너별 hard 상한은 두지 않고 예약(`memoryReservation`)만 둔다 — api 300·scheduler 300·dag-processor 250, CPU unit 512·1024·256. 근거는 아래 "사양 검증"과 "small·1408 후속 검증".
+**자원(태스크 정의).** 태스크 메모리 **2560MiB 하나**(`envs/dev/main.tf` `task_memory`, 2026-11 1408 에서 상향 — parallelism 3 의 추정 최대 약 1,390MiB 에 여유를 둔 값, 미실측)를 세 컨테이너와 그 자식(LocalExecutor task 프로세스)이 함께 쓴다(태스크 cgroup). 컨테이너별 hard 상한은 두지 않고 예약(`memoryReservation`)만 둔다 — api 300·scheduler 300·dag-processor 250, CPU unit 512·1024·256. 근거는 아래 "사양 검증"과 "small·1408 후속 검증".
 
 **헬스체크.** 파이썬을 띄우지 않는다. 각 컨테이너가 api-server `/api/v2/monitor/health` 의 자기 구성요소 status(`metadatabase`·`scheduler`·`dag_processor`)가 `healthy` 인지 본다. 응답 코드는 부분 장애에도 200 이라 본문을 본다. 판정 재료는 `airflow jobs check` 와 같은 heartbeat(메타DB job 표, 30초 임계)다. `jobs check` 는 한 번에 약 110MiB 인 프로세스라 60초마다 둘이 겹치면 순간 228MiB 가 늘었다(로컬 실측).
 - ⚠️ 전제: 메타DB 하나에 scheduler·dag-processor 가 하나씩뿐이다(서비스 desired 1, 배포 min 0 / max 100). `jobs check --local` 과 달리 이 판정은 호스트를 가리지 않는다 — 같은 메타DB 에 다른 scheduler 가 붙으면(예: 수동으로 띄운 두 번째 태스크) 그쪽 heartbeat 가 이 태스크의 멈춤을 가린다.
@@ -1161,7 +1161,7 @@ SNS 메일이 실제로 도착했는지는 담당자가 확인한다(경보 이�
 
 #### 후속: 시장 EOD 이관 전 검토 항목(구현하지 않음)
 
-시장 EOD 는 수집 8·정제 7·적재 6 정도가 Parallel 로 돈다. 지금 Airflow 구성은 parallelism 1 이고 `EdgeStep` 은 ECS 종료까지 worker 슬롯을 쥐고 동기로 기다린다. "병렬화하려면 반드시 증설"로 확정하지 않고 다음을 먼저 잰다.
+시장 EOD 는 수집 8·정제 7·적재 6 정도가 Parallel 로 돈다. 이 항목을 적을 때(2026-10) Airflow 구성은 parallelism 1 이었고 `EdgeStep` 은 ECS 종료까지 worker 슬롯을 쥐고 동기로 기다린다. "병렬화하려면 반드시 증설"로 확정하지 않고 다음을 먼저 잰다.
 1. **동기 대기 방식의 병렬화 비용** — parallelism 을 올릴 때 늘어나는 LocalExecutor 프로세스 메모리(검증 때 task 실행 1개당 약 250~300MiB 관찰)와 1408MiB·호스트 여유의 관계. 대부분 ECS 를 기다리는 시간이라 CPU 보다 메모리 문제다.
 2. **deferrable 방식 + Triggerer** — 대기를 Triggerer 의 비동기 루프로 넘기면 worker 슬롯·프로세스를 덜 쓴다. 대가는 Triggerer 구성요소 추가(같은 태스크 안 컨테이너 또는 프로세스)의 메모리·헬스체크·배포 변경과, provider 의 deferrable `EcsRunTaskOperator` 호환성(3.3.2·amazon 9.36.0).
 3. **`EdgeStep` 계약 영향** — 재접속(`startedBy` 조회)·보류(ECS_STATE_UNKNOWN·RESULT_UNKNOWN)·`on_kill` 무력화·clear/자동 재시도 구분이 defer/resume 경계에서도 그대로 성립하는지. 지금 판정은 한 execute 호출 안에서 끝난다는 전제다.
@@ -1240,7 +1240,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
   - 슬롯 대조(`OPS_DISCLOSURE_SCHED_HHMM`)와 dart 워터마크 창(`DATA_PIPELINE_DART_DISCLOSURE__WATERMARK_WINDOW`)은 유지된다.
   - `disclosure_schedule_state = "DISABLED"` 로 끄면 **안 된다.** 그 값은 슬롯 대조와 워터마크 창까지 끈다.
 - 경계: 하루 한 슬롯이다. 그날 19:30 run 이 끝나고 종료 확인을 마친 뒤, 다음 거래일 19:30 전에 바꾼다.
-- 시간대: 19:30 에는 다른 Airflow run 이 없다(PARALLELISM=1). 실측 걸린 시간은 p50 197초, 최대 238초다.
+- 시간대: 19:30 에는 다른 Airflow run 이 없다. 실측 걸린 시간은 p50 197초, 최대 238초다(PARALLELISM=1 때 — 3 부터는 정제 2개가 함께 돈다).
 
 ## 장전 유니버스 레인(premarket, ALPHA-1408)
 
@@ -1278,7 +1278,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 
 - terraform 값 인자 `--limit`(`tag_news_limit`)·`--window-days`(`assemble_window_days`)는 장전 레인과 같은 `EDGE_LANE_ARGS` 경로로 받는다. 위 "장전 유니버스 레인"의 배포 순서 주의가 같이 적용된다.
 - FMP 뉴스 수집은 `us_fmp_enabled` 일 때만 SFN 에 들어간다. dev 는 꺼져 있어 DAG 에 없다. 켜려면 DAG 도 함께 고친다(tests 가 막는다).
-- **전환 전 조건 — 소요 실측.** SFN 은 태깅과 문서 적재를 병렬로 돌렸다. Airflow 는 PARALLELISM=1 이라 직렬이다.
+- **전환 전 조건 — 소요 실측.** SFN 은 태깅과 문서 적재를 병렬로 돌렸다. Airflow 는 PARALLELISM=1 이라 직렬이었고, 3(2026-11)부터는 함께 돈다. 아래 수치는 1 때다.
   - dagrun_timeout 은 Reconciler 수명(3000초)보다 짧아야 하고 08:10 run 이 09:00 전에 끝나야 해서 2700초다(ALPHA-1475 에서 1700초 → 2700초). SFN 은 2400초였다.
   - SFN 최근 40회: p50 477초, 최대 1099초. 과거에는 25분 상한에 40%가 잘린 기록도 있다(variables.tf `news_state_machine_timeout_seconds`).
   - 그래서 원장 `ops_task_attempt` 로 스텝별 소요(특히 태깅·문서 적재·조립)를 재고, 스텝 사이 대기까지 더한 시작~끝이 상한(2700초) 안에 드는지 확인한다.
@@ -1522,7 +1522,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
    - 코드 가드가 다루는 것: lock을 얻은 실행도 같은 task_key에 원장상 끝나지 않은 시도나 ECS 보류가 있으면 업무를 시작하지 않는다(76). 로컬 재현: 같은 조건에서 B(다른 슬롯·같은 슬롯)는 76, 업무 실행 0(`scenario-hold` V1). Airflow는 결과를 모르는 태스크 옆에 새 태스크를 띄우지 않는다.
    - 운영 절차가 다루는 것: SFN·수동 실행과의 겹침(한 주체만), 보류 해제(종료 증거 확인 뒤), 전환·롤백 시점.
    - **아직 없는 것:** 파티션 저장소가 오래된 작업자의 쓰기를 거부하는 장치. lock 커넥션을 잃고도 이미 업무를 시작한 작업자는 끝까지 쓴다. 새 실행이 그 옆에서 시작하지 않을 뿐이다.
-   - **ALPHA-1057 재검토 조건:** 자동 복구(보류 없는 재시도)나 동시 실행(스텝 병렬·`max_active_runs>1`)을 늘릴 때, 또는 SFN·수동 경로를 계속 함께 쓸 때 쓰기 세대·CAS를 먼저 해결한다.
+   - **ALPHA-1057 재검토 조건:** 자동 복구(보류 없는 재시도)나 같은 산출물을 쓰는 실행의 동시 실행(같은 슬롯 재실행·`max_active_runs>1`, 같은 산출물을 쓰는 스텝의 병렬)을 늘릴 때, 또는 SFN·수동 경로를 계속 함께 쓸 때 쓰기 세대·CAS를 먼저 해결한다.
 3. **알려진 한계(팀 확인).**
    - **전날 이전 슬롯의 재처리는 주기 대조를 받지 않는다.** 주기 Reconciler는 가장 최근 예정일의 슬롯만 본다(ALPHA-565 사각). 그래서 과거 슬롯 재처리 run이 `report` 전에 죽으면 앞 판정이 남는다. 그 run_key를 `OPS_RUN_KEY`로 지정해 `reconcile`을 한 번 돌려야 한다.
    - **과거 슬롯 재처리 중 R02가 잠깐 켠다.** 새 업무 시도가 결론 나기 전 주기 대조가 돌면 판정이 NULL(미귀결)이 된다. 그 슬롯은 hard deadline이 이미 지났으므로 `report` 전까지 R02 P1이 뜬다. 멈춘 재처리를 숨기지 않기 위한 선택이다. 경보 소음으로 볼지 결정한다.

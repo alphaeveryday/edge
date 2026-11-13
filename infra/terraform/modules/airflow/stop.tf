@@ -18,7 +18,8 @@
 locals {
   stop_enabled = var.host_count > 0
   stop_alarms = {
-    # 태스크 cgroup 상한(task_memory) 대비. 실측 최대 80%(1129/1408, 10-01 A4·A5), 1분 지표 최대 76.7%.
+    # 태스크 cgroup 상한(task_memory) 대비. 1408·동시 1 때 실측 최대 80%(1129/1408, 10-01 A4·A5), 1분 지표 최대 76.7%.
+    # 2560·동시 3 에서는 아직 재지 않았다. 추정 최대 약 1,390MiB(54%), 경보 기준 90% = 2,304MiB.
     # OOM 은 100% 에서 순간에 나므로 이 경보는 **누적 증가**(유휴 anon +197MiB/6회, 장시간 미검증)를 잡는 장치다.
     task_memory = {
       namespace  = "AWS/ECS", metric = "MemoryUtilization", statistic = "Maximum", op = "GreaterThanThreshold"
