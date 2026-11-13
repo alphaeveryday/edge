@@ -1307,7 +1307,7 @@ Reconciler의 SFN history 경로는 다른 레인이 모두 옮겨 간 뒤에 �
 - **SFN 과 다른 순서.** 정제는 자기 데이터셋 수집만 기다린다(SFN 은 수집 7개 전체를 기다렸다). 예외로 `normalize_etf` 는 가격·투자자 수집도 기다린다 — 두 수집이 canonical holdings 로 수집 종목을 정하므로, 그 스냅샷을 쓰는 정제가 먼저 끝나면 종목이 실행 순서에 따라 바뀐다. 정제→적재 관문(`load_instruments`)은 같다. 가격·투자자 수집이 먼저 슬롯을 잡는다(priority_weight).
 - terraform 값 인자 `--deadline-sec`(`krx_etf_deadline_sec`)는 장전 레인과 같은 `EDGE_LANE_ARGS` 경로로 받는다. 위 "장전 유니버스 레인"의 배포 순서 주의가 같이 적용된다.
 - IAM: `enrich_corp_code` 가 `rds_dart` task-def 를 쓴다. `envs/dev/main.tf` `batch_task_definition_families` 에 있어야 RunTask 가 된다(없으면 AccessDenied).
-- 시간 상한은 dagrun_timeout 2700초다(SFN 21600초). SFN 실측(원장 25회, 10-09~11-12): 시작~끝 중앙 824초·최대 1255초, 가장 긴 스텝은 가격 수집 최대 807초. PARALLELISM=1 이면 긴 날 이 상한을 넘는다고 추정한다 — 전환 전 PARALLELISM 상향과 동시 실행 메모리 실측이 선행 조건이다.
+- 시간 상한은 dagrun_timeout 2700초다(SFN 21600초). SFN 실측(원장 25회, 10-09~11-12): 시작~끝 중앙 824초·최대 1255초, 가장 긴 스텝은 가격 수집 최대 807초. PARALLELISM=1 이면 긴 날 이 상한을 넘는다고 추정한다(그래서 1 로 되돌리는 것은 이 레인의 롤백 수단이 아니다 — 롤백은 SFN 복귀). PARALLELISM 은 3 으로 올렸다(2026-11). 그 위의 동시 실행 메모리 실측(수동 시험)이 전환의 선행 조건이다.
 - 통보: SFN 의 부분 실패 즉시 통보 3종·NotifyFailure·시간 초과 알람 대신 run 실패 SNS 한 통(dagrun_timeout 포함)이다. 본문에 `pipeline_run_id` 를 싣는다. 실패 런의 raw 는 그 값으로 `--input-run-id` 재정제한다(`statemachine.tf` NormalizeParallel 앞 주석).
 - **전환·롤백.** 위 "운영 전환·롤백 절차(장중 수급)"를 따르되, 아래만 바꿔 읽는다.
   - ①·⑥: `pipeline_type = 'etf-daily'`.
