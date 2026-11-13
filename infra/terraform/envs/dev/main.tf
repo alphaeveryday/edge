@@ -581,6 +581,11 @@ module "data_pipeline" {
 
   # 컷오버: raw 전량성공 게이트 제거(ADR-0030) + 일주일치 백필 실증(#178) 후 일일 트리거 활성화.
   schedule_state = "ENABLED"
+  # 실행 주체(ALPHA-1498). 11-14 전환: 평일 15:40 마감 수집은 Airflow `edge_etf_daily` 가 실행한다. AIRFLOW 면 위
+  # schedule_state(ENABLED)가 DISABLED 로 덮이고, 슬롯 대조(OPS_DAILY_SCHED_HHMM)는 스케줄 상태와 무관하게 주입된다.
+  # 롤백은 edge_etf_daily pause → 종료 확인(queued·running·ECS 0) → 이 줄을 지우는 PR → apply 순서다. apply 를 먼저 하면
+  # 두 주체가 같은 슬롯을 계획한다(apps/engine/airflow/README.md "시장 마감 수집 레인"의 전환·롤백).
+  daily_orchestrator = "AIRFLOW"
 
 
   # 컷오버(ALPHA-553 PR2): 뉴스 레인 스케줄(ALPHA-905 이후 00:10·08:10 KST, 주 7일). 시장 SFN 의 뉴스 스텝
