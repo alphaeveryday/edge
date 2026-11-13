@@ -791,6 +791,9 @@ module "airflow" {
     # 뉴스 레인 edge_news(ALPHA-1409): 태깅은 deepseek, 이벤트 조립은 events task-def.
     module.data_pipeline.task_definition_families["deepseek"],
     module.data_pipeline.task_definition_families["events"],
+    # 시장 마감 수집 레인 edge_etf_daily: corp_code 채움(enrich-corp-code)은 DB·DART 결합 rds_dart task-def.
+    # 역할은 다른 task-def 와 같은 execution·task 역할이라 batch_pass_role_arns 가 이미 덮는다(tasks.tf).
+    module.data_pipeline.task_definition_families["rds_dart"],
   ]
   # DAG 명령 인자 중 terraform 값 — SFN 잡 목록과 같은 변수(ALPHA-1408).
   lane_command_args            = module.data_pipeline.airflow_lane_args
