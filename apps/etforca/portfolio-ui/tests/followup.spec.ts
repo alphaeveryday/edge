@@ -160,11 +160,17 @@ test('asking opens a chat that keeps the conversation and returns to the same pl
   await page.getByRole('button', { name: '질문 보내기' }).click();
   const chat = page.getByRole('dialog', { name: '더 물어보기' });
   await expect(chat.locator('.chat-bubble--me')).toHaveText(['리밸런싱은 어떻게 해요?']);
-  // 답은 네 단계를 다시 돌아 몇 분 걸린다. 대기열인지, 지금 어느 단계인지 보여야 멈춘 화면으로 보지 않는다.
-  await expect(chat.locator('.chat-bubble--waiting')).toContainText('앞선 분석이 끝나면 바로 시작해요');
-  await expect(chat.locator('.chat-bubble--waiting')).toContainText('보통 5분쯤, 길면 9분까지 걸려요');
+  // 대기열인지, 받은 분석으로 바로 답하는 중인지, 처음부터 다시 분석하는 중(네 단계, 몇 분)인지 보여야 멈춘 화면으로 보지 않는다.
+  // 바로 답하는 동안 '5분'을 말하지 않는다 — 대부분 1분 안에 끝나는 답을 오래 기다릴 것처럼 보이게 했다.
+  const waitingBubble = chat.locator('.chat-bubble--waiting');
+  await expect(waitingBubble).toContainText('앞선 분석이 끝나면 바로 시작해요');
+  await expect(waitingBubble).not.toContainText('5분');
+  Object.assign(turns[0], { state: 'running', stage: 'light' });
+  await expect(waitingBubble).toContainText('받은 분석을 보고 답을 쓰고 있어요', { timeout: 8000 });
+  await expect(waitingBubble).not.toContainText('5분');
   Object.assign(turns[0], { state: 'running', stage: 'portfolio' });
-  await expect(chat.locator('.chat-bubble--waiting')).toContainText('구성과 금액을 다시 계산하고 있어요 (2/4)', { timeout: 8000 });
+  await expect(waitingBubble).toContainText('구성과 금액을 다시 계산하고 있어요 (2/4)', { timeout: 8000 });
+  await expect(waitingBubble).toContainText('처음부터 다시 분석해서 보통 5분쯤, 길면 10분까지 걸려요');
   await expect(page.getByLabel('직접 물어보기', { exact: true })).toBeDisabled(); // 결과 화면에서도 답이 끝날 때까지 다음 질문을 막는다
   await expect(chat.getByRole('button', { name: '이어서 질문 보내기' })).toBeDisabled();
   Object.assign(turns[0], { state: 'succeeded', result: { answer: { ...section, paragraphs: ['나스닥100 비중을 30%로 줄여요.'] } } });
