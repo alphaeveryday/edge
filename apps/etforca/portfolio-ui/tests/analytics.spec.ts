@@ -520,3 +520,34 @@ test('copying the result link is counted without the analysis id', async ({ page
   await expect.poll(() => events.find(e => e.event === 'result_link_copied')?.properties.screen).toBe('running');
   expect(JSON.stringify(events)).not.toMatch(/private-running-id|private-question/);
 });
+
+for (const state of ['succeeded', 'failed']) test(`input save funnel for ${state} joins the analysis without leaking holdings or error text`, async ({ page, baseURL }) => {
+  const events = await instrument(page, baseURL!);
+  const workbook = { title: 'private holdings', fx: null, assets: [{ id: 'original', name: 'private security', account: 'ISA', amount: 1234567, quantity: null, weight: null }], dividends: [], months: [] };
+  let writes = 0;
+  await page.route('**/api/portfolio/analyses/result-analysis-id/workbook', r => r.fulfill({ json: workbook }));
+  await page.route('**/api/portfolio/workbook', r => {
+    if (r.request().method() === 'POST') {
+      if (++writes === 1) return r.fulfill({ status: 503, json: { detail: 'private provider failure' } });
+      return r.fulfill({ json: { version: 1, workbook } });
+    }
+    return r.fulfill({ json: { version: 0, workbook: null } });
+  });
+  await resultReport(page);
+  if (state === 'failed') {
+    await page.route('**/api/portfolio/analyses/result-analysis-id', r => r.fulfill({ json: { id: 'result-analysis-id', state: 'failed', failure: 'ANALYSIS_FAILED', result: null } }));
+    await page.reload();
+  }
+  const button = page.getByRole('button', { name: '입력한 포트폴리오 저장', exact: true });
+  await button.scrollIntoViewIfNeeded();
+  const savedEvents = () => events.filter(e => e.event.startsWith('input_save_'));
+  await expect.poll(() => savedEvents().some(e => e.event === 'input_save_shown')).toBe(true);
+  await button.click();
+  await expect(page.getByRole('alert')).toBeVisible();
+  await expect.poll(() => savedEvents().map(e => e.event)).toEqual(['input_save_shown', 'input_save_clicked', 'input_save_failed']);
+  await button.click();
+  await expect.poll(() => savedEvents().map(e => e.event)).toEqual(['input_save_shown', 'input_save_clicked', 'input_save_failed', 'input_save_clicked', 'input_save_succeeded']);
+  await expect(page.getByRole('button', { name: '종목 추가', exact: true })).toBeVisible();
+  expect(savedEvents().every(e => e.properties.analysis_id === 'result-analysis-id' && e.properties.screen === (state === 'failed' ? 'failed' : 'result'))).toBe(true);
+  expect(JSON.stringify(savedEvents())).not.toMatch(/private|1234567|original|provider/);
+});

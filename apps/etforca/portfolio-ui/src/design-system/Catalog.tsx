@@ -7,6 +7,7 @@ import { sample } from '../preview';
 import { NewsletterSignup } from '../NewsletterSignup';
 import { AppDownloadSheet } from '../AppDownloadSheet';
 import { ExampleReport } from '../ExampleReport';
+import { InputSave } from '../InputSave';
 import { InstrumentSearch } from '../InstrumentSearch';
 
 export function DesignCatalog() {
@@ -24,6 +25,7 @@ export function DesignCatalog() {
       <div className="ds-type-specimen"><strong>25,586,400원</strong><h2>내 포트폴리오를 한눈에</h2><p>얼마를 보유하고, 무엇을 바꿀지 명확하게 보여줘요.</p><small>확인이 필요한 내용만 짧게 안내해요.</small></div>
       <p className="ds-catalog-note">본문 대비 4.5:1 · 조작 영역 44px 이상 · 키보드와 글자 확대 · 동작 줄이기 지원</p>
     </section>
+    <InputSave jobId="preview" screen="result" />
     <section id="controls"><SectionHeading title="행동이 분명한 버튼과 입력" />
       <InstrumentSearch includeStocks account="예시 계좌" catalog={{ fetched_at: '2026-10-21', counts: { KR: 1, US: 1 }, instruments: [{ id: 'KR:005930', market: 'KR', ticker: '005930', code: '005930', name: '삼성전자', kind: 'stock' }, { id: 'US:AAPL', market: 'US', ticker: 'AAPL', code: 'AAPL', name: 'Apple', kind: 'stock' }] }} onAdd={() => {}} />
       <div className="step"><ExampleReport /></div>
