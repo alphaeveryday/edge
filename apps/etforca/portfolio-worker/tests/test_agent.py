@@ -587,3 +587,39 @@ def test_output_diagnostics_distinguish_missing_source_evidence_and_invalid_json
         error = ValueError('OUTPUT_INVALID: redacted')
         error.__cause__ = cause
     assert failure_codes(error) == ['OUTPUT_INVALID', 'JSON_INVALID']
+
+
+@pytest.mark.parametrize('broken, field', [
+    # Synthetic break right after a contract key: the event names that key, never the value.
+    (lambda text: text.split('"withheld_reason":')[0] + '"withheld_reason":: ', 'withheld_reason'),
+    (lambda text: text[:-1] + ', "private_user_text": "secret@example.com"', 'FIELD'),
+])
+async def test_broken_report_json_records_parser_location_without_values(monkeypatch, broken, field):
+    # Only the provider's broken submission is diagnosed; the existing rewrite still completes the report.
+    class Optimizer:
+        def __init__(self, *args):
+            self.result = {'status': 'no_match', 'candidates': [], 'reason': 'SERVICE_CUSTOMER_POLICY_CONFLICT'}
+            self.batches = {'first'}
+        def validate(self, final): return None
+    monkeypatch.setattr('edge_portfolio.agent.Optimizer', Optimizer)
+    stages, attempts, events = [], [], []
+    async def model(payload):
+        role = stages[-1]
+        # The strict schema makes the provider send every key, including a null withheld_reason.
+        content = {**final_payload(), 'recommendation': None, 'withheld_reason': None} if role == 'opinion' else final_payload()[role]
+        if role == 'question':
+            content = {**content, 'decision': {}}
+        text = json.dumps(content, ensure_ascii=False)
+        if role == 'opinion' and not attempts:
+            attempts.append(1)
+            text = broken(text)
+        return {'choices': [{'message': {'role': 'assistant', 'content': text}}]}
+    result = await run_analysis(AnalysisInput(holdings=[], planning=True, horizon='10년 이상'), 'test', stages.append,
+                                model_call=model, evidence=Evidence(), on_event=events.append)
+    assert result['completion']['status'] == 'no_match'
+    [failed] = [event for event in events if event.get('code') == 'OUTPUT_JSON']
+    assert failed['field'] == field
+    assert isinstance(failed['json_error'], str) and 0 < failed['position'] <= failed['length']
+    recorded = json.dumps(failed, ensure_ascii=False)
+    assert 'secret' not in recorded and 'private_user_text' not in recorded
+    assert final_payload()['opinion']['paragraphs'][0] not in recorded
