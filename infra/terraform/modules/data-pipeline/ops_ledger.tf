@@ -141,7 +141,6 @@ resource "aws_iam_role_policy" "ops_task" {
         Effect = "Allow"
         Action = ["states:StartExecution"]
         Resource = [
-          aws_sfn_state_machine.this.arn,
           aws_sfn_state_machine.news.arn,
           aws_sfn_state_machine.disclosure.arn,
           aws_sfn_state_machine.investor_intraday.arn,
@@ -152,7 +151,6 @@ resource "aws_iam_role_policy" "ops_task" {
         Effect = "Allow"
         Action = ["states:DescribeExecution", "states:GetExecutionHistory"]
         Resource = [
-          "${replace(aws_sfn_state_machine.this.arn, ":stateMachine:", ":execution:")}:*",
           "${replace(aws_sfn_state_machine.news.arn, ":stateMachine:", ":execution:")}:*",
           "${replace(aws_sfn_state_machine.disclosure.arn, ":stateMachine:", ":execution:")}:*",
           "${replace(aws_sfn_state_machine.investor_intraday.arn, ":stateMachine:", ":execution:")}:*",
@@ -204,8 +202,6 @@ resource "aws_ecs_task_definition" "ops" {
       DATA_PIPELINE_DB__PORT = tostring(var.db_port)
       DATA_PIPELINE_DB__NAME = var.db_name
       DATA_PIPELINE_DB__USER = var.db_user
-      # Planner 가 시작할 상태머신. 카탈로그 버전은 배포 SHA 를 CD 가 주입(없으면 unknown).
-      OPS_STATE_MACHINE_ARN = aws_sfn_state_machine.this.arn
       # Reconciler 가 ECS DescribeTasks 를 이 클러스터로 조회한다(생략하면 default 클러스터를
       # 봐서 실제 태스크를 못 찾는다, edge-review). Planner 의 비거래일 판정용 KR 공휴일 목록도.
       OPS_CLUSTER_ARN = var.cluster_arn

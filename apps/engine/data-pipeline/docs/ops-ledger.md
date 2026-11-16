@@ -223,8 +223,9 @@ Planner 는 StartExecution **전에** 원장을 남긴다 — SFN 이 안 떠도
 ### 실행 (로컬/수동)
 
 ```bash
-# Planner — 원장 기록 + SFN 시작. OPS_STATE_MACHINE_ARN·DATA_PIPELINE_DB__* 필수.
-OPS_STATE_MACHINE_ARN=arn:aws:states:…:stateMachine:edge-dev-data-pipeline \
+# Planner — 원장 기록 + 그 레인 SFN 시작. 레인 SFN ARN env·DATA_PIPELINE_DB__* 필수.
+# 시장 마감 수집(etf-daily, 기본 레인)은 SFN 이 없다(ALPHA-1498) — Airflow 주체로만 계획한다.
+OPS_PIPELINE_TYPE=news OPS_NEWS_STATE_MACHINE_ARN=arn:aws:states:…:stateMachine:edge-dev-data-pipeline-news \
   python -m data_pipeline.run plan-run
 # Reconciler — 예정↔실제 대조(advisory lock 으로 중복 실행 방지).
 python -m data_pipeline.run reconcile

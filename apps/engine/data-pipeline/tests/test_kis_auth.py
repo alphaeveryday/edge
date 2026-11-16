@@ -570,22 +570,15 @@ def test_재시도_예산이_동시_kis_브랜치_수보다_크다():
     kis_states = _re.findall(r'state\s*=\s*"(\w+)"\s*\n\s*taskdef_key\s*=\s*"kis"', text)
     assert len(kis_states) >= 3, f"kis 잡 파싱 실패({kis_states}) — 경로·형식 확인"
 
-    excluded_block = _re.search(
-        r"market_excluded_states\s*=\s*\[(.*?)\]", text, _re.S)
-    assert excluded_block, "market_excluded_states 를 못 찾았다 — 파서가 낡았다"
-    excluded = set(_re.findall(r'"(\w+)"', excluded_block.group(1)))
-
-    # 레인별 kis 잡 수. 시장 = 제외되지 않은 것, 나머지는 각 레인 파일이 이름으로 고른 것.
-    per_lane = {"market": [s for s in kis_states if s not in excluded]}
+    # 레인별 kis 잡 수. 다른 레인 SFN 은 각 레인 파일이 이름으로 고른 것, 시장 = 나머지다. 시장 SFN 은 지웠고
+    # (ALPHA-1498) 시장 kis 잡은 Airflow `edge_etf_daily` 가 돈다 — 동시 실행은 PARALLELISM(3) 이하라 실제 동시
+    # 발급자는 이 수보다 적거나 같다(보수적으로 센다).
+    per_lane = {}
     for lane_file in ("news_pipeline.tf", "disclosure_pipeline.tf",
                       "investor_intraday_pipeline.tf"):
         lane_text = (tf.parent / lane_file).read_text()
-        per_lane[lane_file] = [
-            s for s in kis_states if s in excluded and f'"{s}"' in lane_text
-        ]
-    orphans = [s for s in kis_states
-               if s in excluded and not any(s in v for v in per_lane.values())]
-    assert not orphans, f"시장에서 뺐는데 어느 레인도 안 가진 kis 잡: {orphans}"
+        per_lane[lane_file] = [s for s in kis_states if f'"{s}"' in lane_text]
+    per_lane["market"] = [s for s in kis_states if not any(s in v for v in per_lane.values())]
 
     # ⚠️ **레인별로 세는 것이 옳으려면 "레인이 시간상 안 겹친다"가 참이어야 한다.** 그 전제를
     #    주석에만 두면 슬롯 하나를 옮기는 순간 조용히 깨지고 — 예: 장중 레인에 15:40 근처
@@ -599,15 +592,19 @@ def test_재시도_예산이_동시_kis_브랜치_수보다_크다():
         if not jobs:
             continue
         if lane == "market":
-            cron_var, timeout_var = "schedule_expression", "state_machine_timeout_seconds"
+            # 시장 레인의 시간 상한은 terraform 이 아니라 Airflow DAG 의 dagrun_timeout 이다(ALPHA-1498).
+            cron_var = "schedule_expression"
             crons = [_hcl_default(variables, cron_var)]
+            dag = (here.parents[2] / "airflow/dags/edge_etf_daily.py").read_text()
+            timeout = int(_re.search(r'EDGE_LAB_DAGRUN_TIMEOUT_SECONDS", "(\d+)"', dag).group(1))
+            read_vars.append(cron_var)
         else:
             prefix = lane.replace("_pipeline.tf", "")
             cron_var = f"{prefix}_schedule_expressions"
             timeout_var = f"{prefix}_state_machine_timeout_seconds"
             crons = _hcl_cron_map(variables, cron_var)
-        timeout = _hcl_default_number(variables, timeout_var)
-        read_vars += [cron_var, timeout_var]
+            timeout = _hcl_default_number(variables, timeout_var)
+            read_vars += [cron_var, timeout_var]
         mins = sorted(h * 60 + m for h, m in (_cron_hm(c) for c in crons))
         end = mins[-1] + timeout // 60
         # 창을 하루 안의 분(0~1440)으로 비교하므로 자정을 넘으면 아래 disjoint 판정이 거짓이

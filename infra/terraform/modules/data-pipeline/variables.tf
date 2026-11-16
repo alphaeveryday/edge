@@ -139,7 +139,9 @@ variable "cpu_architecture" {
 # MVP 가 국내 ETF(ADR-0024)라 KR 우선이 맞다. 휴장일은 가격 파티션이 안 생겨
 # 트리거 없음 → analyze 평온 종료로 자연 처리된다.
 variable "schedule_expression" {
-  description = "EventBridge Scheduler cron. 기본은 평일 KRX 장 마감 후(15:40 Asia/Seoul)."
+  # 시장 SFN·EventBridge 스케줄은 지웠다(ALPHA-1498) — 이 cron 은 이제 Reconciler 슬롯 대조(OPS_DAILY_SCHED_*)의
+  # 정본이고, Airflow `edge_etf_daily` 의 CRONS 가 이 값과 같아야 한다(apps/engine/airflow/tests 가 대조).
+  description = "시장 마감 수집 레인 슬롯 cron(Reconciler 슬롯 대조 정본). 기본은 평일 KRX 장 마감 후(15:40 Asia/Seoul)."
   type        = string
   default     = "cron(40 15 ? * MON-FRI *)"
 }
@@ -157,25 +159,6 @@ variable "schedule_timezone" {
   validation {
     condition     = var.schedule_timezone == "Asia/Seoul"
     error_message = "슬롯 키가 cron HH:MM 을 KST 로 해석한다 — Asia/Seoul 외 타임존은 지원하지 않는다(ALPHA-564)."
-  }
-}
-
-variable "schedule_state" {
-  description = "검증 동안은 DISABLED. 컷오버 시 ENABLED."
-  type        = string
-  default     = "DISABLED"
-}
-
-variable "daily_orchestrator" {
-  # 레인별 SFN→Airflow 이관(news_orchestrator 와 같은 장치). AIRFLOW 면 시장 마감 수집 레인의 EventBridge 스케줄이
-  # 꺼진다(Planner·SFN 미시작). 슬롯 대조(OPS_DAILY_SCHED_HHMM)는 원래 스케줄 상태와 무관하게 주입된다(ops_ledger.tf).
-  # 이미 뜬 ECS 태스크는 멈추지 않는다 — 바꾸기 전에 README 의 종료 확인 절차를 따른다.
-  description = "시장 마감 수집 레인(etf-daily)의 실행 주체(SFN|AIRFLOW). AIRFLOW 면 SFN 스케줄 DISABLED, 슬롯 대조는 유지."
-  type        = string
-  default     = "SFN"
-  validation {
-    condition     = contains(["SFN", "AIRFLOW"], var.daily_orchestrator)
-    error_message = "daily_orchestrator 는 SFN 또는 AIRFLOW."
   }
 }
 
@@ -592,11 +575,6 @@ variable "krx_etf_deadline_sec" {
     condition     = var.krx_etf_deadline_sec > 0
     error_message = "krx_etf_deadline_sec 는 0 보다 커야 한다(0 이하면 첫 대상도 못 시도하고 끝난다)."
   }
-}
-
-variable "state_machine_timeout_seconds" {
-  type    = number
-  default = 21600
 }
 
 # US(FMP) 수집 잡을 raw 병렬에 넣을지(ALPHA-558). false 면 CollectFmpNews·CollectFmpPrice·

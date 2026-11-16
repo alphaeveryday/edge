@@ -1,11 +1,6 @@
-output "state_machine_arn" {
-  description = "파이프라인 상태머신 ARN (raw → normalize → feature → analyze)"
-  value       = aws_sfn_state_machine.this.arn
-}
-
 output "batch_state_machine_arns" {
   description = "Scheduled batches checked before the separate dividend maintenance window"
-  value = [aws_sfn_state_machine.this.arn, aws_sfn_state_machine.news.arn,
+  value = [aws_sfn_state_machine.news.arn,
     aws_sfn_state_machine.disclosure.arn, aws_sfn_state_machine.premarket.arn,
   aws_sfn_state_machine.investor_intraday.arn]
 }

@@ -171,24 +171,20 @@ def reconcile_period_seconds() -> int:
 
 
 def _market_normalize_task_keys() -> set[str]:
-    """시장 SFN 이 실제로 도는 정제 state → 카탈로그 task_key.
+    """시장 마감 수집 DAG 의 정제 스텝 → 카탈로그 task_key.
 
-    `normalize_jobs`(전체) − `market_excluded_states` 가 곧 ASL `NormalizeCheckResults` 의
-    멤버다. 원장의 `LOAD_INSTRUMENTS.depends_on` 은 그 게이트를 그린 것이라 **같아야 한다** —
-    어긋나면 게이트가 닫힌 런에서 원인이 오귀속되거나(BLOCKED↔MISSED), 안 도는 작업을 기다려
-    영영 미충족이 된다. 두 사실이 코드와 terraform 에 나뉘어 있으므로 여기서 잇는다.
+    `load_instruments` 는 DAG 의 정제 6개(`NORMALIZE_STEPS`)를 모두 기다린다(시장 SFN 의 `NormalizeCheckResults`
+    를 옮긴 것 — SFN 은 ALPHA-1498 로 지웠다). 원장의 `LOAD_INSTRUMENTS.depends_on` 은 그 관문을 그린 것이라
+    **같아야 한다** — 어긋나면 관문이 닫힌 런에서 원인이 오귀속되거나(BLOCKED↔MISSED), 안 도는 작업을 기다려
+    영영 미충족이 된다. 두 사실이 코드와 DAG 에 나뉘어 있으므로 여기서 잇는다(DAG 는 텍스트로 읽는다 —
+    이 환경엔 Airflow 가 없다).
     """
-    tf = _STATEMACHINE_TF.read_text(encoding="utf-8")
-    block = re.search(r"^\s*normalize_jobs\s*=\s*\[(.*?)^\s{2}\]", tf, re.M | re.S)
-    assert block, "normalize_jobs 블록을 못 찾았다 — 파서가 낡았다"
-    states = set(_ASL_JOB_STATE.findall(block.group(1))) - set(
-        _hcl_list(tf, "market_excluded_states"))
-    assert states, "시장 정제 잡이 0개로 나왔다 — 파서가 깨졌다"
-    keys = set()
-    for state in states:
-        entry = catalog.by_sfn_state(state)
-        assert entry is not None, f"시장 SFN 이 도는 정제 state 인데 미등록: {state}"
-        keys.add(entry.task_key)
+    import ast
+    dag = (Path(__file__).resolve().parents[2] / "airflow" / "dags" / "edge_etf_daily.py").read_text(encoding="utf-8")
+    steps = ast.literal_eval(re.search(r"^NORMALIZE_STEPS = (\(.*?\))$", dag, re.M | re.S).group(1))
+    task_keys = ast.literal_eval(re.search(r"^TASK_KEYS = (\{.*?\})$", dag, re.M | re.S).group(1))
+    keys = {task_keys[s] for s in steps}
+    assert len(keys) == len(steps) == 6, f"DAG 정제 스텝 파싱 결과가 이상하다: {steps}"
     return keys
 
 
@@ -504,21 +500,19 @@ def test_serial_states_inject_ops_env():
     #      끊긴다(Reconciler 가 backfill 때 일부러 채우는 그 계보). 뉴스 SFN 의 직렬 2개도
     #      같은 축이다(ALPHA-591 — LOAD_ASSERTIONS·ASSEMBLE_EVENTS 재등록으로 실질화).
     tf = _combined_tf()
-    for state in ("LoadInstruments", "EnrichCorpCode", "NewsLoadAssertions", "NewsAssembleEvents"):
+    # 시장 SFN 의 직렬 LoadInstruments·EnrichCorpCode 는 SFN 삭제(ALPHA-1498)로 잡 목록 항목이 됐다(실행은 Airflow).
+    for state in ("NewsLoadAssertions", "NewsAssembleEvents"):
         assert f'{{ Name = "OPS_SFN_STATE_NAME", Value = "{state}" }}' in tf, \
             f"{state} 에 OPS_SFN_STATE_NAME 주입이 없다"
 
 
-def test_load_instruments_normal_sfn_uses_latest_good_inputs():
-    """WHY(ALPHA-1048): 정상 SFN이 scope를 생략하면 shared canonical 역사를 다시 훑어
-    producer가 확정한 last-good snapshot 계약과 실행 비용 상한이 동시에 깨진다."""
+def test_load_instruments_uses_latest_good_inputs():
+    """WHY(ALPHA-1048): 정상 배치가 scope를 생략하면 shared canonical 역사를 다시 훑어
+    producer가 확정한 last-good snapshot 계약과 실행 비용 상한이 동시에 깨진다. 실행은 Airflow
+    `edge_etf_daily` 이고, 그 DAG 명령은 이 잡 목록 항목과 인자까지 대조된다(airflow/tests/sfn_commands.py)."""
     tf = _strip_hcl_comments(_STATEMACHINE_TF.read_text(encoding="utf-8"))
-    load_instruments = tf.split(
-        "LoadInstruments = merge(local.ecs_run_task_base, {", 1,
-    )[1].split("LoadInstrumentsCheckExitCode = {", 1)[0]
-    assert (
-        "States.Array('load-instruments', '--run-id', $.run_id, '--latest-good')"
-    ) in load_instruments
+    assert re.search(r'state\s+= "LoadInstruments"\s+taskdef_key\s+= "rds"\s+command_expr = '
+                     r'"States\.Array\(\'load-instruments\', \'--run-id\', \$\.run_id, \'--latest-good\'\)"', tf)
 
 
 def test_news_load_assertions_uses_current_tag_news_manifest():
@@ -552,11 +546,10 @@ def test_dependencies_encode_the_asl_gates():
         "LOAD_PRICE_DAILY", "LOAD_ETF_NAV", "LOAD_ETF_HOLDINGS", "LOAD_ETF_FLOW",
         "LOAD_MARKET_SERIES_DAILY")
     assert catalog.get("ENRICH_CORP_CODE").depends_on == ("LOAD_INSTRUMENTS",)
-    # 정제 전량 성공 게이트(ASL `NormalizeCheckResults`) — **개수가 아니라 정확한 집합**을
-    # terraform 에서 도출해 대조한다(edge-review). 길이만 보면 게이트 멤버가 **바뀌어도**
-    # 통과한다: 예컨대 `market_excluded_states` 에서 공시 정제 대신 투자자 정제를 빼면 시장
-    # SFN 은 투자자를 안 돌리는데 원장은 여전히 NORMALIZE_INVESTOR 를 기다려, 그 런이 영영
-    # 미충족으로 BLOCKED 다. 그 어긋남이 이 테스트가 막으려는 바로 그 종류의 결함이다.
+    # 정제 전량 성공 관문(DAG `load_instruments` 의 상류, 옛 ASL `NormalizeCheckResults`) — **개수가 아니라
+    # 정확한 집합**을 DAG 에서 도출해 대조한다(edge-review). 길이만 보면 게이트 멤버가 **바뀌어도**
+    # 통과한다: 예컨대 DAG 가 투자자 정제를 빼고 다른 정제를 넣으면 DAG 는 투자자를 안 돌리는데 원장은
+    # 여전히 NORMALIZE_INVESTOR 를 기다려, 그 런이 영영 미충족으로 BLOCKED 다. 그 어긋남이 이 테스트가 막으려는 바로 그 종류의 결함이다.
     assert set(catalog.get("LOAD_INSTRUMENTS").depends_on) == _market_normalize_task_keys()
     # 공시 레인 게이트(ASL `DisclosureNormalizeCheckResults`) — 같은 축을 자기 레인으로
     # 그린다. 875 동안은 엔트리가 없어 Worker 체인 순서가 지던 의존이, 987 복원으로

@@ -1,7 +1,8 @@
-"""시장 마감 수집 레인(etf-daily) — SFN `edge-*-data-pipeline` 의 Airflow 실행 경로.
+"""시장 마감 수집 레인(etf-daily) — 이 레인의 유일한 실행 경로. SFN `edge-*-data-pipeline` 에서 옮겨 왔고(11-14 전환),
+그 SFN·스케줄은 지웠다(ALPHA-1498). 아래 "SFN 과 같은 것"·"달라진 것"은 옮길 때의 SFN 대비다.
 
-현행과 같은 것: 슬롯(평일 KST 15:40), Planner 원장 계획, 21개 ECS 스텝과 명령(statemachine.tf 잡 목록과 직렬
-state — tests 가 인자까지 대조), 분기 규칙(ASL):
+SFN 과 같은 것: 슬롯(평일 KST 15:40), Planner 원장 계획, 21개 ECS 스텝과 명령(statemachine.tf 잡 목록 — tests 가
+인자까지 대조), 분기 규칙(옛 ASL):
 - 수집이 실패해도 정제는 돈다(NotifyRawPartial → NormalizeParallel).
 - 정제 6개가 모두 exit 0 또는 2 여야 마스터 적재(LoadInstruments)로 간다. 하나라도 그 밖이면 적재 전부를 돌리지
   않는다(NormalizeCheckResults Default). LoadInstruments·EnrichCorpCode 는 exit 0 만 통과한다.
@@ -12,7 +13,7 @@ state — tests 가 인자까지 대조), 분기 규칙(ASL):
   성공 skip 을 쓰지 않고(지킬 기대 작업이 없다) 보류도 원장에 옮기지 않는다. 런 판정에는 SFN 처럼 넣는다.
   ⚠️ report 가 판정을 남기지 못하면 Reconciler 는 원장 작업 20개로만 투영해, 이 스텝만 실패한 run 이 원장에
   SUCCEEDED 로 남을 수 있다(run 실패 SNS·Airflow 화면에는 드러난다 — README "시장 마감 수집 레인").
-FMP 4스텝은 `us_fmp_enabled` 일 때만 SFN 에 들어간다 — dev 는 꺼져 있어 이 DAG 엔 없다(tests 가 켜짐을 감지하면
+FMP 시장 수집 3스텝은 이 DAG 에 없다 — `us_fmp_enabled` 로 되살리려면 이 DAG 도 고쳐야 한다(tests 가 켜짐을 감지하면
 실패한다).
 달라진 것(의도):
 - 실행 요청 = 이 DAG run. plan 은 원장만 쓰고 SFN 을 시작하지 않는다(OPS_ORCHESTRATOR=AIRFLOW).
@@ -29,16 +30,15 @@ FMP 4스텝은 `us_fmp_enabled` 일 때만 SFN 에 들어간다 — dev 는 꺼�
 - 시간 상한: SFN 21600초 → dagrun_timeout 2700초(Reconciler 수명 3000초보다 짧아야 한다). SFN 실측(원장 25회)
   시작~끝 중앙 824초·최대 1255초, 가장 긴 스텝은 가격 수집 최대 807초.
 - 통보: SFN 의 부분 실패 즉시 통보 3종·NotifyFailure·시간 초과 알람 대신 run 실패 때 SNS 한 통(dagrun_timeout
-  포함). 본문에 pipeline_run_id 를 싣는다 — 실패 런의 raw 는 사람이 `--input-run-id <그 값>` 으로 다시 정제한다
-  (statemachine.tf NormalizeParallel 앞 주석).
+  포함). 본문에 pipeline_run_id 를 싣는다 — 실패 런의 raw 는 사람이 그 값으로 다시 정제한다(conf `reprocess_slot`
+  재처리 run, 또는 `--input-run-id <그 값>` — statemachine.tf normalize_jobs 앞 주석).
 
 일정·날짜:
 - 슬롯은 variables.tf `schedule_expression` 과 같다(dev 는 기본값 — tests 대조).
 - 수집은 당일 슬롯만 — KRX·KIS 는 실행 시각의 값을 주므로 과거 슬롯 run 이 오늘 값을 옛 run_id 로 라벨하면 안 된다.
-- 평일 공휴일에도 run 이 생긴다 — 현행 SFN 과 같다(Planner 가 기대 작업을 SKIPPED 로 계획한다).
+- 평일 공휴일에도 run 이 생긴다 — 옛 SFN 과 같다(Planner 가 기대 작업을 SKIPPED 로 계획한다).
 - catchup 없음, max_active_runs=1: 두 실행이 같은 canonical 파티션·마스터를 동시에 만지지 않게.
-- 켜기 전까지 돌지 않는다(is_paused_upon_creation). 전환은 terraform `daily_orchestrator` 와 unpause 를 함께
-  한다(README "시장 마감 수집 레인").
+- 켜기 전까지 돌지 않는다(is_paused_upon_creation). 실패 슬롯 회수·운영 절차는 README "시장 마감 수집 레인".
 """
 
 from __future__ import annotations
