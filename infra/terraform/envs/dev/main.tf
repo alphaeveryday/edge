@@ -143,6 +143,11 @@ module "rds" {
   vpc_id     = module.network.vpc_id
   subnet_ids = module.network.data_subnet_ids # 격리 데이터 tier(컴퓨트와 분리)
 
+  # 2026-11-16 디스크가 가득 차(여유 0) 운영자가 CLI 로 20→25GiB 로 늘렸다(ALPHA-1499). 그 값에 맞춘다 —
+  # 20 으로 두면 다음 apply 가 25→20 축소를 요청해 실패한다(RDS 는 스토리지를 줄일 수 없다).
+  # 10-02~11-13 여유가 약 12GiB 줄었다(하루 약 0.4GiB). 25 는 원인 조치 전까지 버티는 값이다.
+  allocated_storage = 25
+
   # RDS 알람도 파이프라인과 같은 SNS 토픽으로 보낸다. data_pipeline 이 아래에서 이 모듈의
   # 출력(db_host 등)을 받아가므로 상호 참조지만 순환은 아니다 — 토픽은 DB 출력에 의존하지
   # 않아 값 체인이 닫히지 않고, tofu 는 모듈이 아니라 변수/출력 노드 단위로 그래프를 짠다.

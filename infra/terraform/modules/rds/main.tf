@@ -156,6 +156,30 @@ resource "aws_cloudwatch_metric_alarm" "freeable_memory" {
   alarm_actions = [var.alarm_topic_arn]
 }
 
+# 디스크 여유. 2026-11-16 edge-dev(20GiB)가 여유 0 이 될 때까지 아무 통보가 없었다 — 10-02 11.6GiB 에서
+# 하루 약 0.4GiB 씩 줄었는데 이 지표를 보는 알람이 없었다. 가득 차면 쓰기가 전부 실패해 DB 를 쓰는 모든
+# 레인이 함께 멈춘다. 2GiB 는 그 속도로 약 5일 전에 울리는 자리다 — 증설(장 마감 뒤 modify)과 원인
+# 조사(어느 표가 컸는지)에 쓸 시간이다. 디스크는 천천히 차는 레벨 지표라 period 300·5분 3점이면 충분하다.
+# 결측은 notBreaching: 인스턴스 다운의 통보는 위 freeable_memory 와 아래 이벤트 구독이 맡는다.
+resource "aws_cloudwatch_metric_alarm" "free_storage" {
+  alarm_name        = "${var.name}-rds-free-storage"
+  alarm_description = "RDS 디스크 여유가 2GiB 아래로 15분 이어졌다 — 가득 차면 쓰기가 전부 실패한다. 할 일 ① 장 마감 뒤 aws rds modify-db-instance --allocated-storage 로 늘리고 같은 값을 envs/dev 에 맞춘다(안 맞추면 다음 apply 가 축소를 요청해 실패한다) ② pg_total_relation_size 로 큰 표를 찾아 늘어난 원인을 가른다."
+
+  namespace   = "AWS/RDS"
+  metric_name = "FreeStorageSpace"
+  dimensions  = { DBInstanceIdentifier = aws_db_instance.this.identifier }
+
+  statistic           = "Minimum"
+  period              = 300
+  evaluation_periods  = 3
+  datapoints_to_alarm = 3
+  threshold           = 2147483648 # 2 GiB
+  comparison_operator = "LessThanThreshold"
+  treat_missing_data  = "notBreaching"
+
+  alarm_actions = [var.alarm_topic_arn]
+}
+
 # DB 가 죽었다는 사실 자체의 통보. 위 FreeableMemory 알람은 **죽기 전 예고**이고 그것도
 # 느린 하강 형태에서만 듣는다 — 2026-08-10 22:14 사망은 15개 결측(=evaluation_periods)에도
 # 끝내 ALARM 으로 안 갔다(이력 전이 0건). 지표 공백으로 죽음을 추론하는 방식은 CloudWatch 의
@@ -169,7 +193,8 @@ resource "aws_cloudwatch_metric_alarm" "freeable_memory" {
 #                   memory … set shared_buffers 23081 → 11295"  ← 원인이 담긴 유일한 메시지
 #   failure      — 08-10 에는 안 나왔지만 실제 실패의 카테고리라 넣는다
 # 뺀 것: configuration change(terraform apply 마다 온다) · backup(매일 온다) ·
-# low storage(FreeStorageSpace 16.2GB 로 여유가 크고 근거가 없다 — 필요해지면 그때).
+# low storage(당시 FreeStorageSpace 16.2GB 로 여유가 커서 뺐다. 2026-11-16 edge-dev 가 가득 찬 뒤 위
+# free_storage 알람을 더했다 — 이벤트는 RDS 가 정한 문턱에서만 오지만 알람은 문턱을 우리가 정한다).
 resource "aws_db_event_subscription" "this" {
   name      = "${var.name}-rds-events"
   sns_topic = var.alarm_topic_arn
