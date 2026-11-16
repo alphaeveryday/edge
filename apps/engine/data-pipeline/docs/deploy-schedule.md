@@ -8,7 +8,9 @@ dev 배포 이미지는 `apps/engine/data-pipeline/Dockerfile` 로 빌드해 기
 ECR repository 에 `:${git_sha}` 와 `:data-pipeline-latest` 태그로 push 한다(`deploy-data-pipeline.yml`).
 
 Terraform 의 `modules/data-pipeline` 은 ECS task definition 과 Step Functions state machine 을
-만든다. 상태머신(`edge-dev-data-pipeline`)은 **raw → normalize → feature 3페이즈**를
+만든다. ⚠️ **시장 레인 상태머신(`edge-dev-data-pipeline`)과 그 15:40 스케줄은 지웠다**(ALPHA-1498, 11-16) — 시장 마감
+수집은 Airflow `edge_etf_daily` 가 같은 잡 목록 명령으로 돌린다(apps/engine/airflow/README.md "시장 마감 수집 레인").
+아래 이 절의 시장 SFN 서술은 그 전의 기록이다. 상태머신(`edge-dev-data-pipeline`)은 **raw → normalize → feature 3페이즈**를
 한 실행에서 완주한다(ALPHA-355·386·408, [ADR-0028](../../../../docs/adr/0028-unified-pipeline-sfn.md);
 analyze 페이즈는 ALPHA-806 에서 상주 소비자로 옮겨 나갔다) —
 각 페이즈는 잡을 병렬 ECS RunTask 로 돌리고, **앞 페이즈가 전량 성공해야** 다음으로 넘어간다 —
