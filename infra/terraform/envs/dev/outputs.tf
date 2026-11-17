@@ -23,12 +23,6 @@ output "rds_master_user_secret_arn" {
 # ── 프론트 CDN ───────────────────────────────────────────
 # tenant-console 은 온프렘 플레인(ADR-0032) — cloud CDN 출력 없음. admin_url 은 아래.
 
-# ── data-pipeline (raw → normalize → feature → analyze) ─
-output "data_pipeline_state_machine_arn" {
-  description = "수동 검증 실행: aws stepfunctions start-execution --state-machine-arn <이 값> --input '{\"run_id\":\"manual-...\"}'"
-  value       = module.data_pipeline.state_machine_arn
-}
-
 output "data_pipeline_ecr_repository_url" {
   description = "data-pipeline image repository URL (기존 edge/pipeline; analyze 는 같은 저장소의 analysis-engine-latest 태그)"
   value       = local.data_pipeline_ecr_repository_url

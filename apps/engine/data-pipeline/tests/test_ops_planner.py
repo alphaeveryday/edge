@@ -434,6 +434,19 @@ def test_plan_run_cli_unknown_lane_fails_loud(monkeypatch):
         entry.plan_run_cli(object())
 
 
+def test_plan_run_cli_refuses_sfn_for_the_market_lane(monkeypatch):
+    # WHY(ALPHA-1498): 시장 SFN 을 지웠다. OPS_PIPELINE_TYPE·OPS_ORCHESTRATOR 를 안 주는 수동 plan-run(기본값 =
+    #      시장 레인·SFN)이 계획만 남기고 실행이 없는 run 을 원장에 만들면, 그 슬롯은 기대 작업 20개가 영영 안
+    #      채워져 MISSED 로 닫힌다. 계획 전에 거부해야 원장이 깨끗하다.
+    monkeypatch.delenv("OPS_PIPELINE_TYPE", raising=False)
+    monkeypatch.delenv("OPS_ORCHESTRATOR", raising=False)
+    monkeypatch.setenv("OPS_STATE_MACHINE_ARN", _ARN)      # 옛 env 가 남아 있어도 SFN 으로 가면 안 된다
+    monkeypatch.setattr(entry, "ledger_from_settings",
+                        lambda settings: (_ for _ in ()).throw(AssertionError("원장에 닿으면 안 된다")))
+    with pytest.raises(SystemExit, match="Airflow 전용"):
+        entry.plan_run_cli(object())
+
+
 def test_plan_run_cli_news_lane_requires_news_arn(monkeypatch):
     # WHY: 뉴스 레인이 시장 ARN 으로 폴백하면 뉴스 기대를 걸고 **시장 SFN 을 기동**한다 —
     #      기대와 실행이 어긋난 런이 원장에 남는다. ARN 부재는 시작 전에 fail-loud 다.
@@ -871,7 +884,10 @@ def test_plan_run_cli_snapshots_only_three_etf_collectors(monkeypatch):
     captured = {}
     fake_ledger = object()
     monkeypatch.setenv("OPS_PIPELINE_TYPE", PIPELINE_TYPE)
-    monkeypatch.setenv("OPS_STATE_MACHINE_ARN", _ARN)
+    # 시장 레인은 Airflow 전용이다(ALPHA-1498) — DAG plan 스텝이 넣는 env 그대로.
+    monkeypatch.setenv("OPS_ORCHESTRATOR", "AIRFLOW")
+    monkeypatch.setenv("OPS_ORCHESTRATOR_RUN_REF", "edge_etf_daily/scheduled__x")
+    monkeypatch.setenv("OPS_SCHEDULED_TIME", "2026-11-16T15:40:00+09:00")
     monkeypatch.setattr(entry, "ledger_from_settings", lambda settings: fake_ledger)
 
     def fake_plan_run(ledger, **kwargs):
@@ -1059,195 +1075,18 @@ def test_공시_정제_부분실패는_dual_manifest_적재_후_SFN을_실패로
     assert 'Default = "DisclosureFailed"' in final
 
 
-def test_가격_정제_부분실패는_manifest_적재_후_시장_SFN을_실패로_마감한다():
-    """WHY(ALPHA-1038): NormalizePrice exit 2를 즉시 막으면 성공 KR winner가 DB에 못 가고,
-    성공으로 닫으면 부분 유실이 SFN 상태에서 숨는다. loader 실행과 최종 FAILED를 모두 고정한다."""
+def test_market_loaders_receive_the_normalize_run_manifest_scope():
+    """WHY(ALPHA-1038·1040·1042·1039): 이 로더들은 같은 run 의 정제 manifest 가 지목한 winner 만 읽는다. 명령이
+    run 계보를 넘기지 않으면 정상 배치는 시작 전에 실패하거나, 범위 가드를 걷는 순간 canonical 풀스캔으로 퇴행한다.
+
+    시장 SFN 의 분기 규칙(정제·적재 exit 2 계속, holdings 는 exit 0, 트리거는 적재 commit 뒤, 끝에서 strict 마감)을
+    고정하던 테스트는 SFN 삭제(ALPHA-1498)로 지웠다 — 같은 규칙은 Airflow DAG 가 실행하고
+    apps/engine/airflow/tests/test_etf_daily_dag.py 가 고정한다. DAG 명령은 아래 잡 목록과 인자까지 대조된다.
+    """
     sm = test_ops_catalog._strip_hcl_comments(
         (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
-
-    assert (
-        "States.Array('load-price-daily', '--run-id', $.run_id, "
-        "'--input-run-id', $.run_id)" in sm
-    )
-    continue_check = sm.split("normalize_price_continue_check = {", 1)[1].split(
-        "normalize_continue_checks = concat", 1)[0]
-    assert re.search(
-        r'Variable\s*=\s*"\$\.normalize_results\[\$\{local\.normalize_price_index\}\]'
-        r'\.exit_code".*?IsPresent\s*=\s*true.*?NumericEquals\s*=\s*2',
-        continue_check, re.S,
-    )
-    gate = sm.split("NormalizeCheckResults = {", 1)[1].split(
-        "NotifyNormalizePartial = {", 1)[0]
-    assert 'Next = "NotifyNormalizePartial"' in gate
-    assert 'Default = "NotifyFailure"' in gate
-    notify = sm.split("NotifyNormalizePartial = {", 1)[1].split("LoadInstruments =", 1)[0]
-    assert re.search(r'Next\s*=\s*"LoadInstruments"', notify)
-    assert "normalize_partial_notification_error" in notify
-    final = sm.split("RawPartialCheck = {", 1)[1].split("PipelineSucceeded =", 1)[0]
-    assert "local.raw_ingest_success_checks" in final
-    assert "local.normalize_success_checks" in final
-    assert 'Default = "PipelineFailed"' in final
-
-
-def test_EOD_수급_exit_0_2_1은_성공범위와_최종실패를_동시에_보존한다():
-    """WHY(ALPHA-1040·1041): NormalizeInvestor 2를 즉시 막으면 성공 winner를 잃고, 2를
-    성공으로 닫으면 유실이 숨는다. loader도 같은 계약이며 1은 절대 하류로 보내면 안 된다."""
-    sm = test_ops_catalog._strip_hcl_comments(
-        (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
-
-    assert (
-        "States.Array('load-etf-flow', '--run-id', $.run_id, "
-        "'--input-run-id', $.run_id)" in sm
-    )
-    normalize_continue = sm.split("normalize_investor_continue_check = {", 1)[1].split(
-        "normalize_continue_checks = concat", 1)[0]
-    assert re.search(
-        r'Variable\s*=\s*"\$\.normalize_results\[\$\{local\.normalize_investor_index\}\]'
-        r'\.status".*?StringEquals\s*=\s*"succeeded"', normalize_continue, re.S,
-    )
-    assert re.search(
-        r'Variable\s*=\s*"\$\.normalize_results\[\$\{local\.normalize_investor_index\}\]'
-        r'\.exit_code".*?NumericEquals\s*=\s*2', normalize_continue, re.S,
-    )
-    assert "NumericEquals = 1" not in normalize_continue
-
-    loader_continue = sm.split("feature_etf_flow_continue_check = {", 1)[1].split(
-        "feature_continue_checks = concat", 1)[0]
-    assert re.search(
-        r'Variable\s*=\s*"\$\.feature_results\[\$\{local\.feature_etf_flow_index\}\]'
-        r'\.status".*?StringEquals\s*=\s*"succeeded"', loader_continue, re.S,
-    )
-    assert re.search(
-        r'Variable\s*=\s*"\$\.feature_results\[\$\{local\.feature_etf_flow_index\}\]'
-        r'\.exit_code".*?NumericEquals\s*=\s*2', loader_continue, re.S,
-    )
-    assert "NumericEquals = 1" not in loader_continue
-
-    normalize_gate = sm.split("NormalizeCheckResults = {", 1)[1].split(
-        "NotifyNormalizePartial = {", 1)[0]
-    assert 'Next = "NotifyNormalizePartial"' in normalize_gate
-    assert 'Default = "NotifyFailure"' in normalize_gate
-    feature_gate = sm.split("FeatureCheckResults = {", 1)[1].split(
-        "LoadPriceTriggers = merge", 1)[0]
-    assert 'local.feature_continue_checks' in feature_gate
-    assert 'Default = "NotifyFailure"' in feature_gate
-    partial = sm.split("FeaturePartialCheck = {", 1)[1].split(
-        "NotifyFeaturePartial = {", 1)[0]
-    assert "local.feature_etf_flow_index" in partial
-    assert 'Next = "NotifyFeaturePartial"' in partial
-    final = sm.split("RawPartialCheck = {", 1)[1].split("PipelineSucceeded =", 1)[0]
-    assert "local.normalize_success_checks" in final
-    assert "local.feature_success_checks" in final
-    assert 'Default = "PipelineFailed"' in final
-
-
-def test_ETF_NAV_exit_0_2_1은_하류진행과_최종실패를_동시에_보존한다():
-    """WHY(ALPHA-1042·1043): producer/consumer exit 2의 성공 범위는 이어 처리하되 SFN
-    성공으로 세탁하면 안 되고, exit 1은 신뢰할 범위가 없어 하류를 막아야 한다."""
-    sm = test_ops_catalog._strip_hcl_comments(
-        (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
-    assert (
-        "States.Array('load-etf-nav', '--run-id', $.run_id, "
-        "'--input-run-id', $.run_id)" in sm
-    )
-    normalize = sm.split("normalize_etf_nav_continue_check = {", 1)[1].split(
-        "normalize_continue_checks = concat", 1)[0]
-    assert "NumericEquals = 2" in normalize and "NumericEquals = 1" not in normalize
-    loader = sm.split("feature_etf_nav_continue_check = {", 1)[1].split(
-        "feature_continue_checks = concat", 1)[0]
-    assert "NumericEquals = 2" in loader and "NumericEquals = 1" not in loader
-    partial = sm.split("FeaturePartialCheck = {", 1)[1].split(
-        "NotifyFeaturePartial = {", 1)[0]
-    assert "local.feature_etf_nav_index" in partial
-    final = sm.split("RawPartialCheck = {", 1)[1].split("PipelineSucceeded =", 1)[0]
-    assert "local.normalize_success_checks" in final
-    assert "local.feature_success_checks" in final
-    assert 'Default = "PipelineFailed"' in final
-
-
-def test_ETF_pointer_producer_exit_0_2_1은_마스터진행과_최종실패를_보존한다():
-    """WHY(ALPHA-1047): holdings/profile producer exit 2는 기존 last-good pointer를 보존한다.
-    이를 즉시 막으면 LoadInstruments가 안전한 입력을 못 쓰고, 성공으로 닫으면 producer 실패가 숨는다."""
-    sm = test_ops_catalog._strip_hcl_comments(
-        (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
-
-    strict_exclusions = sm.split("if !contains([", 1)[1].split("], job.state)", 1)[0]
-    continue_concat = sm.split("normalize_continue_checks = concat(", 1)[1].split(
-        "feature_success_checks =", 1)[0]
-    for name, state, next_local in (
-        ("normalize_etf", "NormalizeEtf", "normalize_etf_profile_index"),
-        ("normalize_etf_profile", "NormalizeEtfProfile", "normalize_continue_checks"),
-    ):
-        index_block = sm.split(f"{name}_index = index(", 1)[1].split(
-            f"{name}_continue_check = {{", 1)[0]
-        block = sm.split(f"{name}_continue_check = {{", 1)[1].split(
-            f"{next_local} =", 1)[0]
-        assert f'"{state}"' in index_block
-        assert block.count(f"${{local.{name}_index}}") == 3
-        assert re.search(r'\.status".*?StringEquals\s*=\s*"succeeded"', block, re.S)
-        assert re.search(
-            r'\.exit_code".*?IsPresent\s*=\s*true.*?NumericEquals\s*=\s*2',
-            block, re.S,
-        )
-        assert "NumericEquals = 1" not in block
-        assert f'"{state}"' in strict_exclusions
-        assert f"local.{name}_continue_check" in continue_concat
-    gate = sm.split("NormalizeCheckResults = {", 1)[1].split(
-        "NotifyNormalizePartial = {", 1)[0]
-    assert 'Next = "NotifyNormalizePartial"' in gate
-    assert 'Default = "NotifyFailure"' in gate
-    notify = sm.split("NotifyNormalizePartial = {", 1)[1].split("LoadInstruments =", 1)[0]
-    assert re.search(r'Next\s*=\s*"LoadInstruments"', notify)
-    final = sm.split("RawPartialCheck = {", 1)[1].split("PipelineSucceeded =", 1)[0]
-    assert "local.normalize_success_checks" in final
-    assert 'Default = "PipelineFailed"' in final
-
-
-def test_가격_트리거는_DB_loader_뒤에서_manifest_범위를_처리하고_strict_마감한다():
-    """WHY(ALPHA-1039): 트리거가 feature Parallel 안에 남으면 가격·holdings commit보다 먼저
-    읽는 경합이 생긴다. 두 loader의 exit 0/2 뒤에는 실행하되, 어느 부분 실패도 전체 SFN
-    성공으로 세탁하지 않아야 한다."""
-    sm = test_ops_catalog._strip_hcl_comments(
-        (test_ops_catalog._TF_MODULE / "statemachine.tf").read_text(encoding="utf-8"))
-
-    assert 'j.state != "LoadPriceTriggers"' in sm
-    feature_gate = sm.split("FeatureCheckResults = {", 1)[1].split(
-        "LoadPriceTriggers = merge", 1)[0]
-    assert 'local.feature_continue_checks' in feature_gate
-    assert 'Next = "LoadPriceTriggers"' in feature_gate
-    price_continue = sm.split("feature_price_continue_check = {", 1)[1].split(
-        "feature_continue_checks = concat", 1)[0]
-    assert "NumericEquals = 2" in price_continue
-
-    trigger = sm.split("LoadPriceTriggers = merge", 1)[1].split(
-        "LoadPriceTriggersCheckExitCode = {", 1)[0]
-    assert (
-        "States.Array('load-price-triggers', '--run-id', $.run_id, "
-        "'--input-run-id', $.run_id)" in trigger
-    )
-    trigger_exit = sm.split("LoadPriceTriggersCheckExitCode = {", 1)[1].split(
-        "RawPartialCheck = {", 1)[0]
-    assert "NumericEquals = 0" in trigger_exit and "NumericEquals = 2" in trigger_exit
-    assert 'Default = "NotifyFailure"' in trigger_exit
-    partial_check = sm.split("FeaturePartialCheck = {", 1)[1].split(
-        "NotifyFeaturePartial = {", 1)[0]
-    assert "local.feature_price_index" in partial_check
-    assert re.search(
-        r'Variable\s*=\s*"\$\.ecs\.Containers\[0\]\.ExitCode".*?'
-        r'NumericEquals\s*=\s*2', partial_check, re.S,
-    )
-    assert 'Next = "NotifyFeaturePartial"' in partial_check
-    notify = sm.split("NotifyFeaturePartial = {", 1)[1].split(
-        "RawPartialCheck = {", 1)[0]
-    assert re.search(r'Next\s*=\s*"RawPartialCheck"', notify)
-    assert "feature_partial_notification_error" in notify
-
-    final = sm.split("RawPartialCheck = {", 1)[1].split("PipelineSucceeded =", 1)[0]
-    assert "local.feature_success_checks" in final
-    assert re.search(
-        r'Variable\s*=\s*"\$\.ecs\.Containers\[0\]\.ExitCode".*?NumericEquals\s*=\s*0',
-        final, re.S,
-    )
+    for cli in ("load-price-daily", "load-etf-flow", "load-etf-nav", "load-price-triggers"):
+        assert f"States.Array('{cli}', '--run-id', $.run_id, '--input-run-id', $.run_id)" in sm, cli
 
 
 def test_planner_rejects_lane_without_expected_tasks_before_ledger_or_sfn(monkeypatch):

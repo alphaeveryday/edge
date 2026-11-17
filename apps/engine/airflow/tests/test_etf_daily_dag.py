@@ -1,4 +1,5 @@
-"""시장 마감 수집 DAG 계약 테스트 — SFN 경로와 갈라지면 안 되는 것(슬롯·스텝 집합·명령·분기 규칙·통보)을 고정한다.
+"""시장 마감 수집 DAG 계약 테스트 — SFN 에서 옮겨 온 것(슬롯·스텝·명령·분기 규칙·통보)을 고정한다. 시장 SFN 은
+ALPHA-1498 로 지웠고, 이 DAG 가 그 레인의 유일한 실행 경로다.
 
 EdgeStep 의 실행 판정은 장중 수급 테스트가 같은 클래스로 고정한다. 원장 카탈로그(task_key·태스크 정의·CLI) 대조는
 업무 패키지가 있는 data-pipeline tests/test_airflow_dag_contract.py 가 한다.
@@ -22,7 +23,7 @@ TF = REPO / "infra/terraform/modules/data-pipeline"
 sys.path.insert(0, str(ROOT / "dags"))
 KST = timezone(timedelta(hours=9))
 
-# DAG task → SFN state(statemachine.tf). 롤백하면 SFN 이 이 state 들을 같은 잡 목록으로 돌린다.
+# DAG task → 잡 목록 state(statemachine.tf). 잡 목록이 명령·태스크 정의의 정본이다(다른 레인 SFN 이 같은 목록을 쓴다).
 STATES = {
     "collect_price": "CollectKisPrice", "collect_investor": "CollectKisInvestor", "collect_krx_etf": "CollectKrxEtf",
     "collect_etf_profile": "CollectKisEtfProfile", "collect_nav": "CollectKisNav",
@@ -62,23 +63,11 @@ def test_slot_matches_terraform_schedule(dag_module):
     assert dag_module.CRONS == (f"{minute} {hour} * * 1-5",)
 
 
-def test_steps_are_the_market_sfn_steps(dag_module):
-    # SFN 시장 레인에 스텝이 더해지거나 빠지면(잡 목록·제외 목록·직렬 state) 이 DAG 도 함께 고쳐야 한다 — 아니면 전환 뒤
-    # 그 작업이 조용히 안 돈다(원장 작업이면 매 슬롯 MISSED, 원장 밖이면 아무도 모른다).
-    sm = (TF / "statemachine.tf").read_text()
-    states = lambda block: re.findall(r'^\s*state\s+= "(\w+)"', block, re.M)
-    excluded = set(re.findall(r'"(\w+)"', _block(sm, "market_excluded_states = [", "]")))
-    listed = (states(_block(sm, "kr_ingest_jobs = [", "raw_ingest_jobs ="))
-              + states(_block(sm, "normalize_jobs = [", "feature_jobs = ["))
-              + states(_block(sm, "feature_jobs = [", "market_excluded_states = [")))
-    serial = re.findall(r"^\s*(\w+) = merge\(local\.ecs_run_task_base, \{", _block(sm, "sfn_definition = jsonencode", "\n}\n"), re.M)
-    assert {s for s in listed if s not in excluded} | set(serial) == set(STATES.values())
-    assert set(STATES) == set(dag_module.STEPS) and len(dag_module.STEPS) == 21
-
-
-def test_commands_match_sfn_definition(dag_module):
-    # 롤백하면 SFN 이 같은 잡 목록으로 돈다 — 인자가 갈리면 실행 주체에 따라 같은 슬롯이 다른 일을 한다.
+def test_commands_match_the_job_list(dag_module):
+    # 원장 카탈로그(task_key·태스크 정의·CLI)와 다른 레인 SFN 이 같은 잡 목록을 정본으로 쓴다 — DAG 명령이 갈리면
+    # 같은 CLI 가 레인에 따라 다른 인자로 돌고, 수동 회수 레시피(잡 목록 명령 그대로)와 정기 run 이 다른 일을 한다.
     from sfn_commands import dag_command, sfn_command
+    assert set(STATES) == set(dag_module.STEPS) and len(dag_module.STEPS) == 21
     for task_id, state in STATES.items():
         taskdef, args = sfn_command(state)
         op = dag_module.dag.get_task(task_id)
@@ -87,7 +76,7 @@ def test_commands_match_sfn_definition(dag_module):
 
 
 def test_fmp_collection_is_off_in_dev():
-    # us_fmp_enabled 를 켜면 SFN 이 FMP 수집 4개를 더한다 — 이 DAG 엔 없으므로 켜기 전에 DAG 도 고쳐야 한다.
+    # us_fmp_enabled 는 FMP 수집을 되살리는 토글이다 — 시장 FMP 수집 3개는 이 DAG 에만 넣을 수 있으므로, 켜기 전에 DAG 도 고쳐야 한다.
     block = _block((TF / "variables.tf").read_text(), 'variable "us_fmp_enabled"', "\n}\n")
     assert re.search(r"default\s+= false", block)
     assert "us_fmp_enabled" not in (REPO / "infra/terraform/envs/dev/main.tf").read_text()
@@ -151,7 +140,7 @@ def test_longest_collections_take_slots_first(dag_module):
 
 def test_scheduling_guards(dag_module):
     dag, m = dag_module.dag, dag_module
-    # 전환 전엔 SFN 이 같은 슬롯을 계획한다 — 배포만으로 켜지면 두 주체가 한 슬롯을 돌린다.
+    # 새 DAG(또는 이름을 바꾼 DAG)는 사람이 켤 때까지 돌지 않는다 — 배포만으로 켜지면 확인 없이 슬롯을 돌린다.
     assert dag.is_paused_upon_creation is True and dag.catchup is False and dag.max_active_runs == 1
     assert dag.dagrun_timeout == timedelta(seconds=2700)
     for task_id in m.COLLECT_STEPS:

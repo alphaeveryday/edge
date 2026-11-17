@@ -364,13 +364,14 @@ def _etf_universe_provider(settings):
 # 늘 때 고쳐야 할 곳이 한 줄이고, **여기 없는 레인은 자동으로 fail-loud** 다 — if/elif 사슬은
 # else 를 잊으면 조용히 시장 레인으로 떨어진다.
 _LANE_STATE_MACHINE_ARN_ENV = {
-    catalog.PIPELINE_TYPE: "OPS_STATE_MACHINE_ARN",
     catalog.NEWS_PIPELINE_TYPE: "OPS_NEWS_STATE_MACHINE_ARN",
     catalog.DISCLOSURE_PIPELINE_TYPE: "OPS_DISCLOSURE_STATE_MACHINE_ARN",
     catalog.INVESTOR_INTRADAY_PIPELINE_TYPE: "OPS_INVESTOR_INTRADAY_STATE_MACHINE_ARN",
 }
-# SFN 이 없는 레인 — Airflow 만 계획·실행한다(ALPHA-1130). 위 표와 겹치지 않는다.
-_AIRFLOW_ONLY_LANES = frozenset({catalog.SOURCE_DAILY_PIPELINE_TYPE, catalog.DIVIDEND_DAILY_PIPELINE_TYPE})
+# SFN 이 없는 레인 — Airflow 만 계획·실행한다(ALPHA-1130). 위 표와 겹치지 않는다. 시장 마감 수집(etf-daily)은
+# SFN 을 지워 여기로 옮겼다(ALPHA-1498) — OPS_PIPELINE_TYPE 기본값이라, SFN 주체 plan-run 이 와도 시작 전에 거부된다.
+_AIRFLOW_ONLY_LANES = frozenset({catalog.PIPELINE_TYPE, catalog.SOURCE_DAILY_PIPELINE_TYPE,
+                                 catalog.DIVIDEND_DAILY_PIPELINE_TYPE})
 
 
 # ── CLI 핸들러 ────────────────────────────────────────────
