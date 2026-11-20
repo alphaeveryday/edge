@@ -292,3 +292,26 @@ async def test_a_question_sees_only_the_earlier_answers_of_the_same_conversation
         monkeypatch.setenv('DEEPSEEK_API_KEY', 'test')
         assert await worker.work_once() is True
     assert seen == [[{'question': '첫 질문', 'answer': ['첫 질문 답'], 'proposed_allocations': [{'name': 'VOO', 'account': 'ISA', 'weight_pct': 60.0}]}], []]
+
+
+async def test_only_customer_questions_try_the_light_answer_first(monkeypatch, tmp_path):
+    # 추가 질문은 받은 보고서로 바로 답할 수 있는지부터 본다(화면 단계 'light'). 보완 요청은 원래 분석을 고치는 일이라 처음부터 네 단계를 돈다.
+    from datetime import datetime
+    seen, stages = [], []
+    async def answer(question, report, key, *, light=False, **_):
+        seen.append(light)
+        return {}
+    for mode in ('question', 'recovery'):
+        job = {'id': mode, 'kind': 'chat', 'parent_id': 'parent', 'owner': 'owner', 'started_at': datetime(2026, 11, 7),
+               'created_at': datetime(2026, 11, 7), 'state': 'running', 'input': {'question': 'q', 'mode': mode}}
+        monkeypatch.setattr(worker, 'HEARTBEAT', tmp_path / 'heartbeat')
+        monkeypatch.setattr(worker.store, 'claim', lambda job=job: job)
+        monkeypatch.setattr(worker.store, 'read', lambda *_: {'state': 'succeeded', 'result': {}, 'input': {}})
+        monkeypatch.setattr(worker.store, 'chats', lambda *_: [])
+        monkeypatch.setattr(worker.store, 'stage', lambda job_id, stage: stages.append(stage))
+        for name in ('finish', 'checkpoint'):
+            monkeypatch.setattr(worker.store, name, lambda *_, **__: None)
+        monkeypatch.setattr(worker, 'answer_question', answer)
+        monkeypatch.setenv('DEEPSEEK_API_KEY', 'test')
+        assert await worker.work_once() is True
+    assert seen == [True, False] and stages == ['light', 'question']

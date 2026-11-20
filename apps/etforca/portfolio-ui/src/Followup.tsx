@@ -4,7 +4,7 @@ import { request, roles, type Section, type Report } from './api';
 import { ReportView } from './ReportView';
 import { trackAction } from './analytics';
 
-type ChatJob = { id: string; state: string; stage?: string | null; input?: { question: string }; created_at?: string; started_at?: string | null; result: { answer: Section; revision?: Report; status?: string } | null };
+type ChatJob = { id: string; state: string; stage?: string | null; input?: { question: string }; created_at?: string; started_at?: string | null; result: { answer: Section; revision?: Report | null; status?: string } | null };
 type Chats = { limit: number; items: ChatJob[] };
 export const waiting = (chat: ChatJob) => chat.state === 'queued' || chat.state === 'running';
 
@@ -136,7 +136,7 @@ export function ChatScreen({ chat }: { chat: Conversation }) {
         </div> : <div className="chat-bubble chat-bubble--ai chat-bubble--waiting">
           <span className="chat-dots" aria-hidden="true"><i /><i /><i /></span>
           <p>{progress(item)}<span aria-hidden="true">{elapsed(item, now)}</span></p>
-          <small>보통 5분쯤, 길면 9분까지 걸려요. 분석 결과로 돌아가도 답은 계속 만들어져요.</small>
+          <small>{rerunning(item) ? '처음부터 다시 분석해서 보통 5분쯤, 길면 10분까지 걸려요. ' : ''}분석 결과로 돌아가도 답은 계속 만들어져요.</small>
         </div>}
       </div>)}
       {chat.error && <p className="chat-screen__error" role="alert">{chat.error}</p>}
@@ -150,10 +150,13 @@ export function ChatScreen({ chat }: { chat: Conversation }) {
   </dialog>;
 }
 
-// 추가 질문도 첫 분석과 같은 네 단계를 다시 돈다(2026-11 실측 p50 5분, p90 8.6분). 지금 어느 단계인지 보여 줘야 멈춘 것으로 오해하지 않는다.
+// 추가 질문은 먼저 받은 분석으로 바로 답할 수 있는지 본다(stage 'light'). 계산·새 구성·입력 정정이면 첫 분석과 같은 네 단계를 다시 돈다
+// (2026-11 실측 p50 5분, p90 8.6분). 다시 분석할 때만 오래 걸린다고 알리고, 지금 어느 단계인지 보여 줘야 멈춘 것으로 오해하지 않는다.
 const chatSteps = ['질문을 다시 읽고 있어요', '구성과 금액을 다시 계산하고 있어요', '시장 전망을 다시 확인하고 있어요', '답을 정리하고 있어요'];
+const rerunning = (chat: ChatJob) => chat.state === 'running' && roles.includes(chat.stage as typeof roles[number]);
 function progress(chat: ChatJob) {
   if (chat.state === 'queued') return '앞선 분석이 끝나면 바로 시작해요';
+  if (!rerunning(chat)) return '받은 분석을 보고 답을 쓰고 있어요';
   const step = Math.max(0, roles.indexOf(chat.stage as typeof roles[number]));
   return `${chatSteps[step]} (${step + 1}/${roles.length})`;
 }

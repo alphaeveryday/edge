@@ -6,7 +6,7 @@ export type Records = { items: Row[]; total: number; page: number; page_size: nu
 export type Detail = { test_label?: string | null; id: string; visitor: string; input: import('../api').Input; result?: Record<string, unknown> | null; state?: State; stage?: string; started_at?: string; finished_at?: string; failure?: string; events?: { at: string; stage: string }[]; followups?: { test_label?: string | null; input: { question: string }; result: { answer?: Partial<import('../api').Section> } | null; state: State; failure?: string | null; created_at?: string }[] };
 
 export function progress(row: { stage?: string; started_at?: string; finished_at?: string }, asOf?: string) {
-  const stage = row.stage ? ({ question: '질문 해석', portfolio: '구성 분석', outlook: '전망 검토', opinion: '최종 의견' }[row.stage] || row.stage) : '';
+  const stage = row.stage ? ({ light: '바로 답하기', question: '질문 해석', portfolio: '구성 분석', outlook: '전망 검토', opinion: '최종 의견' }[row.stage] || row.stage) : '';
   const seconds = row.started_at ? Math.max(0, Math.floor((new Date(row.finished_at || asOf || Date.now()).getTime() - new Date(row.started_at).getTime()) / 1000)) : null;
   return [stage, seconds !== null && Number.isFinite(seconds) ? `${Math.floor(seconds / 60)}분 ${seconds % 60}초` : ''].filter(Boolean).join(' · ');
 }
