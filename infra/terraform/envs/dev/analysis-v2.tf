@@ -42,7 +42,8 @@ module "analysis_v2" {
   # 동시 3건으로 dev 37종 실측 81분 32초(2026-10-03, 37종 저장), 동시 37 1회 13분 5초(2026-10-04).
   # 여유와 한계는 tests/loadtest/analysis-v2/README.md '시작 시각'.
   outlook_schedule_expression = "cron(0 6 * * ? *)"
-  outlook_schedule_state      = "ENABLED"
+  # 2026-11-19부터 DeepSeek 402(잔액 부족)로 전건 실패하며 스냅샷 행만 쌓여 꺼 둔다. 다시 켤 때 "ENABLED".
+  outlook_schedule_state      = "DISABLED"
 }
 output "analysis_v2_state_machine_arn" { value = module.analysis_v2.state_machine_arn }
 output "analysis_v2_observer_role_arn" { value = module.analysis_v2.observer_role_arn }
