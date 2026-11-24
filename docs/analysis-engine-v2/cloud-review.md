@@ -9,6 +9,7 @@
 - 화면이 열려 있는 동안 10초마다 재조회. 다른 탭을 보는 동안에는 자동 조회 중지.
 - 관측: 요약·툴 호출 상세·원문. 툴 입력과 출력은 구문 색상을 적용한 JSON으로 표시한다. 실제 DB 테이블 행은 DB 조회에서 확인한다.
 - 로컬 JSON으로 대체하지 않음. DB 조회 실패는 오류로 표시.
+- S3 실행 기록(`analysis-v2/runs/<analysis_id>/`)의 JSON은 들여쓰기 없이 저장한다. `storage.json`·`evidence.json`의 내부 스냅샷 행(`record_research_state`·`capture_news_snapshot`)은 `output` 대신 생략 표시와 바이트 수만 남기고, `input.json`의 이어받은 `research_state`는 자료 개수만 남긴다. 그 원본은 결과 DB의 `tool_runs` 행이다(분석마다 누적 상태 전체를 다시 적어 전망 실행 기록의 82%를 차지했다).
 - `GET /api/analyses`: 두 종류의 최근 분석 목록.
 - `GET /api/analyses/{movement|outlook}/{analysis_id}`: 해당 분석의 감사 기록. 없으면 404.
 - 계약 검사는 DB에서 조립한 응답의 JSON 타입·구조와 계약 규칙을 확인하고 실패 위치를 표시한다. 검사 결과는 실행 기록에 저장한다.

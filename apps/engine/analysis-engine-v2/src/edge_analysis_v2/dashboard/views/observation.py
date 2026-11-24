@@ -8,6 +8,16 @@ def pretty_json(value):
     return '<pre class="observation-json">' + html.escape(json.dumps(value, ensure_ascii=False, indent=2)) + '</pre>'
 
 
+def artifact_text(name, text):
+    """Indent a JSON artifact for reading; cloud records store it compact."""
+    if name.endswith('.json'):
+        try:
+            return json.dumps(json.loads(text), ensure_ascii=False, indent=2)
+        except ValueError:
+            pass
+    return text
+
+
 def render_observation(detail, level):
     if level not in ('summary', 'calls', 'raw'):
         raise ValueError('Unknown observation level')
@@ -40,7 +50,7 @@ def render_observation(detail, level):
     if level == 'raw':
         parts.append('<h3>실행 상태</h3><pre>' + esc(json.dumps(detail['job'], ensure_ascii=False, indent=2)) + '</pre>')
         for name, text in artifacts.items():
-            parts.append('<details><summary>' + esc(name) + '</summary><pre>' + esc(text) + '</pre></details>')
+            parts.append('<details><summary>' + esc(name) + '</summary><pre>' + esc(artifact_text(name, text)) + '</pre></details>')
         return ''.join(parts)
     if level == 'summary':
         pending = sum(identity not in results for identity in calls)
@@ -51,7 +61,7 @@ def render_observation(detail, level):
                      + pretty_json({k: detail['job'].get(k) for k in ('analysis_id', 'started_at', 'finished_at', 'prompt_version')}) + '</section>')
         for name, title in [('input.json','당시 입력'), ('system_prompt.txt','시스템 프롬프트'), ('response.json','에이전트 최종 응답')]:
             if name in artifacts:
-                parts.append('<details><summary>' + title + '</summary><pre>' + esc(artifacts[name]) + '</pre></details>')
+                parts.append('<details><summary>' + title + '</summary><pre>' + esc(artifact_text(name, artifacts[name])) + '</pre></details>')
 
     def output(block):
         value = block.get('content')

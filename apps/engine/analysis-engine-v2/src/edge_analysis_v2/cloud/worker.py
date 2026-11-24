@@ -13,7 +13,7 @@ from psycopg.rows import dict_row
 
 from edge_analysis_v2.analysis.service import execute_request
 from edge_analysis_v2.agent.runner import run_model
-from edge_analysis_v2.cloud.artifacts import Publisher, atomic, encode
+from edge_analysis_v2.cloud.artifacts import Publisher, atomic, encode, omit_snapshots
 from edge_analysis_v2.cloud.contract import decode_request
 from edge_analysis_v2.contracts.audit import read_contract_audit
 from edge_analysis_v2.dashboard.server import assemble_screen
@@ -76,8 +76,10 @@ def export_records(connection, request, folder):
     evidence = read_analysis_evidence(connection, kind, identity)
     if evidence is None:
         return None
-    atomic(folder/'evidence.json',encode(evidence))
-    atomic(folder/'storage.json',encode(read_storage(connection,kind,identity)))
+    atomic(folder/'evidence.json',encode(evidence | {'tool_runs': omit_snapshots(evidence['tool_runs'])}))
+    storage = read_storage(connection,kind,identity)
+    storage['tables']['tool_runs'] = omit_snapshots(storage['tables']['tool_runs'])
+    atomic(folder/'storage.json',encode(storage))
     audit = read_contract_audit(connection,kind,identity)
     atomic(folder/'contract_audit.json',encode(audit))
     if evidence['analysis']['status']=='completed':

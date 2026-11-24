@@ -36,3 +36,11 @@ def test_summary_and_raw_are_distinct_and_keep_original_artifacts():
     assert '에이전트 관측 · 요약' in summary
     assert '에이전트 관측 · 원문' in raw and '&lt;raw&gt;' in raw
     assert 'system_prompt.txt' in raw and 'prompt' in raw
+
+
+def test_compact_cloud_json_is_indented_for_reading_and_broken_json_is_shown_as_is():
+    detail = {'job': {'status': 'completed'}, 'artifacts': {'events.jsonl': '', 'input.json': '{"a":{"b":1}}', 'x.json': '{"a":'}}
+    for level in ('summary', 'raw'):
+        page = render_observation(detail, level)
+        assert html.escape('{\n  "a": {\n    "b": 1') in page
+    assert html.escape('{"a":') in render_observation(detail, 'raw')

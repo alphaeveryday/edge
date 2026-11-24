@@ -136,3 +136,83 @@ def test_terminal_publish_drains_backlog_and_rejects_truncated_event(tmp_path, m
     (tmp_path/'events.jsonl').write_bytes(content+b'{"step":')
     with pytest.raises(ValueError):
         publisher.publish(job)
+
+
+def test_run_record_keeps_inherited_research_state_once_and_compact(tmp_path):
+    """The inherited state is already a database row; copying it into every run made outlook records grow daily."""
+    source, local = tmp_path/'source', tmp_path/'local'
+    source.mkdir()
+    state = {'version': 2, 'materials': {'m1': {'kind': 'note', 'text': '원문'}, 'm2': {'kind': 'note', 'text': 'x'}}}
+    initial = {'context': {'etf_code': '091160'}, 'research_state': state, 'holdings': [[1, 0.5]]}
+    (source/'input.json').write_text(json.dumps(initial, ensure_ascii=False, indent=2), encoding='utf-8')
+    (source/'investigation').mkdir()
+    (source/'investigation'/'input.json').write_text(json.dumps(initial), encoding='utf-8')
+    (source/'model_input.json').write_text(json.dumps({'input': {'research_state': {'catalog': {}}}}), encoding='utf-8')
+    s3 = MemoryS3()
+    manifest = Publisher(s3, 'bucket', REQUEST['analysis_id'], source).publish(
+        REQUEST | {'status':'running', 'origin':'cloud', 'started_at':REQUEST['analysis_at']})
+    download(s3, 'bucket', manifest, local)
+    for name in ('input.json', 'investigation/input.json'):
+        kept = json.loads((local/name).read_text(encoding='utf-8'))
+        assert kept['research_state']['materials'] == 2 and 'omitted' in kept['research_state']
+        assert {k: v for k, v in kept.items() if k != 'research_state'} == {k: v for k, v in initial.items() if k != 'research_state'}
+    # What the model was actually given is the catalog, so that file is kept as written.
+    assert json.loads((local/'model_input.json').read_text()) == {'input': {'research_state': {'catalog': {}}}}
+    assert b'\n' not in (local/'input.json').read_bytes()
+    # The local input is untouched: a resumed local run compares it with the input it rebuilds.
+    assert json.loads((source/'input.json').read_text(encoding='utf-8')) == initial
+
+
+def test_snapshot_rows_are_summarized_and_evidence_rows_kept_whole():
+    from edge_analysis_v2.cloud.artifacts import encode, omit_snapshots
+    evidence = {'tool_run_id': 'e', 'tool_id': 'sum_weighted_net_flow:v1', 'output': {'result': [1, 2]}}
+    state = {'tool_run_id': 's', 'tool_id': 'record_research_state:v1', 'output': {'result': {'materials': {'m': 'x'*100}}}}
+    news = {'tool_run_id': 'n', 'tool_id': 'capture_news_snapshot:v2', 'output': {'data': 'y'*50}}
+    kept = omit_snapshots([evidence, state, news])
+    assert kept[0] == evidence
+    assert [run['tool_run_id'] for run in kept] == ['e', 's', 'n']
+    for run, original in zip(kept[1:], (state, news)):
+        assert set(run['output']) == {'omitted', 'bytes'} and run['output']['bytes'] == len(encode(original['output']))
+    assert state['output']['result']['materials']  # the caller's rows are not modified
+
+
+def test_failed_upload_is_retried_on_the_next_flush(tmp_path):
+    source = tmp_path/'source'
+    source.mkdir()
+    (source/'input.json').write_text('{"value":1}')
+    s3 = MemoryS3()
+    publisher = Publisher(s3, 'bucket', REQUEST['analysis_id'], source)
+    job = REQUEST | {'status':'running', 'origin':'cloud', 'started_at':REQUEST['analysis_at']}
+    real = s3.put_object
+    s3.put_object = Mock(side_effect=OSError('network'))
+    with pytest.raises(OSError):
+        publisher.publish(job)
+    s3.put_object = real
+    assert 'input.json' in publisher.publish(job)['files']
+
+
+def test_changed_file_is_uploaded_again_and_unchanged_file_is_not_reparsed(tmp_path, monkeypatch):
+    from edge_analysis_v2.cloud import artifacts
+    source = tmp_path/'source'
+    source.mkdir()
+    (source/'response.json').write_text('{"value":1}')
+    s3 = MemoryS3()
+    publisher = Publisher(s3, 'bucket', REQUEST['analysis_id'], source)
+    job = REQUEST | {'status':'running', 'origin':'cloud', 'started_at':REQUEST['analysis_at']}
+    first = publisher.publish(job)['files']['response.json']['sha256']
+    parsed = Mock(side_effect=artifacts.decode_json)
+    monkeypatch.setattr(artifacts, 'decode_json', parsed)
+    publisher.publish(job)
+    assert parsed.call_count == 0  # the 5-second flush skips files that did not change
+    (source/'response.json').write_text('{"value":2}')
+    assert publisher.publish(job)['files']['response.json']['sha256'] != first
+
+
+def test_a_file_that_cannot_be_encoded_fails_loudly_instead_of_being_skipped(tmp_path):
+    # A JSON file still being written is skipped until it parses; one that parses but cannot be stored must not vanish.
+    source = tmp_path/'source'
+    source.mkdir()
+    (source/'response.json').write_text('{"x":1e999}')
+    publisher = Publisher(MemoryS3(), 'bucket', REQUEST['analysis_id'], source)
+    with pytest.raises(ValueError):
+        publisher.publish(REQUEST | {'status':'running', 'origin':'cloud', 'started_at':REQUEST['analysis_at']})
