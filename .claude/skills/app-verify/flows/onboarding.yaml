@@ -1,0 +1,32 @@
+# 온보딩: 소개 2장 → 관심 ETF 고르기 → 전망 보기. features/onboarding.md
+# 앱 데이터를 지우고 온보딩을 끝내므로 운영 서버에 게스트 1명 + 관심 ETF 1개가 새로 생긴다.
+# 그래서 기본 실행에서 빠진다(onboarding 태그). 온보딩 화면을 고쳤거나 새 기기를 준비할 때만 ONBOARDING=1 로 돌린다.
+appId: com.alphaeveryday.etforca
+name: onboarding
+tags: [onboarding]
+---
+- launchApp:
+    clearState: true
+    stopApp: true
+    permissions:
+      all: unset
+- extendedWaitUntil:
+    visible: "다음"
+    timeout: 45000
+- assertVisible: "이미 계정이 있나요?"
+- takeScreenshot: onboarding-1
+- tapOn: "다음"
+- assertVisible: "관심 ETF 고르기"
+- takeScreenshot: onboarding-2
+- tapOn: "관심 ETF 고르기"
+- extendedWaitUntil:
+    visible: "KODEX 반도체"
+    timeout: 30000
+- takeScreenshot: onboarding-etf
+- tapOn: "KODEX 반도체"
+- tapOn: "전망 보기"
+- runFlow: common/dismiss-disclaimer.yaml
+- extendedWaitUntil:
+    visible: "AI 분석"
+    timeout: 20000
+- takeScreenshot: onboarding-done

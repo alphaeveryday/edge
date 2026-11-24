@@ -1,0 +1,9 @@
+# 하위 흐름: 게스트 첫 AI 콘텐츠 진입 때 뜨는 투자 유의 사항 시트를 닫는다(기기 안에만 저장된다).
+appId: com.alphaeveryday.etforca
+---
+- runFlow:
+    when:
+      visible: "확인했어요"
+    commands:
+      - tapOn: "확인했어요"
+      - waitForAnimationToEnd

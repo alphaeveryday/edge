@@ -1,0 +1,15 @@
+# 홈: 관심 그룹 전망 강도 카드, 관심 ETF, 하단 탭 4개. features/home.md
+appId: com.alphaeveryday.etforca
+name: home
+tags: [smoke]
+---
+- runFlow: common/launch.yaml
+- assertVisible: "기본 관심 그룹 전망 강도"
+- assertVisible:
+    text: "KODEX 반도체"
+    index: 0
+- assertVisible: "홈"
+- assertVisible: "관심"
+- assertVisible: "탐색"
+- assertVisible: "커뮤니티"
+- takeScreenshot: home

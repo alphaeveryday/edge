@@ -1,0 +1,36 @@
+# mock 빌드 화면 둘러보기: 디자인 기준 스크린샷용(app-design). 데이터가 고정이라 픽셀 비교가 된다.
+# mock 빌드(MODE=mock)에서만 돌린다: run.sh .claude/skills/app-verify/flows/mock/tour.yaml
+# mock 관심 그룹 base = TIGER 반도체TOP10·PLUS K방산·KODEX 미국AI전력핵심인프라·TIGER Fn신재생에너지 (src/api/mock/data.ts)
+appId: com.alphaeveryday.etforca
+name: mock-tour
+tags: [mock]
+---
+- runFlow: ../common/launch.yaml
+- assertVisible:
+    text: "TIGER 반도체TOP10"
+    index: 0
+- waitForAnimationToEnd
+- takeScreenshot: mock-home
+- tapOn: "관심"
+- waitForAnimationToEnd
+- takeScreenshot: mock-watch
+- tapOn: "탐색"
+- waitForAnimationToEnd
+- takeScreenshot: mock-explore
+- tapOn: "커뮤니티"
+- waitForAnimationToEnd
+- takeScreenshot: mock-community
+- tapOn: "홈"
+- tapOn:
+    text: "TIGER 반도체TOP10"
+    index: 0
+- runFlow: ../common/dismiss-disclaimer.yaml
+- tapOn: "AI 분석"
+- waitForAnimationToEnd
+- takeScreenshot: mock-etf-brief
+- tapOn: "오늘 움직임"
+- waitForAnimationToEnd
+- takeScreenshot: mock-etf-summary
+- tapOn: "종목정보"
+- waitForAnimationToEnd
+- takeScreenshot: mock-etf-data
