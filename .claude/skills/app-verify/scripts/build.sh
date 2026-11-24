@@ -9,6 +9,7 @@ APP_DIR=$(cd "${1:-$HERE/../../../../apps/etforca/app-ui}" && pwd)
 REPO=$(git -C "$APP_DIR" rev-parse --show-toplevel)
 OUT=${OUT:-$MOBILE_ENV/out}; mkdir -p "$OUT"
 MODE=${MODE:-http}
+case $MODE in http|mock) ;; *) echo "MODE 는 http 또는 mock: $MODE"; exit 1;; esac
 # 주의: NAME=$([ ... ] && echo ...) 꼴은 http 일 때 set -e 로 조용히 끝난다(2026-11-25 실제로 겪음)
 if [ "$MODE" = mock ]; then NAME=etforca-verify-mock.apk; else NAME=etforca-verify.apk; fi
 export EXPO_PUBLIC_API_MODE=$MODE EXPO_PUBLIC_API_URL=https://etforca.edgesignal.dev/api/v1
@@ -22,10 +23,11 @@ if [ -f "$FAKE" ]; then python3 "$FAKE"; else [ -f "$GOOGLE_SERVICES_JSON" ] || 
 # Metro 변환 캐시에는 EXPO_PUBLIC_* 값이 박혀 있다. 지우지 않으면 MODE 를 바꿔도 이전 빌드의 API 모드가 남는다(2026-11-25 확인).
 rm -rf "$TMPDIR"/metro-cache "$TMPDIR"/metro-file-map-*
 cd "$APP_DIR"
-[ -d node_modules ] || npm ci --no-audit --no-fund
+# 의존성이 바뀐 커밋을 옛 node_modules 로 빌드하지 않는다
+[ node_modules/.package-lock.json -nt package-lock.json ] || npm ci --no-audit --no-fund
 npx expo prebuild --platform android --clean --no-install
 cd android
 echo "org.gradle.jvmargs=-Xmx6g -XX:MaxMetaspaceSize=1g" >> gradle.properties
 ./gradlew assembleRelease -PreactNativeArchitectures=x86_64 --no-daemon
 cp app/build/outputs/apk/release/app-release.apk "$OUT/$NAME"
-echo "APK: $OUT/$NAME ($(git -C "$APP_DIR" rev-parse --short HEAD)$(git -C "$APP_DIR" diff --quiet HEAD -- . || echo -dirty))" | tee "$OUT/$NAME.commit"
+echo "APK: $OUT/$NAME ($(git -C "$APP_DIR" rev-parse --short HEAD)$([ -z "$(git -C "$APP_DIR" status --porcelain -- . ':!android')" ] || echo -dirty))" | tee "$OUT/$NAME.commit"

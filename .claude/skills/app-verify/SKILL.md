@@ -9,10 +9,15 @@ description: ETF Orca 앱(apps/etforca/app-ui)을 Android 에뮬레이터에서 
 
 ## 지켜야 할 것
 
-- **읽기만 한다.** 앱은 운영 API(`etforca.edgesignal.dev`)를 쓴다. 로그인·회원가입·투표(산다·기다린다·판다)·글쓰기·답글·좋아요·관심 하트·그룹 편집은 운영 데이터를 만든다. 자동 흐름에 넣지 않고 사람에게 확인을 넘긴다(2026-11-25 결정). `scripts/check_flows.py` 가 이런 흐름을 막고 `run.sh` 가 매번 먼저 돌린다.
+- **읽기만 한다.** 앱은 운영 API(`etforca.edgesignal.dev`)를 쓴다. 로그인·회원가입·투표(산다·기다린다·판다)·글쓰기·답글·좋아요·관심 하트·그룹 편집·알림 읽음은 운영 데이터를 만든다. 자동 흐름에 넣지 않고 사람에게 확인을 넘긴다(2026-11-25 결정). `scripts/check_flows.py` 가 허용 목록 방식으로 막는다: 읽기 명령만 허용하고, 누르기는 글자 그대로 쓴 text 로만 하며, 쓰기 버튼 글자는 거부한다. `run.sh` 가 실제로 돌릴 흐름을 매번 먼저 검사한다.
+- **게스트로만 돈다.** 흐름은 로그인하지 않은 기기를 전제로 한다. 로그인한 상태에서는 "확인했어요"(투자 유의 사항)도 서버에 기록된다(`POST /me/disclaimer`). 사람이 에뮬레이터에서 로그인해 확인했다면, 끝나고 앱에서 로그아웃한다.
 - **앱 데이터를 지우지 않는다.** 지우면 기기 ID 가 새로 생겨 운영 서버에 게스트가 하나 더 생긴다. 설치는 `adb install -r` 로만 한다. 예외는 `flows/onboarding.yaml`(onboarding 태그) 하나다.
 - **실제 분석 키를 넣지 않는다.** 검증 빌드는 PostHog·Meta 키가 비어 있고 Firebase 는 가짜 설정이다. 시험 기기 데이터가 지표에 섞이지 않게 한다.
 - **증거가 없으면 통과가 아니다.** "아마 될 것", 다른 화면에서 확인, 흐름 일부만 실행은 실패로 보고한다.
+
+## 의존
+
+`build.sh` 는 `.github/scripts/write_fake_firebase.py` 를, 규칙표는 `.github/workflows/app-android-build.yml` 을 쓴다. 둘 다 PR #1656 에서 들어온다. #1656 이 dev 에 들어가기 전에는 build.sh 가 "가짜 Firebase 설정이 없다"로 멈추고, dev 의 앱은 Android 빌드가 깨져 있다(ads-consent).
 
 ## 준비 (기기마다 1회)
 
@@ -30,7 +35,7 @@ S=.claude/skills/app-verify/scripts
 $S/build.sh apps/etforca/app-ui   # 검증용 release APK (x86_64, JS 포함, 10~15분). MODE=mock 이면 가짜 API 빌드
 $S/launch.sh                      # adb 서버·에뮬레이터(systemd 유닛) 띄우고 APK 설치. READY 가 나오면 준비 완료
 $S/doctor.sh                      # 읽기 전용 점검. FAIL 이 하나라도 있으면 조작하지 않는다
-$S/run.sh                         # flows/ 전체(온보딩 제외). 흐름 하나만: run.sh .claude/skills/app-verify/flows/home.yaml
+$S/run.sh                         # flows/ 의 운영 흐름 전체(온보딩·mock 제외). 흐름 하나만: run.sh .claude/skills/app-verify/flows/home.yaml
 $S/cleanup.sh                     # 띄운 유닛만 끈다. 증거·앱 데이터는 남는다
 ```
 
@@ -58,10 +63,11 @@ $S/cleanup.sh                     # 띄운 유닛만 끈다. 증거·앱 데이�
 ## 흐름 쓰기
 
 - 흐름은 `flows/*.yaml`, 하위 흐름은 `flows/common/`. 시작은 `runFlow: common/launch.yaml`(앱을 다시 켜고 홈까지 기다림).
-- 글자로 누른다(`tapOn: "종목정보"`). 좌표(`point`)는 쓰지 않는다. 글자 없는 버튼은 쓰기인지 검사할 수 없다.
+- 글자 그대로 누른다(`tapOn: "종목정보"`). 정규식·변수·id·좌표·상대 위치(rightOf 등)는 검사기가 거부한다 — 무엇을 누르는지 검사할 수 없기 때문이다. 글자 없는 버튼(관심 하트 등)은 자동 흐름으로 누를 수 없다. 확인 대기(`extendedWaitUntil`·`assertVisible`)에는 정규식을 써도 된다.
+- 허용 명령: launchApp(clearState 제외)·stopApp·assertVisible·assertNotVisible·extendedWaitUntil·waitForAnimationToEnd·takeScreenshot·tapOn·back·scroll·scrollUntilVisible·runFlow(flows/ 안 파일만). 그 밖의 명령이 필요하면 읽기 전용인지 확인하고 `READ_COMMANDS` 에 더한다.
 - 운영 데이터는 매일 바뀐다. 가격·글 내용이 아니라 구조(탭·카드 제목·빈 상태 문구)를 확인한다.
 - `launchApp` 에는 `permissions: {all: unset}` 을 준다. 기본값(all: allow)은 이 에뮬레이터에서 adb 연결을 끊었다.
-- 새 흐름을 더하면 `features/` 에 기능 파일을 쓰고 `features/README.md` 표에 넣는다. 새 쓰기 버튼을 찾으면 `check_flows.py` 의 `WRITE_TEXTS` 에 더하고 `check_flows_test.py` 에 사례를 더한다.
+- 새 흐름을 더하면 `features/` 에 기능 파일을 쓰고 `features/README.md` 표에 넣는다. 새 쓰기 버튼을 찾으면 `check_flows.py` 의 `WRITE_SUBSTR`(또는 짧은 글자는 `WRITE_EXACT`)에 더하고 `check_flows_test.py` 에 사례를 더한다. 알림 목록처럼 행 자체를 누르면 쓰기가 되는 화면은 행을 누르지 않는다.
 
 ## 기능 지도
 
@@ -74,7 +80,8 @@ $S/cleanup.sh                     # 띄운 유닛만 끈다. 증거·앱 데이�
 | 규칙 | 지키게 하는 것 |
 |---|---|
 | app-ui 를 바꾼 PR 은 Android 빌드가 통과해야 한다 | `.github/workflows/app-android-build.yml` (#1605 오류가 4주간 숨어 있었던 일에서 나옴) |
-| 자동 검증은 운영 데이터를 만들지 않는다 | `scripts/check_flows.py` (+ `check_flows_test.py`), `run.sh` 가 매번 실행 |
+| 자동 검증은 운영 데이터를 만들지 않는다 | `scripts/check_flows.py` 허용 목록 (+ `check_flows_test.py` 29건, 실제 우회 사례 포함), `run.sh` 가 돌릴 흐름을 매번 검사 |
+| 기준 비교가 아무것도 비교하지 않고 통과하지 않는다 | `app-design/scripts/shotdiff.py` 가 0장·고친 화면 무변화를 실패로 본다 |
 | 검증 빌드는 실제 분석·Firebase 키를 쓰지 않는다 | `scripts/build.sh` 가 키를 비우고 `.github/scripts/write_fake_firebase.py` 로 가짜 설정을 쓴다 |
 | 기능 지도와 앱이 어긋나지 않는다 | 사람이 주기적으로 지도의 기능을 전부 실행해 맞춘다(pstack maintain-verification-skill 방식). 아직 자동 장치 없음 |
 
