@@ -13,11 +13,35 @@ FILES = frozenset(ARTIFACTS) - {'events.jsonl'} | {'evidence.json', 'storage.jso
 # A staged outlook keeps each conversation's files in a folder of its own; their events are already in the run's event file.
 FILES |= {f'{stage}/{name}' for stage in ('investigation', 'writing', 'fields') for name in ARTIFACTS if name != 'events.jsonl'}
 LIMIT = 32 * 1024 * 1024
+# Internal per-run state rows (storage/research.py, storage/news_snapshots.py). Each repeats the whole accumulated
+# state of the ETF, which made them 82% of an outlook run's files; the database keeps the copy the next run reads.
+SNAPSHOT_TOOLS = frozenset({'record_research_state', 'capture_news_snapshot'})
 
 
 def encode(value):
-    """Serialize administrative JSON without rounding application numbers."""
-    return json.dumps(value,ensure_ascii=False,allow_nan=False,indent=2).encode('utf-8')
+    """Serialize administrative JSON without rounding application numbers.
+
+    Compact: indentation made run files 1.5-1.7 times larger; the dashboard indents JSON when showing it.
+    """
+    return json.dumps(value,ensure_ascii=False,allow_nan=False,separators=(',',':')).encode('utf-8')
+
+
+def omit_snapshots(runs):
+    """Replace the output of internal snapshot rows with its size; every other row is unchanged."""
+    return [run | {'output': {'omitted': 'internal snapshot; the result database keeps the row',
+                              'bytes': len(encode(run['output']))}}
+            if run.get('tool_id', '').split(':')[0] in SNAPSHOT_TOOLS and run.get('output') is not None else run
+            for run in runs]
+
+
+def _observed(name, value):
+    """The copy of a file kept in the run record."""
+    if name.split('/')[-1] == 'input.json' and isinstance(value, dict) and isinstance(value.get('research_state'), dict):
+        # The inherited state is the previous publication's record_research_state row, already in the database.
+        state = value['research_state']
+        value = value | {'research_state': {'omitted': 'inherited research state; see the record_research_state row of the nearest completed ancestor',
+                                            'materials': len(state.get('materials', {}))}}
+    return encode(value)
 
 
 def atomic(path, data):
@@ -43,6 +67,7 @@ class Publisher:
         self.s3,self.bucket,self.folder = s3,bucket,Path(folder)
         self.prefix = PREFIX+identity+'/'
         self.files,self.events,self.offset = {},[],0
+        self.read = {}
         self.claimed = False
 
     def _put(self, data, name):
@@ -60,14 +85,19 @@ class Publisher:
             if not path.is_file():
                 continue
             data = path.read_bytes()
+            read = sha256(data).hexdigest()
+            if self.read.get(name) == read:
+                continue
             # A model may still be writing JSON; advertise it only after parsing succeeds.
             if name.endswith('.json'):
                 try:
-                    decode_json(data)
+                    value = decode_json(data)
                 except (ValueError,UnicodeError):
                     continue
+                data = _observed(name, value)
             if self.files.get(name,{}).get('sha256') != sha256(data).hexdigest():
                 self.files[name] = self._put(data,name)
+            self.read[name] = read
         path = self.folder/'events.jsonl'
         if path.is_file():
             with path.open('rb') as stream:

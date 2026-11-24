@@ -66,3 +66,17 @@ def test_worker_records_failure_without_leaking_keys(tmp_path,monkeypatch,failur
     with pytest.raises(FileExistsError):
         worker.run(request,**args)
     load.assert_not_called()
+
+
+def test_exported_records_summarize_snapshot_rows_and_keep_evidence(tmp_path, monkeypatch):
+    """storage.json and evidence.json each copied the whole research state; the database row stays the source."""
+    cited = {'tool_run_id': 'e', 'tool_id': 'list_events:v1', 'output': {'result': ['원문']}}
+    state = {'tool_run_id': 's', 'tool_id': 'record_research_state:v1', 'output': {'result': {'materials': {'m': 1}}}}
+    monkeypatch.setattr(worker, 'read_analysis_evidence', lambda *a: {'analysis': {'status': 'failed'}, 'tool_runs': [cited, state]})
+    monkeypatch.setattr(worker, 'read_storage', lambda *a: {'storage': 'postgresql', 'tables': {'tool_runs': [cited, state]}})
+    monkeypatch.setattr(worker, 'read_contract_audit', lambda *a: {'status': 'failed'})
+    worker.export_records(None, REQUEST, tmp_path)
+    for runs in (decode_json((tmp_path/'evidence.json').read_bytes())['tool_runs'],
+                 decode_json((tmp_path/'storage.json').read_bytes())['tables']['tool_runs']):
+        assert runs[0] == cited
+        assert set(runs[1]['output']) == {'omitted', 'bytes'} and runs[1]['tool_run_id'] == 's'
