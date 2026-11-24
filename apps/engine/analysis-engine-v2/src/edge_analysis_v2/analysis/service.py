@@ -54,6 +54,9 @@ def _previous(connection, kind, etf_code, cutoff, data_source="synthetic"):
 
 
 STAGES = ('investigation', 'writing', 'fields')
+# Days a tool original stays in the inherited research state. Equal to the app's outlook window and the run-record
+# retention; without a limit the state of one outlook chain grew to 979 originals (4 MB) in 33 days.
+RESEARCH_DAYS = 30
 # With the instructions rebuilt as skills a movement explanation took 80 seconds longer and a third ran into the
 # old 300 seconds. ponytail: more time, not less work; bring the limit down once the note-taking is trimmed.
 MOVEMENT_SECONDS = 480
@@ -487,6 +490,9 @@ def _execute(*, kind, tools, cutoff, key, artifacts, analysis_id, model, model_c
         elif previous:
             inherited = [item for item in previous_items if item['item_id'] in response['selected_item_ids']]
             published_references.update(listed_references(inherited if response['selected_item_ids'] else previous))
+        # Tool originals older than the window leave the inherited state unless this publication cites them.
+        research.expire(cutoff - timedelta(days=RESEARCH_DAYS), keep=published_references)
+        research_snapshot = research.snapshot()
         active_references = {research_snapshot['aliases'].get(ref, ref) for ref in published_references}
         if active_references & research_snapshot['removed'].keys():
             raise ValueError('Retired research is still cited by the final publication')

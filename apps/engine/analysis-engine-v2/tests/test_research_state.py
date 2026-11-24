@@ -254,3 +254,61 @@ def test_current_work_uses_canonical_ids_and_drops_pointers_retired_in_a_later_s
     assert set(result['removed']) == {'canonical-note', 'canonical-questions'}
     assert result['materials'] == {}
     assert first['materials']['canonical-note']['text'] == 'original'
+
+
+def _tool(at, value):
+    return {'kind': 'tool', 'definition': {'function_name': 'list_events'}, 'arguments': {'q': value},
+            'context': {'analysis_at': at}, 'output': {'result': value}}
+
+
+def test_expiry_bounds_inherited_state_but_keeps_what_the_publication_still_cites():
+    """Every original stayed in every later state, so one outlook chain carried 979 originals (4 MB) after 33 days."""
+    from datetime import datetime, timezone
+    state = ResearchState()
+    state.add('old', _tool('2026-10-01T06:00:00+09:00', 'old'))
+    state.add('cited', _tool('2026-10-01T06:00:00+09:00', 'cited'))
+    state.add('aliased', _tool('2026-10-02T06:00:00+09:00', 'aliased'))
+    state.add('again', _tool('2026-11-20T06:00:00+09:00', 'aliased'))  # same original read later: an alias
+    state.add('young', _tool('2026-11-10T06:00:00+09:00', 'young'))
+    state.add('note', {'kind': 'note', 'path': 'q1.md', 'text': 'why'})
+    expired = state.expire(datetime(2026, 10, 25, tzinfo=timezone.utc), keep={'cited', 'again'})
+    snapshot = state.snapshot()
+    assert expired == ['old']
+    assert set(snapshot['materials']) == {'cited', 'aliased', 'young', 'note'}
+    assert snapshot['material_order'] == ['cited', 'aliased', 'young', 'note']
+    assert snapshot['removed'] == {}  # not a retirement: nothing is recorded as a judgment
+    assert 'old' not in snapshot['material_keys']
+    # The same original observed again later is research again, unlike a retired one.
+    restored = ResearchState(snapshot)
+    restored.add('fresh', _tool('2026-11-24T06:00:00+09:00', 'old'))
+    assert 'fresh' in restored.snapshot()['materials']
+
+
+def test_expiry_drops_aliases_to_expired_originals_and_skips_undated_ones():
+    from datetime import datetime, timezone
+    state = ResearchState()
+    state.add('old', _tool('2026-10-01T06:00:00+09:00', 'x'))
+    state.add('rerun', _tool('2026-10-02T06:00:00+09:00', 'x'))
+    state.add('undated', {'kind': 'tool', 'definition': {}, 'arguments': {}, 'context': {}, 'output': {'result': 1}})
+    state.add('naive', _tool('2026-10-01T06:00:00', 'naive'))
+    state.expire(datetime(2026, 10, 25, tzinfo=timezone.utc))
+    snapshot = state.snapshot()
+    assert snapshot['aliases'] == {}
+    assert set(snapshot['materials']) == {'undated', 'naive'}
+    ResearchState(snapshot)  # still a valid state for the next analysis
+
+
+def test_reading_the_same_original_again_keeps_it_inside_the_window():
+    from datetime import datetime, timezone
+    state = ResearchState()
+    state.add('first', _tool('2026-10-01T06:00:00+09:00', 'same'))
+    state.add('stale', _tool('2026-10-01T06:00:00+09:00', 'stale'))
+    restored = ResearchState(state.snapshot())  # the next analysis inherits the state
+    restored.add('again', _tool('2026-11-20T06:00:00+09:00', 'same'))
+    assert restored.expire(datetime(2026, 10, 25, tzinfo=timezone.utc)) == ['stale']
+    snapshot = restored.snapshot()
+    assert set(snapshot['materials']) == {'first'} and snapshot['aliases'] == {'again': 'first'}
+    assert snapshot['observed'] == {'first': '2026-11-20T06:00:00+09:00'}
+    restored.add('earlier', _tool('2026-10-05T06:00:00+09:00', 'same'))  # an older read does not move it back
+    assert restored.snapshot()['observed'] == {'first': '2026-11-20T06:00:00+09:00'}
+    assert ResearchState(snapshot).expire(datetime(2026, 11, 21, tzinfo=timezone.utc)) == ['first']

@@ -1,5 +1,6 @@
 """Current research originals, with explicit retirement instead of implicit deletion."""
 from copy import deepcopy
+from datetime import datetime
 from hashlib import sha256
 import json
 import warnings
@@ -14,6 +15,15 @@ def material_key(material):
         else:
             original.get('context', {}).pop('analysis_at', None)
     return sha256(json.dumps(original, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
+
+def _observed_at(material):
+    value = material.get('context', {}).get('analysis_at')
+    try:
+        observed = datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+    return observed if observed is not None and observed.utcoffset() is not None else None
 
 
 class ResearchState:
@@ -52,6 +62,10 @@ class ResearchState:
         original_id = self._by_key.get(fingerprint)
         if original_id is not None and original_id != identity:
             self.value['aliases'][identity] = original_id
+            seen = _observed_at(material)
+            if seen is not None and seen > (self._last_seen(original_id) or seen):
+                # Reading the same original again keeps it inside the expiry window.
+                self.value.setdefault('observed', {})[original_id] = material['context']['analysis_at']
             return
         self.value['material_keys'][identity] = fingerprint
         self._by_key[fingerprint] = identity
@@ -81,7 +95,37 @@ class ResearchState:
         for change in changes:
             self.value['materials'].pop(change['id'])
             self.value['material_order'].remove(change['id'])
+            self.value.get('observed', {}).pop(change['id'], None)
             self.value['removed'][change['id']] = {k: deepcopy(v) for k, v in change.items() if k != 'id'}
+
+    def expire(self, before, keep=()):
+        """Drop tool originals observed before ``before`` unless an ID in ``keep`` (or its alias) cites them.
+
+        Unlike a retirement this is not a judgment about the material: nothing is recorded under ``removed``
+        and the same original read again later is added back. Without it every original stayed in every later
+        state, which grew without bound (979 originals over 33 days in one outlook chain, 4 MB per analysis).
+        Returns the expired IDs.
+        """
+        kept = {self.value['aliases'].get(identity, identity) for identity in keep}
+        expired = [identity for identity, material in self.value['materials'].items()
+                   if material.get('kind') == 'tool' and identity not in kept
+                   and (observed := self._last_seen(identity)) is not None and observed < before]
+        gone = set(expired)
+        for identity in expired:
+            self.value['materials'].pop(identity)
+            self.value.get('observed', {}).pop(identity, None)
+            fingerprint = self.value['material_keys'].pop(identity, None)
+            if self._by_key.get(fingerprint) == identity:
+                self._by_key.pop(fingerprint)
+        self.value['material_order'] = [identity for identity in self.value['material_order'] if identity not in gone]
+        self.value['aliases'] = {alias: identity for alias, identity in self.value['aliases'].items() if identity not in gone}
+        return expired
+
+    def _last_seen(self, identity):
+        """Latest observation of a material: its own context, or a later identical read recorded as an alias."""
+        own = _observed_at(self.value['materials'].get(identity, {}))
+        later = _observed_at({'context': {'analysis_at': self.value.get('observed', {}).get(identity)}})
+        return max(filter(None, (own, later)), default=None)
 
     def snapshot(self):
         return deepcopy(self.value)

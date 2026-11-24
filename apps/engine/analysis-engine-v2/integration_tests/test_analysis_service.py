@@ -152,6 +152,38 @@ def test_revision_receives_uncited_research_and_keeps_state_after_no_change(run_
     assert state['materials'].items() <= after['materials'].items()
 
 
+def test_revision_stops_carrying_uncited_tool_originals_older_than_the_window(run_context, monkeypatch):
+    """Without a window every original stayed in every later state (979 originals, 4 MB in one outlook chain)."""
+    from copy import deepcopy
+    from datetime import datetime, timedelta
+    from edge_analysis_v2.analysis import service
+    from edge_analysis_v2.storage.research import load_research
+    request, factory = run_context
+    fixture = make_fixture()
+    async def first(**kwargs):
+        news_reference(kwargs)
+        return {'new_items': [], 'selected_item_ids': [], 'summary': None}
+    _, identity = request('movement', first, fixture)
+    with factory() as connection:
+        state = load_research(connection, 'movement', identity).snapshot()
+    news = {i for i, m in state['materials'].items() if m['kind'] == 'tool' and m['definition']['function_name'] == 'get_news_evidence'}
+    reread = {i for i, m in state['materials'].items() if m['kind'] == 'tool'} - news  # initial reads repeat every run
+    assert news and reread
+    monkeypatch.setattr(service, 'RESEARCH_DAYS', 0)  # a minute later, the first run's originals are past the window
+    later = deepcopy(fixture)
+    later['context']['analysis_at'] = (datetime.fromisoformat(fixture['context']['analysis_at']) + timedelta(minutes=1)).isoformat()
+    async def revision(**kwargs):
+        assert kwargs['initial']['research_state'] == state  # this run still sees them
+        return {'new_items': [], 'selected_item_ids': [], 'summary': None}
+    _, revised_id = request('movement', revision, later)
+    with factory() as connection:
+        after = load_research(connection, 'movement', revised_id).snapshot()
+    assert not news & after['materials'].keys()  # read only by the first run and never cited
+    assert not news & set(after['material_order'])
+    assert reread <= after['materials'].keys()  # read again by this run, so still current
+    assert after['removed'] == {}  # expiry is not a retirement
+
+
 @pytest.mark.parametrize('empty_selection', [False, True])
 def test_retirement_cannot_leave_published_movement_using_retired_evidence(run_context, empty_selection):
     from copy import deepcopy
