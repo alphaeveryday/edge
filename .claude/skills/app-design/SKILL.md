@@ -16,11 +16,18 @@ S=.claude/skills/app-verify/scripts; D=.claude/skills/app-design/scripts
 MODE=mock $S/build.sh apps/etforca/app-ui       # → $MOBILE_ENV/out/etforca-verify-mock.apk
 ```
 
-mock 데이터는 운영과 ETF 가 다르다(TIGER 반도체TOP10 등). 운영 데이터용 흐름(flows/)은 mock 에서 그대로 돌지 않는다. mock 화면 둘러보기 흐름은 아직 없다 — 첫 디자인 작업에서 `flows/mock/` 에 만든다(아래 "남은 것").
+mock 데이터는 운영과 ETF 가 다르다(TIGER 반도체TOP10 등). 운영 데이터용 흐름(flows/*.yaml)은 mock 에서 돌지 않고, mock 에는 `flows/mock/tour.yaml`(홈·관심·탐색·커뮤니티·ETF 상세 3탭, 스크린샷 7장)을 쓴다. 같은 mock APK 로 두 번 돌리면 7장 모두 0.000% 차이다(2026-11-25 확인). 그림 한 곳을 바꾸면 그 화면만 FAIL 이 난다(같은 날 확인).
+
+```bash
+APK=$MOBILE_ENV/out/etforca-verify-mock.apk $S/launch.sh
+$S/run.sh .claude/skills/app-verify/flows/mock/tour.yaml    # → 증거 폴더 = 기준 또는 수정 후
+```
+
+확인이 끝나면 운영 APK 를 다시 설치한다(`launch.sh`). 앱 데이터는 두 빌드가 함께 쓴다.
 
 ## 절차
 
-1. **수정 전 기준.** 고치기 전 코드로 mock APK 를 빌드·설치하고 화면 둘러보기 흐름을 돌린다. 이 증거 폴더가 기준이다. 기준은 손대지 않는다. 기준이 틀려 보이면 멈추고 사람에게 묻는다.
+1. **수정 전 기준.** 고치기 전 코드로 mock APK 를 빌드·설치하고 `flows/mock/tour.yaml` 을 돌린다. 고칠 화면이 tour 에 없으면 먼저 tour 에 더한다. 이 증거 폴더가 기준이다. 기준은 손대지 않는다. 기준이 틀려 보이면 멈추고 사람에게 묻는다.
 2. **정본 화면.** `apps/etforca/app-ui/design/app-v188-v3.dc.html` 을 브라우저로 열어(agent-browser) 고칠 화면까지 눌러 가서 스크린샷을 찍는다. 정본은 화면 24개의 프로토타입 하나다. screens.md 가 정본과 앱의 차이(바뀐 화면·사라진 화면)를 적어 두었다 — 정본과 다른 것이 의도된 차이인지 먼저 확인한다.
 3. **고친다.** 디자인 토큰(`src/theme` 등 기존 색·글꼴·간격 정의)을 쓴다. 화면 파일에 새 색 값을 직접 쓰지 않는다.
 4. **수정 후.** 같은 흐름을 다시 돌린다.
@@ -40,8 +47,9 @@ mock 데이터는 운영과 ETF 가 다르다(TIGER 반도체TOP10 등). 운영 
 
 ## 남은 것
 
-- `flows/mock/` 화면 둘러보기 흐름(mock 데이터 기준 홈·관심·탐색·ETF 상세·커뮤니티). 첫 디자인 작업에서 만든다.
+- tour 에 없는 화면(검색·알림·전체 메뉴·관심 편집·게시물 등). 그 화면을 고칠 때 더한다.
 - 정본 화면을 이름으로 바로 여는 방법. 지금은 브라우저에서 눌러 간다.
+- 정본 프로토타입은 앱보다 예전 판이다(예: 온보딩 3장·"GPT Astra" 문구 vs 앱 2장·"AI 분석"). 차이가 의도인지는 screens.md 와 사람이 판단한다.
 
 ## 출처
 

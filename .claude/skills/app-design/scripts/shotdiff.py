@@ -38,7 +38,7 @@ def main():
         if b.size != c.size:
             print(f"FAIL {name}: 크기 다름 {b.size} vs {c.size}"); fail = True; continue
         diff = ImageChops.difference(b, c).convert("L").point(lambda v: 255 if v > 16 else 0)
-        ratio = sum(1 for v in diff.getdata() if v) / (b.width * b.height)
+        ratio = diff.histogram()[255] / (b.width * b.height)
         allowed = name in a.allow
         bad = ratio > THRESHOLD and not allowed
         fail |= bad

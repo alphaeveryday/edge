@@ -8,7 +8,9 @@ HERE=$(cd "$(dirname "$0")" && pwd); source "$HERE/env.sh"
 APP_DIR=$(cd "${1:-$HERE/../../../../apps/etforca/app-ui}" && pwd)
 REPO=$(git -C "$APP_DIR" rev-parse --show-toplevel)
 OUT=${OUT:-$MOBILE_ENV/out}; mkdir -p "$OUT"
-MODE=${MODE:-http}; NAME=etforca-verify$([ "$MODE" = mock ] && echo -mock).apk
+MODE=${MODE:-http}
+# 주의: NAME=$([ ... ] && echo ...) 꼴은 http 일 때 set -e 로 조용히 끝난다(2026-11-25 실제로 겪음)
+if [ "$MODE" = mock ]; then NAME=etforca-verify-mock.apk; else NAME=etforca-verify.apk; fi
 export EXPO_PUBLIC_API_MODE=$MODE EXPO_PUBLIC_API_URL=https://etforca.edgesignal.dev/api/v1
 export EXPO_PUBLIC_POSTHOG_KEY= META_APP_ID= META_CLIENT_TOKEN=
 export KAKAO_NATIVE_APP_KEY=$(sed -n "s/^KAKAO_NATIVE_APP_KEY=//p" "$MOBILE_ENV/secrets/kakao.env" 2>/dev/null || true)
