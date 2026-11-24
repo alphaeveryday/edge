@@ -98,9 +98,11 @@ jobs:
           echo "workspace=$WS scheme=$SCHEME"
           start=$(date +%s)
           set -o pipefail
+          # arm64 만: GitHub 맥 러너는 Apple Silicon 이고, FirebaseAnalytics(GoogleAppMeasurement)는
+          # x86_64 시뮬레이터 링크에서 APM 심볼이 없어 실패했다(2026-11-25 첫 실행).
           xcodebuild -workspace "$WS" -scheme "$SCHEME" -configuration Release \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
-            -derivedDataPath build CODE_SIGNING_ALLOWED=NO build | tail -n 200
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO ARCHS=arm64 build | tail -n 200
           echo "xcodebuild seconds: $(( $(date +%s) - start ))" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Run on simulator and capture
