@@ -1,0 +1,129 @@
+# ETF Orca 앱(app-ui)을 iOS 시뮬레이터용으로 빌드해 실행하고 첫 화면 스크린샷·로그를 남긴다.
+#
+# 용도: 에이전트·개발자가 맥 없이 iOS 빌드와 실행을 확인한다. 배포·스토어 제출과는 무관하다.
+# 공개 저장소라 GitHub 호스티드 맥 러너가 무료다. 대신 아티팩트를 GitHub 사용자 누구나 받을 수 있어 보관 1일.
+#
+# 분석 데이터 오염 방지:
+#   - PostHog 키를 비운다 → 앱이 PostHog 클라이언트를 만들지 않는다(src/lib/analytics.ts).
+#   - META_APP_ID 를 비운다 → app.config.ts 가 Meta 플러그인을 뺀다.
+#   - Firebase 설정 파일은 형식만 맞춘 가짜 파일을 만든다 → 실제 Firebase 프로젝트로 갈 경로가 없다. 푸시는 안 된다.
+# 비밀값을 쓰지 않는다.
+#
+# 실행: gh workflow run app-ios-sim-build.yml --ref <브랜치>
+name: app-ios-sim-build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [dev]
+    paths:
+      - .github/workflows/app-ios-sim-build.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-ios-sim-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-26
+    # app.json 의 buildReactNativeFromSource 때문에 콜드 빌드가 길다.
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: apps/etforca/app-ui
+    env:
+      CI: "1"
+      EXPO_PUBLIC_API_MODE: http
+      EXPO_PUBLIC_API_URL: https://etforca.edgesignal.dev/api/v1
+      EXPO_PUBLIC_POSTHOG_KEY: ""
+      META_APP_ID: ""
+      META_CLIENT_TOKEN: ""
+      KAKAO_NATIVE_APP_KEY: ""
+      GOOGLE_SERVICES_JSON: ${{ github.workspace }}/.fake-firebase/google-services.json
+      GOOGLE_SERVICE_INFO_PLIST: ${{ github.workspace }}/.fake-firebase/GoogleService-Info.plist
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/etforca/app-ui/package-lock.json
+
+      - name: Install JS dependencies
+        run: npm ci --no-audit --no-fund
+
+      # 키 문자열을 나눠 이어 붙인다 — 가짜 키지만 gitleaks 의 GCP API 키 패턴에 걸리지 않게 한다.
+      - name: Write placeholder Firebase config
+        run: |
+          python3 - <<'EOF'
+          import json, os, plistlib
+          d = os.path.dirname(os.environ["GOOGLE_SERVICES_JSON"]); os.makedirs(d, exist_ok=True)
+          key = "AI" + "za" + "SyVerifyBuildOnlyNotARealKey"; key += "0" * (39 - len(key))
+          pkg, pid = "com.alphaeveryday.etforca", "orca-verify-fake"
+          json.dump({"project_info": {"project_number": "000000000000", "project_id": pid, "storage_bucket": f"{pid}.appspot.com"},
+                     "client": [{"client_info": {"mobilesdk_app_id": "1:000000000000:android:0000000000000000",
+                                                 "android_client_info": {"package_name": pkg}},
+                                 "oauth_client": [], "api_key": [{"current_key": key}],
+                                 "services": {"appinvite_service": {"other_platform_oauth_client": []}}}],
+                     "configuration_version": "1"}, open(os.environ["GOOGLE_SERVICES_JSON"], "w"))
+          plistlib.dump({"API_KEY": key, "GCM_SENDER_ID": "000000000000", "PLIST_VERSION": "1", "BUNDLE_ID": pkg,
+                         "PROJECT_ID": pid, "STORAGE_BUCKET": f"{pid}.appspot.com", "IS_ADS_ENABLED": False,
+                         "IS_ANALYTICS_ENABLED": False, "IS_APPINVITE_ENABLED": False, "IS_GCM_ENABLED": True,
+                         "IS_SIGNIN_ENABLED": False, "GOOGLE_APP_ID": "1:000000000000:ios:0000000000000000"},
+                        open(os.environ["GOOGLE_SERVICE_INFO_PLIST"], "wb"))
+          EOF
+
+      - name: Expo prebuild (iOS)
+        run: npx expo prebuild --platform ios --clean --no-install
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            apps/etforca/app-ui/ios/Pods
+            ~/Library/Caches/CocoaPods
+          key: pods-${{ runner.os }}-${{ hashFiles('apps/etforca/app-ui/package-lock.json', 'apps/etforca/app-ui/app.json') }}
+
+      - name: Pod install
+        working-directory: apps/etforca/app-ui/ios
+        run: pod install
+
+      - name: Build for simulator
+        working-directory: apps/etforca/app-ui/ios
+        run: |
+          WS=$(ls -d *.xcworkspace | head -1); SCHEME=${WS%.xcworkspace}
+          echo "workspace=$WS scheme=$SCHEME"
+          start=$(date +%s)
+          set -o pipefail
+          xcodebuild -workspace "$WS" -scheme "$SCHEME" -configuration Release \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build CODE_SIGNING_ALLOWED=NO build | tail -n 200
+          echo "xcodebuild seconds: $(( $(date +%s) - start ))" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Run on simulator and capture
+        working-directory: apps/etforca/app-ui/ios
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          APP=$(ls -d build/Build/Products/Release-iphonesimulator/*.app | head -1)
+          UDID=$(xcrun simctl list devices available -j | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; print(next(x['udid'] for r in sorted(d, reverse=True) if 'iOS' in r for x in d[r] if x['name'].startswith('iPhone')))")
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID"
+          xcrun simctl install "$UDID" "$APP"
+          EXE=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+          xcrun simctl spawn "$UDID" log stream --style compact --predicate "process == \"$EXE\"" > "$RUNNER_TEMP/out/app.log" 2>&1 &
+          xcrun simctl launch "$UDID" com.alphaeveryday.etforca
+          sleep 30
+          xcrun simctl io "$UDID" screenshot "$RUNNER_TEMP/out/first-screen.png"
+          kill %1 || true
+          (cd "$(dirname "$APP")" && zip -qry "$RUNNER_TEMP/out/ETFOrca-sim.app.zip" "$(basename "$APP")")
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-sim-${{ github.run_id }}
+          path: ${{ runner.temp }}/out
+          retention-days: 1
+          if-no-files-found: warn
