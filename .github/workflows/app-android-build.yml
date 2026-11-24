@@ -1,0 +1,73 @@
+# ETF Orca 앱(app-ui)을 Android 로 빌드해 본다. 네이티브 모듈·의존성·JS 번들이 깨진 PR 을 머지 전에 잡는다.
+#
+# 생긴 이유: ads-consent 모듈(#1605, 10-30 머지)이 Android 빌드에서 깨져 있었는데(versionName 누락, Kotlin 메타데이터 버전),
+# PR 단계에서 Android 를 빌드하는 검사가 없어 4주 동안 아무도 몰랐다. EAS 스토어 빌드에서야 터질 문제였다.
+#
+# 검증 빌드라 분석 데이터 오염이 없게 한다: PostHog·Meta 키 없음, Firebase 는 가짜 설정 파일. 비밀값을 쓰지 않는다.
+# 컴파일 확인이 목적이라 x86_64 한 가지 ABI 만 빌드한다.
+name: app-android-build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [dev]
+    paths:
+      - apps/etforca/app-ui/**
+      - "!apps/etforca/app-ui/**/*.md"
+      - "!apps/etforca/app-ui/design/**"
+      - .github/workflows/app-android-build.yml
+      - .github/scripts/write_fake_firebase.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: app-android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: apps/etforca/app-ui
+    env:
+      CI: "1"
+      NODE_ENV: production
+      EXPO_PUBLIC_API_MODE: http
+      EXPO_PUBLIC_API_URL: https://etforca.edgesignal.dev/api/v1
+      EXPO_PUBLIC_POSTHOG_KEY: ""
+      META_APP_ID: ""
+      META_CLIENT_TOKEN: ""
+      KAKAO_NATIVE_APP_KEY: ""
+      GOOGLE_SERVICES_JSON: ${{ github.workspace }}/.fake-firebase/google-services.json
+      GOOGLE_SERVICE_INFO_PLIST: ${{ github.workspace }}/.fake-firebase/GoogleService-Info.plist
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/etforca/app-ui/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install JS dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Write placeholder Firebase config
+        run: python3 "$GITHUB_WORKSPACE/.github/scripts/write_fake_firebase.py"
+
+      - name: Expo prebuild (Android)
+        run: npx expo prebuild --platform android --clean --no-install
+
+      - name: Gradle assembleRelease (x86_64)
+        working-directory: apps/etforca/app-ui/android
+        run: ./gradlew assembleRelease -PreactNativeArchitectures=x86_64 --no-daemon
