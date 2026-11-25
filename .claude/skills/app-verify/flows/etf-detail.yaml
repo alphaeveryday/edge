@@ -1,0 +1,30 @@
+# ETF 상세 4탭: AI 분석 · 오늘 움직임 · 커뮤니티 · 종목정보. 홈의 관심 ETF(KODEX 반도체)에서 들어간다. features/etf-detail.md
+appId: com.alphaeveryday.etforca
+name: etf-detail
+tags: [smoke]
+---
+- runFlow: common/launch.yaml
+- tapOn:
+    text: "KODEX 반도체"
+    index: 0
+- runFlow: common/dismiss-disclaimer.yaml
+- assertVisible: "AI 분석"
+- tapOn: "AI 분석"
+- extendedWaitUntil:
+    visible: "단기 전망|오늘 분석은 08:30에 올라와요"
+    timeout: 20000
+- takeScreenshot: etf-brief
+- tapOn: "오늘 움직임"
+- extendedWaitUntil:
+    visible: "왜 움직였을까\\?|가격이 움직인 이유를 아직 찾지 못했어요."
+    timeout: 20000
+- takeScreenshot: etf-summary
+- tapOn: "커뮤니티"
+- waitForAnimationToEnd:
+    timeout: 10000
+- takeScreenshot: etf-community
+- tapOn: "종목정보"
+- extendedWaitUntil:
+    visible: "구성 해석|히트맵"
+    timeout: 20000
+- takeScreenshot: etf-data

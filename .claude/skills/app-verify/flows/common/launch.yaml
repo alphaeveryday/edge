@@ -1,0 +1,12 @@
+# 하위 흐름: 앱을 다시 켜고 홈이 뜰 때까지 기다린다. 앱 데이터는 지우지 않는다(게스트 기기 유지).
+# permissions all: unset — 기본값(all: allow)은 이 에뮬레이터에서 adb 연결을 끊었다(2026-11-25).
+appId: com.alphaeveryday.etforca
+---
+- launchApp:
+    stopApp: true
+    permissions:
+      all: unset
+- extendedWaitUntil:
+    visible: "내 종목 브리핑"
+    timeout: 45000
+    label: "홈이 떴다 (안 뜨면 기기가 온보딩 전이다: ONBOARDING=1 run.sh flows/onboarding.yaml)"

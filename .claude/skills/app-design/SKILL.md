@@ -1,0 +1,56 @@
+---
+name: app-design
+description: ETF Orca 앱(apps/etforca/app-ui) 화면 디자인을 고칠 때 쓴다 — "디자인 개선", "정본대로 맞춰줘", "화면 다듬어줘", 간격·색·글꼴·배치 수정. 디자인 정본(design/app-v188-v3.dc.html)과 앱 화면을 나란히 놓아 사람이 판단하게 하고, 기준 스크린샷과 픽셀 비교로 고치려던 화면 외에 바뀐 화면이 없는지 확인한다. 새 디자인 방향을 정하는 일은 사람 몫이다.
+---
+
+# app-design — 정본과 나란히, 나머지는 그대로
+
+디자인 수정에서 자동으로 확인할 수 있는 것은 두 가지다. (1) 고친 화면이 정본과 같은가, (2) 고치지 않은 화면이 그대로인가. "더 좋아졌는가"는 사람이 판단한다. 이 스킬은 사람이 그 판단을 이미지 몇 장으로 하게 만든다. 앱 조작은 app-verify 스킬을 쓴다.
+
+## 기준 스크린샷은 mock 빌드로 찍는다
+
+운영 데이터(가격·글·분석)는 매일 바뀌어서 운영 빌드끼리는 픽셀 비교가 안 된다. `MODE=mock` 빌드는 앱 안의 가짜 API(`src/api/mock`)를 써서 데이터가 고정이고 서버에 아무것도 보내지 않는다.
+
+```bash
+S=.claude/skills/app-verify/scripts; D=.claude/skills/app-design/scripts
+MODE=mock $S/build.sh apps/etforca/app-ui       # → $MOBILE_ENV/out/etforca-verify-mock.apk
+```
+
+mock 데이터는 운영과 ETF 가 다르다(TIGER 반도체TOP10 등). 운영 데이터용 흐름(flows/*.yaml)은 mock 에서 돌지 않고, mock 에는 `flows/mock/tour.yaml`(홈·관심·탐색·커뮤니티·ETF 상세 3탭, 스크린샷 7장)을 쓴다. 같은 mock APK 로 두 번 돌리면 7장 모두 0.000% 차이다(2026-11-25 확인). 그림 한 곳을 바꾸면 그 화면만 FAIL 이 난다(같은 날 확인).
+
+```bash
+APK=$MOBILE_ENV/out/etforca-verify-mock.apk $S/launch.sh
+$S/run.sh .claude/skills/app-verify/flows/mock/tour.yaml    # → 증거 폴더 = 기준 또는 수정 후
+```
+
+확인이 끝나면 운영 APK 를 다시 설치한다(`launch.sh`). 앱 데이터는 두 빌드가 함께 쓴다.
+
+## 절차
+
+1. **수정 전 기준.** 고치기 전 코드로 mock APK 를 빌드·설치하고 `flows/mock/tour.yaml` 을 돌린다. 고칠 화면이 tour 에 없으면 먼저 tour 에 더한다. 이 증거 폴더가 기준이다. 기준은 손대지 않는다. 기준이 틀려 보이면 멈추고 사람에게 묻는다.
+2. **정본 화면.** `apps/etforca/app-ui/design/app-v188-v3.dc.html` 을 브라우저로 열어(agent-browser) 고칠 화면까지 눌러 가서 스크린샷을 찍는다. 정본은 화면 24개의 프로토타입 하나다. screens.md 가 정본과 앱의 차이(바뀐 화면·사라진 화면)를 적어 두었다 — 정본과 다른 것이 의도된 차이인지 먼저 확인한다.
+3. **고친다.** 디자인 토큰(`src/theme` 등 기존 색·글꼴·간격 정의)을 쓴다. 화면 파일에 새 색 값을 직접 쓰지 않는다.
+4. **수정 후.** 같은 흐름을 다시 돌린다.
+5. **비교.**
+   ```bash
+   python3 $D/side_by_side.py <정본.png> <앱 수정 후.png> <나란히.png>       # 정본 vs 앱
+   python3 $D/shotdiff.py <기준 증거> <수정 후 증거> <결과 폴더> --allow <고친 화면 이름...>
+   ```
+   `shotdiff` 는 고치려던 화면(`--allow`) 외에 0.1% 넘게 바뀐 화면이 있으면 실패한다. 실패하면 그 화면의 `diff-*.png`(바뀐 곳 빨강)를 보고 원인을 찾는다. 비교를 통과시키려고 기준·임계값·흐름을 바꾸지 않는다.
+6. **PR.** pr-cycle 을 따른다. 본문에 나란히 이미지(정본 vs 앱), 고친 화면의 전/후(`pair-*.png`), `shotdiff` 출력(화면별 바뀐 비율)을 붙인다. 사람은 이 이미지로 판단한다.
+
+## 판단 기준
+
+- 정본과 다르게 가는 것이 사용자에게 더 낫다면 그렇게 하되, PR 에 "정본과 다름: 이유"를 적는다(사용자 경험이 구현 편의보다 앞선다).
+- 여러 안이 가능한 새 화면은 2~3개 안을 mock 빌드로 만들어 나란히 보여 주고 사람이 고르게 한다.
+- 한 PR 에 한 화면(또는 같은 부품을 쓰는 화면 묶음). 공용 부품을 바꾸면 그 부품을 쓰는 화면 전부가 `--allow` 대상이고, 전부 전/후를 붙인다.
+
+## 남은 것
+
+- tour 에 없는 화면(검색·알림·전체 메뉴·관심 편집·게시물 등). 그 화면을 고칠 때 더한다.
+- 정본 화면을 이름으로 바로 여는 방법. 지금은 브라우저에서 눌러 간다.
+- 정본 프로토타입은 앱보다 예전 판이다(예: 온보딩 3장·"GPT Astra" 문구 vs 앱 2장·"AI 분석"). 차이가 의도인지는 screens.md 와 사람이 판단한다.
+
+## 출처
+
+pstack `poteto-mode/playbooks/visual-parity.md`(기준 먼저, 기준·하네스 수정 금지, 눈이 아니라 이미지 비교)를 edge 앱에 맞췄다. https://github.com/cursor/plugins/tree/main/pstack

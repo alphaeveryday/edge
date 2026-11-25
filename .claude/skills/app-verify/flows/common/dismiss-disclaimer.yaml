@@ -1,0 +1,10 @@
+# 하위 흐름: 게스트 첫 AI 콘텐츠 진입 때 뜨는 투자 유의 사항 시트를 닫는다. 게스트면 기기 안에만 저장된다.
+# 로그인한 상태면 서버에 기록된다(POST /me/disclaimer) — 흐름은 게스트 기기에서만 돌린다.
+appId: com.alphaeveryday.etforca
+---
+- runFlow:
+    when:
+      visible: "확인했어요"
+    commands:
+      - tapOn: "확인했어요"
+      - waitForAnimationToEnd
