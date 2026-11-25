@@ -71,7 +71,7 @@ resource "aws_cloudfront_function" "www_redirect" {
 
 # ── CloudFront 배포 ─────────────────────────────────────
 resource "aws_cloudfront_distribution" "this" {
-  enabled             = true
+  enabled             = var.enabled
   is_ipv6_enabled     = true
   default_root_object = "index.html"
   aliases             = concat([var.domain_name], var.redirect_www ? ["www.${var.domain_name}"] : [])

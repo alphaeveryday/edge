@@ -30,6 +30,12 @@ variable "redirect_www" {
   default     = false
 }
 
+variable "enabled" {
+  description = "false 면 CloudFront 배포를 끈다(사이트가 응답하지 않는다). 버킷·인증서·DNS 는 그대로 둔다."
+  type        = bool
+  default     = true
+}
+
 variable "price_class" {
   description = "CloudFront 엣지 범위. dev 는 비용 절감으로 좁혀도 됨(PriceClass_100=북미·유럽)."
   type        = string

@@ -34,6 +34,9 @@ module "truth_research" {
 
   # 미국 공시(SEC) 요청 연락처 — truth 사이트 처리방침(privacy.html)에 공개한 운영 연락처와 같다
   sec_contact = "asm.alphaeveryday@gmail.com"
+
+  # 2026-11-25 사용자 결정으로 꺼 둔다(라이브는 CLI 로 선적용). 다시 켤 때 "ENABLED".
+  schedule_state = "DISABLED"
 }
 
 data "aws_secretsmanager_secret" "analysis_v2_reader" { name = "edge/analysis-v2/readonly" }

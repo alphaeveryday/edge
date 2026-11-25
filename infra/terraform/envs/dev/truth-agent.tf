@@ -17,6 +17,8 @@ module "truth_agent" {
   landing_bucket_name = module.landing_site.bucket_name
   landing_bucket_arn  = module.landing_site.bucket_arn
 
+  # 2026-11-25 사용자 결정으로 꺼 둔다(라이브는 CLI 로 선적용). 다시 켤 때 "ENABLED".
+  schedule_state = "DISABLED"
 }
 
 output "truth_agent_store_bucket" { value = module.truth_agent.store_bucket }

@@ -849,6 +849,8 @@ module "super_admin_site" {
   api_origin_domain   = var.admin_api_domain
   api_origin_protocol = "https-only"
   api_allowed_methods = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+  # 2026-11-25 사용자 결정으로 꺼 둔다(라이브는 CLI 로 선적용). 다시 켤 때 true.
+  enabled = false
 }
 
 # 모듈 rename 은 state 상 이동으로 처리 — CloudFront 배포를 재생성하지 않고 보존한다.
@@ -911,6 +913,8 @@ module "b2b_console_site" {
   api_origin_domain   = module.quarterback_call.function_url_domain
   api_origin_protocol = "https-only"
   api_allowed_methods = ["GET", "HEAD", "OPTIONS", "PUT", "POST", "PATCH", "DELETE"]
+  # 2026-11-25 사용자 결정으로 꺼 둔다(라이브는 CLI 로 선적용). 다시 켤 때 true.
+  enabled = false
   # 함수는 이 헤더가 없는 호출을 거른다 — 함수 URL 을 알아도 CloudFront 를 거치지 않으면 못 부른다.
   api_origin_header_name  = "x-qb-origin"
   api_origin_header_value = module.quarterback_call.origin_header_value
@@ -924,6 +928,8 @@ module "quarterback_call" {
   openai_secret_name   = "edge/quarterback-call/openai"
   deepseek_secret_name = "edge/analysis-v2/deepseek"
   allowed_origins      = ["https://${var.b2b_domain}", "http://localhost:5177"]
+  # 2026-11-25 사용자 결정으로 데모를 꺼 둔다(라이브는 CLI 로 선적용). 다시 켤 때 10.
+  reserved_concurrency = 0
 }
 
 # 랜딩 종목 검색이 읽는 전망 파일(outlook/<코드>.json)을 매일 08:00 KST 에 갱신한다(ALPHA-1267).
@@ -939,6 +945,8 @@ module "landing_export" {
   etf_names         = local.outlook_etf_names
   scheduler_dlq_arn = module.data_pipeline.scheduler_dlq_arn
   alarm_topic_arn   = module.data_pipeline.alarm_topic_arn
+  # 전망 배치가 꺼져(2026-11-25) 매일 실패만 해서 꺼 둔다(라이브는 CLI 로 선적용). 다시 켤 때 "ENABLED".
+  schedule_state = "DISABLED"
 }
 
 # ── ETF Orca 앱 API: app-api (ADR-0056) ─────────────────

@@ -32,6 +32,11 @@ variable "on_schedule" {
   type        = string
   description = "켜는 시각(Asia/Seoul)."
 }
+variable "on_schedule_enabled" {
+  type        = bool
+  description = "false 면 켜는 예약을 만들지 않는다. 서비스는 운영자가 켤 때까지 0 대로 남는다."
+  default     = true
+}
 variable "off_schedule" {
   type        = string
   description = "끄는 시각(Asia/Seoul)."
