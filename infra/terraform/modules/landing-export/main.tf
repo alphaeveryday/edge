@@ -103,6 +103,7 @@ resource "aws_iam_role_policy" "scheduler" {
 
 resource "aws_scheduler_schedule" "this" {
   name                         = var.name
+  state                        = var.schedule_state
   schedule_expression          = var.schedule_expression
   schedule_expression_timezone = "Asia/Seoul"
 

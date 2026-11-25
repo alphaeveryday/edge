@@ -185,6 +185,7 @@ resource "aws_appautoscaling_target" "this" {
 }
 
 resource "aws_appautoscaling_scheduled_action" "on" {
+  count              = var.on_schedule_enabled ? 1 : 0
   name               = "${var.name}-on"
   service_namespace  = aws_appautoscaling_target.this.service_namespace
   resource_id        = aws_appautoscaling_target.this.resource_id

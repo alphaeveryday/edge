@@ -74,7 +74,7 @@ resource "aws_lambda_function" "this" {
   memory_size      = 256
   # 답변 스트리밍은 몇 초면 끝난다(첫 글자 ~2초). CloudFront 오리진 응답 제한(30초)과 맞춘다.
   timeout                        = 30
-  reserved_concurrent_executions = 10
+  reserved_concurrent_executions = var.reserved_concurrency
   environment {
     variables = {
       OPENAI_SECRET_ID   = data.aws_secretsmanager_secret.openai.arn

@@ -17,3 +17,9 @@ variable "allowed_origins" {
   description = "호출을 받을 화면 Origin 목록 (예: https://quarterback.etforca.com)"
   type        = list(string)
 }
+
+variable "reserved_concurrency" {
+  description = "함수 동시 실행 상한. 0 이면 모든 호출이 막힌다(데모를 끌 때)."
+  type        = number
+  default     = 10
+}

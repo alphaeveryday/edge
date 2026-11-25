@@ -38,6 +38,16 @@ variable "scheduler_dlq_arn" {
   type        = string
 }
 
+variable "schedule_state" {
+  description = "ENABLED 또는 DISABLED."
+  type        = string
+  default     = "ENABLED"
+  validation {
+    condition     = contains(["ENABLED", "DISABLED"], var.schedule_state)
+    error_message = "schedule_state 는 ENABLED 또는 DISABLED 다."
+  }
+}
+
 variable "schedule_expression" {
   description = "실행 시각 (Asia/Seoul). 전망 배치 마감(08:00) 과 같은 시각이 기본이다."
   type        = string

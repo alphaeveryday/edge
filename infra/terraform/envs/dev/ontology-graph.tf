@@ -13,6 +13,8 @@ module "ontology_graph" {
   username     = "ontology"
   on_schedule  = "cron(30 5 ? * MON-FRI *)"
   off_schedule = "cron(0 16 ? * MON-FRI *)"
+  # 2026-11-25 사용자 결정으로 켜는 예약을 없애 꺼 둔다(라이브는 CLI 로 선적용). 다시 켤 때 true.
+  on_schedule_enabled = false
 
   password_parameter_arn = "arn:aws:ssm:${var.region}:393229433969:parameter/edge/dev/ontology-graph/password"
   # DB 계정(ontology_graph_ro)과 관리자 비밀번호가 든 JSON. 10/5 시험 때 만든 매개변수를 그대로 쓴다(Terraform 밖).
