@@ -8,6 +8,11 @@ locals {
   # foundation 이 소유하는 edge/airflow(ALPHA-1119). data 로 조회하지 않는다 — foundation apply 전에도 plan 이 선다.
   airflow_ecr_repository_arn = "arn:aws:ecr:${var.region}:${data.aws_caller_identity.current.account_id}:repository/edge/airflow"
   airflow_ecr_repository_url = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com/edge/airflow"
+  # 2026-11-25 사용자 결정으로 admin·sync ALB 를 지운다(서비스 0대인데 ALB 시간 요금만 나감).
+  # false 면 ALB·리스너·타깃그룹·ALB SG·DNS 레코드(admin_api_domain, sync_domain)·WAF 연결이 없고,
+  # 서비스는 LB 없이 남는다. 다시 쓸 때 true 로 되돌리고 apply 한 뒤 서비스 desired 를 올린다.
+  super_admin_alb_enabled = false
+  sync_alb_enabled        = false
 }
 
 # ── DNS / TLS ───────────────────────────────────────────
@@ -167,6 +172,7 @@ module "rds" {
 # tenant-console-api 는 onprem 플레인 앱(ADR-0029)이라 dev ECS 에서 제거됐다 —
 # 실 배포처는 데모 박스 compose 스택(ADR-0033).
 module "super_admin_alb" {
+  count  = local.super_admin_alb_enabled ? 1 : 0
   source = "../../modules/alb"
 
   name              = "${local.prefix}-admin"
@@ -190,12 +196,13 @@ module "super_admin_api" {
   container_port   = 8080
   cpu_architecture = "X86_64"
 
-  vpc_id        = module.network.vpc_id
-  subnet_ids    = module.network.private_subnet_ids
-  desired_count = 1
+  vpc_id     = module.network.vpc_id
+  subnet_ids = module.network.private_subnet_ids
+  # 2026-11-25 꺼 둠(라이브 0). desired 는 생성 시 초기값이라 재생성될 때만 쓰인다.
+  desired_count = 0
 
-  target_group_arn           = module.super_admin_alb.target_group_arn
-  ingress_security_group_ids = [module.super_admin_alb.security_group_id]
+  target_group_arn           = local.super_admin_alb_enabled ? module.super_admin_alb[0].target_group_arn : null
+  ingress_security_group_ids = local.super_admin_alb_enabled ? [module.super_admin_alb[0].security_group_id] : []
 
   # 부팅 122s(0.25 vCPU) > 기본 120s — grace 만료 시점에 unhealthy 로 태스크가 킬되는
   # 롤아웃 실패 실증(ALPHA-688, deploy run 30732194158 / failedTasks 5+). 화면이 늘며
@@ -261,13 +268,14 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_super_admin_api" {
 }
 
 resource "aws_route53_record" "admin_api" {
+  count   = local.super_admin_alb_enabled ? 1 : 0
   zone_id = data.aws_route53_zone.main.zone_id
   name    = var.admin_api_domain
   type    = "A"
 
   alias {
-    name                   = module.super_admin_alb.dns_name
-    zone_id                = module.super_admin_alb.zone_id
+    name                   = module.super_admin_alb[0].dns_name
+    zone_id                = module.super_admin_alb[0].zone_id
     evaluate_target_health = false
   }
 }
@@ -337,7 +345,8 @@ resource "aws_wafv2_web_acl" "super_admin" {
 }
 
 resource "aws_wafv2_web_acl_association" "super_admin_alb" {
-  resource_arn = module.super_admin_alb.arn
+  count        = local.super_admin_alb_enabled ? 1 : 0
+  resource_arn = module.super_admin_alb[0].arn
   web_acl_arn  = aws_wafv2_web_acl.super_admin.arn
 }
 
@@ -347,6 +356,7 @@ resource "aws_wafv2_web_acl_association" "super_admin_alb" {
 # ⚠️ mTLS 는 2단계: CA·trust store 준비(ALPHA-447) 전까지 mtls_trust_store_arn=null 이라
 # 이 엔드포인트는 공개 도달이다(dev 스텁·시드 데이터 전제). trust store 주입이 게이트를 닫는다.
 module "sync_alb" {
+  count  = local.sync_alb_enabled ? 1 : 0
   source = "../../modules/alb"
 
   name              = "${local.prefix}-sync"
@@ -372,9 +382,10 @@ module "tenant_sync_api" {
   container_port   = 8080
   cpu_architecture = "X86_64"
 
-  vpc_id        = module.network.vpc_id
-  subnet_ids    = module.network.private_subnet_ids
-  desired_count = 1
+  vpc_id     = module.network.vpc_id
+  subnet_ids = module.network.private_subnet_ids
+  # 2026-11-25 꺼 둠(라이브 0). desired 는 생성 시 초기값이라 재생성될 때만 쓰인다.
+  desired_count = 0
 
   # 부팅 93s(0.25 vCPU) + ALB healthy 플립 ~60s(연속 200 2회×30s) > 기본 120s —
   # grace 만료 시점에 unhealthy 로 태스크가 킬되는 롤아웃 실패 실증(ALPHA-604,
@@ -394,8 +405,8 @@ module "tenant_sync_api" {
 
   # 인바운드는 sync ALB 에서만 — 태스크 직접 도달을 막아야 mTLS 헤더
   # (X-Amzn-Mtls-Clientcert-*) 신뢰가 성립한다(ALB 우회 경로 없음).
-  target_group_arn           = module.sync_alb.target_group_arn
-  ingress_security_group_ids = [module.sync_alb.security_group_id]
+  target_group_arn           = local.sync_alb_enabled ? module.sync_alb[0].target_group_arn : null
+  ingress_security_group_ids = local.sync_alb_enabled ? [module.sync_alb[0].security_group_id] : []
 
   # target group ARN 참조만으로는 리스너 생성을 기다리지 않는다 — LB 미연결 target group 으로
   # 서비스를 만들면 ECS 가 거부하므로(fresh apply 경쟁) 모듈 전체를 명시 의존한다.
@@ -412,13 +423,14 @@ resource "aws_vpc_security_group_ingress_rule" "rds_from_tenant_sync_api" {
 }
 
 resource "aws_route53_record" "sync" {
+  count   = local.sync_alb_enabled ? 1 : 0
   zone_id = data.aws_route53_zone.main.zone_id
   name    = var.sync_domain
   type    = "A"
 
   alias {
-    name                   = module.sync_alb.dns_name
-    zone_id                = module.sync_alb.zone_id
+    name                   = module.sync_alb[0].dns_name
+    zone_id                = module.sync_alb[0].zone_id
     evaluate_target_health = false
   }
 }
