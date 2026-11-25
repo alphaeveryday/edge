@@ -6,6 +6,14 @@ group = 'com.alphaeveryday.adsconsent'
 version = '1.0.0'
 android {
   namespace 'com.alphaeveryday.adsconsent'
+  defaultConfig {
+    versionName '1.0.0'
+  }
+}
+// firebase-analytics 24 는 Kotlin 2.4 메타데이터로 컴파일돼 있어 RN 의 Kotlin 2.2 컴파일러가 거부한다.
+// 이 모듈은 FirebaseAnalytics 의 기존 API 만 쓰므로 메타데이터 버전 검사만 건너뛴다.
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+  compilerOptions.freeCompilerArgs.add('-Xskip-metadata-version-check')
 }
 dependencies {
   implementation 'com.google.firebase:firebase-analytics:24.0.0'
