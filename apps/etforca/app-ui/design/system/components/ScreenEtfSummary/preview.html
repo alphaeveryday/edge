@@ -1,0 +1,535 @@
+<!-- @dsCard group="Screens" height=874 width=402 subtitle="ETF 상세 · 오늘 움직임 · /etf/[code]/summary" page -->
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>@font-face{font-family:"Pretendard-Regular";src:url("../../fonts/Pretendard-Regular.woff2") format("woff2");}@font-face{font-family:"Pretendard-Medium";src:url("../../fonts/Pretendard-Medium.woff2") format("woff2");}@font-face{font-family:"Pretendard-SemiBold";src:url("../../fonts/Pretendard-SemiBold.woff2") format("woff2");}@font-face{font-family:"Pretendard-Bold";src:url("../../fonts/Pretendard-Bold.woff2") format("woff2");}@font-face{font-family:"Pretendard-ExtraBold";src:url("../../fonts/Pretendard-ExtraBold.woff2") format("woff2");}@font-face{font-family:"JetBrainsMono_400Regular";src:url("../../fonts/JetBrainsMono-Regular.ttf") format("truetype");}@font-face{font-family:"JetBrainsMono_500Medium";src:url("../../fonts/JetBrainsMono-Medium.ttf") format("truetype");}@font-face{font-family:"JetBrainsMono_700Bold";src:url("../../fonts/JetBrainsMono-Bold.ttf") format("truetype");}@font-face{font-family:"JetBrainsMono_800ExtraBold";src:url("../../fonts/JetBrainsMono-ExtraBold.ttf") format("truetype");}html,body{margin:0;width:402px;height:874px;overflow:hidden;background:#ffffff;}</style>
+<style>
+html { text-size-adjust: 100%; -webkit-tap-highlight-color: rgba(0, 0, 0, 0); }
+body { margin: 0px; }
+.css-g5y9jx { align-content: flex-start; align-items: stretch; background-color: rgba(0, 0, 0, 0); border: 0px solid black; box-sizing: border-box; display: flex; flex-basis: auto; flex-direction: column; flex-shrink: 0; list-style: none; margin: 0px; min-height: 0px; min-width: 0px; padding: 0px; position: relative; text-decoration: none; z-index: 0; }
+.css-146c3p1 { background-color: rgba(0, 0, 0, 0); border: 0px solid black; box-sizing: border-box; color: rgb(0, 0, 0); display: inline; font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; list-style: none; margin: 0px; padding: 0px; position: relative; text-align: start; text-decoration: none; white-space: pre-wrap; overflow-wrap: break-word; }
+.css-1jxf684 { background-color: rgba(0, 0, 0, 0); border: 0px solid black; box-sizing: border-box; color: inherit; display: inline; font: inherit; list-style: none; margin: 0px; padding: 0px; position: relative; text-align: inherit; text-decoration: none; white-space: inherit; overflow-wrap: break-word; }
+.r-13awgt0 { flex: 1 1 0%; }
+.r-rs99b7 { border-width: 1px; }
+.r-1udh08x { overflow: hidden; }
+.r-krxsd3 { display: -webkit-box; }
+.r-1qsk4np { overflow: clip; }
+.r-1xfd6ze { border-radius: 8px; }
+.r-pqzm30 { border-color: rgb(213, 218, 224); }
+.r-cpet4d { border-radius: 999px; }
+.r-urvukm { border-color: rgba(255, 255, 255, 0.75); }
+.r-ap9gma { border-color: rgb(242, 244, 246); }
+.r-is05cd { padding-left: 8px; padding-right: 8px; }
+.r-u9wvl5 { padding-left: 20px; padding-right: 20px; }
+.r-3pj75a { padding-left: 16px; padding-right: 16px; }
+.r-cnw61z { padding-bottom: 4px; padding-top: 4px; }
+.r-rehuqn { padding-bottom: 5px; padding-top: 5px; }
+.r-1ezpcd1 { padding-left: 9px; padding-right: 9px; }
+.r-1p0dtai { bottom: 0px; }
+.r-1d2f490 { left: 0px; }
+.r-u8s1d { position: absolute; }
+.r-zchlnj { right: 0px; }
+.r-ipm5af { top: 0px; }
+.r-633pao > * { pointer-events: none; }
+.r-633pao { pointer-events: none !important; }
+.r-11yh6sk { overflow-x: hidden; }
+.r-2eszeu::-webkit-scrollbar { display: none; }
+.r-2eszeu { scrollbar-width: none; }
+.r-150rngu { }
+.r-eqz5dr { flex-direction: column; }
+.r-16y2uox { flex-grow: 1; }
+.r-1wbh5a2 { flex-shrink: 1; }
+.r-1rnoaur { overflow-y: auto; }
+.r-agouwx { transform: translateZ(0px); }
+.r-18u37iz { flex-direction: row; }
+.r-1777fci { justify-content: center; }
+.r-13qz1uu { width: 100%; }
+.r-dnmrzs { max-width: 100%; }
+.r-1udbk01 { text-overflow: ellipsis; }
+.r-3s2u2q { white-space: nowrap; }
+.r-1iln25a { overflow-wrap: normal; }
+.r-8akbws { -webkit-box-orient: vertical; }
+.r-1loqt21 { cursor: pointer; }
+.r-1awozwy { align-items: center; }
+@-webkit-keyframes r-11cv4x { 
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes r-11cv4x { 
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.r-1otgn73 { touch-action: manipulation; }
+.r-q4m81j { text-align: center; }
+.r-14lw9ot { background-color: rgb(255, 255, 255); }
+@-webkit-keyframes r-imtty0 { 
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@keyframes r-imtty0 { 
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@-webkit-keyframes r-t2lo5v { 
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes r-t2lo5v { 
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@-webkit-keyframes r-1pzkwqh { 
+  0% { transform: translateY(100%); }
+  100% { transform: translateY(0%); }
+}
+@keyframes r-1pzkwqh { 
+  0% { transform: translateY(100%); }
+  100% { transform: translateY(0%); }
+}
+@-webkit-keyframes r-1iq689l { 
+  0% { transform: translateY(0%); }
+  100% { transform: translateY(100%); }
+}
+@keyframes r-1iq689l { 
+  0% { transform: translateY(0%); }
+  100% { transform: translateY(100%); }
+}
+@-webkit-keyframes r-q67da2 { 
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+@keyframes r-q67da2 { 
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.r-1b43r93 { font-size: 14px; }
+.r-rjixqe { line-height: 20px; }
+.r-qklmqi { border-bottom-width: 1px; }
+.r-3mc0re { right: 8px; }
+.r-10x49cs { font-size: 10px; }
+.r-n6v787 { font-size: 13px; }
+.r-1enofrn { font-size: 12px; }
+.r-ubezar { font-size: 16px; }
+.r-1wtj0ep { justify-content: space-between; }
+.r-uaa2di { gap: 10px; }
+.r-kzbkwu { padding-bottom: 12px; }
+.r-1h8ys4a { padding-top: 4px; }
+.r-580adz { gap: 5px; }
+.r-1h6myly { color: rgb(25, 31, 40); }
+.r-1fekieh { font-family: Pretendard-Bold; }
+.r-a023e6 { font-size: 15px; }
+.r-12sm5po { letter-spacing: -0.3px; }
+.r-m2pi6t { padding-left: 4px; }
+.r-wrv7is { border-bottom-color: rgb(229, 232, 235); }
+.r-1ugchlj { height: 44px; }
+.r-1wjlohb { font-family: Pretendard-ExtraBold; }
+.r-1xbt88q { left: 88px; }
+.r-qpbv1e { right: 88px; }
+.r-oucylx { border-bottom-color: rgba(0, 0, 0, 0); }
+.r-wgabs5 { border-bottom-width: 2px; }
+.r-1t982j2 { padding-bottom: 11px; }
+.r-m611by { padding-top: 10px; }
+.r-1rhl93m { border-bottom-color: rgb(25, 31, 40); }
+.r-13xcry5 { background-color: rgb(242, 244, 246); }
+.r-1or9b2r { height: 10px; }
+.r-1s367qj { gap: 11px; }
+.r-i03k3n { padding-bottom: 14px; }
+.r-95jzfe { padding-top: 16px; }
+.r-ojf8lh { gap: 6px; }
+.r-7h4zh { color: rgb(61, 52, 224); }
+.r-1xz1hyw { color: rgb(107, 118, 132); }
+.r-jah4h5 { font-family: Pretendard-Regular; }
+.r-eaezby { line-height: 26px; }
+.r-ofl2eb { color: rgb(139, 149, 161); }
+.r-1bymd8e { margin-top: 2px; }
+.r-1k25im9 { height: 26px; }
+.r-5kkj8d { border-top-width: 1px; }
+.r-3gfcz5 { font-family: JetBrainsMono_400Regular; }
+.r-ttdzmv { padding-top: 12px; }
+.r-tceitz { left: 16px; }
+.r-1d09ksm { align-items: baseline; }
+.r-1o1qsob { color: rgb(78, 89, 104); }
+.r-1gdmmtd { font-family: JetBrainsMono_700Bold; }
+.r-1grwqd5 { font-size: 12.5px; }
+.r-c0qjth { letter-spacing: -0.25px; }
+.r-13q0vw2 { font-family: JetBrainsMono_800ExtraBold; }
+.r-9aw3ui { gap: 4px; }
+.r-r4ulge { height: 340px; }
+.r-1qd7xl { top: 12px; }
+.r-136ojw6 { z-index: 2; }
+.r-epq5cr { height: 2px; }
+.r-5soawk { width: 10px; }
+.r-1gkfh8e { font-size: 11px; }
+.r-admmdt { margin-top: -7px; }
+.r-j54yjz { background-color: rgb(247, 248, 250); }
+.r-egqq0b { border-top-color: rgb(229, 232, 235); }
+.r-1nkf79l { margin-left: -16px; }
+.r-1677hl4 { top: 6px; }
+.r-1yvhtrz { width: 32px; }
+.r-peo1c { min-height: 44px; }
+.r-1ecvlre { letter-spacing: -0.28px; }
+html, body { height: 100%; }
+body { overflow: hidden; }
+#root { display: flex; height: 100%; flex: 1 1 0%; }
+:root { --expo-router-tabs-font-family: --apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+@keyframes RollOutRight { 
+  0% { transform: translateX(0vw) rotate(0deg); }
+  100% { transform: translateX(100vw) rotate(180deg); }
+}
+@keyframes RollOutLeft { 
+  0% { transform: translateX(0vw) rotate(0deg); }
+  100% { transform: translateX(-100vw) rotate(-180deg); }
+}
+@keyframes RollInRight { 
+  0% { transform: translateX(100vw) rotate(180deg); }
+  100% { transform: translateX(0vw) rotate(0deg); }
+}
+@keyframes RollInLeft { 
+  0% { transform: translateX(-100vw) rotate(-180deg); }
+  100% { transform: translateX(0vw) rotate(0deg); }
+}
+@keyframes RotateOutUpRight { 
+  0% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+  100% { transform: translateX(40%) translateY(-250%) rotate(90deg); opacity: 0; }
+}
+@keyframes RotateOutUpLeft { 
+  0% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+  100% { transform: translateX(-40%) translateY(-250%) rotate(-90deg); opacity: 0; }
+}
+@keyframes RotateOutDownRight { 
+  0% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+  100% { transform: translateX(40%) translateY(250%) rotate(-90deg); opacity: 0; }
+}
+@keyframes RotateOutDownLeft { 
+  0% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+  100% { transform: translateX(-40%) translateY(250%) rotate(90deg); opacity: 0; }
+}
+@keyframes RotateInUpRight { 
+  0% { transform: translateX(40%) translateY(250%) rotate(-90deg); opacity: 0; }
+  100% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+}
+@keyframes RotateInUpLeft { 
+  0% { transform: translateX(-40%) translateY(250%) rotate(90deg); opacity: 0; }
+  100% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+}
+@keyframes RotateInDownRight { 
+  0% { transform: translateX(40%) translateY(-250%) rotate(90deg); opacity: 0; }
+  100% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+}
+@keyframes RotateInDownLeft { 
+  0% { transform: translateX(-50%) translateY(-250%) rotate(-90deg); opacity: 0; }
+  100% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+}
+@keyframes PinwheelOut { 
+  0% { transform: rotate(0rad) scale(1); opacity: 1; }
+  100% { transform: rotate(5rad) scale(0); opacity: 0; }
+}
+@keyframes PinwheelIn { 
+  0% { transform: rotate(5rad) scale(0); opacity: 0; }
+  100% { transform: rotate(0deg) scale(1); opacity: 1; }
+}
+@keyframes LightSpeedOutLeft { 
+  0% { transform: translateX(0vw) skew(0deg); opacity: 1; }
+  100% { transform: translateX(-100vw) skew(45deg); opacity: 0; }
+}
+@keyframes LightSpeedOutRight { 
+  0% { transform: translateX(0vw) skewX(0deg); opacity: 1; }
+  100% { transform: translateX(100vw) skewX(-45deg); opacity: 0; }
+}
+@keyframes LightSpeedInLeft { 
+  0% { transform: translateX(-100vw) skewX(45deg); opacity: 0; }
+  70% { transform: skewX(-10deg); }
+  85% { transform: skewX(5deg); }
+  100% { transform: skewX(0deg); }
+}
+@keyframes LightSpeedInRight { 
+  0% { transform: translateX(100vw) skewX(-45deg); opacity: 0; }
+  70% { transform: skewX(10deg); }
+  85% { transform: skewX(-5deg); }
+  100% { transform: skewX(0deg); }
+}
+@keyframes SlideOutDown { 
+  0% { transform: translateY(0%); }
+  100% { transform: translateY(100vh); }
+}
+@keyframes SlideOutUp { 
+  0% { transform: translateY(0%); }
+  100% { transform: translateY(-100vh); }
+}
+@keyframes SlideOutLeft { 
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-100vw); }
+}
+@keyframes SlideOutRight { 
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(100vw); }
+}
+@keyframes SlideInDown { 
+  0% { transform: translateY(100vh); }
+  100% { transform: translateY(0%); }
+}
+@keyframes SlideInUp { 
+  0% { transform: translateY(-100vh); }
+  100% { transform: translateY(0%); }
+}
+@keyframes SlideInLeft { 
+  0% { transform: translateX(-100vw); }
+  100% { transform: translateX(0%); }
+}
+@keyframes SlideInRight { 
+  0% { transform: translateX(100vw); }
+  100% { transform: translateX(0%); }
+}
+@keyframes ZoomOutEasyDown { 
+  0% { transform: translateY(0%) scale(1); }
+  100% { transform: translateY(100%) scale(0); }
+}
+@keyframes ZoomOutEasyUp { 
+  0% { transform: translateY(0%) scale(1); }
+  100% { transform: translateY(-100%) scale(0); }
+}
+@keyframes ZoomOutDown { 
+  0% { transform: translateX(0vh) scale(1); }
+  100% { transform: translateY(100vh) scale(0); }
+}
+@keyframes ZoomOutUp { 
+  0% { transform: translateX(0vh) scale(1); }
+  100% { transform: translateY(-100vh) scale(0); }
+}
+@keyframes ZoomOutLeft { 
+  0% { transform: translateX(0vw) scale(1); }
+  100% { transform: translateX(-100vw) scale(0); }
+}
+@keyframes ZoomOutRight { 
+  0% { transform: translateX(0vw) scale(1); }
+  100% { transform: translateX(100vw) scale(0); }
+}
+@keyframes ZoomOutRotate { 
+  0% { transform: scale(1) rotate(0rad); }
+  100% { transform: scale(0) rotate(0.3rad); }
+}
+@keyframes ZoomOut { 
+  0% { transform: scale(1); }
+  100% { transform: scale(0); }
+}
+@keyframes ZoomInEasyDown { 
+  0% { transform: translateY(100%) scale(0); }
+  100% { transform: translateY(0%) scale(1); }
+}
+@keyframes ZoomInEasyUp { 
+  0% { transform: translateY(-100%) scale(0); }
+  100% { transform: translateY(0%) scale(1); }
+}
+@keyframes ZoomInDown { 
+  0% { transform: translateY(100vh) scale(0); }
+  100% { transform: translateY(0%) scale(1); }
+}
+@keyframes ZoomInUp { 
+  0% { transform: translateY(-100vh) scale(0); }
+  100% { transform: translateY(0%) scale(1); }
+}
+@keyframes ZoomInLeft { 
+  0% { transform: translateX(-100vw) scale(0); }
+  100% { transform: translateX(0%) scale(1); }
+}
+@keyframes ZoomInRight { 
+  0% { transform: translateX(100vw) scale(0); }
+  100% { transform: translateX(0%) scale(1); }
+}
+@keyframes ZoomInRotate { 
+  0% { transform: scale(0) rotate(0.3rad); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+@keyframes ZoomIn { 
+  0% { transform: scale(0); }
+  100% { transform: scale(1); }
+}
+@keyframes StretchOutY { 
+  0% { transform: scaleY(1); }
+  100% { transform: scaleY(0); }
+}
+@keyframes StretchOutX { 
+  0% { transform: scaleX(1); }
+  100% { transform: scaleX(0); }
+}
+@keyframes StretchInY { 
+  0% { transform: scaleY(0); }
+  100% { transform: scaleY(1); }
+}
+@keyframes StretchInX { 
+  0% { transform: scaleX(0); }
+  100% { transform: scaleX(1); }
+}
+@keyframes FlipOutEasyY { 
+  0% { transform: perspective(500px) rotateY(0deg); }
+  100% { transform: perspective(500px) rotateY(90deg); }
+}
+@keyframes FlipOutEasyX { 
+  0% { transform: perspective(500px) rotateX(0deg); }
+  100% { transform: perspective(500px) rotateX(90deg); }
+}
+@keyframes FlipOutXDown { 
+  0% { transform: perspective(500px) rotateX(0deg) translateY(0%); }
+  100% { transform: perspective(500px) rotateX(-90deg) translateY(100%); }
+}
+@keyframes FlipOutXUp { 
+  0% { transform: perspective(500px) rotateX(0deg) translateY(0%); }
+  100% { transform: perspective(500px) rotateX(90deg) translateY(-100%); }
+}
+@keyframes FlipOutYLeft { 
+  0% { transform: perspective(500px) rotateY(0deg) translateX(0%); }
+  100% { transform: perspective(500px) rotateY(-90deg) translateX(-100%); }
+}
+@keyframes FlipOutYRight { 
+  0% { transform: perspective(500px) rotateY(0deg) translateX(0%); }
+  100% { transform: perspective(500px) rotateY(90deg) translateX(100%); }
+}
+@keyframes FlipInEasyY { 
+  0% { transform: perspective(500px) rotateY(90deg); }
+  100% { transform: perspective(500px) rotateY(0deg); }
+}
+@keyframes FlipInEasyX { 
+  0% { transform: perspective(500px) rotateX(90deg); }
+  100% { transform: perspective(500px) rotateX(0deg); }
+}
+@keyframes FlipInXDown { 
+  0% { transform: perspective(500px) rotateX(-90deg) translateY(100%); }
+  100% { transform: perspective(500px) rotateX(0deg) translateY(0%); }
+}
+@keyframes FlipInXUp { 
+  0% { transform: perspective(500px) rotateX(90deg) translateY(-100%); }
+  100% { transform: perspective(500px) rotateX(0deg) translateY(0%); }
+}
+@keyframes FlipInYLeft { 
+  0% { transform: perspective(500px) rotateY(-90deg) translateX(-100%); }
+  100% { transform: perspective(500px) rotateY(0deg) translateX(0%); }
+}
+@keyframes FlipInYRight { 
+  0% { transform: perspective(500px) rotateY(90deg) translateX(100%); }
+  100% { transform: perspective(500px) rotateY(0deg) translateX(0%); }
+}
+@keyframes BounceOutDown { 
+  0% { transform: translateY(0px); }
+  15% { transform: translateY(-10px); }
+  30% { transform: translateY(10px); }
+  45% { transform: translateY(-20px); }
+  100% { transform: translateY(100vh); }
+}
+@keyframes BounceOutUp { 
+  0% { transform: translateY(0px); }
+  15% { transform: translateY(10px); }
+  30% { transform: translateY(-10px); }
+  45% { transform: translateY(20px); }
+  100% { transform: translateY(-100vh); }
+}
+@keyframes BounceOutLeft { 
+  0% { transform: translateX(0px); }
+  15% { transform: translateX(10px); }
+  30% { transform: translateX(-10px); }
+  45% { transform: translateX(20px); }
+  100% { transform: translateX(-100vh); }
+}
+@keyframes BounceOutRight { 
+  0% { transform: translateX(0px); }
+  15% { transform: translateX(-10px); }
+  30% { transform: translateX(10px); }
+  45% { transform: translateX(-20px); }
+  100% { transform: translateX(100vh); }
+}
+@keyframes BounceOut { 
+  0% { transform: scale(1); }
+  15% { transform: scale(1.1); }
+  30% { transform: scale(0.9); }
+  45% { transform: scale(1.2); }
+  100% { transform: scale(0.1); }
+}
+@keyframes BounceInDown { 
+  0% { transform: translateY(100vh); }
+  55% { transform: translateY(-20px); }
+  70% { transform: translateY(10px); }
+  85% { transform: translateY(-10px); }
+  100% { transform: translateY(0px); }
+}
+@keyframes BounceInUp { 
+  0% { transform: translateY(-100vh); }
+  55% { transform: translateY(20px); }
+  70% { transform: translateY(-10px); }
+  85% { transform: translateY(10px); }
+  100% { transform: translateY(0px); }
+}
+@keyframes BounceInLeft { 
+  0% { transform: translateX(-100vw); }
+  55% { transform: translateX(20px); }
+  70% { transform: translateX(-10px); }
+  85% { transform: translateX(10px); }
+  100% { transform: translateX(0px); }
+}
+@keyframes BounceInRight { 
+  0% { transform: translateX(100vw); }
+  55% { transform: translateX(-20px); }
+  70% { transform: translateX(10px); }
+  85% { transform: translateX(-10px); }
+  100% { transform: translateX(0px); }
+}
+@keyframes BounceIn { 
+  0% { transform: scale(0); }
+  55% { transform: scale(1.2); }
+  70% { transform: scale(0.9); }
+  85% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+@keyframes FadeOutDown { 
+  0% { opacity: 1; transform: translateY(0px); }
+  100% { opacity: 0; transform: translateY(25px); }
+}
+@keyframes FadeOutUp { 
+  0% { opacity: 1; transform: translateY(0px); }
+  100% { opacity: 0; transform: translateY(-25px); }
+}
+@keyframes FadeOutLeft { 
+  0% { opacity: 1; transform: translateX(0px); }
+  100% { opacity: 0; transform: translateX(-25px); }
+}
+@keyframes FadeOutRight { 
+  0% { opacity: 1; transform: translateX(0px); }
+  100% { opacity: 0; transform: translateX(25px); }
+}
+@keyframes FadeOut { 
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes FadeInDown { 
+  0% { opacity: 0; transform: translateY(25px); }
+  100% { opacity: 1; transform: translateY(0px); }
+}
+@keyframes FadeInUp { 
+  0% { opacity: 0; transform: translateY(-25px); }
+  100% { opacity: 1; transform: translateY(0px); }
+}
+@keyframes FadeInLeft { 
+  0% { opacity: 0; transform: translateX(-25px); }
+  100% { opacity: 1; transform: translateX(0px); }
+}
+@keyframes FadeInRight { 
+  0% { opacity: 0; transform: translateX(25px); }
+  100% { opacity: 1; transform: translateX(0px); }
+}
+@keyframes FadeIn { 
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+</style>
+</head>
+<body>
+
+    <!-- Use static rendering with Expo Router to support running without JavaScript. -->
+    
+    <!-- The root element for your Expo app. -->
+    <div id="root"><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx" style="flex: 1 1 0%;"><div style="position: absolute; inset: 0px; pointer-events: none; visibility: hidden;"></div><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx r-13awgt0 r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="background-color: rgb(255, 255, 255); display: flex;"><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx r-13awgt0" style="background-color: rgb(255, 255, 255);"><div class="css-g5y9jx r-14lw9ot r-13awgt0" style="padding-top: 8px;"><div class="css-g5y9jx r-1awozwy r-18u37iz r-1ugchlj r-1wtj0ep r-is05cd"><button aria-label="back" role="button" tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-pqzm30 r-cpet4d r-1777fci" type="button" style="width: 38px; height: 38px; background-color: rgba(0, 0, 0, 0); border-width: 0px;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#191F28" stroke-width="1.9636363636363638" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"></path></svg></button><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1wjlohb r-ubezar r-1xbt88q r-12sm5po r-633pao r-u8s1d r-qpbv1e r-q4m81j">AI·반도체</div><button aria-label="search" role="button" tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-pqzm30 r-cpet4d r-1777fci" type="button" style="width: 38px; height: 38px; background-color: rgba(0, 0, 0, 0); border-width: 0px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#4E5968" stroke-width="2.16" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34"></path><circle cx="11" cy="11" r="8"></circle></svg></button></div><div class="css-g5y9jx r-1awozwy r-18u37iz r-uaa2di r-kzbkwu r-3pj75a r-1h8ys4a"><div class="css-g5y9jx" style="width: 38px; height: 38px; border-radius: 999px; background-color: rgb(61, 52, 224); align-items: center; justify-content: center;"><svg width="22" height="22" viewBox="0 0 24 24"><g><rect x="8.25" y="1.6" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="11.1" y="1.6" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="13.95" y="1.6" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="8.25" y="18.8" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="11.1" y="18.8" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="13.95" y="18.8" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="1.6" y="8.25" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="1.6" y="11.1" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="1.6" y="13.95" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="18.8" y="8.25" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="18.8" y="11.1" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="18.8" y="13.95" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="4.6" y="4.6" width="14.8" height="14.8" rx="3.6" fill="#FFFFFF"></rect><rect x="8.9" y="8.9" width="6.2" height="6.2" rx="1.7" fill="#3D34E0"></rect></g></svg></div><div class="css-g5y9jx r-13awgt0 r-580adz"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1fekieh r-a023e6 r-12sm5po r-rjixqe">TIGER 반도체TOP10</div><div class="css-g5y9jx r-1d09ksm r-18u37iz r-ojf8lh"><div dir="auto" class="css-146c3p1 r-1o1qsob r-1gdmmtd r-1grwqd5 r-c0qjth">₩ 12,845</div><div dir="auto" class="css-146c3p1 r-13q0vw2 r-1grwqd5" style="color: rgb(240, 68, 82);">+3.2%</div></div></div><div class="css-g5y9jx r-1awozwy r-urvukm r-rs99b7 r-18u37iz r-9aw3ui r-1777fci r-1udh08x" style="box-shadow: rgb(240, 68, 82) 0px 0px 0px; height: 28px; min-width: 44px; padding-right: 9px; padding-left: 9px; border-radius: 9px; background-color: rgba(240, 68, 82, 0.18);"><div class="css-g5y9jx r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="border-radius: 9px; background-image: linear-gradient(124.032deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.42));"></div><div class="css-g5y9jx r-1awozwy r-1777fci"><div dir="auto" class="css-146c3p1 r-1wjlohb r-q4m81j" style="color: rgb(240, 68, 82); font-size: 9px; line-height: 8.1px;">▲</div><div dir="auto" class="css-146c3p1 r-1wjlohb r-q4m81j" style="color: rgb(240, 68, 82); font-size: 9px; line-height: 8.1px;">▲</div></div><div dir="auto" class="css-146c3p1 r-1wjlohb r-1grwqd5" style="color: rgb(210, 47, 61);">강력 상승</div></div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-cnw61z r-m2pi6t"><svg width="21" height="21" viewBox="0 0 24 24" fill="#F04452" stroke="#F04452" stroke-width="2.0571428571428574" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"></path></svg></div></div><div class="css-g5y9jx r-wrv7is r-qklmqi r-18u37iz"><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-oucylx r-wgabs5 r-1t982j2 r-m611by r-13awgt0"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1b43r93" style="color: rgb(107, 118, 132); font-family: Pretendard-SemiBold;">AI 분석</div></div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-wgabs5 r-1t982j2 r-m611by r-13awgt0 r-1rhl93m"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1b43r93" style="color: rgb(25, 31, 40); font-family: Pretendard-ExtraBold;">오늘 움직임</div></div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-oucylx r-wgabs5 r-1t982j2 r-m611by r-13awgt0"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1b43r93" style="color: rgb(107, 118, 132); font-family: Pretendard-SemiBold;">커뮤니티</div></div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-oucylx r-wgabs5 r-1t982j2 r-m611by r-13awgt0"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1b43r93" style="color: rgb(107, 118, 132); font-family: Pretendard-SemiBold;">종목정보</div></div></div><div class="css-g5y9jx r-150rngu r-eqz5dr r-16y2uox r-1wbh5a2 r-11yh6sk r-1rnoaur r-agouwx"><div class="css-g5y9jx r-150rngu r-eqz5dr r-16y2uox r-1wbh5a2 r-11yh6sk r-1rnoaur r-agouwx r-2eszeu"><div class="css-g5y9jx" style="padding-bottom: 22px;"><div class="css-g5y9jx r-14lw9ot r-wrv7is r-qklmqi"><div class="css-g5y9jx r-ttdzmv"><div class="css-g5y9jx r-9aw3ui r-tceitz r-u8s1d r-1qd7xl r-136ojw6 r-633pao"><div class="css-g5y9jx r-1d09ksm r-18u37iz r-ojf8lh"><div dir="auto" class="css-146c3p1 r-1h6myly r-1fekieh r-1enofrn">TIGER 반도체TOP10 · 1M</div><div dir="auto" class="css-146c3p1 r-1gdmmtd r-1enofrn" style="color: rgb(240, 68, 82);">₩ 12,845 +3.2%</div></div><div class="css-g5y9jx r-1d09ksm r-18u37iz" style="gap: 10px;"><div class="css-g5y9jx r-1awozwy r-18u37iz r-9aw3ui"><div class="css-g5y9jx r-epq5cr r-5soawk" style="background-color: rgb(139, 149, 161);"></div><div dir="auto" class="css-146c3p1 r-ofl2eb r-3gfcz5 r-1enofrn">MA5 <span class="css-1jxf684 r-1o1qsob r-1gdmmtd">12,753</span></div></div><div class="css-g5y9jx r-1awozwy r-18u37iz r-9aw3ui"><div class="css-g5y9jx r-epq5cr r-5soawk" style="background-color: rgb(224, 137, 26);"></div><div dir="auto" class="css-146c3p1 r-ofl2eb r-3gfcz5 r-1enofrn">MA20 <span class="css-1jxf684 r-1o1qsob r-1gdmmtd">12,659</span></div></div></div></div><div dir="auto" class="css-146c3p1 r-ofl2eb r-3gfcz5 r-1gkfh8e r-admmdt r-u8s1d r-3mc0re r-136ojw6" style="top: 20%;">1.27만</div><div dir="auto" class="css-146c3p1 r-ofl2eb r-3gfcz5 r-1gkfh8e r-admmdt r-u8s1d r-3mc0re r-136ojw6" style="top: 50%;">1.23만</div><div dir="auto" class="css-146c3p1 r-ofl2eb r-3gfcz5 r-1gkfh8e r-admmdt r-u8s1d r-3mc0re r-136ojw6" style="top: 80%;">1.20만</div><svg viewBox="0 0 354 262" preserveAspectRatio="none" class="r-r4ulge r-13qz1uu"><line x1="0" x2="296" y1="52.400000000000006" y2="52.400000000000006" stroke="#F2F4F6" stroke-width="1"></line><line x1="0" x2="296" y1="131" y2="131" stroke="#F2F4F6" stroke-width="1"></line><line x1="0" x2="296" y1="209.60000000000002" y2="209.60000000000002" stroke="#F2F4F6" stroke-width="1"></line><line x1="296" x2="296" y1="0" y2="262" stroke="#E5E8EB" stroke-width="1"></line><path d="M6.7 242.4 L20.2 243.9 L33.6 234.7 L47.1 217.4 L60.5 205.6 L74.0 211.5 L87.5 199.2 L100.9 184.9 L114.4 168.5 L127.8 148.8 L141.3 132.5 L154.7 140.2 L168.2 129.5 L181.6 114.3 L195.1 106.9 L208.5 102.7 L222.0 72.7 L235.5 70.3 L248.9 54.7 L262.4 32.3 L275.8 18.1 L289.3 18.7" fill="none" stroke="#F04452" stroke-width="2" stroke-linejoin="round"></path><path d="M60.5 228.8 L74.0 222.7 L87.5 213.7 L100.9 203.8 L114.4 193.9 L127.8 182.5 L141.3 166.7 L154.7 154.9 L168.2 143.9 L181.6 133.0 L195.1 124.6 L208.5 118.7 L222.0 105.1 L235.5 93.3 L248.9 81.4 L262.4 66.5 L275.8 49.6 L289.3 38.9" fill="none" stroke="#8B95A1" stroke-width="1.6" stroke-linejoin="round"></path><path d="M100.9 217.4 L114.4 208.2 L127.8 196.3 L141.3 183.6 L154.7 174.0 L168.2 164.3 L181.6 152.3 L195.1 140.6 L208.5 130.3 L222.0 118.5 L235.5 108.6 L248.9 99.0 L262.4 85.4 L275.8 71.6 L289.3 59.5" fill="none" stroke="#E0891A" stroke-width="2" stroke-linejoin="round"></path></svg></div><div class="css-g5y9jx r-j54yjz r-egqq0b r-5kkj8d r-1k25im9"><div dir="auto" class="css-146c3p1 r-ofl2eb r-3gfcz5 r-10x49cs r-1nkf79l r-u8s1d r-q4m81j r-1677hl4 r-1yvhtrz" style="left: 8.36158%;">08.05</div><div dir="auto" class="css-146c3p1 r-ofl2eb r-3gfcz5 r-10x49cs r-1nkf79l r-u8s1d r-q4m81j r-1677hl4 r-1yvhtrz" style="left: 25.0847%;">08.13</div><div dir="auto" class="css-146c3p1 r-ofl2eb r-3gfcz5 r-10x49cs r-1nkf79l r-u8s1d r-q4m81j r-1677hl4 r-1yvhtrz" style="left: 41.8079%;">08.21</div><div dir="auto" class="css-146c3p1 r-ofl2eb r-3gfcz5 r-10x49cs r-1nkf79l r-u8s1d r-q4m81j r-1677hl4 r-1yvhtrz" style="left: 58.5311%;">08.28</div><div dir="auto" class="css-146c3p1 r-ofl2eb r-3gfcz5 r-10x49cs r-1nkf79l r-u8s1d r-q4m81j r-1677hl4 r-1yvhtrz" style="left: 75.2542%;">09.04</div></div></div><div class="css-g5y9jx r-13xcry5 r-1or9b2r"></div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1s367qj r-i03k3n r-u9wvl5 r-95jzfe"><div class="css-g5y9jx r-1awozwy r-18u37iz r-ojf8lh"><svg width="15" height="15" viewBox="0 0 16 16"><path d="M8 1.2l1.5 4.1 4.1 1.5-4.1 1.5L8 12.4 6.5 8.3 2.4 6.8l4.1-1.5z" fill="#4B7BF5"></path><path d="M13 11l.6 1.6 1.6.6-1.6.6-.6 1.6-.6-1.6-1.6-.6 1.6-.6z" fill="#8134AF"></path></svg><div dir="auto" class="css-146c3p1 r-7h4zh r-1wjlohb r-a023e6 r-12sm5po">왜 움직였을까?</div><div class="css-g5y9jx" style="flex: 1 1 0%;"></div><div dir="auto" class="css-146c3p1 r-13xcry5 r-1xfd6ze r-1xz1hyw r-1fekieh r-1enofrn r-1udh08x r-rehuqn r-1ezpcd1">오늘 08:30</div></div><div dir="auto" class="css-146c3p1 r-8akbws r-krxsd3 r-dnmrzs r-1qsk4np r-1udbk01 r-1h6myly r-jah4h5 r-ubezar r-eaezby" style="-webkit-line-clamp: 2;">서버용 D램 값이 3개월 동안 18% 올랐어요. 메모리를 만드는 SK하이닉스·삼성전자가 이 ETF의 36%예요.</div><div dir="auto" class="css-146c3p1 r-ofl2eb r-jah4h5 r-n6v787 r-1bymd8e">관련 이슈 3개</div></div><div class="css-g5y9jx" style="margin-top: 4px;"><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-18u37iz r-ojf8lh r-peo1c r-qklmqi r-ap9gma r-5kkj8d" style="justify-content: center; background-color: rgba(0, 0, 0, 0); border-radius: 0px; padding-right: 0px; padding-left: 0px;"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1b43r93 r-1ecvlre" style="color: rgb(78, 89, 104); font-family: Pretendard-Bold;">자세히 보기</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4E5968" stroke-width="2.8499999999999996" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg></div></div></div></div></div></div></div></div></div></div></div></div></div>
+  
+
+
+<div style="position: fixed; left: 0px; top: 0px; width: 0px; height: 0px; z-index: -1; overflow: hidden; visibility: hidden; transition-duration: 0.05s; transition-property: padding; transition-delay: 0s; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);"></div><div></div><div></div><div></div>
+</body>
+</html>

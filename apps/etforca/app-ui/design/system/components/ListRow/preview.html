@@ -1,0 +1,32 @@
+<!-- @dsCard group="Lists" height=260 -->
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font-sans); padding: var(--space-xl) var(--page-x); -webkit-font-smoothing: antialiased; }
+  .note { margin: var(--space-md) 0 0; font-size: 12.5px; color: var(--textMuted); }
+  .stack { display: flex; flex-direction: column; gap: var(--space-md); max-width: 390px; }
+  .rowx { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); }
+  svg.ic { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  .lr { display: flex; align-items: center; gap: 14px; padding: 14px 8px; }
+  .lr.div { border-bottom: 1px solid var(--surface); }
+  .lr .ico { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; color: var(--textSub); }
+  .lr .tx { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .lr .lbl { font-size: 15.5px; font-weight: 600; letter-spacing: -0.3px; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lr .sub { font-size: 12.5px; color: var(--textMuted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .lr .val { font-size: 14px; color: var(--textMuted); }
+  .lr .chv { color: var(--textDisabled); display: flex; }
+</style>
+</head>
+<body>
+<div class="stack" style="gap:0">
+  <div class="lr div"><span class="ico"><svg class="ic" width="19" height="19" viewBox="0 0 24 24"><path d="M16 7h6v6"/><path d="m22 7-8.5 8.5-5-5L2 17"/></svg></span><span class="tx"><span class="lbl">오늘의 전망</span><span class="sub">매일 장 시작 전에 갱신돼요</span></span><span class="chv"><svg class="ic" width="16" height="16" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></span></div>
+  <div class="lr div"><span class="ico"><svg class="ic" width="19" height="19" viewBox="0 0 24 24"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg></span><span class="tx"><span class="lbl">관심 ETF</span></span><span class="val">12개</span><span class="chv"><svg class="ic" width="16" height="16" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></span></div>
+  <div class="lr"><span class="ico"><svg class="ic" width="19" height="19" viewBox="0 0 24 24"><path d="M10.268 21a2 2 0 0 0 3.464 0"/><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"/></svg></span><span class="tx"><span class="lbl">알림 설정</span></span><span class="chv"><svg class="ic" width="16" height="16" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></span></div>
+</div>
+<p class="note">정적 재현 · src/components/ui/ListRow.tsx 의 수치를 옮김</p>
+</body>
+</html>

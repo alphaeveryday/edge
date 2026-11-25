@@ -1,0 +1,614 @@
+<!-- @dsCard group="Screens" height=874 width=402 subtitle="분석 상세 시트 · /(tabs)/explore" page -->
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>@font-face{font-family:"Pretendard-Regular";src:url("../../fonts/Pretendard-Regular.woff2") format("woff2");}@font-face{font-family:"Pretendard-Medium";src:url("../../fonts/Pretendard-Medium.woff2") format("woff2");}@font-face{font-family:"Pretendard-SemiBold";src:url("../../fonts/Pretendard-SemiBold.woff2") format("woff2");}@font-face{font-family:"Pretendard-Bold";src:url("../../fonts/Pretendard-Bold.woff2") format("woff2");}@font-face{font-family:"Pretendard-ExtraBold";src:url("../../fonts/Pretendard-ExtraBold.woff2") format("woff2");}@font-face{font-family:"JetBrainsMono_400Regular";src:url("../../fonts/JetBrainsMono-Regular.ttf") format("truetype");}@font-face{font-family:"JetBrainsMono_500Medium";src:url("../../fonts/JetBrainsMono-Medium.ttf") format("truetype");}@font-face{font-family:"JetBrainsMono_700Bold";src:url("../../fonts/JetBrainsMono-Bold.ttf") format("truetype");}@font-face{font-family:"JetBrainsMono_800ExtraBold";src:url("../../fonts/JetBrainsMono-ExtraBold.ttf") format("truetype");}html,body{margin:0;width:402px;height:874px;overflow:hidden;background:#ffffff;}</style>
+<style>
+html { text-size-adjust: 100%; -webkit-tap-highlight-color: rgba(0, 0, 0, 0); }
+body { margin: 0px; }
+.css-g5y9jx { align-content: flex-start; align-items: stretch; background-color: rgba(0, 0, 0, 0); border: 0px solid black; box-sizing: border-box; display: flex; flex-basis: auto; flex-direction: column; flex-shrink: 0; list-style: none; margin: 0px; min-height: 0px; min-width: 0px; padding: 0px; position: relative; text-decoration: none; z-index: 0; }
+.css-9pa8cd { inset: 0px; height: 100%; opacity: 0; position: absolute; width: 100%; z-index: -1; }
+.css-146c3p1 { background-color: rgba(0, 0, 0, 0); border: 0px solid black; box-sizing: border-box; color: rgb(0, 0, 0); display: inline; font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; list-style: none; margin: 0px; padding: 0px; position: relative; text-align: start; text-decoration: none; white-space: pre-wrap; overflow-wrap: break-word; }
+.css-1jxf684 { background-color: rgba(0, 0, 0, 0); border: 0px solid black; box-sizing: border-box; color: inherit; display: inline; font: inherit; list-style: none; margin: 0px; padding: 0px; position: relative; text-align: inherit; text-decoration: none; white-space: inherit; overflow-wrap: break-word; }
+.r-13awgt0 { flex: 1 1 0%; }
+.r-rs99b7 { border-width: 1px; }
+.r-d045u9 { border-width: 2px; }
+.r-1udh08x { overflow: hidden; }
+.r-1dzdj1l { border-radius: 10px; }
+.r-1uu6nss { padding: 5px; }
+.r-1xfd6ze { border-radius: 8px; }
+.r-11mg6pl { border-color: rgb(255, 255, 255); }
+.r-pqzm30 { border-color: rgb(213, 218, 224); }
+.r-cpet4d { border-radius: 999px; }
+.r-1867qdf { border-radius: 16px; }
+.r-urvukm { border-color: rgba(255, 255, 255, 0.75); }
+.r-6rehxw { border-color: rgb(221, 217, 251); }
+.r-xyw6el { padding: 12px; }
+.r-ap9gma { border-color: rgb(242, 244, 246); }
+.r-nsbfu8 { padding: 16px; }
+.r-n7gxbd { padding-left: 4px; padding-right: 4px; }
+.r-u9wvl5 { padding-left: 20px; padding-right: 20px; }
+.r-zo2zu6 { padding-bottom: 24px; padding-top: 24px; }
+.r-xjggfu { padding-bottom: 3px; padding-top: 3px; }
+.r-c6ipad { padding-left: 7px; padding-right: 7px; }
+.r-rehuqn { padding-bottom: 5px; padding-top: 5px; }
+.r-1ezpcd1 { padding-left: 9px; padding-right: 9px; }
+.r-2psd3c { margin-left: -20px; margin-right: -20px; }
+.r-3pj75a { padding-left: 16px; padding-right: 16px; }
+.r-1gjx2kl { margin-left: -12px; margin-right: -12px; }
+.r-vuvdlw { padding-bottom: 6px; padding-top: 6px; }
+.r-1ubuhtd { padding-left: 10px; padding-right: 10px; }
+.r-18c5d7m { padding-left: 6px; padding-right: 6px; }
+.r-1h31txp { padding-right: 16px; }
+.r-1p0dtai { bottom: 0px; }
+.r-1d2f490 { left: 0px; }
+.r-u8s1d { position: absolute; }
+.r-zchlnj { right: 0px; }
+.r-ipm5af { top: 0px; }
+.r-633pao { pointer-events: none !important; }
+.r-11yh6sk { overflow-x: hidden; }
+.r-buy8e9 { overflow-y: hidden; }
+.r-19z077z { touch-action: none; }
+.r-2eszeu::-webkit-scrollbar { display: none; }
+.r-2eszeu { scrollbar-width: none; }
+.r-150rngu { }
+.r-eqz5dr { flex-direction: column; }
+.r-16y2uox { flex-grow: 1; }
+.r-1wbh5a2 { flex-shrink: 1; }
+.r-1rnoaur { overflow-y: auto; }
+.r-agouwx { transform: translateZ(0px); }
+.r-18u37iz { flex-direction: row; }
+.r-1777fci { justify-content: center; }
+.r-1mlwlqe { flex-basis: auto; }
+.r-417010 { z-index: 0; }
+.r-1niwhzg { background-color: rgba(0, 0, 0, 0); }
+.r-vvn4in { background-position: center center; }
+.r-u6sd8q { background-repeat: no-repeat; }
+.r-4gszlv { background-size: cover; }
+.r-1pi2tsx { height: 100%; }
+.r-13qz1uu { width: 100%; }
+.r-1wyyakw { z-index: -1; }
+.r-dnmrzs { max-width: 100%; }
+.r-1udbk01 { text-overflow: ellipsis; }
+.r-3s2u2q { white-space: nowrap; }
+.r-1iln25a { overflow-wrap: normal; }
+.r-1loqt21 { cursor: pointer; }
+.r-1awozwy { align-items: center; }
+@-webkit-keyframes r-11cv4x { 
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes r-11cv4x { 
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.r-z80fyv { height: 20px; }
+.r-1otgn73 { touch-action: manipulation; }
+.r-jwli3a { color: rgb(255, 255, 255); }
+.r-q4m81j { text-align: center; }
+.r-10ptun7 { height: 16px; }
+.r-1janqcz { width: 16px; }
+.r-14lw9ot { background-color: rgb(255, 255, 255); }
+.r-1xcajam { position: fixed; }
+.r-sfbmgh { z-index: 9999; }
+@-webkit-keyframes r-imtty0 { 
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@keyframes r-imtty0 { 
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@-webkit-keyframes r-t2lo5v { 
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes r-t2lo5v { 
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@-webkit-keyframes r-1pzkwqh { 
+  0% { transform: translateY(100%); }
+  100% { transform: translateY(0%); }
+}
+@keyframes r-1pzkwqh { 
+  0% { transform: translateY(100%); }
+  100% { transform: translateY(0%); }
+}
+@-webkit-keyframes r-1iq689l { 
+  0% { transform: translateY(0%); }
+  100% { transform: translateY(100%); }
+}
+@keyframes r-1iq689l { 
+  0% { transform: translateY(0%); }
+  100% { transform: translateY(100%); }
+}
+.r-1ny4l3l { outline-style: none; }
+@-webkit-keyframes r-q67da2 { 
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+@keyframes r-q67da2 { 
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.r-k200y { align-self: flex-start; }
+.r-1onu96p { }
+.r-1b43r93 { font-size: 14px; }
+.r-rjixqe { line-height: 20px; }
+.r-1inkyih { font-size: 17px; }
+.r-1habvwh { align-items: flex-start; }
+.r-1kihuf0 { align-self: center; }
+.r-qklmqi { border-bottom-width: 1px; }
+.r-1i10wst { font-size: 18px; }
+.r-1h0z5md { justify-content: flex-start; }
+.r-17s6mgv { justify-content: flex-end; }
+.r-h0d30l { height: 28px; }
+.r-726pan { width: 31px; }
+.r-n6v787 { font-size: 13px; }
+.r-1enofrn { font-size: 12px; }
+.r-ubezar { font-size: 16px; }
+.r-14gqq1x { margin-top: 4px; }
+.r-1no09lo { margin-top: 28px; }
+.r-adyw6z { font-size: 20px; }
+.r-qn3fzs { padding-bottom: 24px; }
+.r-eu3ka { height: 40px; }
+.r-1cmwbt1 { gap: 8px; }
+.r-1w6e6rj { flex-wrap: wrap; }
+.r-1ikidpy { letter-spacing: 0.5px; }
+.r-19yat4t { padding-bottom: 15px; }
+.r-1xz1hyw { color: rgb(107, 118, 132); }
+.r-jah4h5 { font-family: Pretendard-Regular; }
+.r-13gvty3 { padding-top: 6px; }
+.r-wrv7is { border-bottom-color: rgb(229, 232, 235); }
+.r-19qsa7v { gap: 13px; }
+.r-1ey881g { gap: 7px; }
+.r-13q0vw2 { font-family: JetBrainsMono_800ExtraBold; }
+.r-mizlga { background-color: rgb(25, 31, 40); }
+.r-ofl2eb { color: rgb(139, 149, 161); }
+.r-19tjxh9 { width: 26px; }
+.r-1fekieh { font-family: Pretendard-Bold; }
+.r-1h6myly { color: rgb(25, 31, 40); }
+.r-1wjlohb { font-family: Pretendard-ExtraBold; }
+.r-icto9i { letter-spacing: -0.5px; }
+.r-waer2z { line-height: 25px; }
+.r-ojf8lh { gap: 6px; }
+.r-j54yjz { background-color: rgb(247, 248, 250); }
+.r-1o1qsob { color: rgb(78, 89, 104); }
+.r-1gl1ra5 { background-color: rgb(240, 68, 82); }
+.r-1tl9yi8 { height: 17px; }
+.r-xegap4 { min-width: 17px; }
+.r-1c7ggc8 { right: -2px; }
+.r-8jfcpp { top: -2px; }
+.r-1ozpbmi { font-size: 10.5px; }
+.r-uaa2di { gap: 10px; }
+.r-ttdzmv { padding-top: 12px; }
+.r-1x35g6 { font-size: 24px; }
+.r-b1yau9 { letter-spacing: -0.7px; }
+.r-17rnw9f { line-height: 30px; }
+.r-14yzgew { line-height: 18px; }
+.r-13xcry5 { background-color: rgb(242, 244, 246); }
+.r-1ws2f5x { font-size: 11.5px; }
+.r-1d09ksm { align-items: baseline; }
+.r-ceyshp { font-family: Pretendard-SemiBold; }
+.r-102nfrm { font-family: JetBrainsMono_500Medium; }
+.r-c4c50z { letter-spacing: -0.6px; }
+.r-1grwqd5 { font-size: 12.5px; }
+.r-tbmifm { height: 12px; }
+.r-156q2ks { margin-top: 10px; }
+.r-a023e6 { font-size: 15px; }
+.r-m611by { padding-top: 10px; }
+.r-kzbkwu { padding-bottom: 12px; }
+.r-lw4x92 { background-color: rgb(229, 232, 235); }
+.r-hdaws3 { height: 4px; }
+.r-131xog0 { width: 38px; }
+.r-le4sbl { margin-bottom: 18px; }
+.r-cqilzk { height: 400px; }
+.r-j76wpu { top: 100%; }
+.r-109y4c4 { height: 1px; }
+.r-9aw3ui { gap: 4px; }
+.r-iphfwy { padding-bottom: 4px; }
+.r-580adz { gap: 5px; }
+.r-13hce6t { margin-left: 4px; }
+.r-12sm5po { letter-spacing: -0.3px; }
+.r-cv4lhi { font-size: 21px; }
+.r-1h1c4di { line-height: 29px; }
+.r-mh4qq6 { background-color: rgb(238, 240, 255); }
+.r-1wzrnnt { margin-top: 16px; }
+.r-5t7p9m { padding-top: 14px; }
+.r-1bwi2ld { background-color: rgb(49, 130, 246); }
+.r-1ozsyd3 { height: 7px; }
+.r-12rgx7y { width: 7px; }
+.r-164rjwe { color: rgb(27, 100, 218); }
+.r-1444osr { margin-top: 18px; }
+.r-1itzn70 { color: rgb(176, 184, 193); }
+.r-1gdmmtd { font-family: JetBrainsMono_700Bold; }
+.r-1s2bzr4 { margin-top: 12px; }
+.r-13sbg7z { padding-left: 26px; }
+.r-kvuhef { background-color: rgb(139, 149, 161); }
+.r-10g5efv { width: 4px; }
+.r-fyomxp { margin-top: 34px; }
+.r-1eoj8my { margin-top: 26px; }
+.r-4x0g5h { padding-top: 22px; }
+.r-e0q9vq { background-color: rgba(49, 130, 246, 0.12); }
+.r-1hq35d5 { background-color: rgba(240, 68, 82, 0.12); }
+.r-1nf4nd3 { color: rgb(210, 47, 61); }
+.r-egqq0b { border-top-color: rgb(229, 232, 235); }
+.r-5kkj8d { border-top-width: 1px; }
+.r-1kt6imw { line-height: 27px; }
+.r-95jzfe { padding-top: 16px; }
+.r-l71dzp { margin-top: 14px; }
+.r-11c0sde { margin-top: 24px; }
+.r-zr46ds { border-top-color: rgb(242, 244, 246); }
+.r-tskmnb { padding-top: 8px; }
+.r-peo1c { min-height: 44px; }
+.r-1ecvlre { letter-spacing: -0.28px; }
+.r-c0qjth { letter-spacing: -0.25px; }
+.r-7ptqe7 { line-height: 23px; }
+.r-1599tul { gap: 3px; }
+.r-kc8jnq { margin-top: 6px; }
+html, body { height: 100%; }
+body { overflow: hidden; }
+#root { display: flex; height: 100%; flex: 1 1 0%; }
+:root { --expo-router-tabs-font-family: --apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+@keyframes RollOutRight { 
+  0% { transform: translateX(0vw) rotate(0deg); }
+  100% { transform: translateX(100vw) rotate(180deg); }
+}
+@keyframes RollOutLeft { 
+  0% { transform: translateX(0vw) rotate(0deg); }
+  100% { transform: translateX(-100vw) rotate(-180deg); }
+}
+@keyframes RollInRight { 
+  0% { transform: translateX(100vw) rotate(180deg); }
+  100% { transform: translateX(0vw) rotate(0deg); }
+}
+@keyframes RollInLeft { 
+  0% { transform: translateX(-100vw) rotate(-180deg); }
+  100% { transform: translateX(0vw) rotate(0deg); }
+}
+@keyframes RotateOutUpRight { 
+  0% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+  100% { transform: translateX(40%) translateY(-250%) rotate(90deg); opacity: 0; }
+}
+@keyframes RotateOutUpLeft { 
+  0% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+  100% { transform: translateX(-40%) translateY(-250%) rotate(-90deg); opacity: 0; }
+}
+@keyframes RotateOutDownRight { 
+  0% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+  100% { transform: translateX(40%) translateY(250%) rotate(-90deg); opacity: 0; }
+}
+@keyframes RotateOutDownLeft { 
+  0% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+  100% { transform: translateX(-40%) translateY(250%) rotate(90deg); opacity: 0; }
+}
+@keyframes RotateInUpRight { 
+  0% { transform: translateX(40%) translateY(250%) rotate(-90deg); opacity: 0; }
+  100% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+}
+@keyframes RotateInUpLeft { 
+  0% { transform: translateX(-40%) translateY(250%) rotate(90deg); opacity: 0; }
+  100% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+}
+@keyframes RotateInDownRight { 
+  0% { transform: translateX(40%) translateY(-250%) rotate(90deg); opacity: 0; }
+  100% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+}
+@keyframes RotateInDownLeft { 
+  0% { transform: translateX(-50%) translateY(-250%) rotate(-90deg); opacity: 0; }
+  100% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+}
+@keyframes PinwheelOut { 
+  0% { transform: rotate(0rad) scale(1); opacity: 1; }
+  100% { transform: rotate(5rad) scale(0); opacity: 0; }
+}
+@keyframes PinwheelIn { 
+  0% { transform: rotate(5rad) scale(0); opacity: 0; }
+  100% { transform: rotate(0deg) scale(1); opacity: 1; }
+}
+@keyframes LightSpeedOutLeft { 
+  0% { transform: translateX(0vw) skew(0deg); opacity: 1; }
+  100% { transform: translateX(-100vw) skew(45deg); opacity: 0; }
+}
+@keyframes LightSpeedOutRight { 
+  0% { transform: translateX(0vw) skewX(0deg); opacity: 1; }
+  100% { transform: translateX(100vw) skewX(-45deg); opacity: 0; }
+}
+@keyframes LightSpeedInLeft { 
+  0% { transform: translateX(-100vw) skewX(45deg); opacity: 0; }
+  70% { transform: skewX(-10deg); }
+  85% { transform: skewX(5deg); }
+  100% { transform: skewX(0deg); }
+}
+@keyframes LightSpeedInRight { 
+  0% { transform: translateX(100vw) skewX(-45deg); opacity: 0; }
+  70% { transform: skewX(10deg); }
+  85% { transform: skewX(-5deg); }
+  100% { transform: skewX(0deg); }
+}
+@keyframes SlideOutDown { 
+  0% { transform: translateY(0%); }
+  100% { transform: translateY(100vh); }
+}
+@keyframes SlideOutUp { 
+  0% { transform: translateY(0%); }
+  100% { transform: translateY(-100vh); }
+}
+@keyframes SlideOutLeft { 
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-100vw); }
+}
+@keyframes SlideOutRight { 
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(100vw); }
+}
+@keyframes SlideInDown { 
+  0% { transform: translateY(100vh); }
+  100% { transform: translateY(0%); }
+}
+@keyframes SlideInUp { 
+  0% { transform: translateY(-100vh); }
+  100% { transform: translateY(0%); }
+}
+@keyframes SlideInLeft { 
+  0% { transform: translateX(-100vw); }
+  100% { transform: translateX(0%); }
+}
+@keyframes SlideInRight { 
+  0% { transform: translateX(100vw); }
+  100% { transform: translateX(0%); }
+}
+@keyframes ZoomOutEasyDown { 
+  0% { transform: translateY(0%) scale(1); }
+  100% { transform: translateY(100%) scale(0); }
+}
+@keyframes ZoomOutEasyUp { 
+  0% { transform: translateY(0%) scale(1); }
+  100% { transform: translateY(-100%) scale(0); }
+}
+@keyframes ZoomOutDown { 
+  0% { transform: translateX(0vh) scale(1); }
+  100% { transform: translateY(100vh) scale(0); }
+}
+@keyframes ZoomOutUp { 
+  0% { transform: translateX(0vh) scale(1); }
+  100% { transform: translateY(-100vh) scale(0); }
+}
+@keyframes ZoomOutLeft { 
+  0% { transform: translateX(0vw) scale(1); }
+  100% { transform: translateX(-100vw) scale(0); }
+}
+@keyframes ZoomOutRight { 
+  0% { transform: translateX(0vw) scale(1); }
+  100% { transform: translateX(100vw) scale(0); }
+}
+@keyframes ZoomOutRotate { 
+  0% { transform: scale(1) rotate(0rad); }
+  100% { transform: scale(0) rotate(0.3rad); }
+}
+@keyframes ZoomOut { 
+  0% { transform: scale(1); }
+  100% { transform: scale(0); }
+}
+@keyframes ZoomInEasyDown { 
+  0% { transform: translateY(100%) scale(0); }
+  100% { transform: translateY(0%) scale(1); }
+}
+@keyframes ZoomInEasyUp { 
+  0% { transform: translateY(-100%) scale(0); }
+  100% { transform: translateY(0%) scale(1); }
+}
+@keyframes ZoomInDown { 
+  0% { transform: translateY(100vh) scale(0); }
+  100% { transform: translateY(0%) scale(1); }
+}
+@keyframes ZoomInUp { 
+  0% { transform: translateY(-100vh) scale(0); }
+  100% { transform: translateY(0%) scale(1); }
+}
+@keyframes ZoomInLeft { 
+  0% { transform: translateX(-100vw) scale(0); }
+  100% { transform: translateX(0%) scale(1); }
+}
+@keyframes ZoomInRight { 
+  0% { transform: translateX(100vw) scale(0); }
+  100% { transform: translateX(0%) scale(1); }
+}
+@keyframes ZoomInRotate { 
+  0% { transform: scale(0) rotate(0.3rad); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+@keyframes ZoomIn { 
+  0% { transform: scale(0); }
+  100% { transform: scale(1); }
+}
+@keyframes StretchOutY { 
+  0% { transform: scaleY(1); }
+  100% { transform: scaleY(0); }
+}
+@keyframes StretchOutX { 
+  0% { transform: scaleX(1); }
+  100% { transform: scaleX(0); }
+}
+@keyframes StretchInY { 
+  0% { transform: scaleY(0); }
+  100% { transform: scaleY(1); }
+}
+@keyframes StretchInX { 
+  0% { transform: scaleX(0); }
+  100% { transform: scaleX(1); }
+}
+@keyframes FlipOutEasyY { 
+  0% { transform: perspective(500px) rotateY(0deg); }
+  100% { transform: perspective(500px) rotateY(90deg); }
+}
+@keyframes FlipOutEasyX { 
+  0% { transform: perspective(500px) rotateX(0deg); }
+  100% { transform: perspective(500px) rotateX(90deg); }
+}
+@keyframes FlipOutXDown { 
+  0% { transform: perspective(500px) rotateX(0deg) translateY(0%); }
+  100% { transform: perspective(500px) rotateX(-90deg) translateY(100%); }
+}
+@keyframes FlipOutXUp { 
+  0% { transform: perspective(500px) rotateX(0deg) translateY(0%); }
+  100% { transform: perspective(500px) rotateX(90deg) translateY(-100%); }
+}
+@keyframes FlipOutYLeft { 
+  0% { transform: perspective(500px) rotateY(0deg) translateX(0%); }
+  100% { transform: perspective(500px) rotateY(-90deg) translateX(-100%); }
+}
+@keyframes FlipOutYRight { 
+  0% { transform: perspective(500px) rotateY(0deg) translateX(0%); }
+  100% { transform: perspective(500px) rotateY(90deg) translateX(100%); }
+}
+@keyframes FlipInEasyY { 
+  0% { transform: perspective(500px) rotateY(90deg); }
+  100% { transform: perspective(500px) rotateY(0deg); }
+}
+@keyframes FlipInEasyX { 
+  0% { transform: perspective(500px) rotateX(90deg); }
+  100% { transform: perspective(500px) rotateX(0deg); }
+}
+@keyframes FlipInXDown { 
+  0% { transform: perspective(500px) rotateX(-90deg) translateY(100%); }
+  100% { transform: perspective(500px) rotateX(0deg) translateY(0%); }
+}
+@keyframes FlipInXUp { 
+  0% { transform: perspective(500px) rotateX(90deg) translateY(-100%); }
+  100% { transform: perspective(500px) rotateX(0deg) translateY(0%); }
+}
+@keyframes FlipInYLeft { 
+  0% { transform: perspective(500px) rotateY(-90deg) translateX(-100%); }
+  100% { transform: perspective(500px) rotateY(0deg) translateX(0%); }
+}
+@keyframes FlipInYRight { 
+  0% { transform: perspective(500px) rotateY(90deg) translateX(100%); }
+  100% { transform: perspective(500px) rotateY(0deg) translateX(0%); }
+}
+@keyframes BounceOutDown { 
+  0% { transform: translateY(0px); }
+  15% { transform: translateY(-10px); }
+  30% { transform: translateY(10px); }
+  45% { transform: translateY(-20px); }
+  100% { transform: translateY(100vh); }
+}
+@keyframes BounceOutUp { 
+  0% { transform: translateY(0px); }
+  15% { transform: translateY(10px); }
+  30% { transform: translateY(-10px); }
+  45% { transform: translateY(20px); }
+  100% { transform: translateY(-100vh); }
+}
+@keyframes BounceOutLeft { 
+  0% { transform: translateX(0px); }
+  15% { transform: translateX(10px); }
+  30% { transform: translateX(-10px); }
+  45% { transform: translateX(20px); }
+  100% { transform: translateX(-100vh); }
+}
+@keyframes BounceOutRight { 
+  0% { transform: translateX(0px); }
+  15% { transform: translateX(-10px); }
+  30% { transform: translateX(10px); }
+  45% { transform: translateX(-20px); }
+  100% { transform: translateX(100vh); }
+}
+@keyframes BounceOut { 
+  0% { transform: scale(1); }
+  15% { transform: scale(1.1); }
+  30% { transform: scale(0.9); }
+  45% { transform: scale(1.2); }
+  100% { transform: scale(0.1); }
+}
+@keyframes BounceInDown { 
+  0% { transform: translateY(100vh); }
+  55% { transform: translateY(-20px); }
+  70% { transform: translateY(10px); }
+  85% { transform: translateY(-10px); }
+  100% { transform: translateY(0px); }
+}
+@keyframes BounceInUp { 
+  0% { transform: translateY(-100vh); }
+  55% { transform: translateY(20px); }
+  70% { transform: translateY(-10px); }
+  85% { transform: translateY(10px); }
+  100% { transform: translateY(0px); }
+}
+@keyframes BounceInLeft { 
+  0% { transform: translateX(-100vw); }
+  55% { transform: translateX(20px); }
+  70% { transform: translateX(-10px); }
+  85% { transform: translateX(10px); }
+  100% { transform: translateX(0px); }
+}
+@keyframes BounceInRight { 
+  0% { transform: translateX(100vw); }
+  55% { transform: translateX(-20px); }
+  70% { transform: translateX(10px); }
+  85% { transform: translateX(-10px); }
+  100% { transform: translateX(0px); }
+}
+@keyframes BounceIn { 
+  0% { transform: scale(0); }
+  55% { transform: scale(1.2); }
+  70% { transform: scale(0.9); }
+  85% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+@keyframes FadeOutDown { 
+  0% { opacity: 1; transform: translateY(0px); }
+  100% { opacity: 0; transform: translateY(25px); }
+}
+@keyframes FadeOutUp { 
+  0% { opacity: 1; transform: translateY(0px); }
+  100% { opacity: 0; transform: translateY(-25px); }
+}
+@keyframes FadeOutLeft { 
+  0% { opacity: 1; transform: translateX(0px); }
+  100% { opacity: 0; transform: translateX(-25px); }
+}
+@keyframes FadeOutRight { 
+  0% { opacity: 1; transform: translateX(0px); }
+  100% { opacity: 0; transform: translateX(25px); }
+}
+@keyframes FadeOut { 
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes FadeInDown { 
+  0% { opacity: 0; transform: translateY(25px); }
+  100% { opacity: 1; transform: translateY(0px); }
+}
+@keyframes FadeInUp { 
+  0% { opacity: 0; transform: translateY(-25px); }
+  100% { opacity: 1; transform: translateY(0px); }
+}
+@keyframes FadeInLeft { 
+  0% { opacity: 0; transform: translateX(-25px); }
+  100% { opacity: 1; transform: translateX(0px); }
+}
+@keyframes FadeInRight { 
+  0% { opacity: 0; transform: translateX(25px); }
+  100% { opacity: 1; transform: translateX(0px); }
+}
+@keyframes FadeIn { 
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+</style>
+</head>
+<body>
+
+    <!-- Use static rendering with Expo Router to support running without JavaScript. -->
+    
+    <!-- The root element for your Expo app. -->
+    <div id="root"><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx" style="flex: 1 1 0%;"><div style="position: absolute; inset: 0px; pointer-events: none; visibility: hidden;"></div><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx r-13awgt0 r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="background-color: rgb(255, 255, 255); display: flex;"><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx r-13awgt0" style="background-color: rgb(255, 255, 255);"><div style="position: absolute; inset: 0px; pointer-events: none; visibility: hidden;"></div><div class="css-g5y9jx r-13awgt0" style="flex-direction: column;"><div class="css-g5y9jx r-13awgt0 r-1udh08x"><div class="css-g5y9jx r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="z-index: 0;"><div class="css-g5y9jx r-13awgt0" style="background-color: rgb(255, 255, 255);"><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx r-14lw9ot r-13awgt0"><div class="css-g5y9jx r-14lw9ot r-18u37iz r-1cmwbt1 r-17s6mgv r-1h31txp" style="padding-top: 6px; height: 48px;"><button aria-label="search" role="button" tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-pqzm30 r-cpet4d r-1777fci" type="button" style="width: 34px; height: 34px; background-color: rgba(0, 0, 0, 0); border-width: 0px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#191F28" stroke-width="2.16" stroke-linecap="round" stroke-linejoin="round"><path d="m21 21-4.34-4.34"></path><circle cx="11" cy="11" r="8"></circle></svg></button><button aria-label="bell" role="button" tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-pqzm30 r-cpet4d r-1777fci" type="button" style="width: 34px; height: 34px; background-color: rgba(0, 0, 0, 0); border-width: 0px;"><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="#191F28" stroke-width="2.2736842105263158" stroke-linecap="round" stroke-linejoin="round"><path d="M10.268 21a2 2 0 0 0 3.464 0"></path><path d="M3.262 15.326A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.673C19.41 13.956 18 12.499 18 8A6 6 0 0 0 6 8c0 4.499-1.411 5.956-2.738 7.326"></path></svg><div class="css-g5y9jx r-1awozwy r-1gl1ra5 r-11mg6pl r-cpet4d r-d045u9 r-1tl9yi8 r-1777fci r-xegap4 r-n7gxbd r-u8s1d r-1c7ggc8 r-8jfcpp"><div dir="auto" class="css-146c3p1 r-jwli3a r-1wjlohb r-1ozpbmi">4</div></div></button><button aria-label="menu" role="button" tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-pqzm30 r-cpet4d r-1777fci" type="button" style="width: 34px; height: 34px; background-color: rgba(0, 0, 0, 0); border-width: 0px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#191F28" stroke-width="2.16" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path></svg></button></div><div class="css-g5y9jx r-150rngu r-eqz5dr r-16y2uox r-1wbh5a2 r-11yh6sk r-1rnoaur r-agouwx"><div class="css-g5y9jx r-150rngu r-eqz5dr r-16y2uox r-1wbh5a2 r-11yh6sk r-1rnoaur r-agouwx r-2eszeu"><div class="css-g5y9jx" style="padding-bottom: 28px;"><div class="css-g5y9jx r-1habvwh r-18u37iz r-uaa2di r-u9wvl5 r-ttdzmv"><div class="css-g5y9jx r-13awgt0 r-ojf8lh"><div dir="auto" class="css-146c3p1 r-1h6myly r-1wjlohb r-1x35g6 r-b1yau9 r-17rnw9f">탐색</div></div><div class="css-g5y9jx r-1kihuf0"><div class="css-g5y9jx r-k200y r-z80fyv r-1777fci r-1udh08x"><div class="css-g5y9jx r-1d09ksm r-18u37iz r-1ey881g" style="opacity: 1; transform: translateY(0px);"><div dir="auto" class="css-146c3p1 r-1o1qsob r-ceyshp r-1b43r93">코스피</div><div dir="auto" class="css-146c3p1 r-1h6myly r-102nfrm r-1b43r93">2,581.20</div><div dir="auto" class="css-146c3p1 r-102nfrm r-1b43r93" style="color: rgb(240, 68, 82);">+0.8%</div></div></div></div></div><div class="css-g5y9jx" style="padding-top: 22px;"><div class="css-g5y9jx r-1d09ksm r-18u37iz r-1cmwbt1 r-u9wvl5"><div class="css-g5y9jx r-1awozwy r-13awgt0 r-18u37iz r-ojf8lh"><div dir="auto" class="css-146c3p1 r-1h6myly r-1wjlohb r-adyw6z r-c4c50z">AI가 보는 오늘 순위</div><div aria-label="투자 유의 사항" tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#8B95A1" stroke-width="2.4000000000000004" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="M12 16v-4"></path><path d="M12 8h.01"></path></svg></div></div><div dir="auto" class="css-146c3p1 r-1kihuf0 r-13xcry5 r-1xfd6ze r-1xz1hyw r-1fekieh r-1ws2f5x r-1udh08x r-rehuqn r-1ezpcd1">오늘 08:30 기준</div></div></div><div dir="auto" class="css-146c3p1 r-1xz1hyw r-jah4h5 r-n6v787 r-u9wvl5 r-13gvty3">재료가 확인된 ETF부터 위에 있어요.</div><div class="css-g5y9jx" style="padding-top: 4px; padding-right: 20px; padding-left: 20px;"><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-wrv7is r-qklmqi r-19qsa7v r-zo2zu6"><div class="css-g5y9jx r-1awozwy r-18u37iz r-1ey881g"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udbk01 r-3s2u2q r-1iln25a r-13q0vw2 r-1enofrn r-1udh08x r-q4m81j r-mizlga r-1xfd6ze r-jwli3a r-xjggfu r-c6ipad">1위</div><div class="css-g5y9jx" style="width: 20px; height: 20px; border-radius: 999px; background-color: rgb(61, 52, 224); align-items: center; justify-content: center;"><svg width="12" height="12" viewBox="0 0 24 24"><g><rect x="8.25" y="1.6" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="11.1" y="1.6" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="13.95" y="1.6" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="8.25" y="18.8" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="11.1" y="18.8" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="13.95" y="18.8" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="1.6" y="8.25" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="1.6" y="11.1" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="1.6" y="13.95" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="18.8" y="8.25" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="18.8" y="11.1" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="18.8" y="13.95" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="4.6" y="4.6" width="14.8" height="14.8" rx="3.6" fill="#FFFFFF"></rect><rect x="8.9" y="8.9" width="6.2" height="6.2" rx="1.7" fill="#3D34E0"></rect></g></svg></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1xz1hyw r-1wbh5a2 r-1fekieh r-1enofrn">TIGER 반도체TOP10</div><div class="css-g5y9jx" style="flex: 1 1 0%;"></div><div class="css-g5y9jx r-1awozwy r-urvukm r-rs99b7 r-18u37iz r-9aw3ui r-1777fci r-1udh08x" style="box-shadow: rgb(240, 68, 82) 0px 0px 0px; height: 24px; min-width: 44px; padding-right: 9px; padding-left: 9px; border-radius: 8px; background-color: rgba(240, 68, 82, 0.18);"><div class="css-g5y9jx r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="border-radius: 8px; background-image: linear-gradient(120.069deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.42));"></div><div class="css-g5y9jx r-1awozwy r-1777fci"><div dir="auto" class="css-146c3p1 r-1wjlohb r-q4m81j" style="color: rgb(240, 68, 82); font-size: 7.71429px; line-height: 6.94286px;">▲</div><div dir="auto" class="css-146c3p1 r-1wjlohb r-q4m81j" style="color: rgb(240, 68, 82); font-size: 7.71429px; line-height: 6.94286px;">▲</div></div><div dir="auto" class="css-146c3p1 r-1wjlohb r-1grwqd5" style="color: rgb(210, 47, 61);">강력 상승</div></div></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1wjlohb r-1i10wst r-icto9i r-waer2z">메모리 값 3개월째 상승, SK하이닉스 이익률 49%</div><div class="css-g5y9jx r-18u37iz r-1w6e6rj r-ojf8lh"><div dir="auto" class="css-146c3p1 r-1udbk01 r-3s2u2q r-1iln25a r-j54yjz r-1xfd6ze r-1o1qsob r-1fekieh r-1enofrn r-dnmrzs r-1udh08x r-rehuqn r-1ezpcd1">환가 상승 지속</div><div dir="auto" class="css-146c3p1 r-1udbk01 r-3s2u2q r-1iln25a r-j54yjz r-1xfd6ze r-1o1qsob r-1fekieh r-1enofrn r-dnmrzs r-1udh08x r-rehuqn r-1ezpcd1">고부가 비중 확대</div></div></div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-wrv7is r-qklmqi r-19qsa7v r-zo2zu6"><div class="css-g5y9jx r-1awozwy r-18u37iz r-1ey881g"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udbk01 r-3s2u2q r-1iln25a r-13q0vw2 r-1enofrn r-1udh08x r-q4m81j r-mizlga r-1xfd6ze r-jwli3a r-xjggfu r-c6ipad">2위</div><div class="css-g5y9jx" style="width: 20px; height: 20px; border-radius: 999px; background-color: rgb(19, 19, 24); align-items: center; justify-content: center;"><svg width="12" height="12" viewBox="0 0 24 24"><g><path d="M12 1.9l8.2 3v6.6c0 5-3.3 8.9-8.2 10.6-4.9-1.7-8.2-5.6-8.2-10.6V4.9z" fill="#FFFFFF"></path><path d="M8.3 11.9l2.6 2.6 4.8-5.2" fill="none" stroke="#131318" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></g></svg></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1xz1hyw r-1wbh5a2 r-1fekieh r-1enofrn">PLUS K방산</div><div class="css-g5y9jx" style="flex: 1 1 0%;"></div><div class="css-g5y9jx r-1awozwy r-urvukm r-rs99b7 r-18u37iz r-9aw3ui r-1777fci r-1udh08x" style="box-shadow: rgb(240, 68, 82) 0px 0px 0px; height: 24px; min-width: 44px; padding-right: 9px; padding-left: 9px; border-radius: 8px; background-color: rgba(240, 68, 82, 0.18);"><div class="css-g5y9jx r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="border-radius: 8px; background-image: linear-gradient(120.069deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.42));"></div><div class="css-g5y9jx r-1awozwy r-1777fci"><div dir="auto" class="css-146c3p1 r-1wjlohb r-q4m81j" style="color: rgb(240, 68, 82); font-size: 7.71429px; line-height: 6.94286px;">▲</div><div dir="auto" class="css-146c3p1 r-1wjlohb r-q4m81j" style="color: rgb(240, 68, 82); font-size: 7.71429px; line-height: 6.94286px;">▲</div></div><div dir="auto" class="css-146c3p1 r-1wjlohb r-1grwqd5" style="color: rgb(210, 47, 61);">강력 상승</div></div></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1wjlohb r-1i10wst r-icto9i r-waer2z">유럽 무기 주문 3분기 연속 증가, 한화에어로 5년치 일감</div><div class="css-g5y9jx r-18u37iz r-1w6e6rj r-ojf8lh"><div dir="auto" class="css-146c3p1 r-1udbk01 r-3s2u2q r-1iln25a r-j54yjz r-1xfd6ze r-1o1qsob r-1fekieh r-1enofrn r-dnmrzs r-1udh08x r-rehuqn r-1ezpcd1">수주 잔고 확대</div><div dir="auto" class="css-146c3p1 r-1udbk01 r-3s2u2q r-1iln25a r-j54yjz r-1xfd6ze r-1o1qsob r-1fekieh r-1enofrn r-dnmrzs r-1udh08x r-rehuqn r-1ezpcd1">수익성 개선</div></div></div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-wrv7is r-qklmqi r-19qsa7v r-zo2zu6"><div class="css-g5y9jx r-1awozwy r-18u37iz r-1ey881g"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udbk01 r-3s2u2q r-1iln25a r-13q0vw2 r-1enofrn r-1udh08x r-q4m81j r-mizlga r-1xfd6ze r-jwli3a r-xjggfu r-c6ipad">3위</div><div class="css-g5y9jx" style="width: 20px; height: 20px; border-radius: 999px; background-color: rgb(14, 138, 108); align-items: center; justify-content: center;"><svg width="12" height="12" viewBox="0 0 24 24"><g><ellipse cx="12" cy="6.4" rx="7.6" ry="3.1" fill="#FFFFFF"></ellipse><path d="M4.4 9.4c0 1.7 3.4 3.1 7.6 3.1s7.6-1.4 7.6-3.1v3.3c0 1.7-3.4 3.1-7.6 3.1s-7.6-1.4-7.6-3.1z" fill="#FFFFFF"></path><path d="M4.4 15.4c0 1.7 3.4 3.1 7.6 3.1s7.6-1.4 7.6-3.1v2.4c0 1.7-3.4 3.1-7.6 3.1s-7.6-1.4-7.6-3.1z" fill="#FFFFFF"></path></g></svg></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1xz1hyw r-1wbh5a2 r-1fekieh r-1enofrn">KODEX 미국AI전력핵심인프라</div><div class="css-g5y9jx" style="flex: 1 1 0%;"></div><div class="css-g5y9jx r-1awozwy r-urvukm r-rs99b7 r-18u37iz r-9aw3ui r-1777fci r-1udh08x" style="box-shadow: rgb(240, 68, 82) 0px 0px 0px; height: 24px; min-width: 44px; padding-right: 9px; padding-left: 9px; border-radius: 8px; background-color: rgba(240, 68, 82, 0.18);"><div class="css-g5y9jx r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="border-radius: 8px; background-image: linear-gradient(128.66deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.42));"></div><div class="css-g5y9jx r-1awozwy r-1777fci"><div dir="auto" class="css-146c3p1 r-1wjlohb r-q4m81j" style="color: rgb(240, 68, 82); font-size: 11.1429px; line-height: 11.1429px;">▲</div></div><div dir="auto" class="css-146c3p1 r-1wjlohb r-1grwqd5" style="color: rgb(210, 47, 61);">상승</div></div></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1wjlohb r-1i10wst r-icto9i r-waer2z">美 전기료 인상 승인, 전력회사 배당 2.4%로 상향</div><div class="css-g5y9jx r-18u37iz r-1w6e6rj r-ojf8lh"><div dir="auto" class="css-146c3p1 r-1udbk01 r-3s2u2q r-1iln25a r-j54yjz r-1xfd6ze r-1o1qsob r-1fekieh r-1enofrn r-dnmrzs r-1udh08x r-rehuqn r-1ezpcd1">매출 확정</div><div dir="auto" class="css-146c3p1 r-1udbk01 r-3s2u2q r-1iln25a r-j54yjz r-1xfd6ze r-1o1qsob r-1fekieh r-1enofrn r-dnmrzs r-1udh08x r-rehuqn r-1ezpcd1">배당 매력 확대</div></div></div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-wrv7is r-qklmqi r-19qsa7v r-zo2zu6"><div class="css-g5y9jx r-1awozwy r-18u37iz r-1ey881g"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udbk01 r-3s2u2q r-1iln25a r-13q0vw2 r-1enofrn r-1udh08x r-q4m81j r-ofl2eb r-19tjxh9">4</div><div class="css-g5y9jx" style="width: 20px; height: 20px; border-radius: 999px; background-color: rgb(224, 86, 43); align-items: center; justify-content: center;"><svg width="12" height="12" viewBox="0 0 24 24"><g><rect x="3.6" y="3.4" width="16.8" height="17.2" rx="3.2" fill="#FFFFFF"></rect><rect x="7.2" y="8.2" width="9.6" height="1.9" rx="0.95" fill="#E0562B"></rect><rect x="7.2" y="11.7" width="9.6" height="1.9" rx="0.95" fill="#E0562B"></rect><rect x="7.2" y="15.2" width="5.4" height="1.9" rx="0.95" fill="#E0562B"></rect></g></svg></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1xz1hyw r-1wbh5a2 r-1fekieh r-1enofrn">KODEX 국고채30년액티브</div><div class="css-g5y9jx" style="flex: 1 1 0%;"></div><div class="css-g5y9jx r-1awozwy r-urvukm r-rs99b7 r-18u37iz r-9aw3ui r-1777fci r-1udh08x" style="box-shadow: rgb(142, 142, 147) 0px 0px 0px; height: 24px; min-width: 44px; padding-right: 9px; padding-left: 9px; border-radius: 8px; background-color: rgba(142, 142, 147, 0.22);"><div class="css-g5y9jx r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="border-radius: 8px; background-image: linear-gradient(129.174deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.42));"></div><div class="css-g5y9jx r-1awozwy r-1777fci"><div dir="auto" class="css-146c3p1 r-1wjlohb r-q4m81j" style="color: rgb(142, 142, 147); font-size: 11.1429px; line-height: 11.1429px;">■</div></div><div dir="auto" class="css-146c3p1 r-1wjlohb r-1grwqd5" style="color: rgb(99, 99, 102);">중립</div></div></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1wjlohb r-1i10wst r-icto9i r-waer2z">물가 3개월째 2%대, 한국은행 금리 인하 기대 확대</div><div class="css-g5y9jx r-18u37iz r-1w6e6rj r-ojf8lh"><div dir="auto" class="css-146c3p1 r-1udbk01 r-3s2u2q r-1iln25a r-j54yjz r-1xfd6ze r-1o1qsob r-1fekieh r-1enofrn r-dnmrzs r-1udh08x r-rehuqn r-1ezpcd1">인하 여건 성숙</div><div dir="auto" class="css-146c3p1 r-1udbk01 r-3s2u2q r-1iln25a r-j54yjz r-1xfd6ze r-1o1qsob r-1fekieh r-1enofrn r-dnmrzs r-1udh08x r-rehuqn r-1ezpcd1">채권 가격 상승</div></div></div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-wrv7is r-qklmqi r-19qsa7v r-zo2zu6"><div class="css-g5y9jx r-1awozwy r-18u37iz r-1ey881g"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udbk01 r-3s2u2q r-1iln25a r-13q0vw2 r-1enofrn r-1udh08x r-q4m81j r-ofl2eb r-19tjxh9">5</div><div class="css-g5y9jx" style="width: 20px; height: 20px; border-radius: 999px; background-color: rgb(232, 161, 61); align-items: center; justify-content: center;"><svg width="12" height="12" viewBox="0 0 24 24"><g><path d="M20.6 3.4c.4 9.6-4.4 14.4-11.2 14.4H6.2c-1 0-1.7-.9-1.5-1.9C6.2 8.3 11.5 3.4 20.6 3.4z" fill="#FFFFFF"></path><path d="M4.6 20.6c1.2-3.8 3.6-6.8 7.2-8.9" fill="none" stroke="#FFFFFF" stroke-width="2.2" stroke-linecap="round"></path></g></svg></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1xz1hyw r-1wbh5a2 r-1fekieh r-1enofrn">TIGER Fn신재생에너지</div><div class="css-g5y9jx" style="flex: 1 1 0%;"></div><div class="css-g5y9jx r-1awozwy r-urvukm r-rs99b7 r-18u37iz r-9aw3ui r-1777fci r-1udh08x" style="box-shadow: rgb(142, 142, 147) 0px 0px 0px; height: 24px; min-width: 44px; padding-right: 9px; padding-left: 9px; border-radius: 8px; background-color: rgba(142, 142, 147, 0.22);"><div class="css-g5y9jx r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="border-radius: 8px; background-image: linear-gradient(129.174deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.42));"></div><div class="css-g5y9jx r-1awozwy r-1777fci"><div dir="auto" class="css-146c3p1 r-1wjlohb r-q4m81j" style="color: rgb(142, 142, 147); font-size: 11.1429px; line-height: 11.1429px;">■</div></div><div dir="auto" class="css-146c3p1 r-1wjlohb r-1grwqd5" style="color: rgb(99, 99, 102);">중립</div></div></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1wjlohb r-1i10wst r-icto9i r-waer2z">태양광 원료값 2년 만에 바닥, 중국 감산 발표는 아직</div><div class="css-g5y9jx r-18u37iz r-1w6e6rj r-ojf8lh"><div dir="auto" class="css-146c3p1 r-1udbk01 r-3s2u2q r-1iln25a r-j54yjz r-1xfd6ze r-1o1qsob r-1fekieh r-1enofrn r-dnmrzs r-1udh08x r-rehuqn r-1ezpcd1">원료 값 바닥</div><div dir="auto" class="css-146c3p1 r-1udbk01 r-3s2u2q r-1iln25a r-j54yjz r-1xfd6ze r-1o1qsob r-1fekieh r-1enofrn r-dnmrzs r-1udh08x r-rehuqn r-1ezpcd1">감산 대기</div></div></div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-wrv7is r-qklmqi r-19qsa7v r-zo2zu6"><div class="css-g5y9jx r-1awozwy r-18u37iz r-1ey881g"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udbk01 r-3s2u2q r-1iln25a r-13q0vw2 r-1enofrn r-1udh08x r-q4m81j r-ofl2eb r-19tjxh9">6</div><div class="css-g5y9jx" style="width: 20px; height: 20px; border-radius: 999px; background-color: rgb(139, 52, 224); align-items: center; justify-content: center;"><svg width="12" height="12" viewBox="0 0 24 24"><g><path d="M8.4 2.2h7.2a1.3 1.3 0 010 2.6h-.5v4l4.6 8.6c1.1 2-.4 4.4-2.6 4.4H6.9c-2.2 0-3.7-2.4-2.6-4.4l4.6-8.6v-4h-.5a1.3 1.3 0 010-2.6z" fill="#FFFFFF"></path><circle cx="10.2" cy="17.2" r="1.5" fill="#8B34E0"></circle><circle cx="14.1" cy="14.9" r="1.1" fill="#8B34E0"></circle></g></svg></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1xz1hyw r-1wbh5a2 r-1fekieh r-1enofrn">TIGER 바이오TOP10</div><div class="css-g5y9jx" style="flex: 1 1 0%;"></div><div class="css-g5y9jx r-1awozwy r-urvukm r-rs99b7 r-18u37iz r-9aw3ui r-1777fci r-1udh08x" style="box-shadow: rgb(49, 130, 246) 0px 0px 0px; height: 24px; min-width: 44px; padding-right: 9px; padding-left: 9px; border-radius: 8px; background-color: rgba(49, 130, 246, 0.18);"><div class="css-g5y9jx r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="border-radius: 8px; background-image: linear-gradient(128.66deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.42));"></div><div class="css-g5y9jx r-1awozwy r-1777fci"><div dir="auto" class="css-146c3p1 r-1wjlohb r-q4m81j" style="color: rgb(49, 130, 246); font-size: 11.1429px; line-height: 11.1429px;">▼</div></div><div dir="auto" class="css-146c3p1 r-1wjlohb r-1grwqd5" style="color: rgb(27, 100, 218);">하락</div></div></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1wjlohb r-1i10wst r-icto9i r-waer2z">바이오 임상 3상 발표 연기, 셀트리온 3분기 실적 하향</div><div class="css-g5y9jx r-18u37iz r-1w6e6rj r-ojf8lh"><div dir="auto" class="css-146c3p1 r-1udbk01 r-3s2u2q r-1iln25a r-j54yjz r-1xfd6ze r-1o1qsob r-1fekieh r-1enofrn r-dnmrzs r-1udh08x r-rehuqn r-1ezpcd1">임상 지연</div><div dir="auto" class="css-146c3p1 r-1udbk01 r-3s2u2q r-1iln25a r-j54yjz r-1xfd6ze r-1o1qsob r-1fekieh r-1enofrn r-dnmrzs r-1udh08x r-rehuqn r-1ezpcd1">실적 하향</div></div></div></div></div></div></div></div></div></div></div></div><div class="css-g5y9jx r-1p0dtai r-zchlnj r-1d2f490" style="pointer-events: auto; border-color: rgba(0, 0, 0, 0.07) rgb(216, 216, 216) rgb(216, 216, 216); padding: 6px 0px 8px; height: 63px; background-color: rgb(255, 255, 255); border-top-width: 1px; transform: translateY(0px);"><div class="css-g5y9jx r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af r-633pao"></div><div role="tablist" class="css-g5y9jx r-13awgt0 r-18u37iz"><div class="css-g5y9jx r-13awgt0" style="border-radius: 0px; overflow: visible;"><a href="/home" role="tab" aria-selected="false" tabindex="0" class="css-g5y9jx r-1otgn73 r-1awozwy r-1onu96p r-eqz5dr r-1h0z5md r-1uu6nss" style="cursor: pointer; flex: 1 1 0%; background-color: rgba(0, 0, 0, 0); border-radius: 0px; opacity: 1;"><div class="css-g5y9jx r-h0d30l r-726pan"><div class="css-g5y9jx r-1awozwy r-1kihuf0 r-1pi2tsx r-1777fci r-u8s1d r-13qz1uu" style="opacity: 0; min-width: 25px;"><svg width="20.4" height="20.4" viewBox="0 0 24 24" fill="none" stroke="#191F28" stroke-width="2.11764705882353" stroke-linecap="round" stroke-linejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg></div><div class="css-g5y9jx r-1awozwy r-1kihuf0 r-1pi2tsx r-1777fci r-u8s1d r-13qz1uu" style="opacity: 1;"><svg width="20.4" height="20.4" viewBox="0 0 24 24" fill="none" stroke="#6B7684" stroke-width="2.11764705882353" stroke-linecap="round" stroke-linejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg></div></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1niwhzg r-q4m81j" style="color: rgb(107, 118, 132); font-weight: 500; font-family: Pretendard-SemiBold; font-size: 11px;">홈</div></a></div><div class="css-g5y9jx r-13awgt0" style="border-radius: 0px; overflow: visible;"><a href="/watch" role="tab" aria-selected="false" tabindex="0" class="css-g5y9jx r-1otgn73 r-1awozwy r-1onu96p r-eqz5dr r-1h0z5md r-1uu6nss" style="cursor: pointer; flex: 1 1 0%; background-color: rgba(0, 0, 0, 0); border-radius: 0px; opacity: 1;"><div class="css-g5y9jx r-h0d30l r-726pan"><div class="css-g5y9jx r-1awozwy r-1kihuf0 r-1pi2tsx r-1777fci r-u8s1d r-13qz1uu" style="opacity: 0; min-width: 25px;"><svg width="20.4" height="20.4" viewBox="0 0 24 24" fill="none" stroke="#191F28" stroke-width="2.11764705882353" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"></path></svg></div><div class="css-g5y9jx r-1awozwy r-1kihuf0 r-1pi2tsx r-1777fci r-u8s1d r-13qz1uu" style="opacity: 1;"><svg width="20.4" height="20.4" viewBox="0 0 24 24" fill="none" stroke="#6B7684" stroke-width="2.11764705882353" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"></path></svg></div></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1niwhzg r-q4m81j" style="color: rgb(107, 118, 132); font-weight: 500; font-family: Pretendard-SemiBold; font-size: 11px;">관심</div></a></div><div class="css-g5y9jx r-13awgt0" style="border-radius: 0px; overflow: visible;"><a href="/explore" role="tab" aria-selected="true" tabindex="0" class="css-g5y9jx r-1otgn73 r-1awozwy r-1onu96p r-eqz5dr r-1h0z5md r-1uu6nss" style="cursor: pointer; flex: 1 1 0%; background-color: rgba(0, 0, 0, 0); border-radius: 0px; opacity: 1;"><div class="css-g5y9jx r-h0d30l r-726pan"><div class="css-g5y9jx r-1awozwy r-1kihuf0 r-1pi2tsx r-1777fci r-u8s1d r-13qz1uu" style="opacity: 1; min-width: 25px;"><svg width="20.4" height="20.4" viewBox="0 0 24 24" fill="none" stroke="#191F28" stroke-width="2.11764705882353" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z"></path></svg></div><div class="css-g5y9jx r-1awozwy r-1kihuf0 r-1pi2tsx r-1777fci r-u8s1d r-13qz1uu" style="opacity: 0;"><svg width="20.4" height="20.4" viewBox="0 0 24 24" fill="none" stroke="#6B7684" stroke-width="2.11764705882353" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z"></path></svg></div></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1niwhzg r-q4m81j" style="color: rgb(25, 31, 40); font-weight: 500; font-family: Pretendard-SemiBold; font-size: 11px;">탐색</div></a></div><div class="css-g5y9jx r-13awgt0" style="border-radius: 0px; overflow: visible;"><a href="/community" role="tab" aria-selected="false" tabindex="0" class="css-g5y9jx r-1otgn73 r-1awozwy r-1onu96p r-eqz5dr r-1h0z5md r-1uu6nss" style="cursor: pointer; flex: 1 1 0%; background-color: rgba(0, 0, 0, 0); border-radius: 0px; opacity: 1;"><div class="css-g5y9jx r-h0d30l r-726pan"><div class="css-g5y9jx r-1awozwy r-1kihuf0 r-1pi2tsx r-1777fci r-u8s1d r-13qz1uu" style="opacity: 0; min-width: 25px;"><svg width="20.4" height="20.4" viewBox="0 0 24 24" fill="none" stroke="#191F28" stroke-width="2.11764705882353" stroke-linecap="round" stroke-linejoin="round"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"></path></svg></div><div class="css-g5y9jx r-1awozwy r-1kihuf0 r-1pi2tsx r-1777fci r-u8s1d r-13qz1uu" style="opacity: 1;"><svg width="20.4" height="20.4" viewBox="0 0 24 24" fill="none" stroke="#6B7684" stroke-width="2.11764705882353" stroke-linecap="round" stroke-linejoin="round"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"></path></svg></div></div><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1niwhzg r-q4m81j" style="color: rgb(107, 118, 132); font-weight: 500; font-family: Pretendard-SemiBold; font-size: 11px;">커뮤니티</div></a></div></div></div></div></div></div></div></div></div></div></div>
+  
+
+
+<div style="position: fixed; left: 0px; top: 0px; width: 0px; height: 0px; z-index: -1; overflow: hidden; visibility: hidden; transition-duration: 0.05s; transition-property: padding; transition-delay: 0s; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);"></div><div></div><div></div><div><div class="r-1p0dtai r-1d2f490 r-1xcajam r-zchlnj r-ipm5af r-sfbmgh"><div role="presentation" tabindex="0" class="r-1ny4l3l"></div><div class="css-g5y9jx"><div aria-modal="true" class="css-g5y9jx r-1p0dtai r-1d2f490 r-1xcajam r-zchlnj r-ipm5af r-1niwhzg" role="dialog"><div class="css-g5y9jx r-13awgt0 r-ipm5af"><div class="css-g5y9jx r-13awgt0 r-17s6mgv"><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx r-13awgt0 r-17s6mgv"><div class="css-g5y9jx" style="position: absolute; inset: 0px; background-color: rgba(0, 0, 0, 0.35); opacity: 1;"><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af"></div></div><div class="css-g5y9jx" style="box-shadow: rgba(0, 0, 0, 0.18) 0px -10px 18px; background-color: rgb(255, 255, 255); border-top-left-radius: 22px; border-top-right-radius: 22px; height: 611.8px; transform: translateY(0px);"><div style="display: contents;"><div class="css-g5y9jx r-m611by r-kzbkwu" style="user-select: none; touch-action: none;"><div class="css-g5y9jx r-1kihuf0 r-lw4x92 r-cpet4d r-hdaws3 r-131xog0 r-le4sbl"></div><div class="css-g5y9jx r-1awozwy r-18u37iz r-1cmwbt1 r-iphfwy r-u9wvl5"><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-13awgt0 r-18u37iz r-1cmwbt1"><div class="css-g5y9jx" style="width: 36px; height: 36px; border-radius: 999px; background-color: rgb(61, 52, 224); align-items: center; justify-content: center;"><svg width="20" height="20" viewBox="0 0 24 24"><g><rect x="8.25" y="1.6" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="11.1" y="1.6" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="13.95" y="1.6" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="8.25" y="18.8" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="11.1" y="18.8" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="13.95" y="18.8" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="1.6" y="8.25" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="1.6" y="11.1" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="1.6" y="13.95" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="18.8" y="8.25" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="18.8" y="11.1" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="18.8" y="13.95" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="4.6" y="4.6" width="14.8" height="14.8" rx="3.6" fill="#FFFFFF"></rect><rect x="8.9" y="8.9" width="6.2" height="6.2" rx="1.7" fill="#3D34E0"></rect></g></svg></div><div class="css-g5y9jx r-13awgt0 r-580adz r-13hce6t"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1fekieh r-a023e6 r-12sm5po r-rjixqe">TIGER 반도체TOP10</div><div class="css-g5y9jx r-1d09ksm r-18u37iz r-ojf8lh"><div dir="auto" class="css-146c3p1 r-1o1qsob r-1gdmmtd r-1grwqd5 r-c0qjth">₩ 12,845</div><div dir="auto" class="css-146c3p1 r-13q0vw2 r-1grwqd5" style="color: rgb(240, 68, 82);">+3.2%</div></div></div></div><div class="css-g5y9jx r-1awozwy r-urvukm r-rs99b7 r-18u37iz r-9aw3ui r-1777fci r-1udh08x" style="box-shadow: rgb(240, 68, 82) 0px 0px 0px; height: 28px; min-width: 44px; padding-right: 9px; padding-left: 9px; border-radius: 9px; background-color: rgba(240, 68, 82, 0.18);"><div class="css-g5y9jx r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="border-radius: 9px; background-image: linear-gradient(124.032deg, rgba(255, 255, 255, 0.8), rgba(255, 255, 255, 0.42));"></div><div class="css-g5y9jx r-1awozwy r-1777fci"><div dir="auto" class="css-146c3p1 r-1wjlohb r-q4m81j" style="color: rgb(240, 68, 82); font-size: 9px; line-height: 8.1px;">▲</div><div dir="auto" class="css-146c3p1 r-1wjlohb r-q4m81j" style="color: rgb(240, 68, 82); font-size: 9px; line-height: 8.1px;">▲</div></div><div dir="auto" class="css-146c3p1 r-1wjlohb r-1grwqd5" style="color: rgb(210, 47, 61);">강력 상승</div></div></div></div></div><div style="display: contents;"><div class="css-g5y9jx r-13awgt0" style="user-select: none; touch-action: none;"><div class="css-g5y9jx r-13xcry5 r-109y4c4"></div><div style="display: contents;"><div class="css-g5y9jx r-150rngu r-eqz5dr r-16y2uox r-1wbh5a2 r-agouwx r-11yh6sk r-buy8e9 r-19z077z r-2eszeu" style="user-select: none; touch-action: auto;"><div class="css-g5y9jx" style="padding: 20px 20px 10px;"><div class="css-g5y9jx" style="margin-bottom: 20px;"><div class="css-g5y9jx r-j54yjz r-1867qdf r-nsbfu8"><div dir="auto" class="css-146c3p1 r-1h6myly r-1wjlohb r-1inkyih r-icto9i r-7ptqe7"><span class="css-1jxf684" style="color: rgb(240, 68, 82);">산다</span> 선택이 더 많아요</div><div dir="auto" class="css-146c3p1 r-1xz1hyw r-jah4h5 r-1grwqd5 r-14gqq1x">584명 참여</div><div class="css-g5y9jx r-18u37iz r-1599tul r-tbmifm r-1s2bzr4"><div class="css-g5y9jx" style="flex: 46 1 0%; border-radius: 5px; background-color: rgb(240, 68, 82);"></div><div class="css-g5y9jx" style="flex: 32 1 0%; border-radius: 5px; background-color: rgb(78, 89, 104);"></div><div class="css-g5y9jx" style="flex: 22 1 0%; border-radius: 5px; background-color: rgb(49, 130, 246);"></div></div><div class="css-g5y9jx r-18u37iz r-1cmwbt1 r-1s2bzr4"><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-1dzdj1l r-13awgt0 r-eu3ka r-1777fci r-18c5d7m" style="background-color: rgb(255, 240, 241);"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1wjlohb r-1b43r93" style="color: rgb(240, 68, 82);">산다<span class="css-1jxf684 r-13q0vw2 r-n6v787"> 46%</span></div></div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-1dzdj1l r-13awgt0 r-eu3ka r-1777fci r-18c5d7m" style="background-color: rgb(242, 244, 246);"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1wjlohb r-1b43r93" style="color: rgb(78, 89, 104);">기다린다<span class="css-1jxf684 r-13q0vw2 r-n6v787"> 32%</span></div></div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-1dzdj1l r-13awgt0 r-eu3ka r-1777fci r-18c5d7m" style="background-color: rgb(234, 242, 255);"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1wjlohb r-1b43r93" style="color: rgb(49, 130, 246);">판다<span class="css-1jxf684 r-13q0vw2 r-n6v787"> 22%</span></div></div></div></div></div><div dir="auto" class="css-146c3p1 r-1h6myly r-1wjlohb r-cv4lhi r-c4c50z r-1h1c4di">SK하이닉스가 HBM4를 고객 3곳에 처음 출하했어요. 다음은 9월 12일 양산 수율 공개예요</div><div class="css-g5y9jx r-mh4qq6 r-6rehxw r-1867qdf r-rs99b7 r-1wzrnnt r-19yat4t r-3pj75a r-5t7p9m"><div class="css-g5y9jx r-1awozwy r-18u37iz r-1ey881g"><div class="css-g5y9jx r-1bwi2ld r-cpet4d r-1ozsyd3 r-12rgx7y"></div><div dir="auto" class="css-146c3p1 r-164rjwe r-1wjlohb r-n6v787">오늘 추가된 것 · 9월 5일</div></div><div class="css-g5y9jx" style="gap: 9px; margin-top: 11px;"><div dir="auto" class="css-146c3p1 r-1h6myly r-jah4h5 r-a023e6 r-waer2z">SK하이닉스 영업이익률은 42%에서 49%가 됐어요.</div><div dir="auto" class="css-146c3p1 r-1h6myly r-jah4h5 r-a023e6 r-waer2z">SK하이닉스가 HBM4를 고객 3곳에 처음 출하했어요.</div><div dir="auto" class="css-146c3p1 r-1h6myly r-jah4h5 r-a023e6 r-waer2z">외국인이 최근 5일 중 4일 대형주를 샀어요.</div></div></div><div class="css-g5y9jx r-1867qdf r-1gjx2kl r-1444osr r-xyw6el"><div class="css-g5y9jx r-1d09ksm r-18u37iz r-uaa2di"><div dir="auto" class="css-146c3p1 r-1itzn70 r-1gdmmtd r-1enofrn">01</div><div dir="auto" class="css-146c3p1 r-1h6myly r-13awgt0 r-1wjlohb r-1inkyih r-icto9i r-waer2z">서버용 D램 값이 3개월 동안 18% 올랐어요</div></div><div class="css-g5y9jx r-1ey881g r-1s2bzr4 r-13sbg7z"><div class="css-g5y9jx r-1habvwh r-18u37iz r-uaa2di"><div class="css-g5y9jx r-kvuhef r-cpet4d r-hdaws3 r-156q2ks r-10g5efv"></div><div dir="auto" class="css-146c3p1 r-1o1qsob r-13awgt0 r-jah4h5 r-a023e6 r-waer2z">AI 서버를 만드는 회사들이 메모리를 더 많이 주문했어요.</div></div><div class="css-g5y9jx r-1habvwh r-18u37iz r-uaa2di"><div class="css-g5y9jx r-kvuhef r-cpet4d r-hdaws3 r-156q2ks r-10g5efv"></div><div dir="auto" class="css-146c3p1 r-1o1qsob r-13awgt0 r-jah4h5 r-a023e6 r-waer2z">메모리를 만드는 SK하이닉스·삼성전자가 이 ETF의 36%예요.</div></div></div></div><div class="css-g5y9jx r-1867qdf r-1gjx2kl r-1444osr r-xyw6el"><div class="css-g5y9jx r-1d09ksm r-18u37iz r-uaa2di"><div dir="auto" class="css-146c3p1 r-1itzn70 r-1gdmmtd r-1enofrn">02</div><div dir="auto" class="css-146c3p1 r-1h6myly r-13awgt0 r-1wjlohb r-1inkyih r-icto9i r-waer2z">SK하이닉스 이익률이 42%에서 49%가 됐어요</div></div><div class="css-g5y9jx r-1ey881g r-1s2bzr4 r-13sbg7z"><div class="css-g5y9jx r-1habvwh r-18u37iz r-uaa2di"><div class="css-g5y9jx r-kvuhef r-cpet4d r-hdaws3 r-156q2ks r-10g5efv"></div><div dir="auto" class="css-146c3p1 r-1o1qsob r-13awgt0 r-jah4h5 r-a023e6 r-waer2z">메모리는 값이 오르면 이익이 그대로 늘어요.</div></div><div class="css-g5y9jx r-1habvwh r-18u37iz r-uaa2di"><div class="css-g5y9jx r-kvuhef r-cpet4d r-hdaws3 r-156q2ks r-10g5efv"></div><div dir="auto" class="css-146c3p1 r-1o1qsob r-13awgt0 r-jah4h5 r-a023e6 r-waer2z">공장을 더 짓지 않아도 같은 칩을 더 비싸게 팔기 때문이에요.</div></div></div></div><div class="css-g5y9jx r-1867qdf r-1gjx2kl r-1444osr r-xyw6el"><div class="css-g5y9jx r-1d09ksm r-18u37iz r-uaa2di"><div dir="auto" class="css-146c3p1 r-1itzn70 r-1gdmmtd r-1enofrn">03</div><div dir="auto" class="css-146c3p1 r-1h6myly r-13awgt0 r-1wjlohb r-1inkyih r-icto9i r-waer2z">그런데 주가가 20일 동안 18% 먼저 올랐어요</div></div><div class="css-g5y9jx r-1ey881g r-1s2bzr4 r-13sbg7z"><div class="css-g5y9jx r-1habvwh r-18u37iz r-uaa2di"><div class="css-g5y9jx r-kvuhef r-cpet4d r-hdaws3 r-156q2ks r-10g5efv"></div><div dir="auto" class="css-146c3p1 r-1o1qsob r-13awgt0 r-jah4h5 r-a023e6 r-waer2z">시장도 같은 걸 봤고 이미 가격에 반영했어요.</div></div><div class="css-g5y9jx r-1habvwh r-18u37iz r-uaa2di"><div class="css-g5y9jx r-kvuhef r-cpet4d r-hdaws3 r-156q2ks r-10g5efv"></div><div dir="auto" class="css-146c3p1 r-1o1qsob r-13awgt0 r-jah4h5 r-a023e6 r-waer2z">그래서 9월 12일 양산 수율이 80%를 넘어야 남은 폭이 열려요.</div></div></div></div><div class="css-g5y9jx r-lw4x92 r-109y4c4 r-fyomxp"></div><div class="css-g5y9jx r-j54yjz r-1867qdf r-1eoj8my r-qn3fzs r-u9wvl5 r-4x0g5h"><div dir="auto" class="css-146c3p1 r-1h6myly r-1wjlohb r-1i10wst r-icto9i">그래서 지금 사도 될까요?</div><div class="css-g5y9jx" style="gap: 12px; margin-top: 18px;"><div class="css-g5y9jx" style="gap: 8px;"><div dir="auto" class="css-146c3p1 r-1wjlohb r-1enofrn r-1ikidpy" style="color: rgb(27, 100, 218);">부담</div><div class="css-g5y9jx r-18u37iz r-1w6e6rj r-ojf8lh"><div dir="auto" class="css-146c3p1 r-1xfd6ze r-1fekieh r-n6v787 r-1udh08x r-vuvdlw r-1ubuhtd r-e0q9vq r-164rjwe">주가가 먼저 올랐어요</div><div dir="auto" class="css-146c3p1 r-1xfd6ze r-1fekieh r-n6v787 r-1udh08x r-vuvdlw r-1ubuhtd r-e0q9vq r-164rjwe">양산 수율 공개 전</div></div></div><div class="css-g5y9jx" style="gap: 8px; margin-top: 4px;"><div dir="auto" class="css-146c3p1 r-1wjlohb r-1enofrn r-1ikidpy" style="color: rgb(210, 47, 61);">개선</div><div class="css-g5y9jx r-18u37iz r-1w6e6rj r-ojf8lh"><div dir="auto" class="css-146c3p1 r-1xfd6ze r-1fekieh r-n6v787 r-1udh08x r-vuvdlw r-1ubuhtd r-1hq35d5 r-1nf4nd3">메모리 값 3개월 상승</div><div dir="auto" class="css-146c3p1 r-1xfd6ze r-1fekieh r-n6v787 r-1udh08x r-vuvdlw r-1ubuhtd r-1hq35d5 r-1nf4nd3">이익률 49%</div><div dir="auto" class="css-146c3p1 r-1xfd6ze r-1fekieh r-n6v787 r-1udh08x r-vuvdlw r-1ubuhtd r-1hq35d5 r-1nf4nd3">외국인 매수</div></div></div></div><div dir="auto" class="css-146c3p1 r-egqq0b r-5kkj8d r-1h6myly r-1fekieh r-ubezar r-1kt6imw r-1444osr r-95jzfe">수요는 확인됐지만 주가가 먼저 올라, 9월 12일 수율이 80%를 넘는지에 달렸어요.</div><div class="css-g5y9jx r-1awozwy r-18u37iz r-1cmwbt1 r-l71dzp"><div dir="auto" class="css-146c3p1 r-1xz1hyw r-1fekieh r-1b43r93">상승</div><div dir="auto" class="css-146c3p1 r-1itzn70 r-jah4h5 r-n6v787">→</div><div dir="auto" class="css-146c3p1 r-1wjlohb r-1b43r93" style="color: rgb(240, 68, 82);">강력 상승</div></div></div><div class="css-g5y9jx r-1no09lo"><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-18u37iz r-ojf8lh r-peo1c" style="justify-content: center; background-color: rgb(247, 248, 250); border-radius: 14px; padding-right: 16px; padding-left: 16px;"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1b43r93 r-1ecvlre" style="color: rgb(78, 89, 104); font-family: Pretendard-Bold;">기준 5개 더 보기</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4E5968" stroke-width="2.8499999999999996" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"></path></svg></div></div><div class="css-g5y9jx r-2psd3c r-11c0sde"><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-18u37iz r-ojf8lh r-peo1c r-qklmqi r-ap9gma r-5kkj8d" style="justify-content: center; background-color: rgba(0, 0, 0, 0); border-radius: 0px; padding-right: 0px; padding-left: 0px;"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1b43r93 r-1ecvlre" style="color: rgb(78, 89, 104); font-family: Pretendard-Bold;">분석 기준과 출처</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#4E5968" stroke-width="2.8499999999999996" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg></div></div><div class="css-g5y9jx r-1wzrnnt"><div class="css-g5y9jx r-1awozwy r-18u37iz r-580adz"><div class="css-g5y9jx r-1mlwlqe r-1udh08x r-417010 r-10ptun7 r-1janqcz"><div class="css-g5y9jx r-1niwhzg r-vvn4in r-u6sd8q r-1p0dtai r-1pi2tsx r-1d2f490 r-u8s1d r-zchlnj r-ipm5af r-13qz1uu r-1wyyakw r-4gszlv" style="filter: url(&quot;data:text/html;base64,PCFET0NUWVBFIGh0bWw+CjxodG1sIGxhbmc9ImVuIj4KICA8aGVhZD4KICAgIDxtZXRhIGNoYXJzZXQ9InV0Zi04IiAvPgogICAgPG1ldGEgaHR0cEVxdWl2PSJYLVVBLUNvbXBhdGlibGUiIGNvbnRlbnQ9IklFPWVkZ2UiIC8+CiAgICA8bWV0YSBuYW1lPSJ2aWV3cG9ydCIgY29udGVudD0id2lkdGg9ZGV2aWNlLXdpZHRoLCBpbml0aWFsLXNjYWxlPTEsIHNocmluay10by1maXQ9bm8iIC8+CiAgICA8dGl0bGU+RVRGIE9yY2E8L3RpdGxlPgogICAgPCEtLSBUaGUgYHJlYWN0LW5hdGl2ZS13ZWJgIHJlY29tbWVuZGVkIHN0eWxlIHJlc2V0OiBodHRwczovL25lY29sYXMuZ2l0aHViLmlvL3JlYWN0LW5hdGl2ZS13ZWIvZG9jcy9zZXR1cC8jcm9vdC1lbGVtZW50IC0tPgogICAgPHN0eWxlIGlkPSJleHBvLXJlc2V0Ij4KICAgICAgLyogVGhlc2Ugc3R5bGVzIG1ha2UgdGhlIGJvZHkgZnVsbC1oZWlnaHQgKi8KICAgICAgaHRtbCwKICAgICAgYm9keSB7CiAgICAgICAgaGVpZ2h0OiAxMDAlOwogICAgICB9CiAgICAgIC8qIFRoZXNlIHN0eWxlcyBkaXNhYmxlIGJvZHkgc2Nyb2xsaW5nIGlmIHlvdSBhcmUgdXNpbmcgPFNjcm9sbFZpZXc+ICovCiAgICAgIGJvZHkgewogICAgICAgIG92ZXJmbG93OiBoaWRkZW47CiAgICAgIH0KICAgICAgLyogVGhlc2Ugc3R5bGVzIG1ha2UgdGhlIHJvb3QgZWxlbWVudCBmdWxsLWhlaWdodCAqLwogICAgICAjcm9vdCB7CiAgICAgICAgZGlzcGxheTogZmxleDsKICAgICAgICBoZWlnaHQ6IDEwMCU7CiAgICAgICAgZmxleDogMTsKICAgICAgfQogICAgPC9zdHlsZT4KICA8bGluayByZWw9Imljb24iIGhyZWY9Ii9mYXZpY29uLmljbyIvPjxsaW5rIHJlbD0icHJlbG9hZCIgaHJlZj0iL19leHBvL3N0YXRpYy9jc3MvbmF0aXZlLXRhYnMubW9kdWxlLTc4YjBmNTk3Mzc1NzFmNDU1NzIwOTcwNzkxYTM2YmRkLmNzcyIgYXM9InN0eWxlIj4KPGxpbmsgcmVsPSJzdHlsZXNoZWV0IiBocmVmPSIvX2V4cG8vc3RhdGljL2Nzcy9uYXRpdmUtdGFicy5tb2R1bGUtNzhiMGY1OTczNzU3MWY0NTU3MjA5NzA3OTFhMzZiZGQuY3NzIj48L2hlYWQ+CgogIDxib2R5PgogICAgPCEtLSBVc2Ugc3RhdGljIHJlbmRlcmluZyB3aXRoIEV4cG8gUm91dGVyIHRvIHN1cHBvcnQgcnVubmluZyB3aXRob3V0IEphdmFTY3JpcHQuIC0tPgogICAgPG5vc2NyaXB0PgogICAgICBZb3UgbmVlZCB0byBlbmFibGUgSmF2YVNjcmlwdCB0byBydW4gdGhpcyBhcHAuCiAgICA8L25vc2NyaXB0PgogICAgPCEtLSBUaGUgcm9vdCBlbGVtZW50IGZvciB5b3VyIEV4cG8gYXBwLiAtLT4KICAgIDxkaXYgaWQ9InJvb3QiPjwvZGl2PgogIDxzY3JpcHQgc3JjPSIvX2V4cG8vc3RhdGljL2pzL3dlYi9lbnRyeS1iYmYwMGQ4NGI5ZWQxMjEwOWFjZjYxMzk1YjliMjBmNi5qcyIgZGVmZXI+PC9zY3JpcHQ+CjwvYm9keT4KPC9odG1sPgo=&quot;); background-image: url(&quot;data:image/png;base64,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&quot;);"></div><img alt="" draggable="false" class="css-9pa8cd" src="data:image/png;base64,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"><svg style="position: absolute; height: 0px; visibility: hidden; width: 0px;"><defs><filter id="tint-0"><feFlood flood-color="#6B7684"></feFlood><feComposite in2="SourceAlpha" operator="in"></feComposite></filter></defs></svg></div><div dir="auto" class="css-146c3p1 r-1xz1hyw r-1fekieh r-1enofrn">ETF Orca</div></div><div dir="auto" class="css-146c3p1 r-ofl2eb r-jah4h5 r-1enofrn r-14yzgew r-kc8jnq">AI가 공개 자료를 정리한 참고 정보이며 매수·매도 권유가 아니에요. 투자 판단과 책임은 이용자 본인에게 있어요.</div></div></div></div></div><div class="css-g5y9jx r-14lw9ot r-zr46ds r-5kkj8d r-u9wvl5 r-tskmnb"><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-18u37iz r-ojf8lh r-peo1c" style="justify-content: center; background-color: rgb(238, 240, 255); border-radius: 14px; padding-right: 16px; padding-left: 16px;"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1b43r93 r-1ecvlre" style="color: rgb(61, 52, 224); font-family: Pretendard-ExtraBold;">다음 · PLUS K방산</div><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#3D34E0" stroke-width="2.8499999999999996" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"></path></svg></div></div></div></div><div class="css-g5y9jx" style="height: 28px;"></div><div class="css-g5y9jx r-14lw9ot r-cqilzk r-1d2f490 r-u8s1d r-zchlnj r-j76wpu"></div></div></div></div></div></div></div></div><div role="presentation" tabindex="0" class="r-1ny4l3l"></div></div></div><div></div><div style="position: fixed; left: 0px; top: 0px; width: 0px; height: 0px; z-index: -1; overflow: hidden; visibility: hidden; transition-duration: 0.05s; transition-property: padding; transition-delay: 0s; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);"></div>
+</body>
+</html>

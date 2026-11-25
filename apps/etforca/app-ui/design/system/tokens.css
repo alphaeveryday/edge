@@ -1,0 +1,294 @@
+/* ETF Orca 디자인 시스템 — generated from tokens.json */
+:root, [data-theme="light"] {
+  --bg: #ffffff; /* 화면 바탕. 본문과 카드가 놓이는 기본 면. */
+  --card: #f7f8fa; /* 바탕 위에 올리는 카드 면. 홈의 카드, 글쓰기 태그. */
+  --surface: #f2f4f6; /* 입력창, 선택된 칩, 배지, soft 버튼의 채움 면. 목록 구분선에도 쓴다. */
+  --line: #e5e8eb; /* 카드와 영역을 나누는 기본 선. */
+  --lineStrong: #d5dae0; /* 아이콘 버튼과 점선 칩의 테두리, 전망 게이지의 중립 칸, 정렬 손잡이 점. */
+  --text: #191f28; /* 본문과 제목. bg, card 위의 기본 글자색. 선택된 탭의 밑줄, dark 버튼 바탕. */
+  --textSub: #4e5968; /* 보조 본문, 목록 아이콘, soft 버튼 글자. bg 위. */
+  --textMuted: #6b7684; /* 설명, 캡션, 선택 안 된 탭과 칩 글자. bg, surface 위. 대비: light에서 bg 위 4.6:1, surface 위 4.2:1이라 surface 위 작은 글자는 기준(4.5:1)에 조금 못 미친다. */
+  --textFaint: #8b95a1; /* 플레이스홀더, 정보 아이콘. bg, surface 위. 본문에는 쓰지 않는다. 대비: light에서 bg 위 3.0:1. 읽어야 하는 문장에는 textMuted 이상을 쓴다. */
+  --textDisabled: #b0b8c1; /* 비활성 글자와 목록 화살표. */
+  --onPrimary: #ffffff; /* primary, up 바탕 위의 글자. 대비: primary 위 light 7.6:1, dark 3.7:1. up 위는 light 3.7:1, dark 3.4:1로 버튼 글자 기준에 못 미친다. */
+  --primary: #3d34e0; /* 브랜드 색. 주요 버튼 바탕, 섹션의 더 보기 글자, 알림 아이콘. */
+  --primaryPressed: #2a22b8; /* primary를 누른 상태용으로 정의돼 있다. 현재 화면에서는 쓰지 않는다(버튼은 눌렀을 때 0.985배로 줄어든다). */
+  --primarySoft: #eef0ff; /* primary의 옅은 면. 강조 링크 행, 인용 태그, 추가 버튼, 오늘의 분석 상자. */
+  --accent: #6c5cf5; /* primary보다 밝은 보라로 정의돼 있다. 현재 화면에서는 쓰지 않는다. */
+  --up: #f04452; /* 상승. 가격 오름, 상승 전망 기호, danger 버튼 바탕, 새 글 점. 한국 시장 관례대로 빨강이다. 대비: light에서 bg 위 3.7:1. 작은 글자에는 upDeep(5.0:1)을 쓰고, 기호나 글자를 함께 둔다. */
+  --upDeep: #d22f3d; /* 상승 스티커의 글자. signalAlpha-up 바탕 위. */
+  --down: #3182f6; /* 하락. 가격 내림, 하락 전망 기호. 한국 시장 관례대로 파랑이다. 대비: light에서 bg 위 3.7:1. 작은 글자에는 downDeep(5.4:1)을 쓰고, 기호나 글자를 함께 둔다. */
+  --downDeep: #1b64da; /* 하락 스티커의 글자. signalAlpha-down 바탕 위. */
+  --neutral: #8e8e93; /* 중립. 중립 전망 기호, 온도 범례의 가운데 칸. */
+  --neutralDeep: #636366; /* 중립 스티커의 글자. */
+  --warn: #e8a13d; /* 관심 알림 아이콘의 바탕, 온보딩 스티커 소개의 매크로 항목. */
+  --positive: #0e8a6c; /* 온보딩 스티커 소개의 수급 항목. 등락과 무관한 좋음을 뜻한다. */
+  --upSoft: rgba(240,68,82,0.12); /* 도움 태그와 긍정 칩의 바탕. 글자는 upDeep. */
+  --downSoft: rgba(49,130,246,0.12); /* 부담 태그와 부정 칩의 바탕. 글자는 downDeep. */
+  --upLight: #f7a1a8; /* 전망 게이지의 상승 칸, 온도 범례의 약한 도움 칸. */
+  --downLight: #8fbbfa; /* 전망 게이지의 하락 칸, 온도 범례의 약한 부담 칸. */
+  --warnDeep: #c9820e; /* 관심 알림 아이콘의 글자. warn 바탕 위. */
+  --success: #22c55e; /* 토스트의 완료 아이콘. */
+  --primaryTint: #ddd9fb; /* primarySoft 면의 테두리. 오늘의 분석 상자. */
+  --highlight: rgba(49,130,246,0.18); /* 본문 강조 구절의 배경으로 정의돼 있다. 현재 화면에서는 쓰지 않는다. */
+  --voteUpBg: #fff0f1; /* 투표에서 상승을 고른 칸의 배경. */
+  --voteDownBg: #eaf2ff; /* 투표에서 하락을 고른 칸의 배경. */
+  --unreadBg: #f8faff; /* 읽지 않은 알림 행의 배경. */
+  --toastBg: #2b2f3a; /* 토스트 바탕. 글자는 onPrimary. */
+  --scrim: rgba(0,0,0,0.35); /* 시트와 대화상자 뒤를 가리는 막. */
+  --tabBarLine: rgba(0,0,0,0.07); /* 하단 탭 바 위쪽 선. */
+  --chartMa20: #e0891a; /* 차트의 20일 이동평균선. */
+  --gaugeStrongDown: #1b64da; /* 전망 게이지의 강력 하락 칸. */
+  --gloss-from: rgba(255,255,255,0.8); /* 스티커 광택 그라데이션의 시작. */
+  --gloss-to: rgba(255,255,255,0.42); /* 스티커 광택 그라데이션의 끝. */
+  --glossLine: rgba(255,255,255,0.75); /* 스티커 테두리. */
+  --heat-help: #fbd5d8; /* 히트맵 온도 3단 중 도움(상승 요인) 칸. */
+  --heat-neutral: #e9ebef; /* 히트맵 온도 3단 중 중립 칸. */
+  --heat-burden: #cfe0fb; /* 히트맵 온도 3단 중 부담(하락 요인) 칸. */
+  --heat-up2: #f9c2c7; /* 히트맵 등락 5단 중 큰 상승 칸. */
+  --heat-up1: #fce3e5; /* 히트맵 등락 5단 중 상승 칸. */
+  --heat-flat: #e9ebef; /* 히트맵 등락 5단 중 보합 칸. */
+  --heat-down1: #dce9fc; /* 히트맵 등락 5단 중 하락 칸. */
+  --heat-down2: #bfd7fa; /* 히트맵 등락 5단 중 큰 하락 칸. */
+  --signalAlpha-up: rgba(240,68,82,0.18); /* 상승 스티커의 바탕과 선. */
+  --signalAlpha-neutral: rgba(142,142,147,0.22); /* 중립 스티커의 바탕. */
+  --signalAlpha-neutralLine: rgba(142,142,147,0.2); /* 중립 스티커의 선. */
+  --signalAlpha-down: rgba(49,130,246,0.18); /* 하락 스티커의 바탕과 선. */
+  --shadow-floating: 0 2px 4px rgba(28,28,30,0.08); /* 떠 있는 작은 요소. */
+  --shadow-fab: 0 8px 11px rgba(25,31,40,0.32); /* 화면 위에 뜨는 둥근 버튼. */
+  --shadow-toast: 0 10px 15px rgba(0,0,0,0.28); /* 토스트. */
+  --shadow-sheet: 0 -10px 18px rgba(0,0,0,0.18); /* 바텀시트. 위쪽으로 드리운다. */
+}
+[data-theme="dark"] {
+  --bg: #17171c;
+  --card: #1f1f25;
+  --surface: #26262d;
+  --line: #2c2c34;
+  --lineStrong: #3a3a44;
+  --text: #eceef1;
+  --textSub: #b6bcc5;
+  --textMuted: #9199a4;
+  --textFaint: #747c87;
+  --textDisabled: #4e545d;
+  --onPrimary: #ffffff;
+  --primary: #7b74f2;
+  --primaryPressed: #6058e0;
+  --primarySoft: #25234a;
+  --accent: #8d80f8;
+  --up: #f2555f;
+  --upDeep: #ff7a84;
+  --down: #4b93f7;
+  --downDeep: #79aefa;
+  --neutral: #8e8e93;
+  --neutralDeep: #aeaeb2;
+  --warn: #ebaa4d;
+  --positive: #2db38f;
+  --upSoft: rgba(242,85,95,0.18);
+  --downSoft: rgba(75,147,247,0.18);
+  --upLight: #7a3238;
+  --downLight: #2d4f80;
+  --warnDeep: #e0a03a;
+  --success: #2fd06a;
+  --primaryTint: #3a3670;
+  --highlight: rgba(75,147,247,0.26);
+  --voteUpBg: #3a1f23;
+  --voteDownBg: #1c2a40;
+  --unreadBg: #1c1e2a;
+  --toastBg: #3a3d48;
+  --scrim: rgba(0,0,0,0.6);
+  --tabBarLine: rgba(255,255,255,0.08);
+  --chartMa20: #f0a040;
+  --gaugeStrongDown: #4b93f7;
+  --gloss-from: rgba(255,255,255,0.14);
+  --gloss-to: rgba(255,255,255,0.04);
+  --glossLine: rgba(255,255,255,0.12);
+  --heat-help: rgba(242,85,95,0.32);
+  --heat-neutral: #2c2c34;
+  --heat-burden: rgba(75,147,247,0.32);
+  --heat-up2: rgba(242,85,95,0.42);
+  --heat-up1: rgba(242,85,95,0.2);
+  --heat-flat: #2c2c34;
+  --heat-down1: rgba(75,147,247,0.2);
+  --heat-down2: rgba(75,147,247,0.42);
+  --signalAlpha-up: rgba(242,85,95,0.22);
+  --signalAlpha-neutral: rgba(142,142,147,0.24);
+  --signalAlpha-neutralLine: rgba(142,142,147,0.2);
+  --signalAlpha-down: rgba(75,147,247,0.22);
+}
+:root {
+  --space-xs: 4px; /* 아이콘과 글자 사이, 칩 안 간격. */
+  --space-sm: 8px; /* 같은 묶음 안 요소 사이. */
+  --space-md: 12px; /* 행 안 요소 사이, 버튼 사이. */
+  --space-lg: 16px; /* 카드 안 여백. */
+  --space-xl: 20px; /* 구역 안 묶음 사이. */
+  --space-xxl: 28px; /* 구역과 구역 사이. */
+  --page-x: 20px; /* 화면 좌우 여백. 제목, 구역 머리, 본문이 모두 이 선에 맞는다. */
+  --radius-tag: 8px; /* 배지, 기준 시각 칩. */
+  --radius-control: 10px; /* 필터 칩 같은 작은 조작부. */
+  --radius-field: 12px; /* 검색창, 입력창. */
+  --radius-button: 14px; /* 버튼. */
+  --radius-card: 16px; /* 카드. */
+  --radius-sheet: 22px; /* 바텀시트의 위쪽 모서리. */
+  --radius-pill: 999px; /* 점, 알약 모양. */
+  --font-sans: "Pretendard", -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --text-pageTitle: 800 24px/30px var(--font-sans); /* 화면 맨 위 제목. 화면당 하나. */
+  --text-sectionTitle: 800 20px/1.4 var(--font-sans); /* 화면 안 구역의 제목. */
+  --text-sheetTitle: 800 19px/25px var(--font-sans); /* 바텀시트와 대화상자의 제목. */
+  --text-cardTitle: 800 17px/23px var(--font-sans); /* 카드 안의 제목. */
+  --text-navTitle: 800 16px/1.4 var(--font-sans); /* 상단 내비게이션 바의 제목. */
+  --text-button: 800 15.5px/1.4 var(--font-sans); /* 버튼 글자. */
+  --text-listLabel: 600 15.5px/1.4 var(--font-sans); /* 목록 행의 이름. */
+  --text-tab: 600 14px/1.4 var(--font-sans); /* 탭과 칩. 선택되면 굵기 800. */
+  --text-sticker: 800 12.5px/1.4 var(--font-sans); /* 전망 스티커의 글자. */
+  --text-body: 400 14px/22px var(--font-sans); /* 본문. */
+  --text-caption: 400 12.5px/1.4 var(--font-sans); /* 보조 설명, 기준 시각. */
+  --text-mono: 700 12.5px/1.4 var(--font-mono); /* 종목 코드, 등락률처럼 자릿수를 맞춰 읽는 숫자. */
+}
+.pageTitle {
+  font-family: var(--font-sans);
+  font-size: 24px;
+  line-height: 30px;
+  font-weight: 800;
+  letter-spacing: -0.7px;
+}
+.sectionTitle {
+  font-family: var(--font-sans);
+  font-size: 20px;
+  line-height: 1.4;
+  font-weight: 800;
+  letter-spacing: -0.6px;
+}
+.sheetTitle {
+  font-family: var(--font-sans);
+  font-size: 19px;
+  line-height: 25px;
+  font-weight: 800;
+  letter-spacing: -0.55px;
+}
+.cardTitle {
+  font-family: var(--font-sans);
+  font-size: 17px;
+  line-height: 23px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+.navTitle {
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.4;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+}
+.button {
+  font-family: var(--font-sans);
+  font-size: 15.5px;
+  line-height: 1.4;
+  font-weight: 800;
+  letter-spacing: -0.15px;
+}
+.listLabel {
+  font-family: var(--font-sans);
+  font-size: 15.5px;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+}
+.tab {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.4;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.sticker {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.4;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+.body {
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.caption {
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  line-height: 1.4;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.4;
+  font-weight: 700;
+  letter-spacing: -0.25px;
+}
+@font-face {
+  font-family: "Pretendard";
+  src: url("fonts/Pretendard-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Pretendard";
+  src: url("fonts/Pretendard-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Pretendard";
+  src: url("fonts/Pretendard-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Pretendard";
+  src: url("fonts/Pretendard-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Pretendard";
+  src: url("fonts/Pretendard-ExtraBold.woff2") format("woff2");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/JetBrainsMono-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/JetBrainsMono-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/JetBrainsMono-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("fonts/JetBrainsMono-ExtraBold.ttf") format("truetype");
+  font-weight: 800;
+  font-style: normal;
+  font-display: swap;
+}

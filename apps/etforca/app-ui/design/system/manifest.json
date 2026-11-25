@@ -1,0 +1,444 @@
+{
+  "manifestVersion": 3,
+  "name": "ETF Orca 디자인 시스템",
+  "namespace": "EtfOrca",
+  "files": [
+    "assets/Logos/README.md",
+    "components/Chip/README.md",
+    "components/CtaButton/README.md",
+    "components/ListRow/README.md",
+    "components/SearchField/README.md",
+    "components/SectionHead/README.md",
+    "components/Sticker/README.md",
+    "components/TabItem/README.md",
+    "fonts/JetBrainsMono-Bold.ttf",
+    "fonts/JetBrainsMono-ExtraBold.ttf",
+    "fonts/JetBrainsMono-LICENSE.txt",
+    "fonts/JetBrainsMono-Medium.ttf",
+    "fonts/JetBrainsMono-Regular.ttf",
+    "fonts/Pretendard-Bold.woff2",
+    "fonts/Pretendard-ExtraBold.woff2",
+    "fonts/Pretendard-LICENSE.txt",
+    "fonts/Pretendard-Medium.woff2",
+    "fonts/Pretendard-Regular.woff2",
+    "fonts/Pretendard-SemiBold.woff2",
+    "screens.md",
+    "surfaces.md",
+    "tokens.css"
+  ],
+  "libraries": [],
+  "components": [
+    {
+      "name": "Chip",
+      "group": "Actions",
+      "summary": "목록을 걸러 보는 선택 칩이다."
+    },
+    {
+      "name": "CtaButton",
+      "group": "Actions",
+      "summary": "화면의 주요 행동을 맡는 가로로 꽉 찬 버튼이다."
+    },
+    {
+      "name": "ListRow",
+      "group": "Lists",
+      "summary": "아이콘, 이름, 값, 화살표로 이루어진 목록 한 줄이다."
+    },
+    {
+      "name": "ScreenCommunity",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenCommunityWrite",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkCommunity",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkCommunityWrite",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkEtfBrief",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkEtfCommunity",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkEtfData",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkEtfSummary",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkExplore",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkFactor",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkHome",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkLogin",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkMenu",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkMenuMember",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkMetric",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkNick",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkNotifications",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkOnboardingEtf",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkOnboardingIntro1",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkOnboardingIntro2",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkPost",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkProfile",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkProfileCommunity",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkReset",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkSearch",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkSearchEmpty",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkSearchResults",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkSheetAnalysis",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkSheetDisclaimer",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkSheetGroup",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkSheetMove",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkSheetTheme",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkSignup",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkWatch",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkWatchAdd",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenDarkWatchEdit",
+      "group": "Screens Dark",
+      "page": true
+    },
+    {
+      "name": "ScreenEtfBrief",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenEtfCommunity",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenEtfData",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenEtfSummary",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenExplore",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenFactor",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenHome",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenLogin",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenMenu",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenMenuMember",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenMetric",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenNick",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenNotifications",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenOnboardingEtf",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenOnboardingIntro1",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenOnboardingIntro2",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenPost",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenProfile",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenProfileCommunity",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenReset",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenSearch",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenSearchEmpty",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenSearchResults",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenSheetAnalysis",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenSheetDisclaimer",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenSheetGroup",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenSheetMove",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenSheetTheme",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenSignup",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenWatch",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenWatchAdd",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "ScreenWatchEdit",
+      "group": "Screens",
+      "page": true
+    },
+    {
+      "name": "SearchField",
+      "group": "Inputs",
+      "summary": "ETF와 테마를 찾는 검색 입력창이다."
+    },
+    {
+      "name": "SectionHead",
+      "group": "Layout",
+      "summary": "화면 안 한 구역의 제목 줄이다."
+    },
+    {
+      "name": "Sticker",
+      "group": "Signals",
+      "summary": "ETF의 오늘 전망을 다섯 단계로 보여 주는 표식이다."
+    },
+    {
+      "name": "TabItem",
+      "group": "Navigation",
+      "summary": "한 화면 안에서 보기를 바꾸는 밑줄 탭 하나다."
+    }
+  ],
+  "assetGroups": [
+    {
+      "name": "Logos",
+      "tile": "l",
+      "order": [
+        "icon.png",
+        "logo-mark.png"
+      ],
+      "files": [
+        {
+          "path": "assets/Logos/icon.png",
+          "id": "3f7f5e01a282e21d3c9b694d1e7e5070"
+        },
+        {
+          "path": "assets/Logos/logo-mark.png",
+          "id": "b08900d9009f2922659944b86c232868"
+        }
+      ]
+    }
+  ],
+  "storage": {
+    "files": {
+      "assets/Logos/icon.png": {
+        "store": "blob",
+        "id": "3f7f5e01a282e21d3c9b694d1e7e5070",
+        "bytes": 120598,
+        "type": "image/png"
+      },
+      "assets/Logos/logo-mark.png": {
+        "store": "blob",
+        "id": "b08900d9009f2922659944b86c232868",
+        "bytes": 4945,
+        "type": "image/png"
+      }
+    },
+    "blobBytesUsed": 125543
+  }
+}
