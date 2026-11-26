@@ -20,6 +20,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     ...config,
     ios: { ...config.ios, googleServicesFile: process.env.GOOGLE_SERVICE_INFO_PLIST },
     android: { ...config.android, googleServicesFile: process.env.GOOGLE_SERVICES_JSON },
+    // design-sync 의 웹 빌드만 /app 아래에서 서빙(design.etforca.com/app/), 앱 빌드에는 값 없음
+    experiments: { ...config.experiments, baseUrl: process.env.DESIGN_SYNC_BASE_URL || config.experiments?.baseUrl },
     // Meta 플러그인은 appID 가 비면 설정 로드부터 실패하므로 값 없는 로컬에서는 제외
     plugins: config.plugins
       ?.filter((p) => appID || !(Array.isArray(p) && p[0] === META))

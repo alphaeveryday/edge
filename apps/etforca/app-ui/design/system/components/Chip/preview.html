@@ -1,0 +1,26 @@
+<!-- @dsCard group="Actions" height=130 -->
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font-sans); padding: var(--space-xl) var(--page-x); -webkit-font-smoothing: antialiased; }
+  .note { margin: var(--space-md) 0 0; font-size: 12.5px; color: var(--textMuted); }
+  .stack { display: flex; flex-direction: column; gap: var(--space-md); max-width: 390px; }
+  .rowx { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); }
+  svg.ic { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  .chip { display: inline-flex; align-items: center; gap: 4px; padding: 8px 13px; border: 1px solid transparent; border-radius: var(--radius-control); font-size: 14px; font-weight: 600; color: var(--textMuted); background: transparent; }
+  .chip.on { background: var(--surface); color: var(--text); font-weight: 800; }
+  .chip.add { border-style: dashed; border-color: var(--lineStrong); color: var(--textSub); }
+</style>
+</head>
+<body>
+<div class="rowx">
+  <span class="chip on">투자 온도</span><span class="chip">오늘 등락</span><span class="chip">종목</span><span class="chip">테마</span>
+  <span class="chip add"><svg class="ic" width="15" height="15" viewBox="0 0 24 24"><path d="M5 12h14"/><path d="M12 5v14"/></svg>추가</span>
+</div>
+<p class="note">정적 재현 · src/components/ui/Chip.tsx 의 수치를 옮김</p>
+</body>
+</html>

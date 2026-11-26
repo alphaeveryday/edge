@@ -1,0 +1,50 @@
+<!-- @dsCard height=288 -->
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; }
+  body { background: var(--bg); }
+  .cover { position: relative; width: 960px; height: 288px; overflow: hidden; background: var(--bg); font-family: var(--font-sans); }
+  .cover svg { position: absolute; inset: 0; display: block; }
+  .blk { rx: var(--radius-card); }
+  .b-up { fill: var(--up); }
+  .b-down { fill: var(--down); }
+  .b-ink { fill: var(--text); }
+  .b-primary { fill: var(--primary); }
+  .dot { fill: var(--lineStrong); }
+  .words { position: absolute; left: 40px; bottom: 36px; width: 440px; }
+  .name { margin: 0; font-size: 88px; line-height: 0.92; font-weight: 800; letter-spacing: -0.03em; color: var(--text); white-space: nowrap; }
+  .tag { margin: 16px 0 0; font-size: 14px; line-height: 1.4; color: var(--textMuted); }
+</style>
+</head>
+<body>
+<div class="cover">
+  <!--
+    blocks: up 80 wide, down 96 wide, text 112 wide, primary 144 wide; each rises one step higher than the last
+    arrangement: four bars of growing width and height standing on the bottom edge, the primary bar bleeding off the right
+    pattern: dot grid at one spacing step, because the system counts in a small fixed scale and sets numbers in mono
+    scales: gaps space-lg (16), dot pitch space-xxl (28), dot radius half of space-xs (2), corners radius-card (16)
+  -->
+  <svg viewBox="0 0 960 288" width="960" height="288" aria-hidden="true">
+    <g class="dots">
+      <circle class="dot" cx="510" cy="36" r="2"/><circle class="dot" cx="538" cy="36" r="2"/><circle class="dot" cx="566" cy="36" r="2"/><circle class="dot" cx="594" cy="36" r="2"/><circle class="dot" cx="622" cy="36" r="2"/><circle class="dot" cx="650" cy="36" r="2"/><circle class="dot" cx="678" cy="36" r="2"/><circle class="dot" cx="706" cy="36" r="2"/><circle class="dot" cx="734" cy="36" r="2"/><circle class="dot" cx="762" cy="36" r="2"/><circle class="dot" cx="790" cy="36" r="2"/><circle class="dot" cx="818" cy="36" r="2"/>
+      <circle class="dot" cx="510" cy="64" r="2"/><circle class="dot" cx="538" cy="64" r="2"/><circle class="dot" cx="566" cy="64" r="2"/><circle class="dot" cx="594" cy="64" r="2"/><circle class="dot" cx="622" cy="64" r="2"/><circle class="dot" cx="650" cy="64" r="2"/><circle class="dot" cx="678" cy="64" r="2"/><circle class="dot" cx="706" cy="64" r="2"/><circle class="dot" cx="734" cy="64" r="2"/><circle class="dot" cx="762" cy="64" r="2"/><circle class="dot" cx="790" cy="64" r="2"/><circle class="dot" cx="818" cy="64" r="2"/>
+      <circle class="dot" cx="510" cy="92" r="2"/><circle class="dot" cx="538" cy="92" r="2"/><circle class="dot" cx="566" cy="92" r="2"/><circle class="dot" cx="594" cy="92" r="2"/><circle class="dot" cx="622" cy="92" r="2"/><circle class="dot" cx="650" cy="92" r="2"/><circle class="dot" cx="678" cy="92" r="2"/>
+      <circle class="dot" cx="510" cy="120" r="2"/><circle class="dot" cx="538" cy="120" r="2"/><circle class="dot" cx="566" cy="120" r="2"/><circle class="dot" cx="594" cy="120" r="2"/><circle class="dot" cx="622" cy="120" r="2"/><circle class="dot" cx="650" cy="120" r="2"/><circle class="dot" cx="678" cy="120" r="2"/>
+      <circle class="dot" cx="510" cy="148" r="2"/><circle class="dot" cx="538" cy="148" r="2"/><circle class="dot" cx="566" cy="148" r="2"/>
+      <circle class="dot" cx="510" cy="176" r="2"/><circle class="dot" cx="538" cy="176" r="2"/><circle class="dot" cx="566" cy="176" r="2"/>
+    </g>
+    <rect class="blk b-up" x="496" y="200" width="80" height="120" rx="16"/>
+    <rect class="blk b-down" x="592" y="152" width="96" height="168" rx="16"/>
+    <rect class="blk b-ink" x="704" y="96" width="112" height="224" rx="16"/>
+    <rect class="blk b-primary" x="832" y="32" width="160" height="288" rx="16"/>
+  </svg>
+  <div class="words">
+    <p class="name">ETF Orca</p>
+    <p class="tag">ETF의 가격이 왜 움직였는지와 오늘의 전망을 읽는 앱</p>
+  </div>
+</div>
+</body>
+</html>

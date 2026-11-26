@@ -1,0 +1,511 @@
+<!-- @dsCard group="Screens" height=874 width=402 subtitle="게시물 · /post/[id]" page -->
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>@font-face{font-family:"Pretendard-Regular";src:url("../../fonts/Pretendard-Regular.woff2") format("woff2");}@font-face{font-family:"Pretendard-Medium";src:url("../../fonts/Pretendard-Medium.woff2") format("woff2");}@font-face{font-family:"Pretendard-SemiBold";src:url("../../fonts/Pretendard-SemiBold.woff2") format("woff2");}@font-face{font-family:"Pretendard-Bold";src:url("../../fonts/Pretendard-Bold.woff2") format("woff2");}@font-face{font-family:"Pretendard-ExtraBold";src:url("../../fonts/Pretendard-ExtraBold.woff2") format("woff2");}@font-face{font-family:"JetBrainsMono_400Regular";src:url("../../fonts/JetBrainsMono-Regular.ttf") format("truetype");}@font-face{font-family:"JetBrainsMono_500Medium";src:url("../../fonts/JetBrainsMono-Medium.ttf") format("truetype");}@font-face{font-family:"JetBrainsMono_700Bold";src:url("../../fonts/JetBrainsMono-Bold.ttf") format("truetype");}@font-face{font-family:"JetBrainsMono_800ExtraBold";src:url("../../fonts/JetBrainsMono-ExtraBold.ttf") format("truetype");}html,body{margin:0;width:402px;height:874px;overflow:hidden;background:#ffffff;}</style>
+<style>
+html { text-size-adjust: 100%; -webkit-tap-highlight-color: rgba(0, 0, 0, 0); }
+body { margin: 0px; }
+input::-webkit-search-cancel-button, input::-webkit-search-decoration, input::-webkit-search-results-button, input::-webkit-search-results-decoration { display: none; }
+.css-g5y9jx { align-content: flex-start; align-items: stretch; background-color: rgba(0, 0, 0, 0); border: 0px solid black; box-sizing: border-box; display: flex; flex-basis: auto; flex-direction: column; flex-shrink: 0; list-style: none; margin: 0px; min-height: 0px; min-width: 0px; padding: 0px; position: relative; text-decoration: none; z-index: 0; }
+.css-146c3p1 { background-color: rgba(0, 0, 0, 0); border: 0px solid black; box-sizing: border-box; color: rgb(0, 0, 0); display: inline; font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; list-style: none; margin: 0px; padding: 0px; position: relative; text-align: start; text-decoration: none; white-space: pre-wrap; overflow-wrap: break-word; }
+.css-11aywtz { appearance: none; background-color: rgba(0, 0, 0, 0); border-radius: 0px; border: 0px solid black; box-sizing: border-box; font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 0px; padding: 0px; resize: none; }
+.r-13awgt0 { flex: 1 1 0%; }
+.r-1udh08x { overflow: hidden; }
+.r-1xfd6ze { border-radius: 8px; }
+.r-cpet4d { border-radius: 999px; }
+.r-pqzm30 { border-color: rgb(213, 218, 224); }
+.r-n7gxbd { padding-left: 4px; padding-right: 4px; }
+.r-is05cd { padding-left: 8px; padding-right: 8px; }
+.r-11f147o { padding-bottom: 8px; padding-top: 8px; }
+.r-u9wvl5 { padding-left: 20px; padding-right: 20px; }
+.r-vuvdlw { padding-bottom: 6px; padding-top: 6px; }
+.r-1ubuhtd { padding-left: 10px; padding-right: 10px; }
+.r-3pj75a { padding-left: 16px; padding-right: 16px; }
+.r-18c5d7m { padding-left: 6px; padding-right: 6px; }
+.r-1p0dtai { bottom: 0px; }
+.r-1d2f490 { left: 0px; }
+.r-u8s1d { position: absolute; }
+.r-zchlnj { right: 0px; }
+.r-ipm5af { top: 0px; }
+.r-12vffkv > * { pointer-events: auto; }
+.r-12vffkv { pointer-events: none !important; }
+.r-633pao { pointer-events: none !important; }
+.r-11yh6sk { overflow-x: hidden; }
+.r-2eszeu::-webkit-scrollbar { display: none; }
+.r-2eszeu { scrollbar-width: none; }
+.r-150rngu { }
+.r-eqz5dr { flex-direction: column; }
+.r-16y2uox { flex-grow: 1; }
+.r-1wbh5a2 { flex-shrink: 1; }
+.r-1rnoaur { overflow-y: auto; }
+.r-agouwx { transform: translateZ(0px); }
+.r-18u37iz { flex-direction: row; }
+.r-1777fci { justify-content: center; }
+.r-dnmrzs { max-width: 100%; }
+.r-1udbk01 { text-overflow: ellipsis; }
+.r-3s2u2q { white-space: nowrap; }
+.r-1iln25a { overflow-wrap: normal; }
+.r-1loqt21 { cursor: pointer; }
+.r-1awozwy { align-items: center; }
+@-webkit-keyframes r-11cv4x { 
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+@keyframes r-11cv4x { 
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.r-1otgn73 { touch-action: manipulation; }
+.r-jwli3a { color: rgb(255, 255, 255); }
+.r-q4m81j { text-align: center; }
+.r-14lw9ot { background-color: rgb(255, 255, 255); }
+@-webkit-keyframes r-imtty0 { 
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@keyframes r-imtty0 { 
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+@-webkit-keyframes r-t2lo5v { 
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes r-t2lo5v { 
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@-webkit-keyframes r-1pzkwqh { 
+  0% { transform: translateY(100%); }
+  100% { transform: translateY(0%); }
+}
+@keyframes r-1pzkwqh { 
+  0% { transform: translateY(100%); }
+  100% { transform: translateY(0%); }
+}
+@-webkit-keyframes r-1iq689l { 
+  0% { transform: translateY(0%); }
+  100% { transform: translateY(100%); }
+}
+@keyframes r-1iq689l { 
+  0% { transform: translateY(0%); }
+  100% { transform: translateY(100%); }
+}
+@-webkit-keyframes r-q67da2 { 
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+@keyframes r-q67da2 { 
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(400%); }
+}
+.r-k200y { align-self: flex-start; }
+.r-6taxm2::-webkit-input-placeholder { color: var(--placeholderTextColor); opacity: 1; }
+.r-6taxm2::placeholder { color: var(--placeholderTextColor); opacity: 1; }
+.r-1b43r93 { font-size: 14px; }
+.r-qklmqi { border-bottom-width: 1px; }
+.r-1i10wst { font-size: 18px; }
+.r-135wba7 { line-height: 24px; }
+.r-n6v787 { font-size: 13px; }
+.r-ubezar { font-size: 16px; }
+.r-1i71y14 { gap: 14px; }
+.r-1wtj0ep { justify-content: space-between; }
+.r-19uekr1 { border-bottom-color: rgb(242, 244, 246); }
+.r-i03k3n { padding-bottom: 14px; }
+.r-95jzfe { padding-top: 16px; }
+.r-uaa2di { gap: 10px; }
+.r-1h6myly { color: rgb(25, 31, 40); }
+.r-1wjlohb { font-family: Pretendard-ExtraBold; }
+.r-a023e6 { font-size: 15px; }
+.r-12sm5po { letter-spacing: -0.3px; }
+.r-ofl2eb { color: rgb(139, 149, 161); }
+.r-jah4h5 { font-family: Pretendard-Regular; }
+.r-1h1c4di { line-height: 29px; }
+.r-l71dzp { margin-top: 14px; }
+.r-13xcry5 { background-color: rgb(242, 244, 246); }
+.r-ojf8lh { gap: 6px; }
+.r-1o1qsob { color: rgb(78, 89, 104); }
+.r-1fekieh { font-family: Pretendard-Bold; }
+.r-zr46ds { border-top-color: rgb(242, 244, 246); }
+.r-5kkj8d { border-top-width: 1px; }
+.r-1s2bzr4 { margin-top: 12px; }
+.r-ttdzmv { padding-top: 12px; }
+.r-1s367qj { gap: 11px; }
+.r-kzbkwu { padding-bottom: 12px; }
+.r-5t7p9m { padding-top: 14px; }
+.r-580adz { gap: 5px; }
+.r-ebhyxa { max-width: 110px; }
+.r-m611by { padding-top: 10px; }
+.r-1ugchlj { height: 44px; }
+.r-1xbt88q { left: 88px; }
+.r-qpbv1e { right: 88px; }
+.r-obd0qt { align-items: flex-end; }
+.r-1524zjh { min-width: 38px; }
+.r-vbi3md { font-size: 13.5px; }
+.r-ceyshp { font-family: Pretendard-SemiBold; }
+html, body { height: 100%; }
+body { overflow: hidden; }
+#root { display: flex; height: 100%; flex: 1 1 0%; }
+:root { --expo-router-tabs-font-family: --apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+@keyframes RollOutRight { 
+  0% { transform: translateX(0vw) rotate(0deg); }
+  100% { transform: translateX(100vw) rotate(180deg); }
+}
+@keyframes RollOutLeft { 
+  0% { transform: translateX(0vw) rotate(0deg); }
+  100% { transform: translateX(-100vw) rotate(-180deg); }
+}
+@keyframes RollInRight { 
+  0% { transform: translateX(100vw) rotate(180deg); }
+  100% { transform: translateX(0vw) rotate(0deg); }
+}
+@keyframes RollInLeft { 
+  0% { transform: translateX(-100vw) rotate(-180deg); }
+  100% { transform: translateX(0vw) rotate(0deg); }
+}
+@keyframes RotateOutUpRight { 
+  0% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+  100% { transform: translateX(40%) translateY(-250%) rotate(90deg); opacity: 0; }
+}
+@keyframes RotateOutUpLeft { 
+  0% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+  100% { transform: translateX(-40%) translateY(-250%) rotate(-90deg); opacity: 0; }
+}
+@keyframes RotateOutDownRight { 
+  0% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+  100% { transform: translateX(40%) translateY(250%) rotate(-90deg); opacity: 0; }
+}
+@keyframes RotateOutDownLeft { 
+  0% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+  100% { transform: translateX(-40%) translateY(250%) rotate(90deg); opacity: 0; }
+}
+@keyframes RotateInUpRight { 
+  0% { transform: translateX(40%) translateY(250%) rotate(-90deg); opacity: 0; }
+  100% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+}
+@keyframes RotateInUpLeft { 
+  0% { transform: translateX(-40%) translateY(250%) rotate(90deg); opacity: 0; }
+  100% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+}
+@keyframes RotateInDownRight { 
+  0% { transform: translateX(40%) translateY(-250%) rotate(90deg); opacity: 0; }
+  100% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+}
+@keyframes RotateInDownLeft { 
+  0% { transform: translateX(-50%) translateY(-250%) rotate(-90deg); opacity: 0; }
+  100% { transform: translateX(0%) translateY(0%) rotate(0deg); opacity: 1; }
+}
+@keyframes PinwheelOut { 
+  0% { transform: rotate(0rad) scale(1); opacity: 1; }
+  100% { transform: rotate(5rad) scale(0); opacity: 0; }
+}
+@keyframes PinwheelIn { 
+  0% { transform: rotate(5rad) scale(0); opacity: 0; }
+  100% { transform: rotate(0deg) scale(1); opacity: 1; }
+}
+@keyframes LightSpeedOutLeft { 
+  0% { transform: translateX(0vw) skew(0deg); opacity: 1; }
+  100% { transform: translateX(-100vw) skew(45deg); opacity: 0; }
+}
+@keyframes LightSpeedOutRight { 
+  0% { transform: translateX(0vw) skewX(0deg); opacity: 1; }
+  100% { transform: translateX(100vw) skewX(-45deg); opacity: 0; }
+}
+@keyframes LightSpeedInLeft { 
+  0% { transform: translateX(-100vw) skewX(45deg); opacity: 0; }
+  70% { transform: skewX(-10deg); }
+  85% { transform: skewX(5deg); }
+  100% { transform: skewX(0deg); }
+}
+@keyframes LightSpeedInRight { 
+  0% { transform: translateX(100vw) skewX(-45deg); opacity: 0; }
+  70% { transform: skewX(10deg); }
+  85% { transform: skewX(-5deg); }
+  100% { transform: skewX(0deg); }
+}
+@keyframes SlideOutDown { 
+  0% { transform: translateY(0%); }
+  100% { transform: translateY(100vh); }
+}
+@keyframes SlideOutUp { 
+  0% { transform: translateY(0%); }
+  100% { transform: translateY(-100vh); }
+}
+@keyframes SlideOutLeft { 
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(-100vw); }
+}
+@keyframes SlideOutRight { 
+  0% { transform: translateX(0%); }
+  100% { transform: translateX(100vw); }
+}
+@keyframes SlideInDown { 
+  0% { transform: translateY(100vh); }
+  100% { transform: translateY(0%); }
+}
+@keyframes SlideInUp { 
+  0% { transform: translateY(-100vh); }
+  100% { transform: translateY(0%); }
+}
+@keyframes SlideInLeft { 
+  0% { transform: translateX(-100vw); }
+  100% { transform: translateX(0%); }
+}
+@keyframes SlideInRight { 
+  0% { transform: translateX(100vw); }
+  100% { transform: translateX(0%); }
+}
+@keyframes ZoomOutEasyDown { 
+  0% { transform: translateY(0%) scale(1); }
+  100% { transform: translateY(100%) scale(0); }
+}
+@keyframes ZoomOutEasyUp { 
+  0% { transform: translateY(0%) scale(1); }
+  100% { transform: translateY(-100%) scale(0); }
+}
+@keyframes ZoomOutDown { 
+  0% { transform: translateX(0vh) scale(1); }
+  100% { transform: translateY(100vh) scale(0); }
+}
+@keyframes ZoomOutUp { 
+  0% { transform: translateX(0vh) scale(1); }
+  100% { transform: translateY(-100vh) scale(0); }
+}
+@keyframes ZoomOutLeft { 
+  0% { transform: translateX(0vw) scale(1); }
+  100% { transform: translateX(-100vw) scale(0); }
+}
+@keyframes ZoomOutRight { 
+  0% { transform: translateX(0vw) scale(1); }
+  100% { transform: translateX(100vw) scale(0); }
+}
+@keyframes ZoomOutRotate { 
+  0% { transform: scale(1) rotate(0rad); }
+  100% { transform: scale(0) rotate(0.3rad); }
+}
+@keyframes ZoomOut { 
+  0% { transform: scale(1); }
+  100% { transform: scale(0); }
+}
+@keyframes ZoomInEasyDown { 
+  0% { transform: translateY(100%) scale(0); }
+  100% { transform: translateY(0%) scale(1); }
+}
+@keyframes ZoomInEasyUp { 
+  0% { transform: translateY(-100%) scale(0); }
+  100% { transform: translateY(0%) scale(1); }
+}
+@keyframes ZoomInDown { 
+  0% { transform: translateY(100vh) scale(0); }
+  100% { transform: translateY(0%) scale(1); }
+}
+@keyframes ZoomInUp { 
+  0% { transform: translateY(-100vh) scale(0); }
+  100% { transform: translateY(0%) scale(1); }
+}
+@keyframes ZoomInLeft { 
+  0% { transform: translateX(-100vw) scale(0); }
+  100% { transform: translateX(0%) scale(1); }
+}
+@keyframes ZoomInRight { 
+  0% { transform: translateX(100vw) scale(0); }
+  100% { transform: translateX(0%) scale(1); }
+}
+@keyframes ZoomInRotate { 
+  0% { transform: scale(0) rotate(0.3rad); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+@keyframes ZoomIn { 
+  0% { transform: scale(0); }
+  100% { transform: scale(1); }
+}
+@keyframes StretchOutY { 
+  0% { transform: scaleY(1); }
+  100% { transform: scaleY(0); }
+}
+@keyframes StretchOutX { 
+  0% { transform: scaleX(1); }
+  100% { transform: scaleX(0); }
+}
+@keyframes StretchInY { 
+  0% { transform: scaleY(0); }
+  100% { transform: scaleY(1); }
+}
+@keyframes StretchInX { 
+  0% { transform: scaleX(0); }
+  100% { transform: scaleX(1); }
+}
+@keyframes FlipOutEasyY { 
+  0% { transform: perspective(500px) rotateY(0deg); }
+  100% { transform: perspective(500px) rotateY(90deg); }
+}
+@keyframes FlipOutEasyX { 
+  0% { transform: perspective(500px) rotateX(0deg); }
+  100% { transform: perspective(500px) rotateX(90deg); }
+}
+@keyframes FlipOutXDown { 
+  0% { transform: perspective(500px) rotateX(0deg) translateY(0%); }
+  100% { transform: perspective(500px) rotateX(-90deg) translateY(100%); }
+}
+@keyframes FlipOutXUp { 
+  0% { transform: perspective(500px) rotateX(0deg) translateY(0%); }
+  100% { transform: perspective(500px) rotateX(90deg) translateY(-100%); }
+}
+@keyframes FlipOutYLeft { 
+  0% { transform: perspective(500px) rotateY(0deg) translateX(0%); }
+  100% { transform: perspective(500px) rotateY(-90deg) translateX(-100%); }
+}
+@keyframes FlipOutYRight { 
+  0% { transform: perspective(500px) rotateY(0deg) translateX(0%); }
+  100% { transform: perspective(500px) rotateY(90deg) translateX(100%); }
+}
+@keyframes FlipInEasyY { 
+  0% { transform: perspective(500px) rotateY(90deg); }
+  100% { transform: perspective(500px) rotateY(0deg); }
+}
+@keyframes FlipInEasyX { 
+  0% { transform: perspective(500px) rotateX(90deg); }
+  100% { transform: perspective(500px) rotateX(0deg); }
+}
+@keyframes FlipInXDown { 
+  0% { transform: perspective(500px) rotateX(-90deg) translateY(100%); }
+  100% { transform: perspective(500px) rotateX(0deg) translateY(0%); }
+}
+@keyframes FlipInXUp { 
+  0% { transform: perspective(500px) rotateX(90deg) translateY(-100%); }
+  100% { transform: perspective(500px) rotateX(0deg) translateY(0%); }
+}
+@keyframes FlipInYLeft { 
+  0% { transform: perspective(500px) rotateY(-90deg) translateX(-100%); }
+  100% { transform: perspective(500px) rotateY(0deg) translateX(0%); }
+}
+@keyframes FlipInYRight { 
+  0% { transform: perspective(500px) rotateY(90deg) translateX(100%); }
+  100% { transform: perspective(500px) rotateY(0deg) translateX(0%); }
+}
+@keyframes BounceOutDown { 
+  0% { transform: translateY(0px); }
+  15% { transform: translateY(-10px); }
+  30% { transform: translateY(10px); }
+  45% { transform: translateY(-20px); }
+  100% { transform: translateY(100vh); }
+}
+@keyframes BounceOutUp { 
+  0% { transform: translateY(0px); }
+  15% { transform: translateY(10px); }
+  30% { transform: translateY(-10px); }
+  45% { transform: translateY(20px); }
+  100% { transform: translateY(-100vh); }
+}
+@keyframes BounceOutLeft { 
+  0% { transform: translateX(0px); }
+  15% { transform: translateX(10px); }
+  30% { transform: translateX(-10px); }
+  45% { transform: translateX(20px); }
+  100% { transform: translateX(-100vh); }
+}
+@keyframes BounceOutRight { 
+  0% { transform: translateX(0px); }
+  15% { transform: translateX(-10px); }
+  30% { transform: translateX(10px); }
+  45% { transform: translateX(-20px); }
+  100% { transform: translateX(100vh); }
+}
+@keyframes BounceOut { 
+  0% { transform: scale(1); }
+  15% { transform: scale(1.1); }
+  30% { transform: scale(0.9); }
+  45% { transform: scale(1.2); }
+  100% { transform: scale(0.1); }
+}
+@keyframes BounceInDown { 
+  0% { transform: translateY(100vh); }
+  55% { transform: translateY(-20px); }
+  70% { transform: translateY(10px); }
+  85% { transform: translateY(-10px); }
+  100% { transform: translateY(0px); }
+}
+@keyframes BounceInUp { 
+  0% { transform: translateY(-100vh); }
+  55% { transform: translateY(20px); }
+  70% { transform: translateY(-10px); }
+  85% { transform: translateY(10px); }
+  100% { transform: translateY(0px); }
+}
+@keyframes BounceInLeft { 
+  0% { transform: translateX(-100vw); }
+  55% { transform: translateX(20px); }
+  70% { transform: translateX(-10px); }
+  85% { transform: translateX(10px); }
+  100% { transform: translateX(0px); }
+}
+@keyframes BounceInRight { 
+  0% { transform: translateX(100vw); }
+  55% { transform: translateX(-20px); }
+  70% { transform: translateX(10px); }
+  85% { transform: translateX(-10px); }
+  100% { transform: translateX(0px); }
+}
+@keyframes BounceIn { 
+  0% { transform: scale(0); }
+  55% { transform: scale(1.2); }
+  70% { transform: scale(0.9); }
+  85% { transform: scale(1.1); }
+  100% { transform: scale(1); }
+}
+@keyframes FadeOutDown { 
+  0% { opacity: 1; transform: translateY(0px); }
+  100% { opacity: 0; transform: translateY(25px); }
+}
+@keyframes FadeOutUp { 
+  0% { opacity: 1; transform: translateY(0px); }
+  100% { opacity: 0; transform: translateY(-25px); }
+}
+@keyframes FadeOutLeft { 
+  0% { opacity: 1; transform: translateX(0px); }
+  100% { opacity: 0; transform: translateX(-25px); }
+}
+@keyframes FadeOutRight { 
+  0% { opacity: 1; transform: translateX(0px); }
+  100% { opacity: 0; transform: translateX(25px); }
+}
+@keyframes FadeOut { 
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes FadeInDown { 
+  0% { opacity: 0; transform: translateY(25px); }
+  100% { opacity: 1; transform: translateY(0px); }
+}
+@keyframes FadeInUp { 
+  0% { opacity: 0; transform: translateY(-25px); }
+  100% { opacity: 1; transform: translateY(0px); }
+}
+@keyframes FadeInLeft { 
+  0% { opacity: 0; transform: translateX(-25px); }
+  100% { opacity: 1; transform: translateX(0px); }
+}
+@keyframes FadeInRight { 
+  0% { opacity: 0; transform: translateX(25px); }
+  100% { opacity: 1; transform: translateX(0px); }
+}
+@keyframes FadeIn { 
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+</style>
+</head>
+<body>
+
+    <!-- Use static rendering with Expo Router to support running without JavaScript. -->
+    
+    <!-- The root element for your Expo app. -->
+    <div id="root"><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx" style="flex: 1 1 0%;"><div style="position: absolute; inset: 0px; pointer-events: none; visibility: hidden;"></div><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx r-13awgt0 r-1p0dtai r-1d2f490 r-u8s1d r-zchlnj r-ipm5af" style="background-color: rgb(255, 255, 255); display: flex;"><div class="css-g5y9jx r-13awgt0"><div class="css-g5y9jx r-13awgt0" style="background-color: rgb(255, 255, 255);"><div class="css-g5y9jx r-14lw9ot r-13awgt0" style="padding-top: 8px;"><div class="css-g5y9jx r-19uekr1 r-qklmqi"><div class="css-g5y9jx r-1awozwy r-18u37iz r-1ugchlj r-1wtj0ep r-is05cd"><button aria-label="back" role="button" tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-pqzm30 r-cpet4d r-1777fci" type="button" style="width: 38px; height: 38px; background-color: rgba(0, 0, 0, 0); border-width: 0px;"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#191F28" stroke-width="1.9636363636363638" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"></path></svg></button><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1wjlohb r-ubezar r-1xbt88q r-12sm5po r-633pao r-u8s1d r-qpbv1e r-q4m81j">게시물</div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-obd0qt r-1524zjh r-11f147o r-18c5d7m"><div dir="auto" class="css-146c3p1 r-1fekieh r-vbi3md" style="color: rgb(78, 89, 104);">신고</div></div></div></div><div class="css-g5y9jx r-150rngu r-eqz5dr r-16y2uox r-1wbh5a2 r-11yh6sk r-1rnoaur r-agouwx"><div class="css-g5y9jx r-150rngu r-eqz5dr r-16y2uox r-1wbh5a2 r-11yh6sk r-1rnoaur r-agouwx r-2eszeu"><div class="css-g5y9jx" style="padding-bottom: 20px;"><div class="css-g5y9jx r-19uekr1 r-qklmqi r-i03k3n r-u9wvl5 r-95jzfe"><div class="css-g5y9jx r-1awozwy r-18u37iz r-uaa2di"><div class="css-g5y9jx r-1awozwy r-cpet4d r-1777fci" style="width: 42px; height: 42px; background-color: rgb(224, 86, 43);"><div dir="auto" class="css-146c3p1 r-jwli3a r-1wjlohb" style="font-size: 16px;">적</div></div><div class="css-g5y9jx" style="flex: 1 1 0%; gap: 2px;"><div dir="auto" class="css-146c3p1 r-dnmrzs r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1wjlohb r-a023e6 r-12sm5po">적립식김씨</div><div dir="auto" class="css-146c3p1 r-ofl2eb r-jah4h5 r-n6v787">19분</div></div></div><div dir="auto" class="css-146c3p1 r-1h6myly r-jah4h5 r-1i10wst r-1h1c4di r-l71dzp">중국 CXMT가 구형 D램 증설을 늘리고 있어요. 이건 아직 숫자로 안 나왔어요.</div><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-k200y r-13xcry5 r-1xfd6ze r-18u37iz r-ojf8lh r-l71dzp r-vuvdlw r-1ubuhtd"><div class="css-g5y9jx" style="width: 16px; height: 16px; border-radius: 999px; background-color: rgb(61, 52, 224); align-items: center; justify-content: center;"><svg width="8" height="8" viewBox="0 0 24 24"><g><rect x="8.25" y="1.6" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="11.1" y="1.6" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="13.95" y="1.6" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="8.25" y="18.8" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="11.1" y="18.8" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="13.95" y="18.8" width="1.8" height="3.6" rx="0.9" fill="#FFFFFF"></rect><rect x="1.6" y="8.25" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="1.6" y="11.1" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="1.6" y="13.95" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="18.8" y="8.25" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="18.8" y="11.1" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="18.8" y="13.95" width="3.6" height="1.8" rx="0.9" fill="#FFFFFF"></rect><rect x="4.6" y="4.6" width="14.8" height="14.8" rx="3.6" fill="#FFFFFF"></rect><rect x="8.9" y="8.9" width="6.2" height="6.2" rx="1.7" fill="#3D34E0"></rect></g></svg></div><div dir="auto" class="css-146c3p1 r-1o1qsob r-1fekieh r-n6v787">반도체TOP10</div></div><div dir="auto" class="css-146c3p1 r-ofl2eb r-jah4h5 r-n6v787 r-l71dzp">조회 7,300</div><div class="css-g5y9jx r-zr46ds r-5kkj8d r-1s2bzr4 r-ttdzmv"><div class="css-g5y9jx r-1awozwy r-18u37iz r-1i71y14"><button aria-label="좋아요" role="button" tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-18u37iz r-580adz" type="button"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8B95A1" stroke-width="2.16" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"></path></svg><div dir="auto" class="css-146c3p1 r-ceyshp" style="font-size: 15px; color: rgb(139, 149, 161);">93</div></button><div tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73 r-1awozwy r-18u37iz r-580adz"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#8B95A1" stroke-width="2.16" stroke-linecap="round" stroke-linejoin="round"><path d="M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092 10 10 0 1 0-4.777-4.719"></path></svg><div dir="auto" class="css-146c3p1 r-ceyshp" style="font-size: 15px; color: rgb(139, 149, 161);">9</div></div></div></div></div><div class="css-g5y9jx r-19uekr1 r-qklmqi r-18u37iz r-1s367qj r-kzbkwu r-u9wvl5 r-5t7p9m"><div class="css-g5y9jx r-1awozwy r-cpet4d r-1777fci" style="width: 36px; height: 36px; background-color: rgb(14, 138, 108);"><div dir="auto" class="css-146c3p1 r-jwli3a r-1wjlohb" style="font-size: 14px;">분</div></div><div class="css-g5y9jx" style="flex: 1 1 0%; gap: 5px;"><div class="css-g5y9jx r-1awozwy r-18u37iz r-580adz"><div dir="auto" class="css-146c3p1 r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1wjlohb r-1b43r93 r-ebhyxa">분할매수중</div><div dir="auto" class="css-146c3p1 r-ofl2eb r-jah4h5 r-n6v787">32분</div><div class="css-g5y9jx" style="flex: 1 1 0%;"></div><div aria-label="댓글 신고" tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73"><div dir="auto" class="css-146c3p1 r-ofl2eb r-1fekieh r-ubezar r-n7gxbd">⋯</div></div></div><div dir="auto" class="css-146c3p1 r-1h6myly r-jah4h5 r-a023e6 r-135wba7">반도체TOP10 저도 같은 생각이에요. 다만 강력 상승 판단이 유지되는지 한 주 더 보려고요.</div></div></div><div class="css-g5y9jx r-19uekr1 r-qklmqi r-18u37iz r-1s367qj r-kzbkwu r-u9wvl5 r-5t7p9m"><div class="css-g5y9jx r-1awozwy r-cpet4d r-1777fci" style="width: 36px; height: 36px; background-color: rgb(139, 52, 224);"><div dir="auto" class="css-146c3p1 r-jwli3a r-1wjlohb" style="font-size: 14px;">장</div></div><div class="css-g5y9jx" style="flex: 1 1 0%; gap: 5px;"><div class="css-g5y9jx r-1awozwy r-18u37iz r-580adz"><div dir="auto" class="css-146c3p1 r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1wjlohb r-1b43r93 r-ebhyxa">장투합니다</div><div dir="auto" class="css-146c3p1 r-ofl2eb r-jah4h5 r-n6v787">1시간</div><div class="css-g5y9jx" style="flex: 1 1 0%;"></div><div aria-label="댓글 신고" tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73"><div dir="auto" class="css-146c3p1 r-ofl2eb r-1fekieh r-ubezar r-n7gxbd">⋯</div></div></div><div dir="auto" class="css-146c3p1 r-1h6myly r-jah4h5 r-a023e6 r-135wba7">저는 숫자가 나온 다음에 들어가요. 지금은 기대만 앞서 있어요.</div></div></div><div class="css-g5y9jx r-19uekr1 r-qklmqi r-18u37iz r-1s367qj r-kzbkwu r-u9wvl5 r-5t7p9m"><div class="css-g5y9jx r-1awozwy r-cpet4d r-1777fci" style="width: 36px; height: 36px; background-color: rgb(232, 161, 61);"><div dir="auto" class="css-146c3p1 r-jwli3a r-1wjlohb" style="font-size: 14px;">초</div></div><div class="css-g5y9jx" style="flex: 1 1 0%; gap: 5px;"><div class="css-g5y9jx r-1awozwy r-18u37iz r-580adz"><div dir="auto" class="css-146c3p1 r-1udh08x r-1udbk01 r-3s2u2q r-1iln25a r-1h6myly r-1wjlohb r-1b43r93 r-ebhyxa">초보투자자</div><div dir="auto" class="css-146c3p1 r-ofl2eb r-jah4h5 r-n6v787">2시간</div><div class="css-g5y9jx" style="flex: 1 1 0%;"></div><div aria-label="댓글 신고" tabindex="0" class="css-g5y9jx r-1loqt21 r-1otgn73"><div dir="auto" class="css-146c3p1 r-ofl2eb r-1fekieh r-ubezar r-n7gxbd">⋯</div></div></div><div dir="auto" class="css-146c3p1 r-1h6myly r-jah4h5 r-a023e6 r-135wba7">이거 초보가 봐도 되는 건가요? 설명 감사합니다.</div></div></div></div></div></div><div class="css-g5y9jx r-1awozwy r-14lw9ot r-zr46ds r-5kkj8d r-18u37iz r-uaa2di r-3pj75a r-m611by" style="padding-bottom: 28px;"><input placeholder="댓글 쓰기" autocapitalize="sentences" autocomplete="on" autocorrect="on" dir="auto" rows="1" spellcheck="true" virtualkeyboardpolicy="auto" class="css-11aywtz r-6taxm2 r-13xcry5 r-cpet4d r-1h6myly r-13awgt0 r-jah4h5 r-a023e6 r-1ugchlj r-3pj75a" value="" style="--placeholderTextColor: #8B95A1;"><div aria-disabled="true" tabindex="-1" class="css-g5y9jx r-12vffkv"><div dir="auto" class="css-146c3p1 r-1wjlohb r-a023e6" style="color: rgb(176, 184, 193);">게시</div></div></div></div></div></div></div></div></div></div></div>
+  
+
+
+<div style="position: fixed; left: 0px; top: 0px; width: 0px; height: 0px; z-index: -1; overflow: hidden; visibility: hidden; transition-duration: 0.05s; transition-property: padding; transition-delay: 0s; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); padding-left: env(safe-area-inset-left); padding-right: env(safe-area-inset-right);"></div><div></div><div></div><div></div>
+</body>
+</html>

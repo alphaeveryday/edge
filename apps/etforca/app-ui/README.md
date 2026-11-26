@@ -18,6 +18,7 @@ src/components/ 디자인 프리미티브
 src/store/      zustand (세션 등 로컬 상태)
 src/theme/      토큰 (색·타이포·간격)
 design/         Claude Design 원본 사본 (참고용)
+design/system/  ETF Orca 디자인 시스템 (토큰·쓰임 규칙·화면 사본)
 modules/ads-consent/  네이티브 시작 시 통계 설정 복원과 실행 중 SDK 설정 변경
 ```
 

@@ -25,11 +25,20 @@ $S/run.sh .claude/skills/app-verify/flows/mock/tour.yaml    # → 증거 폴더 
 
 확인이 끝나면 운영 APK 를 다시 설치한다(`launch.sh`). 앱 데이터는 두 빌드가 함께 쓴다.
 
+## 디자인 시스템
+
+`apps/etforca/app-ui/design/system/` 은 Claude Design 의 "ETF Orca 디자인 시스템" 내보내기다(2026-11-25). 앱 코드(`dev@7f43ab1`)의 테마 값을 옮긴 사본이라 값의 원천은 여전히 `src/theme` 다.
+
+- 색·글자·간격·모서리·그림자를 고를 때: `design/system/README.md` 의 역할 규칙(예: 읽는 문장은 `textMuted` 까지, `primary` 채움은 화면당 하나, 방향은 색과 기호를 함께, 그림자는 뜨는 것에만)을 따른다.
+- 공용 컴포넌트 7개(CtaButton·Chip·Sticker·ListRow·TabItem·SearchField·SectionHead)는 `design/system/components/<이름>/README.md` 에 쓰임과 수치가 있다.
+- `components/Screen*/preview.html`(라이트 34 · 다크 34)은 웹 빌드를 떠낸 정지 화면이다. 앱 화면과 다를 수 있으니 판정은 mock 빌드 스크린샷으로 한다. 앱을 고치면 이 화면들은 낡는다.
+- 정본(`design/app-v188-v3.dc.html`)은 디자인 목표, 디자인 시스템은 지금 코드의 규칙이다. 둘이 다르면 멈추고 사람에게 묻는다.
+
 ## 절차
 
 1. **수정 전 기준.** 고치기 전 코드로 mock APK 를 빌드·설치하고 `flows/mock/tour.yaml` 을 돌린다. 고칠 화면이 tour 에 없으면 먼저 tour 에 더한다. 이 증거 폴더가 기준이다. 기준은 손대지 않는다. 기준이 틀려 보이면 멈추고 사람에게 묻는다.
 2. **정본 화면.** `apps/etforca/app-ui/design/app-v188-v3.dc.html` 을 브라우저로 열어(agent-browser) 고칠 화면까지 눌러 가서 스크린샷을 찍는다. 정본은 화면 24개의 프로토타입 하나다. screens.md 가 정본과 앱의 차이(바뀐 화면·사라진 화면)를 적어 두었다 — 정본과 다른 것이 의도된 차이인지 먼저 확인한다.
-3. **고친다.** 디자인 토큰(`src/theme` 등 기존 색·글꼴·간격 정의)을 쓴다. 화면 파일에 새 색 값을 직접 쓰지 않는다.
+3. **고친다.** 디자인 토큰(`src/theme` 등 기존 색·글꼴·간격 정의)을 디자인 시스템 규칙대로 쓴다. 화면 파일에 새 색 값을 직접 쓰지 않는다.
 4. **수정 후.** 같은 흐름을 다시 돌린다.
 5. **비교.**
    ```bash
@@ -38,6 +47,19 @@ $S/run.sh .claude/skills/app-verify/flows/mock/tour.yaml    # → 증거 폴더 
    ```
    `shotdiff` 는 고치려던 화면(`--allow`) 외에 0.1% 넘게 바뀐 화면이 있으면 실패한다. 실패하면 그 화면의 `diff-*.png`(바뀐 곳 빨강)를 보고 원인을 찾는다. 비교를 통과시키려고 기준·임계값·흐름을 바꾸지 않는다.
 6. **PR.** pr-cycle 을 따른다. 본문에 나란히 이미지(정본 vs 앱), 고친 화면의 전/후(`pair-*.png`), `shotdiff` 출력(화면별 바뀐 비율)을 붙인다. 사람은 이 이미지로 판단한다.
+
+## 웹 보기 사이트 (design.etforca.com)
+
+junyoung 은 디자인을 https://design.etforca.com 에서 본다(비밀번호 있음). 앱 코드를 웹으로 빌드한 것(`/app/`)을 휴대폰 크기로 눌러 보고, `/screens/` 에서 화면 27개를 라이트·다크로 한 장에 본다. 디자인 지시("홈 카드 간격 좁혀")를 받아 코드를 고쳤으면 올린다.
+
+```bash
+apps/etforca/app-ui/scripts/design-sync/design-sync.sh          # 빌드 → 촬영 → 업로드 → 캐시 비우기(약 3분)
+apps/etforca/app-ui/scripts/design-sync/design-sync.sh --local  # 만들기만
+```
+
+- 웹 빌드라 휴대폰과 다른 곳이 있다(상태 표시줄 없음, `(tabs)/_layout.web.tsx` 의 탭바, 카카오·애플 로그인·푸시 없음). 최종 판정은 위 mock APK 스크린샷으로 한다.
+- 찍을 화면 목록은 `scripts/design-sync/screens.cjs`. 회원 화면은 mock 계정으로 로그인한 뒤 눌러서 간다(mock 로그인은 새로 고치면 풀린다).
+- 비밀번호는 CloudFront KeyValueStore `edge-dev-app-design` 의 `basic_auth` 키(base64 "아이디:비밀번호")에만 있다. 인프라는 `infra/terraform/envs/dev/main.tf` 의 `module.design_site`.
 
 ## 판단 기준
 

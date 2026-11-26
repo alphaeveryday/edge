@@ -1,0 +1,33 @@
+<!-- @dsCard group="Actions" height=300 -->
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font-sans); padding: var(--space-xl) var(--page-x); -webkit-font-smoothing: antialiased; }
+  .note { margin: var(--space-md) 0 0; font-size: 12.5px; color: var(--textMuted); }
+  .stack { display: flex; flex-direction: column; gap: var(--space-md); max-width: 390px; }
+  .rowx { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); }
+  svg.ic { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  .cta { display: flex; align-items: center; justify-content: center; align-self: stretch; height: 54px; border: 0; border-radius: var(--radius-button); font-family: var(--font-sans); font-size: 15.5px; font-weight: 800; letter-spacing: -0.15px; }
+  .cta.sm { height: 46px; }
+  .cta.primary { background: var(--primary); color: var(--onPrimary); }
+  .cta.dark { background: var(--text); color: var(--bg); }
+  .cta.danger { background: var(--up); color: var(--onPrimary); }
+  .cta.soft { background: var(--surface); color: var(--textSub); }
+  .cta.disabled { background: var(--surface); color: var(--textDisabled); }
+  .pair { display: flex; gap: var(--space-sm); } .pair .cta { flex: 1; }
+</style>
+</head>
+<body>
+<div class="stack">
+  <button class="cta primary">시작하기</button>
+  <button class="cta dark">관심 ETF에 추가</button>
+  <div class="pair"><button class="cta soft sm">취소</button><button class="cta danger sm">삭제</button></div>
+  <button class="cta disabled" disabled>다음</button>
+</div>
+<p class="note">정적 재현 · src/components/ui/CtaButton.tsx 의 수치를 옮김</p>
+</body>
+</html>

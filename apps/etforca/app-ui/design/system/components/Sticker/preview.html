@@ -1,0 +1,35 @@
+<!-- @dsCard group="Signals" height=150 -->
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--text); font-family: var(--font-sans); padding: var(--space-xl) var(--page-x); -webkit-font-smoothing: antialiased; }
+  .note { margin: var(--space-md) 0 0; font-size: 12.5px; color: var(--textMuted); }
+  .stack { display: flex; flex-direction: column; gap: var(--space-md); max-width: 390px; }
+  .rowx { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-sm); }
+  svg.ic { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  .stk { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 4px; height: 28px; min-width: 44px; padding: 0 9px; box-sizing: border-box; border-radius: 9px; border: 1px solid var(--glossLine); overflow: hidden; font-weight: 800; }
+  .stk::before { content: ""; position: absolute; inset: 0; background: linear-gradient(160deg, var(--gloss-from), var(--gloss-to)); pointer-events: none; }
+  .stk > * { position: relative; }
+  .stk .mk { font-size: 13px; line-height: 1; text-align: center; }
+  .stk .mk.dbl { font-size: 9px; line-height: 0.9; }
+  .stk .lb { font-size: 12.5px; }
+  .stk.up { background: var(--signalAlpha-up); } .stk.up .mk { color: var(--up); } .stk.up .lb { color: var(--upDeep); }
+  .stk.neutral { background: var(--signalAlpha-neutral); } .stk.neutral .mk { color: var(--neutral); } .stk.neutral .lb { color: var(--neutralDeep); }
+  .stk.down { background: var(--signalAlpha-down); } .stk.down .mk { color: var(--down); } .stk.down .lb { color: var(--downDeep); }
+</style>
+</head>
+<body>
+<div class="rowx">
+  <span class="stk down"><span class="mk dbl">▼<br>▼</span><span class="lb">강력 하락</span></span>
+  <span class="stk down"><span class="mk">▼</span><span class="lb">하락</span></span>
+  <span class="stk neutral"><span class="mk">■</span><span class="lb">중립</span></span>
+  <span class="stk up"><span class="mk">▲</span><span class="lb">상승</span></span>
+  <span class="stk up"><span class="mk dbl">▲<br>▲</span><span class="lb">강력 상승</span></span>
+</div>
+<p class="note">정적 재현 · src/components/ui/Sticker.tsx · src/theme/tokens.ts 의 수치를 옮김</p>
+</body>
+</html>
