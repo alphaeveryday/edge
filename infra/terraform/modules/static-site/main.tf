@@ -69,6 +69,39 @@ resource "aws_cloudfront_function" "www_redirect" {
   }
 }
 
+# ── 호출자 viewer-request 함수 (viewer_request_code 지정 시) ─
+# 사이트별 규칙(비밀번호 확인 + 경로 리라이트 등)을 호출자가 코드로 넣는다. key_value_store=true 면
+# KeyValueStore 를 붙여 함수가 cf.kvs() 로 비밀값을 읽는다 — 값은 terraform 밖에서 넣어 state 에 남지 않는다.
+resource "aws_cloudfront_key_value_store" "this" {
+  count   = var.key_value_store ? 1 : 0
+  name    = var.name
+  comment = "${var.name} viewer-request 함수가 읽는 값"
+
+  lifecycle {
+    precondition {
+      condition     = var.viewer_request_code != ""
+      error_message = "key_value_store 는 viewer_request_code 함수가 있어야 쓴다."
+    }
+  }
+}
+
+resource "aws_cloudfront_function" "viewer_request" {
+  count   = var.viewer_request_code != "" ? 1 : 0
+  name    = "${var.name}-viewer-request"
+  runtime = "cloudfront-js-2.0"
+  publish = true
+  code    = var.viewer_request_code
+
+  key_value_store_associations = var.key_value_store ? [aws_cloudfront_key_value_store.this[0].arn] : []
+
+  lifecycle {
+    precondition {
+      condition     = !var.spa && !var.redirect_www
+      error_message = "viewer_request_code 는 spa·redirect_www 와 함께 켤 수 없다(viewer-request 함수는 behavior 당 하나)."
+    }
+  }
+}
+
 # ── CloudFront 배포 ─────────────────────────────────────
 resource "aws_cloudfront_distribution" "this" {
   enabled             = var.enabled
@@ -130,6 +163,14 @@ resource "aws_cloudfront_distribution" "this" {
       content {
         event_type   = "viewer-request"
         function_arn = aws_cloudfront_function.www_redirect[0].arn
+      }
+    }
+
+    dynamic "function_association" {
+      for_each = var.viewer_request_code != "" ? [1] : []
+      content {
+        event_type   = "viewer-request"
+        function_arn = aws_cloudfront_function.viewer_request[0].arn
       }
     }
   }

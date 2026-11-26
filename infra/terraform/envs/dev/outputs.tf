@@ -183,3 +183,18 @@ output "b2b_console_ui_distribution_id" {
   description = "→ vars.B2B_CONSOLE_UI_DISTRIBUTION_ID"
   value       = module.b2b_console_site.distribution_id
 }
+
+output "design_site_bucket" {
+  description = "앱 디자인 보기 사이트 버킷 — design-sync.sh 가 올린다"
+  value       = module.design_site.bucket_name
+}
+
+output "design_site_distribution_id" {
+  description = "앱 디자인 보기 사이트 CloudFront 배포 ID — design-sync.sh 가 무효화한다"
+  value       = module.design_site.distribution_id
+}
+
+output "design_site_kvs_arn" {
+  description = "앱 디자인 보기 비밀번호(basic_auth 키)를 넣는 KeyValueStore"
+  value       = module.design_site.key_value_store_arn
+}

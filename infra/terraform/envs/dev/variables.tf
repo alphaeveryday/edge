@@ -90,6 +90,12 @@ variable "b2b_domain" {
   default     = "quarterback.etforca.com"
 }
 
+variable "design_domain" {
+  description = "ETF Orca 앱 디자인 보기 사이트(앱 웹 빌드 + 화면 모음) 도메인. etforca.com 영역의 서브도메인, 비밀번호로 막는다."
+  type        = string
+  default     = "design.etforca.com"
+}
+
 variable "landing_domain" {
   description = "ETF Orca 랜딩페이지 도메인. 영역 이름과 같은 루트 도메인이다(www 는 서빙하지 않는다)."
   type        = string
