@@ -1,0 +1,51 @@
+# VM-3 뉴스 — 매일 00:00~01:30 · 평일 07:50~16:30 (시작·정지는 VM-1 cron 소관).
+# 뉴스 배치(00:10·08:10)는 cron 레인이고 이 파일에 없다. 여기는 장중 상주 서비스만 둔다.
+#
+# SQS·Relay 없이 DB 큐로 돈다: DATA_PIPELINE_MINUTE_QUEUE_TRANSPORT=db (.env).
+#
+# ECS 서비스 → 컨테이너
+#   edge-dev-news-worker              → news-worker    (BigKinds 1분 수집 — 태깅 job 을 만든다)
+#   edge-dev-news-consumer-realtime   → news-consumer  (큐 = destination news-extraction-realtime)
+#   edge-dev-news-consumer-backfill   → news-consumer-backfill (평소 안 뜬다 — 수동 redrive 때만)
+# SQS 때문에만 있던 것 — 여기 없다: relay · dlq-reconcile · SQS 큐
+#
+# 쓰는 법
+#   docker compose up -d
+#   docker compose --profile backfill up -d news-consumer-backfill   # backfill 일감이 있을 때만
+#
+# ⚠️ news_minute 세션은 VM-2 의 session-start 가 계획한다(MINUTE_SESSION_NEWS_SOURCE_GROUP).
+#    그 전에 뜬 news-worker 는 세션이 없어 기동을 거부하고 재시작하다가 세션이 서면 붙는다.
+# ⚠️ news-worker 를 VM-3 에 둔 것은 "VM-2 = 1분 워커 4종" 결정에서 읽은 배치다. VM-2 로
+#    옮기려면 이 블록을 ../vm2/compose.yaml 로 옮기면 된다(설정은 같다).
+# ⚠️ 3g 는 roberta 태거의 ECS 태스크 크기다(2026-11-20 실사용 약 80%). TAGGER_BACKEND 가
+#    llm 이면 512m 로 충분하다.
+
+name: edge-vm3
+
+x-pipeline: &pipeline
+  image: ${DATA_PIPELINE_IMAGE:?}
+  env_file: [.env]
+  restart: unless-stopped
+  stop_grace_period: 120s
+
+services:
+  news-worker:
+    <<: *pipeline
+    mem_limit: 512m
+    command: ["news-worker"]
+
+  news-consumer:
+    <<: *pipeline
+    mem_limit: 3g
+    command: ["news-consumer"]
+    environment:
+      # db 모드에서 queue_url 은 큐 URL 이 아니라 outbox destination 이름이다
+      DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL: news-extraction-realtime
+
+  news-consumer-backfill:
+    <<: *pipeline
+    profiles: [backfill]
+    mem_limit: 3g
+    command: ["news-consumer"]
+    environment:
+      DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL: news-extraction-backfill

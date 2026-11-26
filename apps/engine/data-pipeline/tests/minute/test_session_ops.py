@@ -1329,3 +1329,83 @@ def test_stop_은_승객_배선_결손에도_부분_스케일다운을_안_남�
             FakeSettings(), dataset="price_minute", source_group="kis")
 
     assert wiring.calls == [], "배선 결손은 아무것도 내리기 전에 죽어야 한다"
+
+
+class TestDbQueueMode:
+    """`minute_queue_transport=db`(OCI) — ECS·SQS 가 없다. 서비스는 compose·VM 시작/정지가
+    올리고 내리므로 이 진입점은 **계획과 게이트만** 한다. AWS 호출이 하나라도 남으면
+    계정이 닫힌 뒤 start 는 세션을 세우고도 실패로 끝나고, stop 은 QC 까지 못 간다."""
+
+    @pytest.fixture
+    def db_mode(self, monkeypatch, wiring):
+        # AWS 배선 env 가 **없는** 환경이다 — 남아 있는 값에 기대 통과하면 안 된다
+        for name in (session_ops.ENV_CLUSTER, session_ops.ENV_SERVICES,
+                     session_ops.ENV_ANALYSIS_SERVICES):
+            monkeypatch.delenv(name)
+        monkeypatch.setenv(session_ops.ENV_GATE_QUEUES,
+                           "price-analysis-realtime,news-extraction-realtime")
+        monkeypatch.setattr(session_ops, "_queue_depths", lambda queues: pytest.fail(
+            "db 모드가 SQS 깊이를 조회했다"))
+        monkeypatch.setattr(session_ops.time, "sleep", lambda _: None)
+        settings = FakeSettings()
+        settings.minute_queue_transport = "db"
+        return settings, wiring
+
+    def test_start_only_plans(self, monkeypatch, db_mode):
+        settings, ecs = db_mode
+        monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+        # 선택 레인도 서비스 목록 없이 계획된다 — 목록은 ECS 스케일 전용 배선이다
+        monkeypatch.setenv(session_ops.ENV_NEWS_SOURCE_GROUP, "bigkinds")
+        planned = []
+        monkeypatch.setattr(session_ops, "plan_session_cli",
+                            lambda settings, **k: planned.append(k["dataset"]) or 0)
+
+        rc = session_ops.start_session_cli(
+            settings, dataset="price_minute", source_group="kis", universe="s3://b/u.json")
+
+        assert rc == 0
+        assert planned == ["price_minute", "news_minute"]
+        assert ecs.calls == [], "db 모드는 ECS desired 를 건드리지 않는다"
+
+    def _stop(self, monkeypatch, settings, *, depths, phases=("DRAINED",)):
+        ledger = FakeLedger(list(phases))
+        ledger.request_drain = lambda *, session_id, now: True
+        jobs = FakeJobs(new=7)   # 전역 NEW — 설명 큐 대기분. db 모드 게이트가 보면 안 된다
+        asked = []
+        jobs.count_new_outbox = lambda *, destinations: asked.append(destinations) or depths
+        monkeypatch.setattr(session_ops, "MinuteLedger", lambda **_: ledger)
+        monkeypatch.setattr(session_ops, "JobLedger", lambda **_: jobs)
+        qcs = []
+        monkeypatch.setattr(session_ops, "qc_session_cli",
+                            lambda settings, *, session_id: qcs.append(session_id) or 0)
+        rc = session_ops.stop_session_cli(settings, dataset="price_minute", source_group="kis")
+        return rc, asked, qcs
+
+    def test_stop_gates_on_outbox_depth_then_qcs_without_ecs(self, monkeypatch, db_mode):
+        settings, ecs = db_mode
+        rc, asked, qcs = self._stop(monkeypatch, settings, depths={})
+
+        assert rc == 0
+        assert asked and all(
+            d == ["price-analysis-realtime", "news-extraction-realtime"] for d in asked)
+        assert len(asked) == session_ops.CLEAR_CONFIRMATIONS
+        assert len(qcs) == 1
+        assert ecs.calls == [], "db 모드는 ECS desired 를 건드리지 않는다"
+
+    def test_stop_does_not_finish_while_gate_destination_has_work(self, monkeypatch, db_mode):
+        """집힌 채 처리 중이거나 재시도를 기다리는 event 가 남았는데 exit 0 이면, 부른 쪽이
+        VM 을 내려 그 window 의 판정·태깅이 다음 세션까지 밀린다."""
+        settings, _ = db_mode
+        monkeypatch.setenv(session_ops.ENV_DRAIN_TIMEOUT, "0.01")
+        rc, _, qcs = self._stop(monkeypatch, settings,
+                                depths={"news-extraction-realtime": 2})
+        assert rc == 1
+        assert qcs == [], "게이트가 안 비었는데 QC 로 원장을 확정하면 안 된다"
+
+    def test_stop_rejects_queue_urls_left_over_from_sqs(self, monkeypatch, db_mode):
+        """큐 URL 이 남아 있으면 그 이름의 outbox 행이 없어 깊이가 늘 0 이다 — 게이트가
+        통째로 사라진 채 exit 0 이 된다."""
+        settings, _ = db_mode
+        monkeypatch.setenv(session_ops.ENV_GATE_QUEUES, "https://sqs.test/price")
+        with pytest.raises(SystemExit, match="destination"):
+            self._stop(monkeypatch, settings, depths={})

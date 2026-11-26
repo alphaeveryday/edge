@@ -614,6 +614,36 @@ class _Cursor:
             self._rows = sorted(counts.items())
         elif s.startswith("UPDATE dataset_commit_outbox o SET claimed_by"):
             self._claim_outbox(params, s)
+        elif s.startswith(
+            "UPDATE dataset_commit_outbox SET published_at = %s, status = 'PUBLISHED'"
+        ):
+            # DB transport 의 ack — 소유 확인은 claimed_by 하나다(receive 마다 새 owner).
+            # 절이 빠지면 만료 뒤 남이 다시 집은 행을 옛 배달이 닫는다(Rule 9).
+            for clause in ("claimed_by = %s", "status = 'NEW'"):
+                assert clause in s, f"ack_outbox SQL 에 {clause} 가 없다"
+            now, event_id, owner = params
+            row = self.db.outbox.get(event_id)
+            if row is not None and row["claimed_by"] == owner and row["status"] == "NEW":
+                row.update(status="PUBLISHED", published_at=now,
+                           claimed_by=None, claim_expires_at=None)
+                self.rowcount = 1
+        elif s.startswith("UPDATE dataset_commit_outbox SET claim_expires_at = %s"):
+            for clause in ("claimed_by = %s", "status = 'NEW'"):
+                assert clause in s, f"defer_outbox SQL 에 {clause} 가 없다"
+            until, event_id, owner = params
+            row = self.db.outbox.get(event_id)
+            if row is not None and row["claimed_by"] == owner and row["status"] == "NEW":
+                row["claim_expires_at"] = until
+                self.rowcount = 1
+        elif s.startswith("SELECT destination, COUNT(*) FROM dataset_commit_outbox"):
+            # 게이트 깊이 — claim 여부를 가리면(claimed_by IS NULL 등) 처리 중인 일감을
+            # 빼고 세어 소비자를 일찍 내린다
+            assert "status = 'NEW'" in s and "claimed_by" not in s
+            counts: dict[str, int] = {}
+            for row in self.db.outbox.values():
+                if row["status"] == "NEW" and row["destination"] in params[0]:
+                    counts[row["destination"]] = counts.get(row["destination"], 0) + 1
+            self._rows = sorted(counts.items())
         elif "SET status = 'PUBLISHED'" in s:
             # CAS 가드를 fake 가 Python 으로 재현하므로, SQL 에서 빠지면 여기서 못 잡는다
             # — 절의 존재를 못 박는다(옛 Relay 가 새 claim 을 마감하는 회귀, Rule 9)
@@ -1124,8 +1154,12 @@ class _Cursor:
              and (r["claimed_by"] is None or r["claim_expires_at"] < now)),
             key=lambda r: r["seq"],
         )[:limit]
+        # receive 횟수는 **claim 시점**에 오른다(DB transport) — 실패 기록 때만 올리면
+        # 기록 전에 죽는 소비자의 반복이 상한에 안 잡힌다
+        counted = "attempt_count = o.attempt_count + 1" in sql
         for row in eligible:
-            row.update(claimed_by=relay_id, claim_expires_at=claim_until)
+            row.update(claimed_by=relay_id, claim_expires_at=claim_until,
+                       attempt_count=row["attempt_count"] + counted)
         self._rows = [
             (r["event_id"], r["event_type"], r["destination"], r["payload"],
              r["claim_expires_at"], r["attempt_count"]) for r in eligible

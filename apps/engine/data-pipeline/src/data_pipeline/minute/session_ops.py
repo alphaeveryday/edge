@@ -27,6 +27,12 @@ stop-minute-session  (EOD)       : drain 요청 → 원장 게이트 대기 → 
   큐에 나간 적이 없다.
 - 게이트 큐 깊이 0 — Consumer 를 먼저 내리면 남은 메시지는 7일 retention 안에서
   아무도 안 집다가 **다음 세션의 Consumer** 가 어제 window 를 처리한다.
+
+**db 모드(`minute_queue_transport=db`, OCI)** 에서는 ECS 도 SQS 도 부르지 않는다. 서비스를
+올리고 내리는 주체가 compose·VM 시작/정지라서 start 는 **세션 계획만** 하고, stop 은 drain →
+게이트 → QC 까지만 한다. 게이트의 큐 깊이는 outbox 의 destination 별 NEW 수다
+(`MINUTE_SESSION_GATE_QUEUES` 에 큐 URL 대신 destination 이름을 넣는다). exit 0 이 "이제
+내려도 된다"는 신호이고, 실제로 내리는 것은 부른 쪽(cron)이다.
 """
 
 from __future__ import annotations
@@ -40,7 +46,7 @@ from typing import NamedTuple
 
 from ..db import stable_domain_id
 from ..ops.trading_calendar import is_trading_day
-from .jobs import JobLedger
+from .jobs import DESTINATION_JOB_KINDS, JobLedger, uses_db_queue
 from .eod import qc_session_cli
 from .models import KST
 from .repository import MinuteLedger
@@ -313,12 +319,14 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
     (fail-loud), 올려 두면 하루 종일 재기동 루프만 돈다.
     """
     dataset, source_group = _resolve(dataset, source_group)
+    # db 모드(OCI)는 계획만 한다 — 서비스는 compose·VM 시작이 올린다(모듈 도크스트링).
+    ecs = not uses_db_queue(settings)
     # 배선 오타는 계획 전에 죽는다(_services 와 같은 축). 켜진 레인만 남긴다.
     lane_groups = [(lane, _lane_source_group(lane)) for lane in _OPTIONAL_LANES]
     for lane, group in lane_groups:
         # 목록 결손도 계획 전에 — 계획만 세우고 올릴 서비스가 없으면 그 레인은 하루 종일
         # PLANNED 로 남고, 그 사실이 드러나는 자리가 없다.
-        if group is not None:
+        if ecs and group is not None:
             _lane_worker_services(lane)
     today = datetime.now(KST).date()
     if not is_trading_day(today):
@@ -358,7 +366,8 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
     # 건당 588초짜리 레인이라 감내한다 — 개장 지연이 문제가 되면 세션을 되살리지 말고
     # `aws_appautoscaling_scheduled_action` 으로 09:00 에 min 1 을 얹는 쪽이 싸다.
     # `_services` 가 공용 목록에서 이 이름을 빼는 것이 세션이 이 서비스에 대해 하는 일의 전부다.
-    _scale(desired=1, force=True)
+    if ecs:
+        _scale(desired=1, force=True)
 
     lane_exits = {}
     for lane, group in lane_groups:
@@ -407,7 +416,8 @@ def start_session_cli(settings, *, dataset: str | None, source_group: str | None
         # 가 안 잡는다) 이미 계획에 성공한 앞 레인이 desired 0 인 채 남는다. 세션은 섰는데
         # Worker 가 없으니 그 레인은 그날 조용히 아무것도 수집하지 않는다.
         # 레인별로 판정한다: 뉴스가 실패해도 iNAV 는 올라가야 한다(서로 독립이다).
-        _scale(desired=1, force=True, services=_lane_worker_services(lane))
+        if ecs:
+            _scale(desired=1, force=True, services=_lane_worker_services(lane))
     # ⚠️ 여러 레인이 실패하면 **첫 실패 코드**를 낸다(0 이 아니면 스케줄 기록에 남는 건
     # 같고, 어느 레인인지는 위 로그가 말한다). 합치거나 최댓값을 쓰면 없는 코드가 나온다.
     return next((code for code in lane_exits.values() if code != 0), 0)
@@ -442,7 +452,11 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
     # 배선 결손에서 SystemExit 이라(토글은 켜졌는데 목록이 빔), 스케일다운 루프 안에서
     # 처음 부르면 공용 서비스를 0 으로 내린 **뒤** 죽어서 나머지 레인 Worker 가 밤새
     # desired 1 로 남는다 — 게다가 exit 는 "stop 전체 실패" 로 읽힌다. start 와 같은 순서다.
-    lane_workers = {lane: _lane_worker_services(lane) for lane in _OPTIONAL_LANES}
+    # db 모드(OCI)는 ECS·SQS 를 부르지 않는다 — 스케일 목록도 해석하지 않는다.
+    ecs = not uses_db_queue(settings)
+    lane_workers = (
+        {lane: _lane_worker_services(lane) for lane in _OPTIONAL_LANES} if ecs else {}
+    )
     ids = {lane: stable_domain_id("msn", lane[0], lane[1], day.isoformat()) for lane in lanes}
 
     ledger = MinuteLedger(db=settings.db)
@@ -491,10 +505,20 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
 
     timeout_sec = _drain_timeout_sec()
     queues = _gate_queues()
+    if not ecs:
+        unknown = sorted(set(queues) - set(DESTINATION_JOB_KINDS))
+        if unknown:
+            # db 모드의 게이트 큐는 destination 이름이다. 큐 URL 이 남아 있으면 그 이름의
+            # 행은 없어서 깊이가 늘 0 으로 읽히고, 게이트가 통째로 사라진다(fail-open).
+            raise SystemExit(
+                f"{ENV_GATE_QUEUES} 에 job destination 이 아닌 값이 있다: {unknown} — "
+                f"db 모드에서는 destination 이름을 넣는다(가능: {sorted(DESTINATION_JOB_KINDS)})"
+            )
     deadline = time.monotonic() + timeout_sec
     clear_streak = 0
     while True:
-        pending = _gate_pending(ledger, jobs, session_ids=list(ids.values()), queues=queues)
+        pending = _gate_pending(ledger, jobs, session_ids=list(ids.values()), queues=queues,
+                                db_queue=not ecs)
         if not pending:
             clear_streak += 1
             if clear_streak >= CLEAR_CONFIRMATIONS:
@@ -535,7 +559,8 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
     # ⚠️ 절단이 통째로 사라진 것은 아니다 — 버스트 중에 CD 가 재배포를 걸면 롤링이
     # 처리 중인 태스크를 여전히 자른다(Fargate `stopTimeout` 상한 120초 < 건당 588초).
     # 그건 이 변경이 만든 것도, 없앤 것도 아니다.
-    _scale(desired=0, force=False)
+    if ecs:
+        _scale(desired=0, force=False)
     # ⚠️ 토글과 무관하게 **목록이 있으면 내린다** — 토글을 끈 날 그 서비스가 떠 있으면
     # 아무도 안 내려 계속 돈다(어제 켜고 오늘 끈 경우가 정확히 그 모양이다). 내리는 방향은
     # 과하게 잡아도 안전하다(이미 0 이면 no-op). 목록은 위에서 이미 해석해 뒀다.
@@ -547,7 +572,8 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
 
 
 def _gate_pending(ledger: MinuteLedger, jobs: JobLedger, *,
-                  session_ids: list[str], queues: list[str]) -> list[str]:
+                  session_ids: list[str], queues: list[str],
+                  db_queue: bool = False) -> list[str]:
     """아직 안 끝난 것들의 사람이 읽는 목록. 비면 내려도 된다.
 
     앞 단계가 안 끝났으면 뒤를 보지 않는다 — Worker 가 아직 window 를 커밋하는 중이면
@@ -572,6 +598,14 @@ def _gate_pending(ledger: MinuteLedger, jobs: JobLedger, *,
             phase_pending.append(f"session {session_id[:12]}… phase={snapshot.get('phase')}")
     if phase_pending:
         return phase_pending
+
+    if db_queue:
+        # db 모드 — 큐가 곧 outbox 다. 게이트 destination 의 NEW 가 깊이이고(집힌 것·
+        # 재시도 대기 포함, `count_new_outbox`), 아래 전역 NEW 는 보지 않는다: 설명 큐
+        # (price-explanation-realtime)의 분석 대기분까지 세어 게이트 밖 레인이 종료를 막는다.
+        depths = jobs.count_new_outbox(destinations=queues)
+        return [f"outbox NEW={count} {destination}"
+                for destination, count in sorted(depths.items()) if count]
 
     # depth < 0 은 조회 실패다(모름) — `if depth` 가 0 만 통과시키므로 실패도 pending 이다
     queue_pending = [f"queue depth={'unknown' if depth < 0 else depth} {url}"

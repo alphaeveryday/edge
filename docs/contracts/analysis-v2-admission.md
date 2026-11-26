@@ -99,4 +99,26 @@ API와 가격 사건이 같은 접수 함수를 사용한다. 같은 요청의 �
 검증 가능한 소비 루프이며 실행 진입점·배포 설정은 추가하지 않는다.
 기존 소비자는 큐 상태에 따른 0대 축소·재기동 설정을 유지한다.
 
+## SQS·Step Functions 없는 호스트 (db 모드)
+
+`ANALYSIS_QUEUE_TRANSPORT=db`(기본 `sqs`)면 같은 소비 루프가 SQS·SFN·ECS 없이 돈다
+(`cloud/local.py`). 기본값에서는 위 계약이 그대로다.
+
+1. 가격 사건: `dataset_commit_outbox`의 `price-explanation-realtime` 행을 직접 집는다. 집는 조건은 Relay와 같아 한 행을 둘이 동시에 쥐지 않는다. 접수를 마치면 `PUBLISHED`로 닫는다.
+2. 접수: `analysis_execution_requests`에 예약만 한다. `execution_arn`은 `local:<analysis_id>`, `accepted_at`은 비워 둔다.
+3. 실행: 같은 호스트에서 `cloud.worker`를 자식 프로세스로 띄운다. 동시 실행은 `ANALYSIS_SLOTS`건, 같은 ETF는 한 번에 한 건.
+4. 종료: 자식 프로세스가 끝나면 종료 코드와 무관하게 `accepted_at`을 채운다. 이 모드에서 `accepted_at`은 "SFN 접수 시각"이 아니라 "실행 프로세스 종료 시각"이다.
+
+| 상황 | 동작 |
+|---|---|
+| 접수 실패 반복 | 300초 뒤 다시 집힘. 16회를 넘기면 outbox 행을 `DEAD`로 닫고 `last_error=DB_MAX_RECEIVE` |
+| 분석 프로세스 실패·강제 종료 | 다시 실행하지 않음. 요청당 프로세스 1회 |
+| 1,100초 초과 | 프로세스를 중지하고 종료로 처리 |
+| 호스트·소비자 재시작 | `accepted_at`이 빈 요청을 다시 실행. 완료된 분석은 워커가 반복하지 않음 |
+| 전날(KST) 요청이 남음 | 실행하지 않고 닫음. 경고 로그에 `analysis_id` 기록 |
+| 가격 복귀 | 기존과 같이 회수 기록 후 닫음. 분석 대기열과 무관하게 즉시 처리 |
+
+- 필요한 DB 권한: `V202611271200__allow_v2_outbox_claim.sql`(writer에 outbox 배달 상태 컬럼만).
+- 워커는 `ANALYSIS_EXECUTION_ARN` 없이 뜬다. 실행 수 제한과 ETF별 직렬화는 워커의 세션 잠금이 한 번 더 지킨다.
+
 Refs: ALPHA-1143, ALPHA-1146

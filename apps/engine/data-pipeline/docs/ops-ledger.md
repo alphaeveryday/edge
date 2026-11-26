@@ -257,6 +257,18 @@ DATA_PIPELINE_MINUTE_CONSUMER__DLQ_URLS='{"price-analysis-realtime":"https://sqs
 # producer 를 고쳐 재실행해도 그 행은 안 바뀐다(미지정=직전 event 값 복사).
 DATA_PIPELINE_DB__PASSWORD=... \
   python -m data_pipeline.run redrive --kind news --job-id <job_id> --reason "큐 URL 오타 수정 후 재시도"
+# DB 큐 모드(OCI — SQS·Relay·DLQ 대사 없음). `DATA_PIPELINE_MINUTE_QUEUE_TRANSPORT=db` 하나가
+# 셋을 바꾼다: ① 소비자가 SQS 대신 outbox 행을 직접 집는다(QUEUE_URL 자리에 **destination
+# 이름**을 넣는다), ② relay 는 기동을 거부한다(함께 뜨면 먼저 집은 행을 SQS 로 보낸다),
+# ③ start/stop-minute-session 이 ECS·SQS 를 부르지 않는다 — start 는 세션 계획만, stop 은
+# drain → 게이트 → QC 만 하고, 게이트의 큐 깊이는 outbox 의 destination 별 NEW 수다
+# (MINUTE_SESSION_GATE_QUEUES 에도 destination 이름). 기본값은 sqs 이고 그때 동작은 그대로다.
+# 재시도 상한은 claim 때 센다: job 은 max_attempts 를 넘긴 claim 이 RETRY_BUDGET_EXHAUSTED,
+# 배달만 16회 소진된 job 은 DB_MAX_RECEIVE 로 DEAD 다. 판정할 수 없는 event 는 16회 뒤
+# outbox 행이 DEAD 가 된다(last_error=`DB_MAX_RECEIVE: <사유>`). 복구는 위 redrive 그대로다.
+DATA_PIPELINE_DB__PASSWORD=... DATA_PIPELINE_MINUTE_QUEUE_TRANSPORT=db \
+DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL=news-extraction-realtime \
+  python -m data_pipeline.run news-consumer --max-ticks 5
 # 세션 계획(1분 파이프라인, ALPHA-698) — 하루치 session + window 를 멱등 생성한다
 # (스케줄 경로에서는 아래 `start-minute-session` 이 부른다). 재실행은 no-op 이고 exit 0 — 새로 생겼는지는 출력의
 # `created` 가 말한다. ⚠️ 가격 세션은 `--universe` 가 **필수**다: 빠뜨리면 정규장 390 만

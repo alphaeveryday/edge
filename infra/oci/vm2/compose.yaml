@@ -1,0 +1,99 @@
+# VM-2 장중 수집 — 평일 07:50 시작 → 16:30 정지 (시작·정지는 VM-1 cron 소관).
+#
+# SQS·Relay·DLQ 대사 없이 DB 큐로 돈다: DATA_PIPELINE_MINUTE_QUEUE_TRANSPORT=db,
+# ANALYSIS_QUEUE_TRANSPORT=db (.env). 소비자는 outbox 행을 직접 집는다.
+#
+# ECS 서비스 → 컨테이너
+#   edge-dev-price-worker          → price-worker
+#   edge-dev-disclosure-worker     → disclosure-worker
+#   edge-dev-inav-worker           → inav-worker
+#   edge-dev-sector-index-worker   → sector-index-worker
+#   edge-dev-price-consumer        → price-consumer        (큐 = destination price-analysis-realtime)
+#   edge-dev-analysis-consumer     → analysis              (접수 + 분석 실행을 한 컨테이너가 한다)
+#   analysis-v2 SFN + ECS 워커 태스크 → analysis 의 자식 프로세스 (동시 ANALYSIS_SLOTS 건)
+#   start/stop-minute-session 태스크 → session-start / session-stop (ECS·SQS 호출 없음)
+#   edge-dev-news-worker · news-consumer-realtime → VM-3 (../vm3/compose.yaml)
+# SQS 때문에만 있던 것 — 여기 없다
+#   edge-dev-relay (outbox → SQS 발행) · dlq-reconcile 스케줄 태스크 · SQS 원큐 4종 + DLQ 4종
+#   analysis-v2 control Lambda(슬롯 예약) · 분석 소비자 오토스케일링
+#
+# 쓰는 법
+#   docker compose up -d                  # session-start 가 세션을 계획한 뒤 워커가 뜬다
+#   docker compose run --rm session-stop  # drain → 게이트 → QC. exit 0 이면 VM 을 내려도 된다
+#
+# ⚠️ 메모리 한도는 ECS 태스크 크기와 2026-11-20 실사용 합계에서 잡은 잠정값이다. 분석 1건의
+#    메모리는 재지 않았다 — analysis 한도와 ANALYSIS_SLOTS 는 첫 장중에 재고 고친다.
+# ⚠️ 비거래일에 VM 을 올리면 session-start 는 세션을 만들지 않고 0 으로 끝나고, 워커는 세션이
+#    없어 기동을 거부하며 재시작을 반복한다. 거래일 판정은 VM 을 올리는 쪽이 한다.
+
+name: edge-vm2
+
+x-pipeline: &pipeline
+  image: ${DATA_PIPELINE_IMAGE:?}
+  env_file: [.env]
+  restart: unless-stopped
+  # ECS stopTimeout 과 같은 값 — in-flight 배치가 기록까지 끝낼 시간
+  stop_grace_period: 120s
+  mem_limit: 512m
+
+# KIS 를 부르는 서비스는 토큰 파일 캐시를 **같은 호스트 디렉터리·같은 경로**로 함께 쓴다
+# (KIS_TOKEN_CACHE_DIR, 컨테이너 사용자 uid 1001 이 쓸 수 있어야 한다). 따로 두면 컨테이너마다
+# 토큰을 새로 받고, KIS 는 잦은 재발급에 제재를 건다.
+x-kis-token-cache: &kis-token-cache
+  volumes:
+    - ${KIS_TOKEN_CACHE_DIR:?}:${KIS_TOKEN_CACHE_DIR:?}
+
+x-after-session: &after-session
+  depends_on:
+    session-start:
+      condition: service_completed_successfully
+
+services:
+  session-start:
+    <<: *pipeline
+    restart: "no"
+    command: ["start-minute-session", "--dataset", "price_minute",
+              "--source-group", "${MINUTE_SOURCE_GROUP:?}", "--universe", "${MINUTE_UNIVERSE_URI:?}"]
+
+  session-stop:
+    <<: *pipeline
+    restart: "no"
+    profiles: [ops]
+    command: ["stop-minute-session", "--dataset", "price_minute",
+              "--source-group", "${MINUTE_SOURCE_GROUP:?}"]
+
+  price-worker:
+    <<: [*pipeline, *after-session, *kis-token-cache]
+    mem_limit: 1g
+    command: ["price-worker", "--universe", "${MINUTE_UNIVERSE_URI:?}"]
+
+  disclosure-worker:
+    <<: [*pipeline, *after-session]
+    mem_limit: 1g
+    command: ["disclosure-worker"]
+
+  inav-worker:
+    <<: [*pipeline, *after-session, *kis-token-cache]
+    command: ["inav-worker", "--universe", "${MINUTE_UNIVERSE_URI:?}"]
+
+  sector-index-worker:
+    <<: [*pipeline, *after-session, *kis-token-cache]
+    command: ["sector-index-worker"]
+
+  price-consumer:
+    <<: [*pipeline, *after-session]
+    command: ["price-consumer", "--universe", "${MINUTE_UNIVERSE_URI:?}"]
+    environment:
+      # db 모드에서 queue_url 은 큐 URL 이 아니라 outbox destination 이름이다
+      DATA_PIPELINE_MINUTE_PRICE_CONSUMER__QUEUE_URL: price-analysis-realtime
+
+  analysis:
+    image: ${ANALYSIS_IMAGE:?}
+    env_file: [.env]
+    restart: unless-stopped
+    stop_grace_period: 120s
+    # 접수 루프 + 분석 자식 프로세스 ANALYSIS_SLOTS 개(ECS 에선 건당 2 GB 태스크였다)
+    mem_limit: 3g
+    entrypoint: ["python", "-m", "edge_analysis_v2.cloud.queue_runtime"]
+    environment:
+      ANALYSIS_QUEUE_TRANSPORT: db

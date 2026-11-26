@@ -45,6 +45,7 @@ from .jobs import (
     TRIGGER_EVENT_DESTINATIONS,
     JobLedger,
     destination_accepts,
+    uses_db_queue,
 )
 from .models import canonical_json
 
@@ -557,6 +558,12 @@ def relay_cli(settings, *, max_ticks: int | None = None) -> int:
     import time
     from datetime import timezone
 
+    if uses_db_queue(settings):
+        # db 모드에서는 소비자가 outbox 행을 직접 집는다(consumer.DbQueue). Relay 가 함께
+        # 뜨면 먼저 집은 행을 SQS 로 보내고 PUBLISHED 로 닫아, 소비자는 그 행을 영영 못 본다.
+        raise SystemExit(
+            "minute_queue_transport=db — relay 는 뜨지 않는다(소비자가 outbox 를 직접 집는다)"
+        )
     if settings.db is None:
         raise SystemExit("db 설정 없음 — relay 는 outbox 원장 필수(DATA_PIPELINE_DB__* 주입)")
     if settings.minute_relay is None:

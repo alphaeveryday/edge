@@ -49,6 +49,9 @@ python -m edge_analysis_v2.dashboard.server --rds-ca /path/to/rds-ca.pem --port 
 실제 DB 분석에 `TINYFISH_API_KEY`를 설정하면 기존 분석 MCP에 `search_web(query, page)`와
 `read_web_document(url, offset)`가 추가된다. 로컬 `analysis.database_run`은 `--env-file` 또는
 환경변수에서, 클라우드 워커는 기존 `DEEPSEEK_SECRET_ARN`이 가리키는 Secret JSON에서 읽는다.
+클라우드 워커에 `DEEPSEEK_API_KEY` 환경변수가 있으면 Secret을 조회하지 않고 환경변수
+(`DEEPSEEK_API_KEY`·`DEEPSEEK_MODEL`·`TINYFISH_API_KEY`)만 쓴다. 관측 버킷은 `OBSERVATION_BUCKET`이고,
+S3 호환 저장소는 `AWS_ENDPOINT_URL_S3`로 고른다.
 키가 없으면 웹 도구를 등록하지 않고 초기 입력의 `web_research.enabled=false`로 표시한다.
 합성 시나리오는 외부 웹을 사용하지 않는다. 별도 MCP 서비스·DB 마이그레이션·의존성 추가는 없다.
 
