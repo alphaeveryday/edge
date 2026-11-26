@@ -48,6 +48,19 @@ $S/run.sh .claude/skills/app-verify/flows/mock/tour.yaml    # → 증거 폴더 
    `shotdiff` 는 고치려던 화면(`--allow`) 외에 0.1% 넘게 바뀐 화면이 있으면 실패한다. 실패하면 그 화면의 `diff-*.png`(바뀐 곳 빨강)를 보고 원인을 찾는다. 비교를 통과시키려고 기준·임계값·흐름을 바꾸지 않는다.
 6. **PR.** pr-cycle 을 따른다. 본문에 나란히 이미지(정본 vs 앱), 고친 화면의 전/후(`pair-*.png`), `shotdiff` 출력(화면별 바뀐 비율)을 붙인다. 사람은 이 이미지로 판단한다.
 
+## 웹 보기 사이트 (design.etforca.com)
+
+junyoung 은 디자인을 https://design.etforca.com 에서 본다(비밀번호 있음). 앱 코드를 웹으로 빌드한 것(`/app/`)을 휴대폰 크기로 눌러 보고, `/screens/` 에서 화면 27개를 라이트·다크로 한 장에 본다. 디자인 지시("홈 카드 간격 좁혀")를 받아 코드를 고쳤으면 올린다.
+
+```bash
+apps/etforca/app-ui/scripts/design-sync/design-sync.sh          # 빌드 → 촬영 → 업로드 → 캐시 비우기(약 3분)
+apps/etforca/app-ui/scripts/design-sync/design-sync.sh --local  # 만들기만
+```
+
+- 웹 빌드라 휴대폰과 다른 곳이 있다(상태 표시줄 없음, `(tabs)/_layout.web.tsx` 의 탭바, 카카오·애플 로그인·푸시 없음). 최종 판정은 위 mock APK 스크린샷으로 한다.
+- 찍을 화면 목록은 `scripts/design-sync/screens.cjs`. 회원 화면은 mock 계정으로 로그인한 뒤 눌러서 간다(mock 로그인은 새로 고치면 풀린다).
+- 비밀번호는 CloudFront KeyValueStore `edge-dev-app-design` 의 `basic_auth` 키(base64 "아이디:비밀번호")에만 있다. 인프라는 `infra/terraform/envs/dev/main.tf` 의 `module.design_site`.
+
 ## 판단 기준
 
 - 정본과 다르게 가는 것이 사용자에게 더 낫다면 그렇게 하되, PR 에 "정본과 다름: 이유"를 적는다(사용자 경험이 구현 편의보다 앞선다).
