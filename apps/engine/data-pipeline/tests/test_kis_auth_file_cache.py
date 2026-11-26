@@ -75,12 +75,26 @@ def test_앱키_둘은_파일이_갈려_서로의_토큰을_밀어내지_않는�
     assert client.issued == 2
 
 
-def test_캐시_디렉터리가_없으면_발급으로_떨어진다(tmp_path):
+def test_캐시_디렉터리가_없으면_발급으로_떨어지고_설정_오류를_드러낸다(tmp_path, caplog):
     # WHY: 마운트가 빠져도 수집은 돌아야 한다 — 최악이 캐시 없던 시절의 동작(각자 발급)이다.
+    #      다만 '아직 아무도 안 썼다'와 같은 정상 미스로 치면 설정 오류가 INFO 한 줄에 묻히고,
+    #      403 을 맞았을 때 아무도 못 쓰는 캐시를 10초 헛폴링한다 — 죽은 캐시로 판정돼야 한다.
     client = IssuingClient()
+    cache = FileTokenCache(str(tmp_path / "없음"))
 
-    assert KisAuth("k", "s", client, cache=FileTokenCache(str(tmp_path / "없음"))).token() == "T-k"
+    assert KisAuth("k", "s", client, cache=cache).token() == "T-k"
     assert client.issued == 1
+    assert cache.read_failed is True
+    assert [record.levelname for record in caplog.records].count("ERROR") == 1
+
+
+def test_아직_아무도_안_쓴_디렉터리는_정상_미스다(tmp_path):
+    # WHY: 그날 첫 프로세스는 늘 빈 디렉터리를 본다. 이걸 죽은 캐시로 치면 403 뒤 승자 폴링이
+    #      가장 필요한 순간에 꺼진다.
+    cache = FileTokenCache(str(tmp_path))
+
+    assert cache.get("지문") is None
+    assert cache.read_failed is False
 
 
 # 자식 프로세스: 준비를 알리고, 출발 신호를 기다렸다가 토큰을 받는다. 발급은 로그에 한 줄씩 남긴다.

@@ -66,7 +66,8 @@ DATA_PIPELINE_PRICE__SOURCE__API_KEY=... \
 # ALPHA-590)의 구성종목·ETF 티커 ∪ targets(ALPHA-419 — 유니버스가 holdings 를 따라감). KRX 6자리 코드는 KIS 코드와 항등이라 심볼맵 없이 수집되고,
 # symbol_map 은 예외 오버라이드 축. 신규 상장분은 코드에 문자가 섞이므로(0093A0 등 148종 중
 # 37종) 형태 판정은 '선두 숫자 + 영숫자 6자'다(ALPHA-463 — 숫자로만 거르면 그 종목들이 샌다).
-# 토큰은 run 당 1회 발급·재사용, 그리고 `KIS_TOKEN_CACHE_PARAM`(SSM SecureString) 이 주입되면
+# 토큰은 run 당 1회 발급·재사용, 그리고 `KIS_TOKEN_CACHE_PARAM`(SSM SecureString) 또는
+# `KIS_TOKEN_CACHE_DIR`(AWS 없는 환경의 호스트 디렉터리, 둘 다 있으면 이쪽) 이 주입되면
 # 컨테이너 사이로도 공유한다(ALPHA-573 — docs/deploy-schedule.md 의 ingest-raw-nav 항목).
 # 시장 SFN은 `--max-failed-symbols 1`을 명시한다(ALPHA-798). 고립 실패 1개는 exit 0이지만
 # collection log는 partial·failed_records=1을 보존해 원장에는 INCOMPLETE로 남는다. 2개 이상과

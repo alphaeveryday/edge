@@ -234,7 +234,7 @@ class FileTokenCache(SsmTokenCache):
 
     ⚠️ 공유 범위는 **이 디렉터리를 보는 프로세스**다. 컨테이너는 같은 호스트 디렉터리를 마운트해야
     하고(없으면 컨테이너마다 따로 발급한다), VM 이 다르면 VM 마다 한 번씩 발급한다.
-    디렉터리는 만들지 않는다 — 마운트가 빠진 것을 조용히 가리지 않고 경고 로그로 드러낸다.
+    디렉터리는 만들지 않는다 — 마운트가 빠진 것을 조용히 가리지 않고 오류 로그로 드러낸다.
     """
 
     absent_error = "FileNotFoundError"
@@ -242,13 +242,24 @@ class FileTokenCache(SsmTokenCache):
     def __init__(self, directory: str):
         self.directory = directory
         self.read_failed = False
+        # 디렉터리가 없거나 못 쓰면 아무도 캐시를 못 쓴다. 발급은 계속하되(모든 실패는 미스) 설정 오류를 드러낸다.
+        self.usable = os.path.isdir(directory) and os.access(directory, os.W_OK | os.X_OK)
+        if not self.usable:
+            logger.error(
+                "KIS 토큰 캐시 디렉터리가 없거나 쓸 수 없다 — 프로세스마다 따로 발급한다(마운트·권한 확인): %s", directory)
 
     def _path(self, fingerprint: str) -> str:
         return os.path.join(self.directory, f"kis-token-{fingerprint}.json")
 
     def _read(self, fingerprint: str) -> str:
-        with open(self._path(fingerprint), encoding="utf-8") as handle:
-            return handle.read()
+        try:
+            with open(self._path(fingerprint), encoding="utf-8") as handle:
+                return handle.read()
+        except FileNotFoundError:
+            if self.usable:
+                raise  # 아직 아무도 안 썼다 — 정상 미스
+            # 쓸 수 없는 디렉터리의 '파일 없음'은 기다려도 안 생긴다. 정상 미스로 치면 403 뒤 승자 폴링이 헛돈다.
+            raise OSError(f"KIS 토큰 캐시 디렉터리를 쓸 수 없다: {self.directory}") from None
 
     def _write(self, fingerprint: str, value: str) -> None:
         descriptor, temporary = tempfile.mkstemp(dir=self.directory, prefix="kis-token-", suffix=".tmp")  # 권한 600
@@ -324,13 +335,13 @@ class KisAuth:
         self.app_secret = app_secret
         self.base = domain_for(env)
         self.client = client
-        # 캐시 파라미터가 env 에 없으면 None — 로컬·테스트는 캐시 없이 현행대로 돈다.
+        # 캐시 env(디렉터리·파라미터)가 없으면 None — 로컬·테스트는 캐시 없이 현행대로 돈다.
         self.cache = cache if cache is not None else SsmTokenCache.from_env()
         self._token: str | None = None
         # 동시 요청(분 워커 fetch_concurrency>1)에서 두 스레드가 동시에 첫 발급하면 분당 1회 제한(403)에
         # 걸린다 — 발급·폐기를 한 잠금 아래 둔다. 발급 대기 동안 다른 스레드는 어차피 토큰이 필요하다.
         # ⚠️ 이 잠금은 **프로세스 안**만 묶는다. 컨테이너 사이의 중복 발급은 종전대로 공유 캐시(SSM)
-        # 재확인 + 403 대기·재시도가 맡는다(ALPHA-573·458).
+        # 재확인 + 403 대기·재시도가 맡는다(ALPHA-573·458). 파일 캐시는 `issuing` 의 flock 이 프로세스 사이도 묶는다.
         self._lock = threading.Lock()
         # 직전 발급 실패와 실패 세대. 실패가 난 **동안 잠금을 기다리던** 스레드만 같은 실패를 받는다 —
         # 그 스레드들이 줄줄이 발급을 다시 두드리지 않게. 실패 뒤에 온 호출은 잠금 아래 하나씩 재시도한다
@@ -384,7 +395,7 @@ class KisAuth:
         return self.cache.get(fingerprint) if self.cache else None
 
     def _await_winner(self, fingerprint: str) -> str | None:
-        """403 직후 승자의 SSM 쓰기를 짧게 기다린다 — 없으면 None(1분 대기로 떨어진다).
+        """403 직후 승자의 캐시 쓰기를 짧게 기다린다 — 없으면 None(1분 대기로 떨어진다).
 
         403 은 '같은 앱키로 방금 누가 발급했다'는 신호다. 그 승자가 응답을 받아 캐시에 쓰기까지
         1초 안팎이 걸리므로 한 번만 읽고 포기하면 61초 대기로 떨어져, 없애려던 직렬 큐가
