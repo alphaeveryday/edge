@@ -148,6 +148,8 @@ resource "aws_cloudfront_distribution" "this" {
     compress               = true
     cache_policy_id        = "658327ea-f89d-4fab-a63d-7e88639e58f6" # AWS Managed-CachingOptimized
 
+    response_headers_policy_id = var.response_headers_policy_id != "" ? var.response_headers_policy_id : null
+
     # SPA fallback — 요청 단계 리라이트라 딥링크가 에러 경로를 타지 않고, 캐시 키도
     # /index.html 로 수렴한다. 없는 정적 에셋(/assets/nope.js)은 S3 404 가 그대로 노출(정직한 에러).
     dynamic "function_association" {
@@ -201,7 +203,8 @@ resource "aws_cloudfront_distribution" "this" {
 
   restrictions {
     geo_restriction {
-      restriction_type = "none"
+      restriction_type = length(var.geo_allow_countries) > 0 ? "whitelist" : "none"
+      locations        = length(var.geo_allow_countries) > 0 ? var.geo_allow_countries : null
     }
   }
 

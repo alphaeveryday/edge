@@ -947,6 +947,44 @@ module "design_site" {
   certificate_arn     = data.aws_acm_certificate.etforca_cdn.arn
   viewer_request_code = file("${path.module}/design-site.js")
   key_value_store     = true
+
+  # 비용 없는 방어: 한국 밖 접속은 CloudFront 가 함수 전에 403 으로 끊어 해외 봇의 비밀번호 대입을 막는다.
+  # (WAF 요청 제한은 월 ~7달러라 쓰지 않는다 — 2026-11-26 사용자 결정. 화면 촬영은 이 PC 로컬 서버에서 한다.)
+  geo_allow_countries        = ["KR"]
+  response_headers_policy_id = aws_cloudfront_response_headers_policy.design_site.id
+}
+
+# 보안 헤더 — https 고정(HSTS), 남의 사이트에 끼워 넣기 금지(첫 페이지가 /app 을 같은 출처 iframe 으로
+# 띄우므로 SAMEORIGIN), MIME 추측 금지, 검색엔진 색인 금지.
+resource "aws_cloudfront_response_headers_policy" "design_site" {
+  name = "${local.prefix}-app-design"
+
+  security_headers_config {
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      include_subdomains         = true
+      override                   = true
+    }
+    frame_options {
+      frame_option = "SAMEORIGIN"
+      override     = true
+    }
+    content_type_options {
+      override = true
+    }
+    referrer_policy {
+      referrer_policy = "same-origin"
+      override        = true
+    }
+  }
+
+  custom_headers_config {
+    items {
+      header   = "X-Robots-Tag"
+      value    = "noindex, nofollow"
+      override = true
+    }
+  }
 }
 
 # 통화 데모 API — 전사 임시 토큰 발급(OpenAI)과 상담 답변 스트리밍(DeepSeek). 키는 Secrets Manager 에만 있다.
