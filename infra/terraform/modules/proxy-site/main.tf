@@ -29,7 +29,7 @@ resource "aws_cloudfront_origin_request_policy" "api_no_auth" {
 }
 
 resource "aws_cloudfront_distribution" "this" {
-  enabled         = true
+  enabled         = var.enabled
   is_ipv6_enabled = true
   aliases         = [var.domain_name]
   price_class     = var.price_class

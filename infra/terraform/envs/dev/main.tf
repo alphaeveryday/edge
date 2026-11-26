@@ -284,7 +284,9 @@ resource "aws_route53_record" "admin_api" {
 # 공개 엣지의 최소 보안 백스톱 — AWS Managed rules 2종(공통 취약점 + known bad inputs)을
 # 기본 차단 동작(override 없음)으로 부착한다. 커스텀 룰·레이트리밋은 범위 밖(후속).
 # sync ALB 는 대상이 아니다 — trust store(mTLS)가 게이트(ALPHA-447).
+# admin ALB 를 끄면(super_admin_alb_enabled=false) 붙일 곳이 없으므로 web ACL 도 만들지 않는다.
 resource "aws_wafv2_web_acl" "super_admin" {
+  count = local.super_admin_alb_enabled ? 1 : 0
   name  = "${local.prefix}-admin"
   scope = "REGIONAL" # ALB 용 — CloudFront(GLOBAL/us-east-1)가 아니다
 
@@ -347,7 +349,7 @@ resource "aws_wafv2_web_acl" "super_admin" {
 resource "aws_wafv2_web_acl_association" "super_admin_alb" {
   count        = local.super_admin_alb_enabled ? 1 : 0
   resource_arn = module.super_admin_alb[0].arn
-  web_acl_arn  = aws_wafv2_web_acl.super_admin.arn
+  web_acl_arn  = aws_wafv2_web_acl.super_admin[0].arn
 }
 
 # ── Sync 채널 공개 엣지 (ADR-0034) ──────────────────────

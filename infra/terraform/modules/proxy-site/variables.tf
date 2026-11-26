@@ -23,6 +23,12 @@ variable "origin_domain" {
   type        = string
 }
 
+variable "enabled" {
+  description = "false 면 CloudFront 배포를 끈다(사이트가 응답하지 않는다). 인증서·DNS 는 그대로 둔다."
+  type        = bool
+  default     = true
+}
+
 variable "origin_port" {
   description = "커스텀 오리진 HTTP 포트 (박스 컨테이너 호스트 포트)"
   type        = number

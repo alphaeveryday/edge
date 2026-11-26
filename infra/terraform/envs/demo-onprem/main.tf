@@ -85,6 +85,9 @@ module "demo_onprem" {
 module "mts_site" {
   source = "../../modules/proxy-site"
 
+  # 사용자 결정(2026-11-26): 박스 EC2 를 꺼 둔 동안 데모 사이트도 끈다. 다시 쓸 때 true.
+  enabled = false
+
   name            = "${local.prefix}-mts"
   domain_name     = var.mts_domain
   zone_id         = data.terraform_remote_state.foundation.outputs.zone_id
@@ -99,6 +102,9 @@ module "mts_site" {
 # demo/onprem/README "검수 콘솔 접근" 참조.
 module "console_site" {
   source = "../../modules/proxy-site"
+
+  # 사용자 결정(2026-11-26): 박스 EC2 를 꺼 둔 동안 데모 사이트도 끈다. 다시 쓸 때 true.
+  enabled = false
 
   name            = "${local.prefix}-console"
   domain_name     = var.console_domain
