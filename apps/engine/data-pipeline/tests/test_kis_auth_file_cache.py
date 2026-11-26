@@ -6,10 +6,12 @@ KIS 는 토큰 발급을 앱키당 분당 1회로 막고, 발급할 때마다 �
 """
 
 import json
-import multiprocessing
 import os
 import stat
+import subprocess
+import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -34,14 +36,18 @@ class IssuingClient:
 
 @pytest.fixture
 def file_cache_env(tmp_path, monkeypatch):
+    aws_calls = []
+
     def no_aws():
+        aws_calls.append("ssm")  # 캐시가 예외를 미스로 삼키므로 호출 자체를 센다
         raise AssertionError("파일 캐시를 골랐는데 SSM 을 불렀다")
 
     monkeypatch.setenv("KIS_TOKEN_CACHE_DIR", str(tmp_path))
     # AWS 에서 넘어온 env 가 남아 있어도 파일 캐시가 이겨야 한다.
     monkeypatch.setenv("KIS_TOKEN_CACHE_PARAM", "/edge-dev-data-pipeline/kis/access-token")
     monkeypatch.setattr(kis_auth, "ssm_client", no_aws)
-    return tmp_path
+    yield tmp_path
+    assert aws_calls == []
 
 
 def test_env_로_고른_파일_캐시는_AWS_없이_프로세스_사이에_토큰을_넘긴다(file_cache_env):
@@ -77,36 +83,53 @@ def test_캐시_디렉터리가_없으면_발급으로_떨어진다(tmp_path):
     assert client.issued == 1
 
 
-def _issue_in_child(directory, barrier, issue_log):
-    class SlowClient:
-        def request(self, method, url, *, headers=None, data=None, decode=True):
-            with open(issue_log, "a", encoding="utf-8") as handle:
-                handle.write("issued\n")
-            time.sleep(0.5)  # 발급 응답을 기다리는 동안이 경합 창이다
-            return json.dumps({"access_token": "T", "expires_in": 86400})
+# 자식 프로세스: 준비를 알리고, 출발 신호를 기다렸다가 토큰을 받는다. 발급은 로그에 한 줄씩 남긴다.
+CHILD = """
+import json, os, sys, time
+from data_pipeline.sources.kis_auth import FileTokenCache, KisAuth
 
-        @staticmethod
-        def _sleep(seconds):
-            pass
+directory, go, issue_log = sys.argv[1:]
 
-    barrier.wait(timeout=10)
-    token = KisAuth("k", "s", SlowClient(), cache=FileTokenCache(directory)).token()
-    os._exit(0 if token == "T" else 1)
+
+class SlowClient:
+    def request(self, method, url, *, headers=None, data=None, decode=True):
+        with open(issue_log, "a", encoding="utf-8") as handle:
+            handle.write("issued\\n")
+        time.sleep(0.5)  # 발급 응답을 기다리는 동안이 경합 창이다
+        return json.dumps({"access_token": "T", "expires_in": 86400})
+
+    @staticmethod
+    def _sleep(seconds):
+        pass
+
+
+open(f"{go}.ready-{os.getpid()}", "w").close()
+while not os.path.exists(go):
+    time.sleep(0.01)
+sys.exit(0 if KisAuth("k", "s", SlowClient(), cache=FileTokenCache(directory)).token() == "T" else 1)
+"""
 
 
 def test_두_프로세스가_동시에_미스를_봐도_발급은_한_번이다(tmp_path):
     # WHY: 같은 VM 에서 1분 워커 여럿이 07:50 에 함께 뜬다. 각자 발급하면 한쪽이 403 을 맞아
     #      61초를 기다리고(그 동안 1분 window 가 결손), 계좌 주인에게 발급 알림이 두 번 간다.
-    context = multiprocessing.get_context("fork")
-    barrier, issue_log = context.Barrier(2), tmp_path / "issued.log"
+    cache_dir, go, issue_log = tmp_path / "cache", tmp_path / "go", tmp_path / "issued.log"
+    cache_dir.mkdir()
+    env = {**os.environ, "PYTHONPATH": str(Path(kis_auth.__file__).parents[2])}
     children = [
-        context.Process(target=_issue_in_child, args=(str(tmp_path), barrier, str(issue_log)))
+        subprocess.Popen([sys.executable, "-c", CHILD, str(cache_dir), str(go), str(issue_log)], env=env)
         for _ in range(2)
     ]
-    for child in children:
-        child.start()
-    for child in children:
-        child.join(timeout=30)
+    try:
+        deadline = time.monotonic() + 30
+        while len(list(tmp_path.glob("go.ready-*"))) < 2:  # 둘 다 import 를 끝낸 뒤 함께 출발시킨다
+            assert time.monotonic() < deadline and all(child.poll() is None for child in children)
+            time.sleep(0.01)
+        go.touch()
+        codes = [child.wait(timeout=30) for child in children]
+    finally:
+        for child in children:
+            child.kill()
 
-    assert [child.exitcode for child in children] == [0, 0]  # 둘 다 같은 토큰을 받았다
+    assert codes == [0, 0]  # 둘 다 같은 토큰을 받았다
     assert issue_log.read_text(encoding="utf-8").count("issued") == 1

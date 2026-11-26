@@ -26,7 +26,6 @@ import random
 import tempfile
 import threading
 import time
-
 from contextlib import contextmanager
 
 from ..ops.aws import ssm_client
@@ -135,6 +134,9 @@ class SsmTokenCache:
     '만료·타인 토큰을 쓴다'로 나타나 전 종목 401 이 되는데, 엄격한 실수는 발급 한 번이다.
     """
 
+    # 읽기 예외 중 '아직 아무도 안 썼다'(정상 미스)의 클래스 이름 — 저장소마다 다르다.
+    absent_error = "ParameterNotFound"
+
     def __init__(self, param: str, client=None):
         self.param = param
         self._client = client
@@ -180,8 +182,7 @@ class SsmTokenCache:
             # 것으로 치면 승자 폴링이 첫 런에서 아예 안 도는데, 그때가 폴링이 제일 필요한
             # 순간이다. 클래스 이름으로 가른다 — botocore 예외를 import 하면 boto3 없는
             # 로컬·단위테스트에서 이 모듈을 못 읽는다(지연 import 관례).
-            # 파일 캐시의 '파일 없음'도 같은 정상 미스다.
-            self.read_failed = type(exc).__name__ not in ("ParameterNotFound", "FileNotFoundError")
+            self.read_failed = type(exc).__name__ != self.absent_error
             logger.info("KIS 토큰 캐시 미스 — 발급 경로로 간다: %s", exc)
             return None
         self.read_failed = False
@@ -235,6 +236,8 @@ class FileTokenCache(SsmTokenCache):
     하고(없으면 컨테이너마다 따로 발급한다), VM 이 다르면 VM 마다 한 번씩 발급한다.
     디렉터리는 만들지 않는다 — 마운트가 빠진 것을 조용히 가리지 않고 경고 로그로 드러낸다.
     """
+
+    absent_error = "FileNotFoundError"
 
     def __init__(self, directory: str):
         self.directory = directory
