@@ -90,6 +90,7 @@ claude mcp add edge-analysis -- <.venv의 python> -m edge_analysis_v2.tools.mcp_
 
 - 에이전트는 `open_etf(etf_code, analysis_at)`로 ETF 하나를 그 시점 기준으로 읽고, 응답의 `tools`에 있는 이름과 `parameters`대로 `call(tool, arguments)`를 부른다. `analysis_at`을 비우면 지금이다.
 - 읽기 전용 계정(`edge-v2-readonly`) 터널 `127.0.0.1:15432`가 필요하다. 거시·재무 툴은 쓰기 계정(`edge-v2-writer`) 터널 `127.0.0.1:15433`이 열려 있을 때만 붙고, 그 연결은 `default_transaction_read_only`로 잠근다. 터널이 없거나 조회가 실패하면 거시·재무 툴만 빼고 `notes`에 이유를 적는다.
+- AWS 밖의 PostgreSQL 에 붙을 때는 `EDGE_ANALYSIS_DB_HOST` 를 준다. 그러면 Secrets Manager·터널 없이 env 값으로 붙는다: `EDGE_ANALYSIS_DB_PORT`(기본 5432)·`EDGE_ANALYSIS_DB_NAME`(기본 edge)·`EDGE_ANALYSIS_DB_SSLMODE`(기본 verify-full, require·verify-ca 허용)·`EDGE_ANALYSIS_DB_{WRITER,READER}_PASSWORD`(필수)·`EDGE_ANALYSIS_DB_{WRITER,READER}_USER`(기본은 전용 계정). 루트 인증서는 종전대로 `--rds-ca`(`RDS_CA_PATH`)에 그 서버의 CA 파일을 준다.
 
 ## 검증
 

@@ -1,9 +1,11 @@
-"""KIS(한국투자) OAuth 토큰 발급 — 컨테이너 간 공유 캐시(SSM) + run 당 1회 발급.
+"""KIS(한국투자) OAuth 토큰 발급 — 컨테이너 간 공유 캐시(SSM 또는 파일) + run 당 1회 발급.
 
 KIS 는 잦은 재발급을 분당 한도로 차단하므로, 종목마다 발급하지 않고 run 시작 시 한 번
 받아 그 run 내내 재사용한다(가격 어댑터가 fetch 시작에서 `token()` 을 한 번 호출).
-토큰은 디스크·레이크에 남기지 않는다(메모리 + SSM SecureString) — 앱키/시크릿은 env 로만
+토큰은 레이크에 남기지 않는다(메모리 + SSM SecureString) — 앱키/시크릿은 env 로만
 주입하고, **토큰 값은 로그·state 에 절대 남기지 않는다**(ADR-0009).
+AWS 가 없는 환경(OCI VM)은 `KIS_TOKEN_CACHE_DIR` 로 고른 **호스트 디렉터리의 파일**(권한 600)에
+공유한다 — 이때만 토큰이 디스크에 남는다(`FileTokenCache`).
 
 같은 앱키를 쓰는 SFN kis 브랜치 4개가 각자 발급하면 분당 1회 제한이 직렬 큐를 만들어
 마지막 브랜치가 222초를 기다린다(2026-07-24 실런 실측, ALPHA-573). 토큰은 24시간 유효하므로
@@ -21,8 +23,11 @@ import logging
 import math
 import os
 import random
+import tempfile
 import threading
 import time
+
+from contextlib import contextmanager
 
 from ..ops.aws import ssm_client
 from .http import PoliteClient, StopFetch
@@ -68,6 +73,8 @@ TOKEN_RATE_LIMIT_MAX_RETRY = 5
 # 파라미터 이름은 terraform(data-pipeline 모듈)이 kis task-def env 로 주입한다. 없으면
 # 캐시 없이 도는 게 정상이다 — 로컬 실행·단위테스트는 AWS 없이 돌아야 한다.
 CACHE_PARAM_ENV = "KIS_TOKEN_CACHE_PARAM"
+# AWS 가 없는 환경의 캐시 — 이 디렉터리의 파일에 공유한다(`FileTokenCache`). 둘 다 있으면 이쪽이 이긴다.
+CACHE_DIR_ENV = "KIS_TOKEN_CACHE_DIR"
 # 남은 유효시간이 이보다 짧으면 캐시를 안 쓴다. 수집 런 하나가 10분 안쪽이라, 런 도중
 # 만료돼 전 종목이 401 을 두드리는 것보다 한 번 더 발급하는 편이 싸다.
 # 만료 응답 코드. **여기 사는 이유**: 만료를 본 쪽이 부르는 문(`invalidate`)이 이 모듈에
@@ -138,7 +145,10 @@ class SsmTokenCache:
 
     @classmethod
     def from_env(cls) -> SsmTokenCache | None:
-        """env 에 캐시 파라미터 이름이 있으면 캐시를, 없으면 None(각자 발급 경로)."""
+        """env 에 캐시 디렉터리가 있으면 파일 캐시를, 파라미터 이름이 있으면 SSM 캐시를, 없으면 None(각자 발급 경로)."""
+        directory = os.environ.get(CACHE_DIR_ENV)
+        if directory:
+            return FileTokenCache(directory)
         param = os.environ.get(CACHE_PARAM_ENV)
         return cls(param) if param else None
 
@@ -147,11 +157,21 @@ class SsmTokenCache:
             self._client = ssm_client()
         return self._client
 
+    def _read(self, fingerprint: str) -> str:
+        return self._ssm().get_parameter(Name=self.param, WithDecryption=True)["Parameter"]["Value"]
+
+    def _write(self, fingerprint: str, value: str) -> None:
+        self._ssm().put_parameter(Name=self.param, Value=value, Type="SecureString", Overwrite=True)
+
+    @contextmanager
+    def issuing(self, fingerprint: str):
+        """발급 구간. SSM 에는 잠금이 없다 — 컨테이너 사이 경합은 403 뒤 승자 폴링이 맡는다."""
+        yield None
+
     def get(self, fingerprint: str) -> str | None:
         """유효한 공유 토큰 또는 None. 토큰 값은 로그에 남기지 않는다(남은 초만)."""
         try:
-            raw = self._ssm().get_parameter(Name=self.param, WithDecryption=True)
-            data = json.loads(raw["Parameter"]["Value"])
+            data = json.loads(self._read(fingerprint))
             token = data["token"]
             expires_at = float(data["expires_at"])
             same_key = data["app_key"] == fingerprint
@@ -160,7 +180,8 @@ class SsmTokenCache:
             # 것으로 치면 승자 폴링이 첫 런에서 아예 안 도는데, 그때가 폴링이 제일 필요한
             # 순간이다. 클래스 이름으로 가른다 — botocore 예외를 import 하면 boto3 없는
             # 로컬·단위테스트에서 이 모듈을 못 읽는다(지연 import 관례).
-            self.read_failed = type(exc).__name__ != "ParameterNotFound"
+            # 파일 캐시의 '파일 없음'도 같은 정상 미스다.
+            self.read_failed = type(exc).__name__ not in ("ParameterNotFound", "FileNotFoundError")
             logger.info("KIS 토큰 캐시 미스 — 발급 경로로 간다: %s", exc)
             return None
         self.read_failed = False
@@ -194,14 +215,73 @@ class SsmTokenCache:
     def put(self, token: str, fingerprint: str, expires_at: float) -> None:
         """새로 발급한 토큰을 공유한다. 쓰기 실패는 경고만 — 이 런은 이미 토큰을 들고 있다."""
         try:
-            self._ssm().put_parameter(
-                Name=self.param,
-                Value=json.dumps({"token": token, "app_key": fingerprint, "expires_at": expires_at}),
-                Type="SecureString",
-                Overwrite=True,
-            )
+            self._write(fingerprint, json.dumps({"token": token, "app_key": fingerprint, "expires_at": expires_at}))
         except Exception as exc:  # noqa: BLE001 — 다음 컨테이너가 발급하면 될 뿐이다
             logger.warning("KIS 토큰 캐시 쓰기 실패 — 다음 컨테이너가 다시 발급한다: %s", exc)
+
+
+class FileTokenCache(SsmTokenCache):
+    """토큰을 호스트 디렉터리의 파일에 공유한다 — AWS 가 없는 환경(OCI VM)의 캐시.
+
+    판정(지문·만료·형식)과 "모든 실패는 미스"는 SSM 판의 코드를 그대로 쓴다. 다른 점은 셋이다.
+
+    - 파일은 **앱키 지문마다 하나**다(`kis-token-<지문>.json`). 앱키가 둘이라, 한 파일을 나눠 쓰면
+      서로의 토큰을 지문 불일치로 버리고 프로세스가 뜰 때마다 번갈아 재발급한다.
+    - 쓰기는 임시 파일(권한 600)에 쓴 뒤 `os.replace` 로 바꾼다 — 읽는 쪽이 반쯤 쓰인 파일을 못 본다.
+    - `issuing` 이 발급 구간을 `flock` 으로 묶는다. 두 프로세스가 동시에 미스를 봐도 하나만 발급하고,
+      나머지는 잠금이 풀린 뒤 그 토큰을 읽는다(SSM 판은 둘 다 발급해 한쪽이 403 을 맞는다).
+
+    ⚠️ 공유 범위는 **이 디렉터리를 보는 프로세스**다. 컨테이너는 같은 호스트 디렉터리를 마운트해야
+    하고(없으면 컨테이너마다 따로 발급한다), VM 이 다르면 VM 마다 한 번씩 발급한다.
+    디렉터리는 만들지 않는다 — 마운트가 빠진 것을 조용히 가리지 않고 경고 로그로 드러낸다.
+    """
+
+    def __init__(self, directory: str):
+        self.directory = directory
+        self.read_failed = False
+
+    def _path(self, fingerprint: str) -> str:
+        return os.path.join(self.directory, f"kis-token-{fingerprint}.json")
+
+    def _read(self, fingerprint: str) -> str:
+        with open(self._path(fingerprint), encoding="utf-8") as handle:
+            return handle.read()
+
+    def _write(self, fingerprint: str, value: str) -> None:
+        descriptor, temporary = tempfile.mkstemp(dir=self.directory, prefix="kis-token-", suffix=".tmp")  # 권한 600
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                handle.write(value)
+            os.replace(temporary, self._path(fingerprint))
+        except BaseException:
+            os.unlink(temporary)
+            raise
+
+    @contextmanager
+    def issuing(self, fingerprint: str):
+        """발급 구간을 프로세스 사이 잠금으로 묶고, 잠금을 잡은 뒤 다시 읽은 캐시 값을 내준다.
+
+        잠금을 못 잡으면 None 을 내주고 잠금 없이 발급하게 둔다 — 최악이 캐시 없던 시절의 동작이다.
+        """
+        import fcntl  # 지연 import — Unix 전용
+
+        # ponytail: 잠금 대기에 기한이 없다. 잡은 쪽의 발급은 유한하고(HTTP 타임아웃·403 재시도 상한 약 8분)
+        # 죽으면 커널이 잠금을 푼다. 대기자가 그보다 빨리 포기해야 하면 LOCK_NB 폴링으로 바꾼다.
+        try:
+            lock = open(self._path(fingerprint) + ".lock", "a")  # noqa: SIM115 — 아래 with 가 닫는다
+        except OSError as exc:
+            logger.warning("KIS 토큰 캐시 잠금 파일을 열지 못했다 — 잠금 없이 발급한다: %s", exc)
+            yield None
+            return
+        with lock:  # 닫히면 잠금도 풀린다
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+            except OSError as exc:
+                logger.warning("KIS 토큰 캐시 잠금을 잡지 못했다 — 잠금 없이 발급한다: %s", exc)
+                yield None
+                return
+            # 잠금을 기다린 사이 앞선 프로세스가 발급해 썼을 수 있다.
+            yield self.get(fingerprint)
 
 
 def domain_for(env: str) -> str:
@@ -227,7 +307,7 @@ def _is_rate_limited(exc: StopFetch) -> bool:
 
 
 class KisAuth:
-    """앱키/시크릿 → 액세스 토큰. 공유 캐시(SSM) → 없으면 1회 발급 후 메모리 캐시."""
+    """앱키/시크릿 → 액세스 토큰. 공유 캐시(SSM 또는 파일) → 없으면 1회 발급 후 메모리 캐시."""
 
     def __init__(
         self,
@@ -325,6 +405,14 @@ class KisAuth:
         cached = self._cached(fingerprint)
         if cached:
             return cached
+        if not self.cache:
+            return self._issue_shared(fingerprint)
+        # 파일 캐시는 여기서 프로세스 사이 잠금을 잡고 캐시를 다시 읽어 준다(SSM 캐시는 None 을 준다).
+        with self.cache.issuing(fingerprint) as cached:
+            return cached or self._issue_shared(fingerprint)
+
+    def _issue_shared(self, fingerprint: str) -> str:
+        """발급하고 공유 캐시에 쓴다. 403(분당 1회)은 대기·재시도한다."""
         for attempt in range(TOKEN_RATE_LIMIT_MAX_RETRY + 1):
             try:
                 token, expires_at = self._issue()

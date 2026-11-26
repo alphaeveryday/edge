@@ -6,7 +6,7 @@ from pathlib import Path
 import psycopg
 from psycopg.rows import dict_row
 
-from edge_analysis_v2.storage.database import DB_HOST
+from edge_analysis_v2.storage.database import DB_HOST, env_target
 from edge_analysis_v2.storage.source_inputs import macro_inputs, financial_inputs
 from edge_analysis_v2.sources.calendar import trading_dates
 from edge_analysis_v2.tools.fixture_data import FixtureTools
@@ -19,8 +19,12 @@ from copy import deepcopy
 def connect_sources(ca_path: Path, *, session=None, cloud=False):
     """Open a dedicated TLS-verified, read-only source transaction.
 
+    With ``EDGE_ANALYSIS_DB_HOST`` set the connection goes to that host with reader credentials from
+    the environment (``storage.database.env_target``); ``session`` and ``cloud`` are ignored and AWS is
+    not called.
+
     Args:
-        ca_path: Regional RDS CA bundle.
+        ca_path: Regional RDS CA bundle, or the CA of the host named in the environment.
         session: Optional AWS session; default uses the restricted reader profile.
         cloud: Use the ECS task role and direct VPC connection instead of local SSM.
 
@@ -28,18 +32,20 @@ def connect_sources(ca_path: Path, *, session=None, cloud=False):
         Caller-owned repeatable-read psycopg connection with dictionary rows.
     """
     ca = Path(ca_path).resolve(strict=True)
-    if session is None:
-        import boto3
-        session = boto3.Session(region_name='ap-northeast-2', **({} if cloud else {'profile_name':'edge-v2-readonly'}))
-    secret = json.loads(session.client('secretsmanager').get_secret_value(
-        SecretId='edge/analysis-v2/readonly')['SecretString'])
-    expected = dict(username='edge_analysis_v2_reader', host=DB_HOST, port=5432, dbname='edge')
-    if any(secret.get(k) != v for k,v in expected.items()) or not isinstance(secret.get('password'), str) or not secret['password']:
-        raise ValueError('Dedicated source reader identity required')
-    address = {'port':5432} if cloud else {'hostaddr':'127.0.0.1','port':15432}
-    connection = psycopg.connect(host=DB_HOST, **address,
-        user=expected['username'], password=secret['password'], dbname='edge',
-        sslmode='verify-full', sslrootcert=str(ca), connect_timeout=10,
+    target = env_target('READER', 'edge_analysis_v2_reader', ca)
+    if target is None:
+        if session is None:
+            import boto3
+            session = boto3.Session(region_name='ap-northeast-2', **({} if cloud else {'profile_name':'edge-v2-readonly'}))
+        secret = json.loads(session.client('secretsmanager').get_secret_value(
+            SecretId='edge/analysis-v2/readonly')['SecretString'])
+        expected = dict(username='edge_analysis_v2_reader', host=DB_HOST, port=5432, dbname='edge')
+        if any(secret.get(k) != v for k,v in expected.items()) or not isinstance(secret.get('password'), str) or not secret['password']:
+            raise ValueError('Dedicated source reader identity required')
+        address = {'port':5432} if cloud else {'hostaddr':'127.0.0.1','port':15432}
+        target = dict(host=DB_HOST, **address, user=expected['username'], password=secret['password'], dbname='edge',
+                      sslmode='verify-full', sslrootcert=str(ca))
+    connection = psycopg.connect(**target, connect_timeout=10,
         row_factory=dict_row, options='-c default_transaction_read_only=on -c statement_timeout=15000')
     connection.read_only = True
     connection.isolation_level = psycopg.IsolationLevel.REPEATABLE_READ
