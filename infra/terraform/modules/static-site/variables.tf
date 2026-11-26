@@ -107,3 +107,15 @@ variable "api_origin_header_value" {
   default   = ""
   sensitive = true
 }
+
+variable "geo_allow_countries" {
+  description = "접속을 허용할 나라(ISO 3166-1 alpha-2, 예: [\"KR\"]). 빈 목록이면 나라 제한 없이 둔다."
+  type        = list(string)
+  default     = []
+}
+
+variable "response_headers_policy_id" {
+  description = "default behavior 응답에 붙일 response headers policy ID(보안 헤더 등). 빈 값이면 붙이지 않는다."
+  type        = string
+  default     = ""
+}
