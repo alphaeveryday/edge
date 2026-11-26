@@ -76,3 +76,14 @@ def test_missing_password_or_clear_text_mode_is_rejected_before_connection(host,
         db.connect_results(ca)
     assert not rejected.value.transient
     connect.assert_not_called()
+
+
+def test_empty_host_is_an_error_not_a_fallback_to_rds(host, monkeypatch):
+    # ``HOST=${UNSET}`` in an env file yields an empty value; treating it as unset would connect to RDS instead.
+    ca, connect = host
+    monkeypatch.setenv("EDGE_ANALYSIS_DB_HOST", "")
+    with pytest.raises(ValueError):
+        db.env_target("WRITER", db.DB_USER, ca)
+    with pytest.raises(ValueError):
+        sources.connect_sources(ca)
+    connect.assert_not_called()

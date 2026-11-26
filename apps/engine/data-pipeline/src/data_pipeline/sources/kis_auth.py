@@ -136,6 +136,9 @@ class SsmTokenCache:
 
     # 읽기 예외 중 '아직 아무도 안 썼다'(정상 미스)의 클래스 이름 — 저장소마다 다르다.
     absent_error = "ParameterNotFound"
+    # '없음'이 아닌 읽기 실패의 로그 수준, 그리고 403 뒤 승자의 쓰기를 폴링할지 — 저장소마다 다르다.
+    read_failure_level = logging.INFO
+    awaits_winner = True
 
     def __init__(self, param: str, client=None):
         self.param = param
@@ -183,7 +186,8 @@ class SsmTokenCache:
             # 순간이다. 클래스 이름으로 가른다 — botocore 예외를 import 하면 boto3 없는
             # 로컬·단위테스트에서 이 모듈을 못 읽는다(지연 import 관례).
             self.read_failed = type(exc).__name__ != self.absent_error
-            logger.info("KIS 토큰 캐시 미스 — 발급 경로로 간다: %s", exc)
+            logger.log(self.read_failure_level if self.read_failed else logging.INFO,
+                       "KIS 토큰 캐시 미스 — 발급 경로로 간다: %s", exc)
             return None
         self.read_failed = False
         if not same_key:
@@ -234,10 +238,15 @@ class FileTokenCache(SsmTokenCache):
 
     ⚠️ 공유 범위는 **이 디렉터리를 보는 프로세스**다. 컨테이너는 같은 호스트 디렉터리를 마운트해야
     하고(없으면 컨테이너마다 따로 발급한다), VM 이 다르면 VM 마다 한 번씩 발급한다.
+    쓰는 uid 는 **하나**여야 한다 — 파일이 600 이라 다른 uid 는 못 읽고, 서로 덮어쓰며 번갈아 재발급한다
+    (읽기 실패를 경고로 남기는 이유다).
     디렉터리는 만들지 않는다 — 마운트가 빠진 것을 조용히 가리지 않고 오류 로그로 드러낸다.
     """
 
     absent_error = "FileNotFoundError"
+    read_failure_level = logging.WARNING  # 권한·손상 — 프로세스마다 재발급하게 되는 설정 오류다
+    # 이 디렉터리에 쓰는 프로세스는 모두 `issuing` 의 잠금을 거친다. 잠금을 쥔 동안에는 승자가 있을 수 없다.
+    awaits_winner = False
 
     def __init__(self, directory: str):
         self.directory = directory
@@ -438,7 +447,7 @@ class KisAuth:
                 # 폴링은 **첫 403 에서만** 한다. 경합은 컨테이너들이 동시에 시작하는 그 순간에만
                 # 있고, 그 뒤로도 매번 폴링하면 아무도 캐시를 못 쓰는 상황(승자가 쓰기에 실패)에서
                 # 재시도마다 10초씩 얹혀 폴백이 현행보다 느려진다(edge-review 지적).
-                if self.cache and attempt == 0:
+                if self.cache and self.cache.awaits_winner and attempt == 0:
                     cached = self._await_winner(fingerprint)
                     if cached:
                         logger.info("KIS 토큰 — 403 직후 공유 캐시에서 받았다(1분 대기 없음)")

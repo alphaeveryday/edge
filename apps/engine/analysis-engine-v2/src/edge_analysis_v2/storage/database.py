@@ -48,11 +48,15 @@ def env_target(role, user, ca):
         Keyword arguments for ``psycopg.connect`` without timeouts or session options.
 
     Raises:
-        ValueError: Password missing, or ``EDGE_ANALYSIS_DB_SSLMODE`` would allow an unencrypted session.
+        ValueError: Host set but empty, password missing, or ``EDGE_ANALYSIS_DB_SSLMODE`` would allow an
+            unencrypted session.
     """
     env = os.environ
-    if not env.get(ENV_HOST):
+    if ENV_HOST not in env:
         return None
+    if not env[ENV_HOST]:
+        # An empty value is a broken substitution, not a request for RDS; falling back would reach the wrong database.
+        raise ValueError(f"{ENV_HOST} is set but empty")
     password, sslmode = env.get(f"EDGE_ANALYSIS_DB_{role}_PASSWORD"), env.get("EDGE_ANALYSIS_DB_SSLMODE") or "verify-full"
     if not password:
         raise ValueError(f"EDGE_ANALYSIS_DB_{role}_PASSWORD is required with {ENV_HOST}")

@@ -97,6 +97,39 @@ def test_아직_아무도_안_쓴_디렉터리는_정상_미스다(tmp_path):
     assert cache.read_failed is False
 
 
+def test_깨진_캐시_파일은_경고를_남기고_새_발급이_덮어쓴다(tmp_path, caplog):
+    # WHY: 못 읽는 파일(권한·손상)을 조용히 미스로 넘기면 프로세스가 뜰 때마다 재발급하는 상태가
+    #      INFO 로그에 묻힌다. 경고로 드러내고, 다음 발급이 파일을 고쳐 놓아야 한다.
+    client = IssuingClient()
+    (broken,) = [tmp_path / f"kis-token-{kis_auth._app_key_fingerprint('k')}.json"]
+    broken.write_text("{잘린 값", encoding="utf-8")
+
+    assert KisAuth("k", "s", client, cache=FileTokenCache(str(tmp_path))).token() == "T-k"
+    assert "WARNING" in [record.levelname for record in caplog.records]
+    assert KisAuth("k", "s", client, cache=FileTokenCache(str(tmp_path))).token() == "T-k"
+    assert client.issued == 1
+
+
+def test_파일_캐시는_403_뒤에_승자를_폴링하지_않는다(tmp_path):
+    # WHY: 이 디렉터리에 쓰는 프로세스는 모두 같은 잠금을 거친다. 잠금을 쥔 채 승자의 쓰기를
+    #      기다려도 아무도 못 쓰니, 폴링 10초는 나와 잠금 대기자 모두를 그만큼 늦출 뿐이다.
+    from data_pipeline.sources.http import StopFetch
+
+    slept = []
+
+    class RateLimitedOnce(IssuingClient):
+        def request(self, method, url, *, headers=None, data=None, decode=True):
+            if not slept:
+                raise StopFetch("HTTP 403", status=403, body='{"error_code":"EGW00133"}')
+            return super().request(method, url, headers=headers, data=data, decode=decode)
+
+        def _sleep(self, seconds):
+            slept.append(seconds)
+
+    assert KisAuth("k", "s", RateLimitedOnce(), cache=FileTokenCache(str(tmp_path))).token() == "T-k"
+    assert len(slept) == 1 and slept[0] >= kis_auth.TOKEN_RATE_LIMIT_WAIT_SEC
+
+
 # 자식 프로세스: 준비를 알리고, 출발 신호를 기다렸다가 토큰을 받는다. 발급은 로그에 한 줄씩 남긴다.
 CHILD = """
 import json, os, sys, time
