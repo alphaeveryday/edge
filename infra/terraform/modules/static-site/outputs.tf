@@ -27,3 +27,8 @@ output "distribution_arn" {
   description = "CloudFront 배포 ARN — UI CD 의 무효화(CreateInvalidation) 권한 스코프"
   value       = aws_cloudfront_distribution.this.arn
 }
+
+output "key_value_store_arn" {
+  description = "key_value_store=true 일 때 KeyValueStore ARN — 값은 aws cloudfront-keyvaluestore put-key --kvs-arn <이 값> 으로 넣는다"
+  value       = var.key_value_store ? aws_cloudfront_key_value_store.this[0].arn : null
+}

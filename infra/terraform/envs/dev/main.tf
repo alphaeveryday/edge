@@ -934,6 +934,21 @@ module "b2b_console_site" {
   api_origin_header_value = module.quarterback_call.origin_header_value
 }
 
+# ── ETF Orca 앱 디자인 보기 (design.etforca.com) ─────────
+# 앱 코드를 웹으로 빌드한 것(/app/)과 화면 모음(/screens/)을 비밀번호 뒤에 둔다. 파일은
+# apps/etforca/app-ui/scripts/design-sync.sh 가 빌드해 올린다(CD 없음 — 디자인 수정 때 손으로 돌린다).
+# 비밀번호는 KeyValueStore 의 basic_auth 키(base64 "아이디:비밀번호")에만 있다 — 키가 없으면 모두 401.
+module "design_site" {
+  source = "../../modules/static-site"
+
+  name                = "${local.prefix}-app-design"
+  domain_name         = var.design_domain
+  zone_id             = data.aws_route53_zone.etforca.zone_id
+  certificate_arn     = data.aws_acm_certificate.etforca_cdn.arn
+  viewer_request_code = file("${path.module}/design-site.js")
+  key_value_store     = true
+}
+
 # 통화 데모 API — 전사 임시 토큰 발급(OpenAI)과 상담 답변 스트리밍(DeepSeek). 키는 Secrets Manager 에만 있다.
 module "quarterback_call" {
   source = "../../modules/quarterback-call"

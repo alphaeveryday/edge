@@ -36,6 +36,18 @@ variable "enabled" {
   default     = true
 }
 
+variable "viewer_request_code" {
+  description = "선택: default behavior 의 viewer-request 에 붙일 CloudFront Function(cloudfront-js-2.0) 코드. 사이트마다 다른 규칙(비밀번호 확인 + 경로 리라이트 등)을 호출자가 넣는다. spa·redirect_www 와 함께 켤 수 없다(viewer-request 함수는 behavior 당 하나)."
+  type        = string
+  default     = ""
+}
+
+variable "key_value_store" {
+  description = "true 면 CloudFront KeyValueStore 를 만들어 viewer_request_code 함수에 붙인다. 비밀값(예: 접속 비밀번호)을 코드·state 밖에서 넣을 때 쓴다 — 키 값은 terraform 이 아니라 aws cloudfront-keyvaluestore put-key 로 넣는다."
+  type        = bool
+  default     = false
+}
+
 variable "price_class" {
   description = "CloudFront 엣지 범위. dev 는 비용 절감으로 좁혀도 됨(PriceClass_100=북미·유럽)."
   type        = string
