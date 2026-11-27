@@ -6,6 +6,7 @@ edge-v2-readonly AWS profile. Macro and financial reads exist only behind the wr
 tunnel 127.0.0.1:15433); that session is forced read-only, and without it those tools are left out and said so.
 """
 import argparse
+import os
 from datetime import datetime
 from pathlib import Path
 
@@ -15,7 +16,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from edge_analysis_v2.sources.database import (DatabaseTools, connect_sources, load_flow, load_prices,
                                                load_research_observations, load_source)
-from edge_analysis_v2.storage.database import ResultDatabaseError, connect_results
+from edge_analysis_v2.storage.database import ENV_HOST, ResultDatabaseError, connect_results
 
 
 def load(ca_path, etf_code, analysis_at):
@@ -31,6 +32,8 @@ def load(ca_path, etf_code, analysis_at):
             connection.execute('SET SESSION default_transaction_read_only = on')
             source = load_research_observations(connection, source)
     except ResultDatabaseError:
+        if ENV_HOST in os.environ:
+            return DatabaseTools(source), ['거시·재무 툴 없음: EDGE_ANALYSIS_DB_* 로 지정한 DB 에 쓰기 계정으로 붙지 못함']
         return DatabaseTools(source), ['거시·재무 툴 없음: 127.0.0.1:15433 쓰기 계정 터널이 닫혀 있거나 edge-v2-writer 프로필을 쓸 수 없음']
     except psycopg.Error as error:  # connected, then a grant, timeout or schema change failed: drop these tools, not the ETF
         return DatabaseTools(source), [f'거시·재무 툴 없음: {type(error).__name__}: {error}']

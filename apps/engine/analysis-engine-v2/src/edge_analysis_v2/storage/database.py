@@ -1,6 +1,7 @@
-"""Dedicated result database connection through the fixed local SSM tunnel."""
+"""Dedicated result database connection: RDS through Secrets Manager, or a host named in the environment."""
 from collections import OrderedDict
 import json
+import os
 from pathlib import Path
 import random
 import time
@@ -14,6 +15,10 @@ SECRET_ID = "edge/analysis-v2/writer"
 # are deliberately absent: repeating them unchanged cannot succeed and would hide the cause.
 TRANSIENT_SQLSTATES = ('57P01', '57P02', '57P03', '53300')
 RETRY_SECONDS = 20
+RESULT_OPTIONS = "-c statement_timeout=15000 -c idle_in_transaction_session_timeout=30000"
+ENV_HOST = "EDGE_ANALYSIS_DB_HOST"
+# Credentials must not cross the network in clear text, and libpq falls back to it under the weaker modes.
+ENV_SSLMODES = ("require", "verify-ca", "verify-full")
 
 
 class ResultDatabaseError(RuntimeError):
@@ -26,6 +31,44 @@ class ResultDatabaseError(RuntimeError):
     def __init__(self, message, *, transient=False):
         super().__init__(message)
         self.transient = transient
+
+
+def env_target(role, user, ca):
+    """Return connection arguments for a database named in the environment, or None when none is named.
+
+    ``EDGE_ANALYSIS_DB_HOST`` selects a PostgreSQL outside AWS. Secrets Manager, the RDS host and the
+    local tunnel are then all skipped, so nothing calls AWS. Unset, the caller keeps its RDS path.
+
+    Args:
+        role: ``WRITER`` or ``READER``; picks ``EDGE_ANALYSIS_DB_<role>_USER`` and ``_PASSWORD``.
+        user: Database role used when the user variable is unset.
+        ca: Certificate bundle the caller verified on disk; used only by the verifying sslmodes.
+
+    Returns:
+        Keyword arguments for ``psycopg.connect`` without timeouts or session options.
+
+    Raises:
+        ValueError: Host set but empty, password missing, or ``EDGE_ANALYSIS_DB_SSLMODE`` would allow an
+            unencrypted session.
+    """
+    env = os.environ
+    if ENV_HOST not in env:
+        return None
+    if not env[ENV_HOST]:
+        # An empty value is a broken substitution, not a request for RDS; falling back would reach the wrong database.
+        raise ValueError(f"{ENV_HOST} is set but empty")
+    password, sslmode = env.get(f"EDGE_ANALYSIS_DB_{role}_PASSWORD"), env.get("EDGE_ANALYSIS_DB_SSLMODE") or "verify-full"
+    if not password:
+        raise ValueError(f"EDGE_ANALYSIS_DB_{role}_PASSWORD is required with {ENV_HOST}")
+    if sslmode not in ENV_SSLMODES:
+        raise ValueError(f"EDGE_ANALYSIS_DB_SSLMODE must be one of {ENV_SSLMODES}")
+    target = dict(host=env[ENV_HOST], port=int(env.get("EDGE_ANALYSIS_DB_PORT") or 5432),
+                  dbname=env.get("EDGE_ANALYSIS_DB_NAME") or "edge",
+                  user=env.get(f"EDGE_ANALYSIS_DB_{role}_USER") or user, password=password, sslmode=sslmode)
+    if sslmode != "require":
+        # With a root certificate present libpq verifies even under ``require``; leave it out there.
+        target["sslrootcert"] = str(ca)
+    return target
 
 
 def transient(exc):
@@ -88,8 +131,12 @@ def connect_results(ca_path: Path, *, session=None, cloud=False):
     The secret and its client are reused within the process. A failed connection refetches the secret
     before the next attempt, so a rotated password recovers without a restart.
 
+    With ``EDGE_ANALYSIS_DB_HOST`` set the connection goes to that host with credentials from the
+    environment instead (see ``env_target``); ``session`` and ``cloud`` are ignored and AWS is not called.
+
     Args:
-        ca_path: Verified regional RDS certificate bundle on disk.
+        ca_path: Certificate bundle on disk: the regional RDS bundle, or the CA of the host named in the
+            environment. The file must exist under every sslmode.
         session: Optional AWS session for isolated tests; defaults to edge-v2-writer.
         cloud: Connect inside the VPC using the task role and the native RDS port.
 
@@ -104,6 +151,12 @@ def connect_results(ca_path: Path, *, session=None, cloud=False):
         ca = Path(ca_path).resolve(strict=True)
         if not ca.is_file():
             raise ValueError("CA bundle must be a file")
+        target = env_target("WRITER", DB_USER, ca)
+        if target is not None:
+            started = time.monotonic()
+            connection = psycopg.connect(**target, connect_timeout=10, autocommit=True, options=RESULT_OPTIONS)
+            STATS.connect_seconds.append(time.monotonic() - started)
+            return connection
         if session is None:
             if cloud not in _SESSIONS:
                 import boto3
@@ -121,8 +174,7 @@ def connect_results(ca_path: Path, *, session=None, cloud=False):
             connection = psycopg.connect(host=DB_HOST, **address,
                                          dbname="edge", user=DB_USER, password=secret["password"],
                                          sslmode="verify-full", sslrootcert=str(ca), connect_timeout=10,
-                                         autocommit=True,
-                                         options="-c statement_timeout=15000 -c idle_in_transaction_session_timeout=30000")
+                                         autocommit=True, options=RESULT_OPTIONS)
         except psycopg.OperationalError:
             # psycopg reports no SQLSTATE for connect failures, so a rotated password looks like any other refusal.
             _SECRETS[id(session)]['stale'] = True
@@ -131,7 +183,8 @@ def connect_results(ca_path: Path, *, session=None, cloud=False):
         STATS.connect_seconds.append(time.monotonic() - started)
         return connection
     except Exception as exc:
-        raise ResultDatabaseError("Writer connection unavailable; check writer profile, tunnel and RDS CA",
+        raise ResultDatabaseError("Writer connection unavailable; check writer profile, tunnel and RDS CA"
+                                  " (or EDGE_ANALYSIS_DB_* when a host is set there)",
                                   transient=isinstance(exc, psycopg.OperationalError)) from None
 
 
