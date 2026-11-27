@@ -36,6 +36,8 @@ from torch import nn
 from transformers import AutoConfig, AutoModel, AutoModelForQuestionAnswering, AutoTokenizer
 from transformers.modeling_utils import no_init_weights
 
+from .extract import ARM, ARM_VERSION_SUFFIX
+
 # 모델 문서 분류 → 운영 어휘(extract.DOC_CLASSES). LIST(공시·종목 나열)는 운영에 없는
 # 축이라 사건 없는 시세 나열로 합친다 — 둘 다 추출 대상이 아니라는 점이 같다.
 DOC_CLASS_MAP = {
@@ -74,7 +76,8 @@ class RobertaTagger:
     def __init__(self, model_dir: str | Path, threads: int | None = None):
         root = Path(model_dir)
         meta = json.loads((root / "meta.json").read_text(encoding="utf-8"))
-        self.version: str = meta["version"]
+        # arm 이면 엔진 접미사를 붙인다(extract.ROBERTA_RUNTIME_VERSION 과 같은 값). x86 은 묶음 버전 그대로.
+        self.version: str = meta["version"] + ARM_VERSION_SUFFIX
         self._doc_classes: list[str] = meta["doc_classes"]
         self._types: list[str] = meta["types"]
         self._max_length: int = meta["max_length"]
@@ -155,6 +158,10 @@ def _quantized(model: nn.Module, weights: Path) -> nn.Module:
     가중치의 범위를 관측하는데, 초기화를 건너뛴 뼈대의 값은 쓰레기(NaN 포함 가능)다.
     가중치는 텐서만 읽는다(weights_only, 피클 실행 없음).
     """
+    if ARM:
+        # aarch64 기본 엔진(x86)은 int8 Linear 를 못 만든다 — 프로세스 전역 설정이라 arm 에서만 바꾼다.
+        # int8 을 fp32 로 풀어 돌리는 방식은 4GB 호스트에서 두 모델을 못 올려(적재 중 OOM) 쓰지 않는다.
+        torch.backends.quantized.engine = "qnnpack"
     _swap_linear(model)
     model.load_state_dict(torch.load(weights, map_location="cpu", weights_only=True))
     return model.eval()
