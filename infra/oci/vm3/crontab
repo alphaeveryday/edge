@@ -1,0 +1,12 @@
+# VM-3 뉴스 — 뉴스 배치 레인. 설치: crontab infra/oci/vm3/crontab
+# 시각은 모두 KST 다. 호스트 시간대를 Asia/Seoul 로 맞춘다(CRON_TZ 는 cronie 만 읽는다).
+# 이 VM 은 VM-1 감시가 매일 00:00~01:30, 거래일 07:50~16:30 에만 켠다. 그래서 08:10 슬롯은 거래일에만 돈다
+# (주말은 아래 요일 칸이, 평일 휴장일은 VM 이 꺼져 있어서 빠진다).
+# 레인 줄의 마지막 인자(HH:MM)는 그 줄의 cron 시각과 같아야 한다 — run_id 가 이 값에서 나온다.
+# 슬롯을 바꾸면 lib/edge_cron.py 의 SLOTS 도 같이 바꾼다(테스트가 둘을 대조한다).
+CRON_TZ=Asia/Seoul
+EDGE=/opt/edge/infra/oci
+LOG=/var/log/edge
+
+10 0 * * * $EDGE/vm3/news.sh 00:10 >> $LOG/news.log 2>&1
+10 8 * * 1-5 $EDGE/vm3/news.sh 08:10 >> $LOG/news.log 2>&1

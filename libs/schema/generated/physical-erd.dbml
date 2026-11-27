@@ -72,6 +72,16 @@ Table "assertion_metric" {
   "confidence" float8
 }
 
+Table "batch_lane_success" {
+  "lane" text [not null]
+  "slot_at" timestamptz [not null]
+  "finished_at" timestamptz [not null]
+
+  indexes {
+    ("lane", "slot_at") [pk]
+  }
+}
+
 Table "business_segment_fact" {
   "fact_id" text [pk]
   "fact_type" varchar(30)

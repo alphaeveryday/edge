@@ -4,6 +4,7 @@
 업무 데이터의 의미 관계가 아니라 실행 완전성과 운영 추적을 위한 도메인이다.
 시장·수집 도메인은 실행 및 커밋 상태를 남기고, 설명 도메인의 운영자 무효화는 `admin_activity_log`에 남는다.
 `call_budget`·`call_budget_class`는 KIS 호출자들이 나눠 쓰는 공유 호출 예산이며(ALPHA-1087, 기본 비활성), data-pipeline만 쓴다.
+`batch_lane_success`는 OCI 배치 cron 레인이 모든 스텝을 성공으로 끝낸 슬롯의 기록이며, 감시가 기한이 지나도 행이 없는 슬롯을 알린다([infra/oci](../../../../infra/oci/)).
 `ops_reconciliation_issue.evidence`는 운영 진단 JSON이며 이벤트 도메인의 `event_evidence`를 참조하지 않는다.
 
 ![운영 원장 ERD](erd.svg)

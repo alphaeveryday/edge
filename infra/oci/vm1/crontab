@@ -1,0 +1,35 @@
+# VM-1 서비스 — 배치 레인과 감시. 설치: crontab infra/oci/vm1/crontab
+# 시각은 모두 KST 다. 호스트 시간대를 Asia/Seoul 로 맞춘다(CRON_TZ 는 cronie 만 읽는다).
+# 레인 줄의 마지막 인자(HH:MM)는 그 줄의 cron 시각과 같아야 한다 — run_id 가 이 값에서 나온다.
+# 슬롯을 바꾸면 lib/edge_cron.py 의 SLOTS 도 같이 바꾼다(테스트가 둘을 대조한다).
+CRON_TZ=Asia/Seoul
+EDGE=/opt/edge/infra/oci
+LOG=/var/log/edge
+
+# ── 배치 레인 (락 하나를 나눠 써서 한 번에 하나만 돈다) ──
+0 3 * * * $EDGE/vm1/dividend_daily.sh 03:00 >> $LOG/dividend-daily.log 2>&1
+30 4 * * * $EDGE/vm1/snapshot_retention.sh 04:30 >> $LOG/snapshot-retention.log 2>&1
+20 5 * * * $EDGE/vm1/source_daily.sh 05:20 >> $LOG/source-daily.log 2>&1
+0 7 * * 1-5 $EDGE/vm1/premarket.sh 07:00 >> $LOG/premarket.log 2>&1
+35 9 * * 1-5 $EDGE/vm1/investor_intraday.sh 09:35 >> $LOG/investor-intraday.log 2>&1
+5 10 * * 1-5 $EDGE/vm1/investor_intraday.sh 10:05 >> $LOG/investor-intraday.log 2>&1
+25 11 * * 1-5 $EDGE/vm1/investor_intraday.sh 11:25 >> $LOG/investor-intraday.log 2>&1
+25 13 * * 1-5 $EDGE/vm1/investor_intraday.sh 13:25 >> $LOG/investor-intraday.log 2>&1
+35 14 * * 1-5 $EDGE/vm1/investor_intraday.sh 14:35 >> $LOG/investor-intraday.log 2>&1
+30 16 * * 1-5 $EDGE/vm1/etf_daily.sh 16:30 >> $LOG/etf-daily.log 2>&1
+30 19 * * 1-5 $EDGE/vm1/disclosure.sh 19:30 >> $LOG/disclosure.log 2>&1
+
+# ── 감시: 성공 행이 없는 슬롯 ──
+*/15 * * * * $EDGE/vm1/watchdog.py slots >> $LOG/watchdog.log 2>&1
+
+# ── 감시: 레이크 하루 증가 ──
+0 6 * * * $EDGE/vm1/watchdog.py lake >> $LOG/watchdog.log 2>&1
+
+# ── 감시: VM-2(장중 수집) 거래일 07:50~16:30, VM-3(뉴스) 매일 00:00~01:30 · 거래일 07:50~16:30 ──
+# --trading-day: KR 휴장일(env 파일의 OPS_KR_HOLIDAYS)에는 건너뛴다. 휴장일에 켜면 장중 컨테이너가 재시작을 되풀이한다.
+# 16:30 끄기는 날마다 한다(이미 꺼져 있으면 그대로 둔다).
+0 0 * * * $EDGE/vm1/watchdog.py vm start VM3 >> $LOG/watchdog.log 2>&1
+30 1 * * * $EDGE/vm1/watchdog.py vm stop VM3 >> $LOG/watchdog.log 2>&1
+50 7 * * 1-5 $EDGE/vm1/watchdog.py vm start VM2 VM3 --trading-day >> $LOG/watchdog.log 2>&1
+0 8 * * 1-5 $EDGE/vm1/watchdog.py vm check VM2 --trading-day >> $LOG/watchdog.log 2>&1
+30 16 * * 1-5 $EDGE/vm1/watchdog.py vm stop VM2 VM3 >> $LOG/watchdog.log 2>&1
