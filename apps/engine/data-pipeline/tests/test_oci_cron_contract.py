@@ -300,18 +300,33 @@ def test_lock_timeout_runs_nothing_and_alerts(tmp_path):
     assert (code, steps, rows) == (1, [], []) and len(mails) == 1
 
 
-def test_premarket_gives_up_when_the_universe_cannot_be_swapped_by_0730(tmp_path):
-    # WHY: build-minute-universe 는 거래일 07:30 뒤에는 유니버스 교체를 거부한다. 그 앞의 수집(시한 660초)·정제에 약 17분이
-    # 걸리므로 07:10 넘어 락을 잡아 봐야 교체까지 못 간다 — 락 실패로 끝내 일찍 알린다.
-    run_lane(tmp_path, "premarket", late_minutes=1)                 # 07:01 → 07:10 까지 9분
-    assert run_lane.lock_wait == [["-w", "540", "9"]]
-    assert run_lane.limits == ["5400", "5400", "1740"]              # 유니버스 스텝만 07:30 까지(29분)로 줄어든다
+def test_premarket_waits_for_the_lock_only_until_0720(tmp_path):
+    # WHY: build-minute-universe 는 거래일 07:30 뒤에는 유니버스 교체를 거부한다. 레인 전체가 실측 최대 376초라
+    # (edge_premarket.py 머리말) 07:20 까지 락을 잡으면 그 전에 끝난다. 더 기다려 봐야 교체까지 못 가므로 락 실패로 일찍 알린다.
+    run_lane(tmp_path, "premarket", late_minutes=1)                 # 07:01 → 07:20 까지 19분
+    assert run_lane.lock_wait == [["-w", "1140", "9"]]
+    assert "최대 376초" in (DAGS / "edge_premarket.py").read_text(encoding="utf-8")   # 07:20 의 근거가 그대로인가
     run_lane(tmp_path, "investor-intraday")                         # 다른 레인은 3600초
     assert run_lane.lock_wait == [["-w", "3600", "9"]]
-    # 수집·정제가 늦어 07:30 을 넘겼으면 유니버스 스텝을 시작하지 않고 알린다.
-    code, steps, mails, rows = run_lane(tmp_path, "premarket", EDGE_MANUAL="1", STUB_NOW="2026-11-30T07:31:00+09:00")
-    assert [step[0] for step in steps] == ["ingest-raw-etf", "normalize-etf"]
-    assert (code, rows) == (1, []) and len(mails) == 1 and "07:30" in run_lane.bodies[0]
+
+
+def test_premarket_leaves_the_0730_decision_to_the_universe_step(tmp_path):
+    # WHY: build-minute-universe 는 유니버스가 안 바뀐 날 07:30 뒤에도 exit 0 으로 끝난다(무변경 검사가 시각 검사보다
+    # 앞이다). 레인이 시각만 보고 그 스텝을 막으면 그런 날과 늦은 수동 재실행이 멀쩡한데 실패가 된다. 교체를 거부할지는
+    # 스텝이 정하고, 레인은 그 exit 코드만 따른다.
+    late = dict(EDGE_MANUAL="1", STUB_NOW="2026-11-30T07:45:00+09:00")
+    code, steps, mails, rows = run_lane(tmp_path, "premarket", **late)          # 스텝이 0 을 냈다 = 무변경
+    assert (code, steps, mails) == (0, _expected("premarket"), []) and len(rows) == 1
+    assert run_lane.limits == ["5400", "5400", "5400"]                           # 07:30 에 끊지도 않는다
+    code, steps, mails, rows = run_lane(tmp_path, "premarket", exits="build-minute-universe=1", **late)
+    assert (code, rows) == (1, []) and len(steps) == 3 and len(mails) == 1       # 스텝이 거부했다 = 레인 실패
+
+
+def test_watchdog_waits_for_snapshot_retention_past_its_cutoff():
+    # WHY: 정리는 06:15 까지 돌 수 있다. 감시 기한이 그보다 이르면 아직 도는 정리를 날마다 "빠진 슬롯"으로 헛통보한다.
+    cutoff = re.search(r"^STEP_DEADLINE=(\d\d:\d\d)$", (OCI / "vm1" / "snapshot_retention.sh").read_text(), re.M).group(1)
+    hhmm, grace = next(entry[2:5:2] for entry in edge_cron.SLOTS if entry[1] == "snapshot-retention")
+    assert _slot(hhmm) + timedelta(minutes=grace) > _slot(cutoff), (hhmm, grace, cutoff)
 
 
 def test_snapshot_retention_is_cut_off_before_source_daily_gives_up(tmp_path):
