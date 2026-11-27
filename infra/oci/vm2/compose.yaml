@@ -101,6 +101,7 @@ services:
     environment:
       # db 모드에서 queue_url 은 큐 URL 이 아니라 outbox destination 이름이다
       DATA_PIPELINE_MINUTE_PRICE_CONSUMER__QUEUE_URL: price-analysis-realtime
+      DATA_PIPELINE_MINUTE_PRICE_CONSUMER__DETECTION_POLICY_VERSION: ${MINUTE_DETECTION_POLICY_VERSION:?}
 
   analysis:
     image: ${ANALYSIS_IMAGE:?}
