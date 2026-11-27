@@ -7,6 +7,8 @@
 #   기사 적재까지 늦는다(DAG 도 한 줄로 돌 때 이 순서였다).
 # - 태깅과 문서 적재가 모두 exit 0 이어야 assertion 적재, 그 뒤 이벤트 조립을 돈다.
 . "$(dirname "$0")/../lib/batch.sh"
+# 이 VM 의 스텝은 4g 를 기본으로 준다. 로컬 태거(tag-news)는 최대 2.0~2.2GB 를 썼고 assemble-events 는 AWS 에서 4096MB 였다.
+EDGE_STEP_MEMORY_DEFAULT=4g
 
 begin_lane news "${1:-}"
 TAG_LIMIT="$(need EDGE_TAG_NEWS_LIMIT)" || exit 1

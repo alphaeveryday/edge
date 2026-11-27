@@ -4,13 +4,13 @@
 #   edge_sql.sh '<SQL — 값 자리는 %s>' [값…]
 #
 # 호스트에 psql 과 DB 접속값 사본을 따로 두지 않으려고 이미지의 psycopg 와 적재 스텝이 쓰는 DB 설정
-# (env 파일의 DATA_PIPELINE_DB__*)을 그대로 쓴다. 레인의 성공 행 기록과 감시의 조회가 이 스크립트를 부른다.
+# (pipeline.env 의 DATA_PIPELINE_DB__*)을 그대로 쓴다. 레인의 성공 행 기록과 감시의 조회가 이 스크립트를 부른다.
 set -u
-ENV_FILE="${EDGE_ENV_FILE:-/etc/edge/batch.env}"
-IMAGE="$(sed -n 's/^EDGE_PIPELINE_IMAGE=//p' "$ENV_FILE" | tail -n 1)"
-[ -n "$IMAGE" ] || { echo "$ENV_FILE 에 EDGE_PIPELINE_IMAGE 가 없다" >&2; exit 1; }
+CONF_DIR="${EDGE_CONF_DIR:-/etc/edge}"
+IMAGE="$(sed -n 's/^EDGE_PIPELINE_IMAGE=//p' "$CONF_DIR/batch.env" | tail -n 1)"
+[ -n "$IMAGE" ] || { echo "$CONF_DIR/batch.env 에 EDGE_PIPELINE_IMAGE 가 없다" >&2; exit 1; }
 
-exec docker run --rm --env-file "$ENV_FILE" --entrypoint python "$IMAGE" -c '
+exec docker run --rm --env-file "$CONF_DIR/pipeline.env" --entrypoint python "$IMAGE" -c '
 import sys
 from data_pipeline.config import load_settings
 from data_pipeline.db import connect, db_config_from_env

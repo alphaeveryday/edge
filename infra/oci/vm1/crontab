@@ -3,6 +3,8 @@
 # 레인 줄의 마지막 인자(HH:MM)는 그 줄의 cron 시각과 같아야 한다 — run_id 가 이 값에서 나온다.
 # 슬롯을 바꾸면 lib/edge_cron.py 의 SLOTS 도 같이 바꾼다(테스트가 둘을 대조한다).
 CRON_TZ=Asia/Seoul
+# cron 의 기본 PATH 는 좁다. docker·python3·flock·timeout 이 있는 곳을 적는다.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EDGE=/opt/edge/infra/oci
 LOG=/var/log/edge
 
@@ -25,11 +27,26 @@ LOG=/var/log/edge
 # ── 감시: 레이크 하루 증가 ──
 0 6 * * * $EDGE/vm1/watchdog.py lake >> $LOG/watchdog.log 2>&1
 
-# ── 감시: VM-2(장중 수집) 거래일 07:50~16:30, VM-3(뉴스) 매일 00:00~01:30 · 거래일 07:50~16:30 ──
-# --trading-day: KR 휴장일(env 파일의 OPS_KR_HOLIDAYS)에는 건너뛴다. 휴장일에 켜면 장중 컨테이너가 재시작을 되풀이한다.
-# 16:30 끄기는 날마다 한다(이미 꺼져 있으면 그대로 둔다).
+# ── 감시: 휴장일 목록에 올해(12월에는 내년도) 날짜가 있는가 ──
+0 9 1 * * $EDGE/vm1/watchdog.py holidays >> $LOG/watchdog.log 2>&1
+
+# ── 감시: VM 켜고 끄기 ──
+# --trading-day: KR 휴장일(pipeline.env 의 OPS_KR_HOLIDAYS)에는 건너뛴다. 휴장일에 켜면 장중 컨테이너가 재시작을 되풀이한다.
+# stop-when-done <VM> <레인> <HH:MM> <포기 HH:MM>: 오늘 그 슬롯의 성공 행이 있을 때만 끈다. 없으면 10분 뒤 다시 보고,
+# 포기 시각에도 없으면 메일을 보내고 켜 둔다. 이미 꺼져 있으면(휴장일) 아무것도 하지 않는다.
+#
+# VM-3(뉴스) 밤: 00:00 켬 → 00:10 뉴스 레인이 성공 행을 쓰면 끔(01:30 부터, 03:00 에 포기).
 0 0 * * * $EDGE/vm1/watchdog.py vm start VM3 >> $LOG/watchdog.log 2>&1
-30 1 * * * $EDGE/vm1/watchdog.py vm stop VM3 >> $LOG/watchdog.log 2>&1
+30,40,50 1 * * * $EDGE/vm1/watchdog.py vm stop-when-done VM3 news 00:10 03:00 >> $LOG/watchdog.log 2>&1
+*/10 2 * * * $EDGE/vm1/watchdog.py vm stop-when-done VM3 news 00:10 03:00 >> $LOG/watchdog.log 2>&1
+0 3 * * * $EDGE/vm1/watchdog.py vm stop-when-done VM3 news 00:10 03:00 >> $LOG/watchdog.log 2>&1
+# VM-2(장중 수집)·VM-3 낮: 거래일 07:50 켬, 08:00 에 VM-2 가 RUNNING 인지 확인.
 50 7 * * 1-5 $EDGE/vm1/watchdog.py vm start VM2 VM3 --trading-day >> $LOG/watchdog.log 2>&1
 0 8 * * 1-5 $EDGE/vm1/watchdog.py vm check VM2 --trading-day >> $LOG/watchdog.log 2>&1
-30 16 * * 1-5 $EDGE/vm1/watchdog.py vm stop VM2 VM3 >> $LOG/watchdog.log 2>&1
+# VM-3 은 16:30 에 끈다(실시간 태거가 다 끝났는지 알려 주는 신호가 없다 — README "알려진 한계").
+30 16 * * 1-5 $EDGE/vm1/watchdog.py vm stop VM3 >> $LOG/watchdog.log 2>&1
+# VM-2 는 분 세션 종료가 성공 행(minute_session_stop, 16:10)을 쓴 뒤에만 끈다(16:30 부터, 19:00 에 포기).
+# 장 마감 뒤 밀린 가격 설명 분석이 VM-2 에서 돈다 — 그냥 끄면 그 분석이 죽는다.
+30,40,50 16 * * 1-5 $EDGE/vm1/watchdog.py vm stop-when-done VM2 minute_session_stop 16:10 19:00 >> $LOG/watchdog.log 2>&1
+*/10 17-18 * * 1-5 $EDGE/vm1/watchdog.py vm stop-when-done VM2 minute_session_stop 16:10 19:00 >> $LOG/watchdog.log 2>&1
+0 19 * * 1-5 $EDGE/vm1/watchdog.py vm stop-when-done VM2 minute_session_stop 16:10 19:00 >> $LOG/watchdog.log 2>&1

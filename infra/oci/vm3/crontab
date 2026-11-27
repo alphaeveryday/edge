@@ -5,6 +5,8 @@
 # 레인 줄의 마지막 인자(HH:MM)는 그 줄의 cron 시각과 같아야 한다 — run_id 가 이 값에서 나온다.
 # 슬롯을 바꾸면 lib/edge_cron.py 의 SLOTS 도 같이 바꾼다(테스트가 둘을 대조한다).
 CRON_TZ=Asia/Seoul
+# cron 의 기본 PATH 는 좁다. docker·python3·flock·timeout 이 있는 곳을 적는다.
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 EDGE=/opt/edge/infra/oci
 LOG=/var/log/edge
 

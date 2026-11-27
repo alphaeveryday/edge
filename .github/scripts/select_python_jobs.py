@@ -76,6 +76,8 @@ def select_jobs(paths: list[str], available: set[str]) -> dict:
             apps.update(app for app in APPS if path.startswith(f"apps/engine/{app}/"))
         elif path.startswith("apps/engine/airflow/dags/") or path == "apps/engine/airflow/tests/ecs_stop_cases.json":
             apps.add("data-pipeline")  # DAG constants and shared ECS termination cases.
+        elif path.startswith("infra/oci/"):
+            apps.add("data-pipeline")  # OCI cron scripts are tested by data-pipeline tests/test_oci_cron_contract.py.
         elif path in {"pyproject.toml", "uv.lock", ".dockerignore", ".github/workflows/test-python.yml"} or path.startswith((".github/scripts/", ".github/tests/")):
             shared = True
         elif path.endswith((".py", ".toml", ".lock")) or path.startswith("libs/ontology/"):

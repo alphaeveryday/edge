@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """OCI 배치 cron 공통 — 슬롯 표, run_id, 설정 읽기, 통보 메일. 표준 라이브러리만 쓴다.
 
-레인 스크립트(lib/batch.sh)와 감시(vm1/watchdog.py)가 같이 쓴다.
+레인 스크립트(lib/batch.sh)와 감시(vm1/watchdog.py)가 같이 쓴다. 설정 파일은 EDGE_CONF_DIR(기본 /etc/edge) 아래에 있고
+읽는 쪽이 갈린다 — batch.env(호스트 스크립트), pipeline.env(스텝 컨테이너), mail.env(통보 메일, 이 파일만 읽는다).
 
     edge_cron.py run-id <lane> <HH:MM>   # "<run_id> <슬롯 ISO 시각>" 을 출력한다
+    edge_cron.py seconds-until <HH:MM>   # 오늘(KST) 그 시각까지 남은 초(지났으면 0)
     edge_cron.py mail <제목>             # 본문은 표준 입력
 """
 
@@ -22,13 +24,13 @@ PIPELINE_ID = "alphamale-etf-daily-v1"
 # cron 이 슬롯 시각보다 이만큼 넘게 늦으면 그 슬롯으로 돌리지 않는다(호스트 시간대가 KST 가 아닌 경우를 잡는다).
 MAX_START_DELAY = timedelta(minutes=10)
 
-# (VM, 레인, 슬롯 KST, cron 요일 칸, 성공 행 기한(분)). crontab 과 감시가 이 표를 같이 본다(테스트가 crontab 과 대조).
+# (VM, 레인, 슬롯 KST, cron 요일 칸, 성공 행 기한(분)). crontab 과 감시가 이 표를 같이 본다(테스트가 VM-1·VM-3 crontab 과 대조).
 # 기한 = 락 대기 최대 60분 + 레인 실행 시간. etf-daily 는 21스텝을 한 줄로 돌려 더 길게 잡았다.
 # ponytail: 기한은 추정값이다. 첫 주 실행 시간을 보고 줄인다.
 SLOTS = (
     (1, "dividend-daily", "03:00", "*", 90),
-    # 정리는 디스크 여유가 모자라면 묶음마다 기다린다(최대 30분씩) — 기한을 길게 잡았다.
-    (1, "snapshot-retention", "04:30", "*", 180),
+    # 정리는 06:50 에 끊긴다(vm1/snapshot_retention.sh) — 그 뒤 성공 행을 쓸 시간까지 준다.
+    (1, "snapshot-retention", "04:30", "*", 150),
     (1, "source-daily", "05:20", "*", 90),
     (1, "premarket", "07:00", "1-5", 90),
     (1, "investor-intraday", "09:35", "1-5", 90),
@@ -41,15 +43,19 @@ SLOTS = (
     (3, "news", "00:10", "*", 90),
     # VM-3 은 거래일 아침에만 켜져 08:10 은 거래일만 돈다(Airflow 는 매일이었다 — README "Airflow 와 달라진 것").
     (3, "news", "08:10", "1-5", 90),
+    # VM-2 의 분 세션 종료가 쓰는 행이다(이 디렉터리의 레인이 아니다 — vm2/crontab 이 16:10 에 돌린다).
+    # 레인 이름과 시각은 data_pipeline/minute/session_ops.py 의 STOP_SUCCESS_LANE · STOP_SUCCESS_SLOT_KST 와 같아야 한다.
+    # 큐와 밀린 분석이 다 빠진 뒤에 쓰므로 기한을 19:00 으로 잡았다(감시가 VM-2 끄기를 포기하는 시각과 같다).
+    (2, "minute_session_stop", "16:10", "1-5", 170),
 )
-# 평일이어도 휴장일에는 돌지 않는 슬롯 — 그날 아침엔 감시가 VM-3 을 켜지 않는다. 감시는 휴장일에 이 슬롯을 기대하지 않는다.
-TRADING_DAY_ONLY = {("news", "08:10")}
+# 평일이어도 휴장일에는 돌지 않는 슬롯 — 그날 감시가 VM-2·VM-3 을 켜지 않는다. 감시는 휴장일에 이 슬롯을 기대하지 않는다.
+TRADING_DAY_ONLY = {("news", "08:10"), ("minute_session_stop", "16:10")}
 
 
-def read_conf(path: str | None = None) -> dict[str, str]:
-    """env 파일을 docker --env-file 과 같은 규칙으로 읽는다(KEY=VALUE 그대로, 따옴표 해석 없음)."""
+def read_conf(name: str = "batch.env") -> dict[str, str]:
+    """설정 파일 하나를 docker --env-file 과 같은 규칙으로 읽는다(KEY=VALUE 그대로, 따옴표 해석 없음)."""
     conf = {}
-    with open(path or os.environ.get("EDGE_ENV_FILE", "/etc/edge/batch.env"), encoding="utf-8") as handle:
+    with open(os.path.join(os.environ.get("EDGE_CONF_DIR", "/etc/edge"), name), encoding="utf-8") as handle:
         for line in handle:
             line = line.rstrip("\n")
             if line.strip() and not line.lstrip().startswith("#") and "=" in line:
@@ -88,8 +94,9 @@ def checked_slot(lane: str, hhmm: str, now: datetime, manual: bool) -> datetime:
     return slot
 
 
-def send_mail(subject: str, body: str, conf: dict[str, str]) -> None:
-    """앱 메일 계정으로 통보를 보낸다(app-api application.yaml 과 같은 587 포트·STARTTLS)."""
+def send_mail(subject: str, body: str) -> None:
+    """앱 메일 계정(mail.env)으로 통보를 보낸다(app-api application.yaml 과 같은 587 포트·STARTTLS)."""
+    conf = read_conf("mail.env")
     message = EmailMessage()
     message["Subject"] = subject
     message["From"] = conf["EDGE_MAIL_USER"]
@@ -110,8 +117,12 @@ def main(argv: list[str], now: datetime | None = None) -> int:
             return 1
         print(run_id(argv[1], slot), slot.isoformat())
         return 0
+    if len(argv) == 2 and argv[0] == "seconds-until":
+        now = now or datetime.now(KST)
+        print(max(0, int((slot_at(argv[1], now) - now).total_seconds())))
+        return 0
     if len(argv) == 2 and argv[0] == "mail":
-        send_mail(argv[1], sys.stdin.read(), read_conf())
+        send_mail(argv[1], sys.stdin.read())
         return 0
     print(__doc__, file=sys.stderr)
     return 2
