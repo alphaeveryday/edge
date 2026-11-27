@@ -1,0 +1,14 @@
+# VM-2 장중 수집 — 세션 시작·종료. 설치: crontab infra/oci/vm2/crontab
+# 시각은 모두 KST 다. 호스트 시간대를 Asia/Seoul 로 맞춘다(CRON_TZ 는 cronie 만 읽는다).
+# 이 VM 은 VM-1 감시가 거래일에만 켠다(07:50). 평일 휴장일은 VM 이 꺼져 있어서 빠지고, 켜져 있더라도
+# session_start.sh 가 거래일이 아니면 아무것도 올리지 않는다.
+# 줄의 마지막 인자(HH:MM)는 그 줄의 cron 시각과 같아야 한다(다른 VM 의 crontab 과 같은 규칙).
+# 16:10 은 stop 이 성공하면 쓰는 batch_lane_success 행의 슬롯 시각이기도 하다 — 바꾸면
+# data-pipeline session_ops.STOP_SUCCESS_SLOT_KST 와 감시의 슬롯 표도 같이 바꾼다.
+CRON_TZ=Asia/Seoul
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+EDGE=/opt/edge/infra/oci
+LOG=/var/log/edge
+
+5 8 * * 1-5 $EDGE/vm2/session_start.sh 08:05 >> $LOG/minute-session.log 2>&1
+10 16 * * 1-5 $EDGE/vm2/session_stop.sh 16:10 >> $LOG/minute-session.log 2>&1

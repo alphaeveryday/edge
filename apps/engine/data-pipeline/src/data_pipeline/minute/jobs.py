@@ -1,7 +1,8 @@
 """1분 파이프라인 job/outbox repository + 결정적 ID (ALPHA-664, 계획 §7 PR 2C).
 
 PostgreSQL 이 논리 job/retry 의 SSOT 이고 SQS 는 wake-up transport 다(v0.7 12.4 —
-재비교 금지). 이 모듈은 그 계약의 DB 측 기반이다:
+재비교 금지). 그래서 transport 는 갈아 끼울 수 있다: SQS 가 없으면 outbox 행 자체가
+메시지다(`consumer.DbQueue` — `minute_queue_transport=db`). 이 모듈은 그 계약의 DB 측 기반이다:
 
 - 결정적 ID (v0.7 10.6): 고정 필드 순서 UTF-8 JSON array·UTC RFC3339 Z·lowercase
   sha256. **두 writer 는 반드시 이 함수를 공유한다** — 각자 구현하면 구분자 하나로
@@ -86,6 +87,20 @@ def destination_accepts(destination: str, event_type: str) -> bool:
 # 논리 job 이 non-terminal 인데 메시지가 DLQ 에 도착했을 때의 사유(v0.7 12.4).
 # transport 예산(maxReceiveCount)이 먼저 소진된 것이라 job 자체의 결함과 구분한다.
 DLQ_ERROR_CODE = "SQS_MAX_RECEIVE"
+# 같은 판정의 DB transport 판(OCI 이전 — SQS·DLQ 가 없다). outbox 행의 receive 횟수가
+# 상한을 넘은 것이 "DLQ 도착"이다(consumer.DbQueue). 사유를 나눠 두는 이유는 어느
+# transport 가 포기했는지가 조회 근거라서다.
+DB_RECEIVE_ERROR_CODE = "DB_MAX_RECEIVE"
+
+
+def uses_db_queue(settings) -> bool:
+    """1분 레인이 db 큐 모드인가(`minute_queue_transport=db`, OCI) — 판정은 여기 한 곳이다.
+
+    소비자의 큐 선택·relay 기동 거부·세션 start/stop 의 ECS·SQS 생략이 전부 이 값을 본다.
+    속성이 없으면 sqs 로 읽는다 — 기본이 sqs 인 것과 같은 뜻이고(`config.loader.Settings`),
+    이 필드가 생기기 전의 설정 객체가 그대로 sqs 로 돈다.
+    """
+    return getattr(settings, "minute_queue_transport", "sqs") == "db"
 
 
 # ── 결정적 ID (v0.7 10.6 유도식) ──
@@ -567,8 +582,11 @@ class JobLedger:
 
     def dead_on_dlq(
         self, *, kind: str, job_id: str, redrive_generation: int, now: datetime,
+        error_code: str = DLQ_ERROR_CODE,
     ) -> bool:
         """DLQ 도착 + DB non-terminal → `SQS_MAX_RECEIVE` 사유 DEAD CAS (v0.7 12.4).
+
+        DB transport 는 같은 판정을 `error_code=DB_RECEIVE_ERROR_CODE` 로 부른다.
 
         세 가드가 다 있어야 한다:
         - `redrive_generation` 일치 — 옛 세대 메시지가 뒤늦게 DLQ 에 닿았을 뿐인데
@@ -591,7 +609,7 @@ class JobLedger:
                   AND (status <> 'CLAIMED'
                        OR lease_expires_at IS NULL OR lease_expires_at < %s)
                 """,
-                (DLQ_ERROR_CODE, now, job_id, redrive_generation, now),
+                (error_code, now, job_id, redrive_generation, now),
             )
             return cur.rowcount == 1
 
@@ -783,6 +801,7 @@ class JobLedger:
         self, *, relay_id: str, now: datetime, limit: int, lease_seconds: int,
         destination: str | None = None,
         exclude_destinations: tuple[str, ...] = (),
+        count_receive: bool = False,
     ) -> list[dict]:
         """미발행(NEW) event 를 batch claim 한다 — claim 은 status 가 아니라
         claimed_by/claim_expires_at 이다(Relay crash 가 CLAIMED 고착을 만들지 않게).
@@ -795,6 +814,10 @@ class JobLedger:
         `exclude_destinations` 는 그 나머지를 쓸어 담는 반대편이다(설정에 없는 큐로 쓰인
         행 — 안 집으면 영원히 NEW 로 남아 아무도 모른다). **집을 것만 집어야 한다** —
         전역으로 집은 뒤 골라내면 처리하지 않을 행까지 lease 로 묶어 그만큼 지연된다.
+
+        `count_receive` 는 DB transport(consumer.DbQueue) 전용이다 — claim 이 곧 배달이라
+        `attempt_count` 를 **claim 시점에** 올린다(SQS 의 ApproximateReceiveCount 자리).
+        Relay 는 켜지 않는다: 거기서 이 값은 발행 실패 횟수이고 backoff 재료다.
         """
         if destination is not None and exclude_destinations:
             raise ValueError("destination 과 exclude_destinations 는 함께 쓸 수 없다")
@@ -806,11 +829,12 @@ class JobLedger:
         elif exclude_destinations:
             destination_filter = " AND NOT (c.destination = ANY(%s))"
             destination_params = (sorted(exclude_destinations),)
+        receive_count = ", attempt_count = o.attempt_count + 1" if count_receive else ""
         with self.connect_fn(self.db) as conn, conn.cursor() as cur:
             cur.execute(
                 f"""
                 UPDATE dataset_commit_outbox o
-                SET claimed_by = %s, claim_expires_at = %s
+                SET claimed_by = %s, claim_expires_at = %s{receive_count}
                 WHERE o.event_id IN (
                     SELECT c.event_id FROM dataset_commit_outbox c
                     WHERE c.status = 'NEW'
@@ -868,6 +892,41 @@ class JobLedger:
             counts = dict(cur.fetchall())
             return {"NEW": counts.get("NEW", 0), "DEAD": counts.get("DEAD", 0)}
 
+    def count_new_outbox(self, *, destinations: list[str]) -> dict[str, int]:
+        """destination 별 NEW event 수 — db 모드 세션 종료 게이트의 "큐 깊이"다.
+
+        claim 여부를 가리지 않는다(SQS 의 가시 + 비가시 합과 같은 뜻): db 모드에서 event 는
+        소비자가 판정을 끝내야 PUBLISHED 가 되므로, NEW 는 "아직 안 집었거나 처리 중이거나
+        재시도를 기다리는" 일감 전부다. job 을 따로 셀 필요가 없는 이유이기도 하다 —
+        non-terminal job 의 event 는 닫히지 않는다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT destination, COUNT(*) FROM dataset_commit_outbox
+                WHERE status = 'NEW' AND destination = ANY(%s)
+                GROUP BY destination
+                """,
+                (sorted(destinations),),
+            )
+            return dict(cur.fetchall())
+
+    def count_pending_local_analyses(self) -> int:
+        """접수됐지만 아직 끝나지 않은 장중 설명 분석 수 — db 모드 세션 종료 게이트용.
+
+        ⚠️ 분석 v2 소유 테이블을 **읽기만** 한다. 술어는 그쪽 실행기의 것을 그대로 옮겼다
+        (`edge_analysis_v2.cloud.local.LocalRunner` — `local:` 로 예약하고, 분석 프로세스가
+        끝나면 `accepted_at` 을 채운다). 그쪽 술어가 바뀌면 여기도 바뀌어야 한다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM analysis_execution_requests
+                WHERE accepted_at IS NULL AND execution_arn LIKE 'local:%%'
+                """
+            )
+            return cur.fetchone()[0]
+
     def mark_published(
         self, *, event_id: str, relay_id: str, claim_token: datetime, now: datetime,
     ) -> bool:
@@ -914,5 +973,43 @@ class JobLedger:
                 """,
                 ("DEAD" if terminal else "NEW", next_attempt_at, error, event_id,
                  relay_id, claim_token),
+            )
+            return cur.rowcount == 1
+
+    # ── outbox 를 큐로 쓰는 경로 (DB transport — consumer.DbQueue) ──
+    # claim 은 위 claim_outbox_batch 를 그대로 쓴다(Relay 와 같은 행 잠금이라 둘이 함께
+    # 떠 있어도 한 행을 동시에 쥐지 못한다). 아래 둘은 소유 확인을 claim_token 이 아니라
+    # **claimed_by 만으로** 한다 — DbQueue 가 receive 마다 새 owner 문자열을 쓰므로 그
+    # 값이 곧 그 배달의 token 이고, visibility 연장이 claim_expires_at 을 바꿔도 같은
+    # receipt 로 ack 할 수 있어야 하기 때문이다(SQS receipt handle 과 같은 성질).
+    def ack_outbox(self, *, event_id: str, owner: str, now: datetime) -> bool:
+        """배달 확정(SQS delete 자리) — 내 claim 일 때만 PUBLISHED 로 닫는다.
+
+        DB transport 에서 PUBLISHED 는 "큐에 실었다"가 아니라 "소비자가 판정을 끝냈다"다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE dataset_commit_outbox
+                SET published_at = %s, status = 'PUBLISHED',
+                    claimed_by = NULL, claim_expires_at = NULL
+                WHERE event_id = %s AND claimed_by = %s AND status = 'NEW'
+                """,
+                (now, event_id, owner),
+            )
+            return cur.rowcount == 1
+
+    def defer_outbox(self, *, event_id: str, owner: str, until: datetime) -> bool:
+        """다시 보일 시각을 정한다(SQS ChangeMessageVisibility 자리) — 내 claim 일 때만.
+
+        claim 은 유지한 채 만료만 옮긴다: `until` 이 지나면 claim_outbox_batch 가 다시 집는다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE dataset_commit_outbox SET claim_expires_at = %s
+                WHERE event_id = %s AND claimed_by = %s AND status = 'NEW'
+                """,
+                (until, event_id, owner),
             )
             return cur.rowcount == 1

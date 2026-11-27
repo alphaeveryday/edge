@@ -33,6 +33,9 @@ STAGED_SINCE = datetime(2026, 10, 13, 21, 0, tzinfo=timezone.utc)   # the 06:00 
 
 # The workflow stops the task at 1100 seconds; waiting longer would leave no time to analyze.
 SLOT_WAIT_SECONDS = 600
+# One folder per analysis. An ECS task takes it away when it stops; a host that keeps running
+# (cloud.local) removes it after the child exits.
+ARTIFACTS = Path('/tmp/analysis')
 
 
 class SlotUnavailable(RuntimeError):
@@ -215,20 +218,38 @@ def run(request, *, bucket, ca_path, folder, key, model, session, slots=1, owner
         raise RuntimeError(job.get('error',job.get('observation_error','Cloud execution failed'))) from None
 
 
+def model_secret(session, environ):
+    """Read the model credentials from the environment when set, else from the existing secret.
+
+    A host without Secrets Manager sets DEEPSEEK_API_KEY (and optionally DEEPSEEK_MODEL and
+    TINYFISH_API_KEY, the names the local dashboard already reads). Without it the cloud task
+    keeps reading the JSON secret named by DEEPSEEK_SECRET_ARN. The two are never merged, so a
+    stray variable cannot pair one source's key with the other's model.
+    """
+    if environ.get('DEEPSEEK_API_KEY'):
+        return {name: environ[name] for name in ('DEEPSEEK_API_KEY', 'DEEPSEEK_MODEL', 'TINYFISH_API_KEY')
+                if environ.get(name)}
+    return json.loads(session.client('secretsmanager').get_secret_value(
+        SecretId=environ['DEEPSEEK_SECRET_ARN'])['SecretString'])
+
+
 def main():
-    """Run the server-controlled task; requests cannot select commands or credentials."""
+    """Run the server-controlled task; requests cannot select commands or credentials.
+
+    The observation bucket is OBSERVATION_BUCKET. Its S3 client honours AWS_ENDPOINT_URL_S3
+    (botocore), which is how an S3-compatible store such as MinIO is selected without code.
+    """
     parser=argparse.ArgumentParser()
     parser.add_argument('--request',default=os.environ.get('ANALYSIS_REQUEST'))
     args=parser.parse_args()
     request=decode_request(args.request or '',internal=True)
     session=boto3.Session(region_name=os.environ.get('AWS_REGION','ap-northeast-2'))
-    secret=json.loads(session.client('secretsmanager').get_secret_value(
-        SecretId=os.environ['DEEPSEEK_SECRET_ARN'])['SecretString'])
-    key=secret['DEEPSEEK_API_KEY']
+    secret=model_secret(session, os.environ)
+    key=secret.get('DEEPSEEK_API_KEY')
     if not isinstance(key,str) or not key:
         raise ValueError('DeepSeek credential unavailable')
     run(request,bucket=os.environ['OBSERVATION_BUCKET'],ca_path=Path(os.environ['RDS_CA_PATH']),
-        folder=Path('/tmp/analysis')/request['analysis_id'],key=key,
+        folder=ARTIFACTS/request['analysis_id'],key=key,
         model=secret.get('DEEPSEEK_MODEL','deepseek-flash'),session=session,
         slots=int(os.environ.get('ANALYSIS_SLOTS','1')),
         owner=os.environ.get('ANALYSIS_EXECUTION_ARN') or None,

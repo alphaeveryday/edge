@@ -618,7 +618,7 @@ def news_consumer_cli(settings, *, max_ticks: int | None = None) -> int:
 
     from ..lake.storage import make_storage
     from ..tagging.llm import DEFAULT_BASE_URL, DEFAULT_MODEL, openai_compatible_complete_fn
-    from .consumer import ConsumerConfig, MinuteConsumer, SqsQueue
+    from .consumer import ConsumerConfig, MinuteConsumer, make_queue
     from .jobs import JobLedger
 
     if settings.db is None:
@@ -657,12 +657,14 @@ def news_consumer_cli(settings, *, max_ticks: int | None = None) -> int:
         # RELEVANCE_FILTER=on 이면 스레드 전에 관련성 판정기로 무관 기사를 거른다(ALPHA-1476).
         event_assembler=NewsEventAssembler(db=settings.db, relevance=load_relevance(storage)),
     )
+    consumer_id = f"nc-{socket.gethostname()}-{os.getpid()}"
+    jobs = JobLedger(db=settings.db)
     consumer = MinuteConsumer(
-        jobs=JobLedger(db=settings.db),
-        queue=SqsQueue(wait_seconds=options.wait_seconds),
+        jobs=jobs,
+        queue=make_queue(settings, options, jobs=jobs, kind="news", consumer_id=consumer_id),
         handler=handler,
         config=ConsumerConfig(
-            consumer_id=f"nc-{socket.gethostname()}-{os.getpid()}",
+            consumer_id=consumer_id,
             kind="news",
             queue_url=options.queue_url,
             batch_size=options.batch_size,

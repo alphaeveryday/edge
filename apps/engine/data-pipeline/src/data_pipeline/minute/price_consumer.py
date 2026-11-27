@@ -1100,7 +1100,7 @@ def price_consumer_cli(settings, *, universe: str | None,
     import time as _time
     from datetime import timezone
 
-    from .consumer import ConsumerConfig, MinuteConsumer, SqsQueue
+    from .consumer import ConsumerConfig, MinuteConsumer, make_queue
     from .models import load_universe_uri
 
     if settings.db is None:
@@ -1145,12 +1145,14 @@ def price_consumer_cli(settings, *, universe: str | None,
         destination=options.destination,
         extended_hours_ids=frozenset(universe_model.extended_hours_ids),
     )
+    consumer_id = f"pc-{socket.gethostname()}-{os.getpid()}"
+    jobs = JobLedger(db=settings.db)
     consumer = MinuteConsumer(
-        jobs=JobLedger(db=settings.db),
-        queue=SqsQueue(wait_seconds=options.wait_seconds),
+        jobs=jobs,
+        queue=make_queue(settings, options, jobs=jobs, kind="price", consumer_id=consumer_id),
         handler=handler,
         config=ConsumerConfig(
-            consumer_id=f"pc-{socket.gethostname()}-{os.getpid()}",
+            consumer_id=consumer_id,
             kind="price",
             queue_url=options.queue_url,
             batch_size=options.batch_size,

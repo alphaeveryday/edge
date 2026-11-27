@@ -127,6 +127,11 @@ class Settings(BaseSettings):
     # 1분 Price Worker(ALPHA-706)는 `price-worker` 스텝만 쓴다 — 미설정이면 그
     # 진입점이 fail-loud 한다(토스 자격증명은 env 로만).
     minute_price_worker: MinutePriceWorkerConfig | None = None
+    # 1분 레인의 큐 구현 — sqs(기본, AWS) | db(OCI: SQS·Relay·DLQ 없이 outbox 행을
+    # 메시지로 쓴다). 이 값 하나가 셋을 함께 바꾼다: 소비자의 큐(`minute.consumer.
+    # make_queue`), relay 기동 거부, start/stop-minute-session 의 ECS·SQS 호출 생략.
+    # db 면 소비자 `queue_url` 자리에 destination 이름을 넣는다.
+    minute_queue_transport: Literal["sqs", "db"] = "sqs"
     # 세 분 레인만 적용. 세션 경계에서만 content_v2로 전환한다.
     minute_artifact_format: Literal["legacy", "content_v2"] = "legacy"
     # 1분 가격 판정 Consumer(ALPHA-711)는 `price-consumer` 스텝만 쓴다 — 미설정이면

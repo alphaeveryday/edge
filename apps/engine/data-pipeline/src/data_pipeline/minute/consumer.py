@@ -26,6 +26,10 @@ receive
 남긴다. 남기면 maxReceiveCount 가 DLQ 로 보내 근거가 보존되지만(DLQ 대사는 다음 조각),
 지우면 그 자리에서 조용히 사라진다. "관측되지 않음"은 "존재하지 않음"이 아니다.
 
+SQS 가 없는 환경(OCI)에서는 같은 kernel 이 `DbQueue` 위에서 돈다 — outbox 행이 메시지이고,
+DLQ 자리는 receive 횟수 상한이 대신한다(`DbQueue` 도크스트링). 고르는 것은
+`minute_queue_transport` 설정 하나다(`make_queue`).
+
 ⚠️ **DEAD 도 근거가 그 job 자체의 성질일 때만이다.** 분류되지 않은 예외는 재시도로
 보내고 예산(max_attempts)이 판정한다 — 설정·시간·외부 장애로 나는 예외를 첫 회에
 terminal 로 확정하면 그 job 은 원인이 사라진 뒤에도 안 돌아온다. PR 6 과 달리 예산을
@@ -40,20 +44,24 @@ import math
 import re
 import threading
 import time
+import uuid
 from collections import Counter
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .jobs import (
+    DB_RECEIVE_ERROR_CODE,
     DESTINATION_JOB_KINDS,
+    DLQ_ERROR_CODE,
     EVENT_TYPE_JOB_KINDS,
     JOB_EVENT_TYPES,
     JobLedger,
     build_event_id,
+    uses_db_queue,
 )
-from .relay import KNOWN_DESTINATIONS
+from .relay import KNOWN_DESTINATIONS, build_message_body
 from .states import JOB_DEAD, JOB_RETRY_WAIT, JOB_SUCCEEDED
 
 logger = logging.getLogger(__name__)
@@ -78,6 +86,15 @@ _READ_TIMEOUT_MARGIN_SECONDS = 10
 # backoff 지수 상한 — 복원·마이그레이션으로 큰 attempt_count 가 들어와도 2**n 이
 # 거대 정수가 되지 않게(relay 와 같은 이유·같은 값).
 _MAX_BACKOFF_EXPONENT = 30
+
+# DB transport(DbQueue) 노브 — 빈 큐를 다시 보는 간격과, outbox 행 하나를 몇 번까지
+# 배달하고 포기하는가다. 상한 16 은 SQS 원큐의 maxReceiveCount 와 같은 값·같은 근거다
+# (minute_services.tf — lease 600 > visibility 300 이라 receive 의 절반꼴만 실행이고,
+# 그보다 낮으면 DB 예산 max_attempts 5 가 판정하기 전에 transport 가 먼저 포기한다).
+# ponytail: 빈 폴링마다 연결을 하나 연다(JobLedger 가 호출마다 연결한다). 소비자 3개면 초당 3회 —
+# 부담이 보이면 이 간격을 늘리거나 LISTEN/NOTIFY 로 깨운다(그때도 폴링은 fallback 으로 남긴다).
+DB_POLL_SECONDS = 1.0
+DB_MAX_RECEIVES = 16
 
 
 class JobExecutionError(Exception):
@@ -318,6 +335,147 @@ class SqsQueue:
         self.control_client.change_message_visibility(
             QueueUrl=queue_url, ReceiptHandle=receipt_handle, VisibilityTimeout=seconds
         )
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+@dataclass
+class DbQueue:
+    """SQS 없이 **outbox 행을 메시지로** 쓰는 transport (OCI 이전 — SQS·Relay·DLQ 가 없다).
+
+    `SqsQueue` 와 같은 인터페이스라 kernel(`MinuteConsumer`)은 한 줄도 안 바뀐다. 그래서
+    실행 자격(claim_job CAS)·lease/heartbeat·stale 세대 거부·멱등·재시도 예산이 SQS 때와
+    같은 코드로 돈다. 대응은 이렇다:
+
+    ```text
+    receive             → claim_outbox_batch(destination, count_receive)  행 claim = 비가시
+    delete              → ack_outbox      PUBLISHED = 소비자가 판정을 끝냄
+    change_visibility   → defer_outbox    claim 만료 시각을 옮김
+    maxReceiveCount+DLQ → receive 횟수 상한 → 아래 `_give_up`
+    ```
+
+    `queue_url` 자리에는 **destination 이름**이 온다(`news-extraction-realtime` 등) —
+    realtime/backfill 구분은 SQS 때와 똑같이 outbox destination 이 진다.
+
+    ⚠️ job 을 직접 집는 `JobLedger.claim_due_job` 폴링을 쓰지 않는 이유: 과거일 세션
+    차단(ALPHA-863)이 "job 은 만들되 **event 를 안 만든다**"로 되어 있어, job 을 직접
+    집으면 그 가드가 조용히 무효가 된다(백필 window 가 실시간 설명으로 나간다). payload
+    도 outbox 행에만 있다. 깨울 근거는 SQS 때와 똑같이 event 다.
+
+    재시도 상한은 두 겹이고 **둘 다 claim 시점에 센다**(실패 기록 시점이 아니다 — 기록
+    전에 죽는 crash loop 도 세어야 한다): job 은 `claim_job` 이 attempt_count 를 올리고
+    kernel 이 max_attempts 를 넘긴 claim 을 실행 없이 DEAD 로 닫는다. outbox 행은 여기
+    receive 가 attempt_count 를 올리고 상한을 넘기면 `_give_up` 이 닫는다.
+
+    Relay 와는 같은 claim SQL(`FOR UPDATE SKIP LOCKED` + `claimed_by/claim_expires_at`)을
+    써서 한 행을 둘이 동시에 쥐지 못한다. 그래도 db 모드에서 Relay 가 뜨면 그 행이 SQS
+    로 나가 버리므로 `relay_cli` 가 db 모드 기동을 거부한다.
+    """
+
+    jobs: JobLedger
+    consumer_id: str
+    max_receives: int = DB_MAX_RECEIVES
+    poll_seconds: float = DB_POLL_SECONDS
+    # 벽시계 — claim 만료·ack 시각의 기준이다. kernel 은 receive 에 now 를 넘기지 않는다.
+    clock: Callable[[], datetime] = _utc_now
+    sleep: Callable[[float], None] = time.sleep
+
+    def receive(
+        self, *, queue_url: str, max_messages: int, wait_seconds: int,
+        visibility_seconds: int,
+    ) -> tuple[ConsumerMessage, ...]:
+        """destination 의 NEW event 를 최대 max_messages 건 claim 해 메시지로 돌려준다.
+
+        `wait_seconds`(long polling)는 쓰지 않는다 — 비었으면 `poll_seconds` 만 쉬고
+        빈 손으로 돌아가 호출자가 다시 부른다(SIGTERM 반응이 그만큼 빠르다).
+        """
+        now = self.clock()
+        # receive 마다 새 owner — 이 값이 그 배달의 receipt 다(JobLedger.ack_outbox 주석).
+        owner = f"{self.consumer_id}:{uuid.uuid4().hex}"
+        rows = self.jobs.claim_outbox_batch(
+            relay_id=owner, now=now, limit=max_messages,
+            lease_seconds=visibility_seconds, destination=queue_url, count_receive=True,
+        )
+        if not rows:
+            self.sleep(self.poll_seconds)
+            return ()
+        messages = []
+        for row in rows:
+            message = ConsumerMessage(
+                message_id=row["event_id"], receipt_handle=f"{owner}|{row['event_id']}",
+                body=build_message_body(row),
+            )
+            if row["attempt_count"] > self.max_receives and self._give_up(
+                message, row, owner, queue_url, now
+            ):
+                continue
+            messages.append(message)
+        return tuple(messages)
+
+    def _give_up(self, message, row, owner, destination, now: datetime) -> bool:
+        """receive 상한을 넘긴 행 — SQS 의 "DLQ 도착 + 대사"를 DB 에서 한 번에 한다.
+
+        job 쪽은 DLQ 대사와 **같은 판정**을 그대로 쓴다(non-terminal 이면 `DB_MAX_RECEIVE`
+        사유 DEAD CAS, 살아 있는 lease·끝난 job·낡은 세대는 건드리지 않음). 그 뒤:
+
+        - 판정 가능한 상태 → False(메시지를 kernel 에 넘긴다). kernel 이 terminal·
+          superseded 로 ack 하거나 contended 로 다시 미룬다.
+        - **판정 불가**(poison·misrouted·orphan·ahead) → event 를 DEAD 로 격리하고 True.
+          kernel 은 이런 메시지를 일부러 남기는데(근거 보존), DB 에는 대신 받아 줄 DLQ 가
+          없어 visibility 마다 영원히 돌아온다. DEAD 행이 그 근거 보존소다
+          (`count_unpublished` 가 세고, `last_error` 에 사유가 남는다).
+        """
+        verdict = DlqReconciler(
+            jobs=self.jobs, queue=None, queue_urls={}, error_code=DB_RECEIVE_ERROR_CODE,
+        )._reconcile(message, destination, now)
+        if verdict not in ("poison", "misrouted", "orphan", "ahead"):
+            return False
+        logger.error(
+            "outbox event %s 가 receive 상한(%d회)을 넘겼고 판정할 수 없다(%s) — DEAD 로 격리",
+            row["event_id"], self.max_receives, verdict,
+        )
+        self.jobs.record_publish_failure(
+            event_id=row["event_id"], relay_id=owner, claim_token=row["claim_token"],
+            now=now, next_attempt_at=None, terminal=True,
+            error=f"{DB_RECEIVE_ERROR_CODE}: {verdict}",
+        )
+        return True
+
+    def delete(self, *, queue_url: str, receipt_handle: str) -> None:
+        """배달 확정 — 내 claim 이 아니면(만료 뒤 재claim) 아무것도 바꾸지 않는다."""
+        owner, event_id = receipt_handle.split("|", 1)
+        if not self.jobs.ack_outbox(event_id=event_id, owner=owner, now=self.clock()):
+            # SQS 의 낡은 receipt 와 같다 — 지금 쥔 쪽이 다시 판정한다(job 은 이미 terminal).
+            logger.warning("outbox ack 거부(claim 상실) — 재배달된다: %s", event_id)
+
+    def change_visibility(
+        self, *, queue_url: str, receipt_handle: str, seconds: int
+    ) -> None:
+        """다시 보일 시각을 지금+seconds 로 옮긴다(0 이면 다음 폴링에 바로 보인다)."""
+        owner, event_id = receipt_handle.split("|", 1)
+        self.jobs.defer_outbox(
+            event_id=event_id, owner=owner,
+            until=self.clock() + timedelta(seconds=seconds),
+        )
+
+
+def make_queue(settings, options, *, jobs: JobLedger, kind: str, consumer_id: str):
+    """`minute_queue_transport` 로 큐 구현을 고른다 — `sqs`(기본, 지금까지와 동일) | `db`.
+
+    db 모드에서 `queue_url` 은 destination 이름이다. 이 Consumer 의 kind 가 받는 큐가
+    아니면 기동을 거부한다 — 오타면 아무 행도 못 집은 채 조용히 idle 로 돈다.
+    """
+    if not uses_db_queue(settings):
+        return SqsQueue(wait_seconds=options.wait_seconds)
+    if DESTINATION_JOB_KINDS.get(options.queue_url) != kind:
+        raise SystemExit(
+            f"minute_queue_transport=db 인데 queue_url({options.queue_url!r})이 {kind} "
+            "destination 이 아니다 — db 모드의 queue_url 은 destination 이름이다(가능: "
+            f"{sorted(d for d, k in DESTINATION_JOB_KINDS.items() if k == kind)})"
+        )
+    return DbQueue(jobs=jobs, consumer_id=consumer_id)
 
 
 @dataclass
@@ -822,6 +980,9 @@ class DlqReconciler:
     wait_seconds: int = 20
     visibility_seconds: int = 60
     stopping: bool = False
+    # non-terminal job 을 DEAD 로 수렴시킬 때 남기는 사유. DB transport(DbQueue)가 같은
+    # 판정을 `DB_MAX_RECEIVE` 로 빌려 쓴다.
+    error_code: str = DLQ_ERROR_CODE
     # 이번 실행에서 이미 판정한 메시지 — 지우지 않으므로 visibility 가 풀리면 같은
     # 메시지가 다시 온다. 그걸 "새 일감"으로 세면 종료 조건(받은 게 없다)이 영원히
     # 성립하지 않아 일회성 명령이 안 끝난다. MessageId 는 배달이 반복돼도 같다.
@@ -888,10 +1049,11 @@ class DlqReconciler:
         if self.jobs.dead_on_dlq(
             kind=delivery.kind, job_id=delivery.job_id,
             redrive_generation=delivery.redrive_generation, now=now,
+            error_code=self.error_code,
         ):
             logger.error(
-                "DLQ 도착 + DB non-terminal(%s) → DEAD(SQS_MAX_RECEIVE): %s",
-                job["status"], delivery.event_id,
+                "DLQ 도착 + DB non-terminal(%s) → DEAD(%s): %s",
+                job["status"], self.error_code, delivery.event_id,
             )
             return "dead"
         # 살아 있는 lease(실행 중)거나 그새 상태가 바뀌었다 — 다음 회차가 본다.

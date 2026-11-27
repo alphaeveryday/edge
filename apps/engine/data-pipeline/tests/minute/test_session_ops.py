@@ -1329,3 +1329,179 @@ def test_stop_은_승객_배선_결손에도_부분_스케일다운을_안_남�
             FakeSettings(), dataset="price_minute", source_group="kis")
 
     assert wiring.calls == [], "배선 결손은 아무것도 내리기 전에 죽어야 한다"
+
+
+class TestDbQueueMode:
+    """`minute_queue_transport=db`(OCI) — ECS·SQS 가 없다. 서비스는 compose·VM 시작/정지가
+    올리고 내리므로 이 진입점은 **계획과 게이트만** 한다. AWS 호출이 하나라도 남으면
+    계정이 닫힌 뒤 start 는 세션을 세우고도 실패로 끝나고, stop 은 QC 까지 못 간다."""
+
+    @pytest.fixture
+    def db_mode(self, monkeypatch, wiring):
+        # AWS 배선 env 가 **없는** 환경이다 — 남아 있는 값에 기대 통과하면 안 된다
+        for name in (session_ops.ENV_CLUSTER, session_ops.ENV_SERVICES,
+                     session_ops.ENV_ANALYSIS_SERVICES):
+            monkeypatch.delenv(name)
+        monkeypatch.setenv(session_ops.ENV_GATE_QUEUES,
+                           "price-analysis-realtime,news-extraction-realtime")
+        monkeypatch.setattr(session_ops, "_queue_depths", lambda queues: pytest.fail(
+            "db 모드가 SQS 깊이를 조회했다"))
+        monkeypatch.setattr(session_ops.time, "sleep", lambda _: None)
+        self.success_rows = []
+        monkeypatch.setattr(session_ops, "_record_stop_success",
+                            lambda settings, day: self.success_rows.append(day))
+        settings = FakeSettings()
+        settings.minute_queue_transport = "db"
+        return settings, wiring
+
+    def test_start_only_plans(self, monkeypatch, db_mode):
+        settings, ecs = db_mode
+        monkeypatch.setattr(session_ops, "is_trading_day", lambda day: True)
+        # 선택 레인도 서비스 목록 없이 계획된다 — 목록은 ECS 스케일 전용 배선이다
+        monkeypatch.setenv(session_ops.ENV_NEWS_SOURCE_GROUP, "bigkinds")
+        planned = []
+        monkeypatch.setattr(session_ops, "plan_session_cli",
+                            lambda settings, **k: planned.append(k["dataset"]) or 0)
+
+        rc = session_ops.start_session_cli(
+            settings, dataset="price_minute", source_group="kis", universe="s3://b/u.json")
+
+        assert rc == 0
+        assert planned == ["price_minute", "news_minute"]
+        assert ecs.calls == [], "db 모드는 ECS desired 를 건드리지 않는다"
+
+    def _stop(self, monkeypatch, settings, *, depths, phases=("DRAINED",), analyses=(0,)):
+        """`depths` = destination 별 outbox NEW. `analyses` = 끝나지 않은 분석 요청 수를 조회마다
+        순서대로(마지막 값은 계속 반복)."""
+        ledger = FakeLedger(list(phases))
+        ledger.request_drain = lambda *, session_id, now: True
+        jobs = FakeJobs(new=7)   # 전역 NEW — db 모드 게이트는 destination 별 수만 본다
+        asked, remaining = [], list(analyses)
+        jobs.count_new_outbox = lambda *, destinations: asked.append(destinations) or {
+            name: count for name, count in depths.items() if name in destinations}
+        jobs.count_pending_local_analyses = lambda: (
+            remaining.pop(0) if len(remaining) > 1 else remaining[0])
+        monkeypatch.setattr(session_ops, "MinuteLedger", lambda **_: ledger)
+        monkeypatch.setattr(session_ops, "JobLedger", lambda **_: jobs)
+        qcs = []
+        monkeypatch.setattr(session_ops, "qc_session_cli",
+                            lambda settings, *, session_id: qcs.append(session_id) or 0)
+        rc = session_ops.stop_session_cli(settings, dataset="price_minute", source_group="kis")
+        return rc, asked, qcs
+
+    def test_stop_gates_on_outbox_depth_then_qcs_without_ecs(self, monkeypatch, db_mode):
+        settings, ecs = db_mode
+        rc, asked, qcs = self._stop(monkeypatch, settings, depths={})
+
+        assert rc == 0
+        gate = ["price-analysis-realtime", "news-extraction-realtime"]
+        assert asked[:-1] == [gate] * session_ops.CLEAR_CONFIRMATIONS
+        assert asked[-1] == ["price-explanation-realtime"]   # QC 뒤의 분석 잔여 확인
+        assert len(qcs) == 1
+        # 감시가 VM-2 를 내리는 근거 — 정확히 한 번(슬롯 시각은 e2e test_db_queue_pg 가 실 PG 로 본다)
+        assert len(self.success_rows) == 1
+        assert ecs.calls == [], "db 모드는 ECS desired 를 건드리지 않는다"
+
+    def test_stop_does_not_finish_while_gate_destination_has_work(self, monkeypatch, db_mode):
+        """집힌 채 처리 중이거나 재시도를 기다리는 event 가 남았는데 exit 0 이면, 부른 쪽이
+        VM 을 내려 그 window 의 판정·태깅이 다음 세션까지 밀린다."""
+        settings, _ = db_mode
+        monkeypatch.setenv(session_ops.ENV_DRAIN_TIMEOUT, "0.01")
+        rc, _, qcs = self._stop(monkeypatch, settings,
+                                depths={"news-extraction-realtime": 2})
+        assert rc == 1
+        assert qcs == [], "게이트가 안 비었는데 QC 로 원장을 확정하면 안 된다"
+        assert self.success_rows == []
+
+    def test_stop_waits_for_the_explanation_backlog_before_saying_stop(
+            self, monkeypatch, db_mode):
+        """exit 0 은 "VM 을 내려도 된다"다. 분석은 같은 VM 에서 돌아, 마감 직전에 몰린 설명이
+        남은 채 0 을 주면 실행 중인 분석이 잘리고 나머지는 다음 날 분석 없이 닫힌다
+        (AWS 에서는 stop 이 설명 소비자를 내리지 않았다)."""
+        settings, _ = db_mode
+        rc, asked, qcs = self._stop(monkeypatch, settings, depths={}, analyses=(3, 1, 0))
+        assert rc == 0
+        assert asked.count(["price-explanation-realtime"]) == 3, "빌 때까지 다시 본다"
+        assert len(qcs) == 1
+
+    @pytest.mark.parametrize("left", [
+        dict(depths={"price-explanation-realtime": 4}),   # 아직 접수 전인 설명 사건
+        dict(depths={}, analyses=(2,)),                   # 접수됐지만 안 끝난 분석
+    ])
+    def test_stop_fails_when_the_explanation_backlog_outlives_its_own_cap(
+            self, monkeypatch, db_mode, left, caplog):
+        """분석 대기는 가격·뉴스 drain 과 **따로** 상한을 갖는다(건당 약 10분이라 훨씬 길다).
+        상한을 넘기면 0 을 주지 않는다 — 다만 분 원장 QC 는 분석과 무관하게 이미 끝나 있다."""
+        settings, _ = db_mode
+        monkeypatch.setenv(session_ops.ENV_ANALYSIS_DRAIN_TIMEOUT, "0.01")
+        rc, _, qcs = self._stop(monkeypatch, settings, **left)
+        assert rc == 1
+        assert len(qcs) == 1
+        assert session_ops.ENV_ANALYSIS_DRAIN_TIMEOUT in caplog.text, "어느 상한인지 말해야 한다"
+        assert self.success_rows == [], "행이 있으면 감시가 분석이 남은 VM 을 내린다"
+
+    def test_no_success_row_when_qc_fails_or_the_row_cannot_be_written(
+            self, monkeypatch, db_mode):
+        """행 = "끝까지 성공". QC 가 깨졌는데 행이 있으면 감시가 그 실패를 못 본다. 반대로 행을
+        못 썼는데 exit 0 이면, 감시는 행이 없다고 알리는데 실행은 성공으로 보여 원인이 갈린다."""
+        settings, _ = db_mode
+        ledger = FakeLedger(["DRAINED"])
+        ledger.request_drain = lambda *, session_id, now: True
+        jobs = FakeJobs()
+        jobs.count_new_outbox = lambda *, destinations: {}
+        jobs.count_pending_local_analyses = lambda: 0
+        monkeypatch.setattr(session_ops, "MinuteLedger", lambda **_: ledger)
+        monkeypatch.setattr(session_ops, "JobLedger", lambda **_: jobs)
+        monkeypatch.setattr(session_ops, "qc_session_cli", lambda *a, **k: 1)
+        assert session_ops.stop_session_cli(
+            settings, dataset="price_minute", source_group="kis") == 1
+        assert self.success_rows == []
+
+        def unwritable(settings, day):
+            raise RuntimeError('relation "batch_lane_success" does not exist')
+        monkeypatch.setattr(session_ops, "qc_session_cli", lambda *a, **k: 0)
+        monkeypatch.setattr(session_ops, "_record_stop_success", unwritable)
+        assert session_ops.stop_session_cli(
+            settings, dataset="price_minute", source_group="kis") == 2
+
+    def test_unknown_explanation_backlog_is_not_read_as_empty(self, monkeypatch, db_mode):
+        """조회 실패를 0 으로 읽으면 안 본 일감을 '끝났음'으로 인증한다."""
+        settings, _ = db_mode
+        monkeypatch.setenv(session_ops.ENV_ANALYSIS_DRAIN_TIMEOUT, "0.01")
+
+        def broken():
+            raise RuntimeError("permission denied for table analysis_execution_requests")
+        ledger = FakeLedger(["DRAINED"])
+        ledger.request_drain = lambda *, session_id, now: True
+        jobs = FakeJobs()
+        jobs.count_new_outbox = lambda *, destinations: {}
+        jobs.count_pending_local_analyses = broken
+        monkeypatch.setattr(session_ops, "MinuteLedger", lambda **_: ledger)
+        monkeypatch.setattr(session_ops, "JobLedger", lambda **_: jobs)
+        assert session_ops.stop_session_cli(
+            settings, dataset="price_minute", source_group="kis") == 1
+
+    def test_sqs_mode_stop_never_waits_for_analysis(self, monkeypatch, wiring):
+        """AWS 에서는 설명 소비자의 수명을 오토스케일링이 진다(ALPHA-912) — 여기서 기다리면
+        매일 밤 stop 이 최대 2시간 늘어난다."""
+        # 기다리는 회귀가 생기면 멈춰 서지 않고 곧장 exit 1 로 드러나게 상한을 줄여 둔다
+        monkeypatch.setenv(session_ops.ENV_ANALYSIS_DRAIN_TIMEOUT, "0.01")
+        monkeypatch.setattr(session_ops, "_queue_depths", lambda queues: [])
+        monkeypatch.setattr(session_ops.time, "sleep", lambda _: None)
+        ledger = FakeLedger(["DRAINED"])
+        ledger.request_drain = lambda *, session_id, now: True
+        jobs = FakeJobs()   # 분석 잔여 조회 메서드가 없다 — 부르면 AttributeError 로 드러난다
+        monkeypatch.setattr(session_ops, "MinuteLedger", lambda **_: ledger)
+        monkeypatch.setattr(session_ops, "JobLedger", lambda **_: jobs)
+        monkeypatch.setattr(session_ops, "_record_stop_success", lambda *a: pytest.fail(
+            "sqs 모드가 OCI 성공 행을 썼다 — AWS DB 에는 그 표가 없을 수 있다"))
+        assert session_ops.stop_session_cli(
+            FakeSettings(), dataset="price_minute", source_group="toss") == 0
+
+    def test_stop_rejects_queue_urls_left_over_from_sqs(self, monkeypatch, db_mode):
+        """큐 URL 이 남아 있으면 그 이름의 outbox 행이 없어 깊이가 늘 0 이다 — 게이트가
+        통째로 사라진 채 exit 0 이 된다."""
+        settings, _ = db_mode
+        monkeypatch.setenv(session_ops.ENV_GATE_QUEUES, "https://sqs.test/price")
+        with pytest.raises(SystemExit, match="destination"):
+            self._stop(monkeypatch, settings, depths={})

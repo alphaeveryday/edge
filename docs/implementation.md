@@ -38,6 +38,7 @@
 - 모든 테이블은 **단일 쓰기 소유자(writer)** 를 갖는다. 그 서비스만 INSERT/UPDATE/DELETE 한다.
 - 읽기는 여러 서비스가 할 수 있다(reader). 소유자가 아닌 서비스의 쓰기는 금지.
 - 소유자는 그 테이블의 컬럼 변경에 책임을 진다 — 확장-수축 절차를 주도하고, 다른 reader가 깨지지 않도록 보장한다.
+- **예외 1건 — `dataset_commit_outbox`의 배달 상태.** 소유자는 data-pipeline이다. SQS가 없는 db 큐 모드에서만 분석 v2(`edge_analysis_v2_writer`)가 `price-explanation-realtime` 행을 직접 집고 닫는다. 쓸 수 있는 것은 배달 상태 컬럼(`status`·`attempt_count`·`claimed_by`·`claim_expires_at`·`published_at`·`last_error`)뿐이고 사건 내용(`payload`·`destination` 등)과 INSERT·DELETE는 권한이 없다. 어느 destination 행인지는 컬럼 권한으로 막을 수 없어 코드(`cloud/local.py`)가 진다. 컬럼 구성은 `libs/schema/tests/analysis_v2_writer.sql`이 검사한다. 근거: [v2 실행 접수 계약](contracts/analysis-v2-admission.md) "db 모드", `V202611271200__allow_v2_outbox_claim.sql`.
 
 **확장-수축(expand-contract) 절차 — 왜 필요한가**
 머지 ≠ 배포다. PR이 머지돼도 서비스 롤아웃에는 시차가 있어, 한순간 **구버전 코드와 신버전 코드가 같은 DB**를
