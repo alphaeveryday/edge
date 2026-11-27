@@ -35,6 +35,11 @@ class SelectionTests(unittest.TestCase):
                 self.assertEqual(result["images"], [app])
                 self.assertTrue(result["e2e"])
 
+    def test_oci_cron_scripts_run_the_data_pipeline_tests_that_cover_them(self):
+        for path in ("infra/oci/vm1/etf_daily.sh", "infra/oci/vm1/crontab", "infra/oci/lib/edge_cron.py"):
+            with self.subTest(path=path):
+                self.assertEqual(self.select(path)["legacy"], ["data-pipeline"])
+
     def test_schema_change_keeps_real_database_e2e_not_unchanged_images(self):
         result = self.select("libs/schema/migrations-cloud/V202609.sql")
         self.assertEqual(result["legacy"], [])

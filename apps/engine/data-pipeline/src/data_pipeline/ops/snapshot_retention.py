@@ -20,8 +20,10 @@
 보관하지 않는다: 지운 행의 내용은 파생물이다. 도구 출력 원문은 각자의 `tool_runs` 행에, 메모·질문은 최신
 스냅샷에 그대로 남는다. 2026-11-16·11-22 수동 정리분은 `operations_archive/tool_runs_snapshots/` 에 있다.
 
-삭제는 WAL 을 만들어 RDS 디스크를 잠시 먹는다(11-22: 2,415행에 여유 4.35→2.66GiB). 그래서 묶음마다 RDS
-FreeStorageSpace 를 보고, 여유가 PACE_FREE_GIB 아래면 회복을 기다리고 MIN_FREE_GIB 아래면 멈춘다.
+삭제는 WAL 을 만들어 DB 디스크를 잠시 먹는다(11-22: 2,415행에 여유 4.35→2.66GiB). 그래서 묶음마다 디스크 여유를
+보고, 여유가 PACE_FREE_GIB 아래면 회복을 기다리고 MIN_FREE_GIB 아래면 멈춘다. 여유는 둘 중 하나로 읽는다:
+RDS_INSTANCE_ID(AWS — CloudWatch FreeStorageSpace) 또는 DB_DISK_PATH(VM — PostgreSQL 데이터 디렉터리가 있는
+파일시스템의 경로, 컨테이너에 같은 디스크가 붙어 있어야 한다). 둘 다 없으면 MODE=run 은 지우지 않고 끝난다.
 
 실행: edge-dev-db-maintenance 태스크(마스터 계정만 tool_runs 를 지울 수 있다).
   MODE=plan(기본): 읽기만 — 후보 수·크기를 로그로 낸다.  MODE=run: 지우고 VACUUM (ANALYZE) tool_runs.
@@ -31,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -118,8 +121,24 @@ def rds_free_bytes(cloudwatch, instance_id: str) -> float | None:
     return values[0] if values else None
 
 
+def free_source(environ=os.environ):
+    """디스크 여유(바이트)를 읽는 함수. 읽을 곳이 설정되지 않았으면 None.
+
+    RDS_INSTANCE_ID 가 있으면 CloudWatch, 없고 DB_DISK_PATH 가 있으면 그 경로의 파일시스템 여유다.
+    """
+    instance, path = environ.get("RDS_INSTANCE_ID"), environ.get("DB_DISK_PATH")
+    if instance:
+        import boto3
+
+        cloudwatch = boto3.client("cloudwatch", region_name=environ.get("AWS_REGION") or "ap-northeast-2")
+        return lambda: rds_free_bytes(cloudwatch, instance)
+    if path:
+        return lambda: float(shutil.disk_usage(path).free)
+    return None
+
+
 class DiskGuard:
-    """삭제 묶음 사이에 RDS 여유 공간을 본다. free=None 이면 지표 없이 진행한다(로컬·테스트)."""
+    """삭제 묶음 사이에 DB 디스크 여유를 본다. free 가 None 을 돌려주면 그 확인은 건너뛴다(지표 공백·테스트)."""
 
     def __init__(self, free, *, pace_bytes: float, min_bytes: float, sleep=time.sleep, waits: int = 30):
         self.free, self.pace_bytes, self.min_bytes, self.sleep, self.waits = free, pace_bytes, min_bytes, sleep, waits
@@ -165,17 +184,19 @@ def run(conn, *, mode: str, age: str, guard: DiskGuard, pause: float = 0, etf_co
 
 
 def main() -> int:
-    """태스크 진입점. 종료 코드: 0 정상, 2 잘못된 MODE, 3 디스크 여유 부족으로 중간에 멈춤."""
-    import boto3
+    """태스크 진입점. 종료 코드: 0 정상, 2 잘못된 설정(MODE·디스크 여유를 읽을 곳 없음), 3 디스크 여유 부족으로 멈춤."""
     import psycopg
 
     mode = os.environ.get("MODE", "plan")
     if mode not in ("plan", "run"):
         log("error.mode", mode=mode)
         return 2
-    instance = os.environ.get("RDS_INSTANCE_ID")
-    cloudwatch = boto3.client("cloudwatch", region_name=os.environ.get("AWS_REGION") or "ap-northeast-2")
-    guard = DiskGuard((lambda: rds_free_bytes(cloudwatch, instance)) if instance else (lambda: None),
+    free = free_source()
+    if free is None and mode == "run":
+        # 여유를 못 보면서 지우면 디스크가 차도 멈추지 못한다(11-16 에 DB 디스크가 가득 찼다). 조용히 끄지 않는다.
+        log("error.disk_guard", reason="RDS_INSTANCE_ID 와 DB_DISK_PATH 가 모두 없다")
+        return 2
+    guard = DiskGuard(free or (lambda: None),
                       pace_bytes=float(os.environ.get("PACE_FREE_GIB", "2.5")) * GIB,
                       min_bytes=float(os.environ.get("MIN_FREE_GIB", "1.5")) * GIB)
     with psycopg.connect(autocommit=True, application_name="db-maintenance-snapshot-retention") as conn:
