@@ -123,9 +123,16 @@ _run_step() {
   # 124 이상은 컨테이너가 뜨지 못했거나(125~127) 신호로 죽은 것(137 메모리 초과·시간 상한)이다. 어디까지 썼는지 모르므로
   # 뒤 스텝을 돌리지 않는다(Airflow 의 "결과 미상 → 보류"와 같은 뜻).
   if [ "$code" -ge 124 ]; then
-    # 상한에 걸리면 timeout 은 docker 명령만 죽인다. 컨테이너는 이름으로 따로 지운다(이미 없으면 아무 일도 없다).
-    docker rm -f "$container" >/dev/null 2>&1
-    [ $((SECONDS - started)) -lt "$limit" ] || NOTE=" · $name 이 시간 상한 ${limit}초를 넘겨 컨테이너를 지웠다"
+    [ $((SECONDS - started)) -lt "$limit" ] || NOTE=" · $name 이 시간 상한 ${limit}초를 넘겼다"
+    # 상한에 걸리면 timeout 은 docker 명령만 죽인다. 컨테이너는 이름으로 따로 지운다. 삭제가 실패해도 컨테이너가
+    # 이미 없으면(스스로 죽어 --rm 이 치운 경우) 된 것이다. 남아 있거나 확인하지 못하면 지웠다고 말하지 않는다 —
+    # 이 레인이 락을 놓은 뒤에도 그 컨테이너가 돌 수 있다.
+    if docker rm -f "$container" >/dev/null 2>&1 \
+      || { left="$(docker ps -aq --filter "name=^${container}\$" 2>/dev/null)" && [ -z "$left" ]; }; then
+      [ -z "$NOTE" ] || NOTE="$NOTE(컨테이너는 지웠다)"
+    else
+      NOTE="$NOTE · 컨테이너 $container 를 지우지 못했다 — 아직 돌 수 있다. docker ps 로 확인하고 손으로 지운다"
+    fi
     end_lane
   fi
 }

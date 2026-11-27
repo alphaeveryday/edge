@@ -109,7 +109,11 @@ import json, os, sys
 args = sys.argv[1:]
 with open(os.environ["STUB_LOG"], "a") as log:
     log.write(json.dumps({{"docker": args}}) + "\\n")
+stuck = os.environ.get("STUB_RM_FAILS") == "1"     # 데몬이 컨테이너를 지우지 못하는 경우
 if args[0] == "rm":   # 시간 상한 뒤 컨테이너 지우기
+    sys.exit(1 if stuck else 0)
+if args[0] == "ps":   # 지운 뒤 남았는지 확인 — 남아 있으면 id 를 낸다
+    print("0123456789ab" if stuck else "", end="")
     sys.exit(0)
 if "-c" in args:      # edge_sql.sh(python -c) — 성공 행 기록
     sys.exit(int(os.environ.get("STUB_SQL_EXIT", "0")))
@@ -192,6 +196,7 @@ def run_lane(tmp_path, lane, *, exits="", late_minutes=1, env_lines=ENV_LINES, p
         assert args[2] == "--name" and args[3].startswith(f"edge-{lane}-"), args
         assert args[:2] + args[4:len(prefix) + 2] == prefix, args
     run_lane.output = result.stdout + result.stderr
+    run_lane.bodies = [call["body"] for call in calls if "mail" in call]
     run_lane.lock_wait = [call["flock"] for call in calls if "flock" in call]
     run_lane.limits = [call["timeout"] for call in calls if "timeout" in call]
     run_lane.removed = [args[2] for args in docker if args[:2] == ["rm", "-f"]]
@@ -295,26 +300,46 @@ def test_lock_timeout_runs_nothing_and_alerts(tmp_path):
     assert (code, steps, rows) == (1, [], []) and len(mails) == 1
 
 
-def test_premarket_waits_for_the_lock_only_until_0725(tmp_path):
-    # WHY: build-minute-universe 는 거래일 07:30 뒤에는 유니버스 교체를 거부한다. 락을 1시간 기다렸다 08:00 에
-    # 시작하면 수집·정제만 돌고 교체는 실패한다 — 그 전에 락 실패로 끝내 일찍 알린다.
-    run_lane(tmp_path, "premarket", late_minutes=1)                 # 07:01 → 07:25 까지 24분
-    assert run_lane.lock_wait == [["-w", "1440", "9"]]
+def test_premarket_waits_for_the_lock_only_until_0720(tmp_path):
+    # WHY: build-minute-universe 는 거래일 07:30 뒤에는 유니버스 교체를 거부한다. 레인 전체가 실측 최대 376초라
+    # (edge_premarket.py 머리말) 07:20 까지 락을 잡으면 그 전에 끝난다. 더 기다려 봐야 교체까지 못 가므로 락 실패로 일찍 알린다.
+    run_lane(tmp_path, "premarket", late_minutes=1)                 # 07:01 → 07:20 까지 19분
+    assert run_lane.lock_wait == [["-w", "1140", "9"]]
+    assert "최대 376초" in (DAGS / "edge_premarket.py").read_text(encoding="utf-8")   # 07:20 의 근거가 그대로인가
     run_lane(tmp_path, "investor-intraday")                         # 다른 레인은 3600초
     assert run_lane.lock_wait == [["-w", "3600", "9"]]
 
 
-def test_snapshot_retention_is_cut_off_before_premarket(tmp_path):
-    # WHY: 정리는 디스크 여유가 모자라면 오래 기다린다. 07:00 넘어까지 락을 쥐면 장전 레인이 07:25 까지 못 들어가
-    # 그날 신규 편입 종목이 분봉을 못 받는다. 06:50 을 넘지 않게 상한을 줄인다.
+def test_premarket_leaves_the_0730_decision_to_the_universe_step(tmp_path):
+    # WHY: build-minute-universe 는 유니버스가 안 바뀐 날 07:30 뒤에도 exit 0 으로 끝난다(무변경 검사가 시각 검사보다
+    # 앞이다). 레인이 시각만 보고 그 스텝을 막으면 그런 날과 늦은 수동 재실행이 멀쩡한데 실패가 된다. 교체를 거부할지는
+    # 스텝이 정하고, 레인은 그 exit 코드만 따른다.
+    late = dict(EDGE_MANUAL="1", STUB_NOW="2026-11-30T07:45:00+09:00")
+    code, steps, mails, rows = run_lane(tmp_path, "premarket", **late)          # 스텝이 0 을 냈다 = 무변경
+    assert (code, steps, mails) == (0, _expected("premarket"), []) and len(rows) == 1
+    assert run_lane.limits == ["5400", "5400", "5400"]                           # 07:30 에 끊지도 않는다
+    code, steps, mails, rows = run_lane(tmp_path, "premarket", exits="build-minute-universe=1", **late)
+    assert (code, rows) == (1, []) and len(steps) == 3 and len(mails) == 1       # 스텝이 거부했다 = 레인 실패
+
+
+def test_watchdog_waits_for_snapshot_retention_past_its_cutoff():
+    # WHY: 정리는 06:15 까지 돌 수 있다. 감시 기한이 그보다 이르면 아직 도는 정리를 날마다 "빠진 슬롯"으로 헛통보한다.
+    cutoff = re.search(r"^STEP_DEADLINE=(\d\d:\d\d)$", (OCI / "vm1" / "snapshot_retention.sh").read_text(), re.M).group(1)
+    hhmm, grace = next(entry[2:5:2] for entry in edge_cron.SLOTS if entry[1] == "snapshot-retention")
+    assert _slot(hhmm) + timedelta(minutes=grace) > _slot(cutoff), (hhmm, grace, cutoff)
+
+
+def test_snapshot_retention_is_cut_off_before_source_daily_gives_up(tmp_path):
+    # WHY: 정리는 디스크 여유가 모자라면 오래 기다리고, 미뤄도 되는 일이다. 05:20 원천 관측 레인은 락을 06:20 까지만
+    # 기다린다 — 정리가 그 뒤까지 락을 쥐면 그날 원천 관측이 빠진다. 06:15 를 넘지 않게 상한을 줄인다.
     attached = _retention_opts(tmp_path)
-    run_lane(tmp_path, "snapshot-retention", mount=attached)        # 04:31 → 06:50 까지 8340초(기본 5400 이 더 짧다)
+    run_lane(tmp_path, "snapshot-retention", mount=attached)        # 04:31 → 06:15 까지 6240초(기본 5400 이 더 짧다)
     assert run_lane.limits == ["5400"]
     run_lane(tmp_path, "snapshot-retention", mount=attached, EDGE_MANUAL="1",
-             STUB_NOW="2026-11-30T06:20:00+09:00")                  # 락을 늦게 잡았다 → 남은 30분만
-    assert run_lane.limits == ["1800"]
+             STUB_NOW="2026-11-30T05:50:00+09:00")                  # 락을 늦게 잡았다 → 남은 25분만
+    assert run_lane.limits == ["1500"]
     code, steps, mails, rows = run_lane(tmp_path, "snapshot-retention", mount=attached, EDGE_MANUAL="1",
-                                        STUB_NOW="2026-11-30T06:55:00+09:00")
+                                        STUB_NOW="2026-11-30T06:20:00+09:00")
     assert (code, steps, rows) == (1, [], []) and len(mails) == 1   # 마감 뒤에는 시작하지 않는다
 
 
@@ -385,6 +410,16 @@ def test_step_over_its_time_limit_is_killed_and_stops_the_lane(tmp_path):
     assert (code, rows) == (1, []) and len(mails) == 1
     assert [step[0] for step in steps] == ["ingest-raw-investor-estimate"]
     assert run_lane.removed == run_lane.names and len(run_lane.names) == 1
+    # 메일이 시간 상한 때문인지(메모리 초과 137 과 같은 exit 코드다), 컨테이너를 정말 지웠는지 말한다.
+    assert "collect 이 시간 상한 1초를 넘겼다(컨테이너는 지웠다)" in run_lane.bodies[0]
+    run_lane(tmp_path, "disclosure", exits="ingest-raw-disclosure=137")         # 스스로 죽은 137 — 상한이 아니다
+    assert "collect=137" in run_lane.bodies[0] and "시간 상한" not in run_lane.bodies[0]
+    assert "지우지 못했다" not in run_lane.bodies[0]
+    # 컨테이너를 지우지 못하면 지웠다고 하지 않는다 — 락을 놓은 뒤에도 그 컨테이너가 돌 수 있다.
+    run_lane(tmp_path, "investor-intraday", STUB_HANG="ingest-raw-investor-estimate", STUB_RM_FAILS="1",
+             env_lines=[*ENV_LINES, "EDGE_TIMEOUT_SEC_INVESTOR_INTRADAY_COLLECT=1"])
+    assert f"컨테이너 {run_lane.names[0]} 를 지우지 못했다" in run_lane.bodies[0]
+    assert "시간 상한 1초를 넘겼다" in run_lane.bodies[0] and "컨테이너는 지웠다" not in run_lane.bodies[0]
     # 락이 풀렸다 — 같은 락으로 다음 레인이 바로 돈다.
     assert subprocess.run(["bash", "-c", f"exec 9>{tmp_path / 'lock'} && python3 -c 'import fcntl; "
                            "fcntl.flock(9, fcntl.LOCK_EX | fcntl.LOCK_NB)'"]).returncode == 0
@@ -552,13 +587,13 @@ def test_vm2_stop_signal_is_the_row_the_minute_session_stop_writes():
     # 시각이 어긋나면 세션이 성공해도 VM-2 를 끄지 않고 날마다 19:00 에 메일만 보낸다.
     from data_pipeline.minute import session_ops
 
-    # 쓰는 쪽 상수는 #1665 에서 들어온다. 그 전에는 여기 적은 값으로 표·crontab 끼리만 대조한다.
-    lane = getattr(session_ops, "STOP_SUCCESS_LANE", "minute_session_stop")
-    hour, minute = getattr(session_ops, "STOP_SUCCESS_SLOT_KST", (16, 10))
-    signal = (lane, f"{hour:02d}:{minute:02d}")
+    hour, minute = session_ops.STOP_SUCCESS_SLOT_KST
+    signal = (session_ops.STOP_SUCCESS_LANE, f"{hour:02d}:{minute:02d}")
     assert (2, *signal, "1-5") in {entry[:4] for entry in edge_cron.SLOTS}
     assert signal in edge_cron.TRADING_DAY_ONLY         # 휴장일엔 VM-2 를 켜지 않으니 행도 기대하지 않는다
     assert f"vm stop-when-done VM2 {signal[0]} {signal[1]} 19:00 " in (OCI / "vm1" / "crontab").read_text()
+    # 그 행을 쓰는 종료 스크립트는 VM-2 의 crontab 이 같은 시각에 돌린다.
+    assert f"{minute} {hour} * * 1-5 $EDGE/vm2/session_stop.sh {signal[1]} " in (OCI / "vm2" / "crontab").read_text()
 
 
 def test_crontab_stops_vms_by_the_agreed_rules():
@@ -601,6 +636,35 @@ def test_watchdog_mails_when_the_lake_grows_more_than_5_gib_since_the_last_check
     for day in (28, 29, 30):        # 첫 측정은 기준값, +4GiB 는 조용히, +6GiB 는 알린다
         watchdog.check_lake(datetime(2026, 11, day, 6, 0, tzinfo=KST), {"EDGE_LAKE_DATA_DIR": "/data/minio"})
     assert sent == ["[watchdog] 레이크가 6.0GiB 늘었다"]
+
+
+def test_broken_holiday_setting_does_not_stop_the_missing_slot_check(tmp_path, monkeypatch):
+    # WHY: 휴장일 값이 빠지면 예전에는 감시 전체가 15분마다 실패 메일(하루 96통)을 보내면서 정작 빠진 슬롯은 알리지
+    # 못했다. 휴장일을 몰라도 거래일과 무관한 슬롯은 그대로 보고, 거래일 전용 슬롯은 거래일로 쳐서 놓치지 않는다.
+    now = datetime(2026, 11, 30, 20, 0, tzinfo=KST)      # 월요일 20:00
+    sent = []
+    monkeypatch.setattr(watchdog, "STATE_FILE", tmp_path / "alerted")
+    monkeypatch.setattr(watchdog, "done_slots", lambda: set(watchdog.due_slots(now)) - {
+        ("premarket", "2026-11-30T07:00"), ("minute_session_stop", "2026-11-30T16:10")})
+    monkeypatch.setattr(edge_cron, "send_mail", lambda subject, body: sent.append(body))
+    watchdog.check_slots(now, {"OPS_KR_HOLIDAYS": ""})
+    assert len(sent) == 1 and "premarket 2026-11-30T07:00" in sent[0]
+    assert "minute_session_stop 2026-11-30T16:10" in sent[0] and "휴장일 설정 오류" in sent[0]
+    watchdog.check_slots(now + timedelta(minutes=15), {"OPS_KR_HOLIDAYS": ""})   # 같은 날 다시 알리지 않는다
+    assert len(sent) == 1
+    watchdog.check_slots(now + timedelta(days=1), {})                             # 다음 날에도 그대로면 한 번 더
+    assert len(sent) == 2 and "휴장일 설정 오류" in sent[1]
+
+
+def test_watchdog_reads_holidays_from_the_file_the_steps_read(tmp_path, monkeypatch):
+    # WHY: 감시(VM 을 켤지)와 수집 스텝(거래일인지)이 다른 휴장일 값을 보면 한쪽은 쉬고 한쪽은 도는 날이 생긴다.
+    # 스텝 컨테이너가 받는 pipeline.env 의 값만 쓴다 — batch.env 에 적힌 값은 무시한다.
+    monkeypatch.setenv("EDGE_CONF_DIR", str(tmp_path))
+    (tmp_path / "batch.env").write_text("EDGE_VM2_OCID=ocid.vm2\nOPS_KR_HOLIDAYS=1999-01-01\n")
+    (tmp_path / "pipeline.env").write_text("OPS_KR_HOLIDAYS=2026-12-25\n")
+    assert watchdog.load_conf() == {"EDGE_VM2_OCID": "ocid.vm2", "OPS_KR_HOLIDAYS": "2026-12-25"}
+    (tmp_path / "pipeline.env").write_text("")
+    assert watchdog.load_conf() == {"EDGE_VM2_OCID": "ocid.vm2"}
 
 
 def test_watchdog_mails_when_it_cannot_do_its_job(monkeypatch):
