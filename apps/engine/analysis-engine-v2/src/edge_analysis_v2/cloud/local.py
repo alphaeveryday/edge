@@ -32,6 +32,14 @@ POLL_SECONDS = 1
 # The workflow stopped its Analyze task after this long.
 TASK_SECONDS = 1100
 KST = timezone(timedelta(hours=9))
+# What a worker child may inherit. The worker runs a model with file-reading tools, so it gets
+# what it reads and nothing else that happens to be in this container's environment (an ECS task
+# only ever had its own variables). Prefixes: object store and region, and the database target.
+CHILD_ENV = frozenset({'PATH', 'HOME', 'LANG', 'LC_ALL', 'TZ', 'TMPDIR', 'PYTHONPATH', 'PYTHONUNBUFFERED',
+    'PYTHONDONTWRITEBYTECODE', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'HTTPS_PROXY', 'HTTP_PROXY', 'NO_PROXY',
+    'RDS_CA_PATH', 'OBSERVATION_BUCKET', 'IMAGE_REVISION',
+    'DEEPSEEK_API_KEY', 'DEEPSEEK_MODEL', 'DEEPSEEK_SECRET_ARN', 'TINYFISH_API_KEY'})
+CHILD_ENV_PREFIXES = ('AWS_', 'EDGE_ANALYSIS_DB_')
 
 # The eligibility predicate is the Relay's (data-pipeline JobLedger.claim_outbox_batch): a row held
 # by either side is invisible to the other. The delivery count rises here, at claim time, so a
@@ -113,10 +121,12 @@ class LocalAdmission:
 def spawn_worker(raw, slots):
     """Start the unchanged cloud worker for one request, as the ECS task override did.
 
-    ANALYSIS_EXECUTION_ARN is withheld: without a workflow slot the worker uses its session
-    advisory locks (one per kind and ETF, and one of ``slots``), which need no Step Functions.
+    The child inherits only CHILD_ENV. ANALYSIS_EXECUTION_ARN is not in it: without a workflow
+    slot the worker uses its session advisory locks (one per kind and ETF, and one of ``slots``),
+    which need no Step Functions.
     """
-    env = {name: value for name, value in os.environ.items() if name != 'ANALYSIS_EXECUTION_ARN'}
+    env = {name: value for name, value in os.environ.items()
+           if name in CHILD_ENV or name.startswith(CHILD_ENV_PREFIXES)}
     env.update(ANALYSIS_REQUEST=raw, ANALYSIS_SLOTS=str(slots))
     return subprocess.Popen([sys.executable, '-m', 'edge_analysis_v2.cloud.worker'], env=env)
 
@@ -129,7 +139,9 @@ class LocalRunner:
     request is run again only if this runner itself stopped while its process was alive, which
     the worker tolerates (a completed analysis is not repeated). The host stops every evening,
     so a request left over from an earlier KST day is closed without running: explaining
-    yesterday's price move today would publish stale content.
+    yesterday's price move today would publish stale content. What keeps that from being the
+    normal fate of a late burst is the session stop gate, which waits for pending requests
+    (data-pipeline ``session_ops._wait_analysis_drain`` reads the same predicate as ``tick``).
 
     Args:
         connect: Opens a result-writer connection.
@@ -192,5 +204,8 @@ class LocalRunner:
             except Exception as exc:
                 # Exception text may carry connection details.
                 LOG.warning('Local analysis runner failed type=%s', type(exc).__name__)
+        if self.running:
+            # Cut work is reported the same day; tomorrow these are closed as stale.
+            LOG.warning('Stopping %s running analyses; they stay pending: %s', len(self.running), sorted(self.running))
         for process, _, _ in self.running.values():
             process.terminate()

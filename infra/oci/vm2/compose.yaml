@@ -19,7 +19,16 @@
 #
 # 쓰는 법
 #   docker compose up -d                  # session-start 가 세션을 계획한 뒤 워커가 뜬다
-#   docker compose run --rm session-stop  # drain → 게이트 → QC. exit 0 이면 VM 을 내려도 된다
+#   docker compose run --rm session-stop  # drain → 게이트 → QC → 설명 분석 대기. exit 0 이면 VM 을 내려도 된다
+#                                         # (성공하면 batch_lane_success 에 minute_session_stop 행을 쓴다)
+#
+# ⚠️ 전환 순서: 같은 DB 를 보는 AWS relay(sqs 모드)를 먼저 내린 뒤에 이 compose 를 올린다.
+#    relay 가 살아 있으면 먼저 집은 사건을 SQS 로 보내 버려 여기 소비자가 영영 못 본다.
+# ⚠️ session-stop 이 0 이 아닌데 VM 을 내리면 실행 중인 분석이 잘리고, 남은 요청은 다음 날
+#    분석 없이 닫힌다(경고 로그만 남는다). 설명 분석 대기 상한은 기본 2시간이다
+#    (MINUTE_SESSION_ANALYSIS_DRAIN_TIMEOUT_SEC).
+# env 파일은 둘이다: .env(data-pipeline 과 compose 치환) · .env.analysis(analysis 컨테이너만).
+#    분석은 파일을 읽는 도구를 가진 모델을 돌리므로 파이프라인 DB·KIS·DART 값을 주지 않는다.
 #
 # ⚠️ 메모리 한도는 ECS 태스크 크기와 2026-11-20 실사용 합계에서 잡은 잠정값이다. 분석 1건의
 #    메모리는 재지 않았다 — analysis 한도와 ANALYSIS_SLOTS 는 첫 장중에 재고 고친다.
@@ -89,7 +98,7 @@ services:
 
   analysis:
     image: ${ANALYSIS_IMAGE:?}
-    env_file: [.env]
+    env_file: [.env.analysis]
     restart: unless-stopped
     stop_grace_period: 120s
     # 접수 루프 + 분석 자식 프로세스 ANALYSIS_SLOTS 개(ECS 에선 건당 2 GB 태스크였다)

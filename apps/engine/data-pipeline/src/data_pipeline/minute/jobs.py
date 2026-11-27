@@ -911,6 +911,22 @@ class JobLedger:
             )
             return dict(cur.fetchall())
 
+    def count_pending_local_analyses(self) -> int:
+        """접수됐지만 아직 끝나지 않은 장중 설명 분석 수 — db 모드 세션 종료 게이트용.
+
+        ⚠️ 분석 v2 소유 테이블을 **읽기만** 한다. 술어는 그쪽 실행기의 것을 그대로 옮겼다
+        (`edge_analysis_v2.cloud.local.LocalRunner` — `local:` 로 예약하고, 분석 프로세스가
+        끝나면 `accepted_at` 을 채운다). 그쪽 술어가 바뀌면 여기도 바뀌어야 한다.
+        """
+        with self.connect_fn(self.db) as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM analysis_execution_requests
+                WHERE accepted_at IS NULL AND execution_arn LIKE 'local:%%'
+                """
+            )
+            return cur.fetchone()[0]
+
     def mark_published(
         self, *, event_id: str, relay_id: str, claim_token: datetime, now: datetime,
     ) -> bool:

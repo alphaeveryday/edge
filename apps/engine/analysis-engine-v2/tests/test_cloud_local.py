@@ -187,6 +187,22 @@ def test_the_worker_child_uses_its_lock_slots_not_a_workflow_slot(monkeypatch):
     assert (seen['env']['ANALYSIS_REQUEST'], seen['env']['ANALYSIS_SLOTS']) == ('{"analysis_id":"x"}', '3')
 
 
+def test_the_worker_child_inherits_only_what_it_reads(monkeypatch):
+    """The child runs a model with file-reading tools; it must not hold credentials of other services."""
+    seen = {}
+    needed = {'DEEPSEEK_API_KEY': 'k', 'OBSERVATION_BUCKET': 'b', 'RDS_CA_PATH': '/ca', 'PATH': '/bin',
+              'AWS_ENDPOINT_URL_S3': 'http://minio', 'AWS_SECRET_ACCESS_KEY': 's',
+              'EDGE_ANALYSIS_DB_HOST': 'db', 'EDGE_ANALYSIS_DB_WRITER_PASSWORD': 'w'}
+    foreign = {'DATA_PIPELINE_DB__PASSWORD': 'owner', 'DATA_PIPELINE_KIS_NAV__SOURCE__APP_SECRET': 'kis',
+               'DATA_PIPELINE_DART_DISCLOSURE__SOURCE__API_KEY': 'dart', 'LLM_API_KEY': 'tagger'}
+    for name, value in (needed | foreign).items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(local.subprocess, 'Popen', lambda command, env: seen.update(env=env))
+    local.spawn_worker('{}', 2)
+    assert needed.items() <= seen['env'].items()
+    assert not foreign.keys() & seen['env'].keys()
+
+
 def test_admission_records_the_request_without_marking_it_run():
     class Requests:
         def reserve(self, *args):

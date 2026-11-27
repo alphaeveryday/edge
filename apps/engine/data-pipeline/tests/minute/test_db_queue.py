@@ -231,6 +231,19 @@ class TestRetryCeiling:
         env.clock.advance(VISIBILITY + 1)
         assert consumer.tick(env.clock.now) == {"idle": 1}
 
+    def test_event_on_the_wrong_lane_ends_dead_without_touching_its_job(self, env):
+        """남의 레인 destination 에 실린 사건(배선 오류) — 이 큐의 소비자는 그 job 을 판정할
+        자격이 없다. 상한에서 event 만 격리하고 job 은 건드리지 않는다(죽이면 배선 오류 하나가
+        멀쩡한 다른 레인의 job 을 죽인다)."""
+        job_id, event_id = env.enqueue(destination="price-analysis-realtime")
+        event = env.db.outbox[event_id]
+        event["attempt_count"] = DB_MAX_RECEIVES
+
+        assert receive(env.queue(), "price-analysis-realtime") == ()
+
+        assert (event["status"], event["last_error"]) == ("DEAD", "DB_MAX_RECEIVE: misrouted")
+        assert env.db.jobs[("news", job_id)]["status"] == "PENDING"
+
     def test_receive_ceiling_closes_a_live_job_with_its_own_reason(self, env):
         """배달만 소진되고 job 은 살아 있는 경우(SQS 의 DLQ 도착 + 대사) — job 을 DEAD 로
         닫되 사유를 예산 소진과 구분한다. 닫지 않으면 깨울 event 없는 job 이 남는다."""

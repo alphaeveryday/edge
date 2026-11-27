@@ -44,6 +44,24 @@ BEGIN
                OR has_table_privilege('edge_analysis_v2_writer',r.oid,'UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES') THEN
                 RAISE EXCEPTION 'Wrong admission grants';
             END IF;
+        ELSIF r.relname='dataset_commit_outbox' THEN
+            -- db 모드의 claim·닫기(V202611271200). 배달 상태 컬럼만 고칠 수 있고, 사건의 내용은
+            -- 고칠 수 없어야 한다. 테이블 수준 검사는 컬럼 GRANT 를 못 보므로 컬럼마다 본다.
+            IF has_table_privilege('edge_analysis_v2_writer',r.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES')
+               OR has_any_column_privilege('edge_analysis_v2_writer',r.oid,'INSERT,REFERENCES') THEN
+                RAISE EXCEPTION 'Outbox access is wider than the delivery columns';
+            END IF;
+            IF (SELECT array_agg(a.attname::text ORDER BY a.attname) FROM pg_attribute a
+                 WHERE a.attrelid=r.oid AND a.attnum>0 AND NOT a.attisdropped
+                   AND has_column_privilege('edge_analysis_v2_writer',r.oid,a.attnum,'UPDATE'))
+               IS DISTINCT FROM ARRAY['attempt_count','claim_expires_at','claimed_by','last_error','published_at','status'] THEN
+                RAISE EXCEPTION 'Wrong outbox delivery-state grants';
+            END IF;
+            IF EXISTS (SELECT FROM unnest(ARRAY['event_id','event_type','destination','payload','status',
+                                               'attempt_count','next_attempt_at','claimed_by','claim_expires_at','created_at']) c
+                        WHERE NOT has_column_privilege('edge_analysis_v2_writer',r.oid,c,'SELECT')) THEN
+                RAISE EXCEPTION 'Missing outbox claim read permission';
+            END IF;
         ELSIF r.relname='analysis_execution_slots' THEN
             IF NOT has_table_privilege('edge_analysis_v2_writer',r.oid,'SELECT')
                OR NOT has_table_privilege('edge_analysis_v2_writer',r.oid,'INSERT')

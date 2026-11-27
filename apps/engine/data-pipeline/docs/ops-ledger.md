@@ -266,6 +266,15 @@ DATA_PIPELINE_DB__PASSWORD=... \
 # 재시도 상한은 claim 때 센다: job 은 max_attempts 를 넘긴 claim 이 RETRY_BUDGET_EXHAUSTED,
 # 배달만 16회 소진된 job 은 DB_MAX_RECEIVE 로 DEAD 다. 판정할 수 없는 event 는 16회 뒤
 # outbox 행이 DEAD 가 된다(last_error=`DB_MAX_RECEIVE: <사유>`). 복구는 위 redrive 그대로다.
+# ⚠️ 전환 순서: **같은 DB 를 보는 sqs 모드 relay 를 먼저 내린 뒤**(AWS edge-dev-relay desired 0,
+# 또는 AWS 가 닫힌 뒤) db 모드 소비자를 띄운다. relay 기동 거부는 그 프로세스가 db 모드일 때만
+# 막는다 — 다른 환경의 relay 가 살아 있으면 먼저 집은 행을 SQS 로 보내고 PUBLISHED 로 닫아,
+# db 모드 소비자는 그 사건을 영영 못 본다.
+# db 모드의 stop-minute-session 은 QC 뒤에 장중 설명 분석의 잔여 일감(설명 사건 + 끝나지 않은
+# 분석 요청)이 빌 때까지 기다린다. 상한은 MINUTE_SESSION_ANALYSIS_DRAIN_TIMEOUT_SEC(기본 7200초)
+# 이고 넘기면 exit 1 이다. 전부 비고 QC 도 0 이면 exit 0 과 함께 `batch_lane_success` 에
+# (lane=`minute_session_stop`, slot_at=그날 16:10 KST) 행을 쓴다 — OCI 감시가 이 행으로 VM-2 를
+# 내린다(표는 V202611270230 이 만든다). QC 가 0 이 아니거나 행을 못 쓰면 행이 없고 exit 도 0 이 아니다.
 DATA_PIPELINE_DB__PASSWORD=... DATA_PIPELINE_MINUTE_QUEUE_TRANSPORT=db \
 DATA_PIPELINE_MINUTE_NEWS_CONSUMER__QUEUE_URL=news-extraction-realtime \
   python -m data_pipeline.run news-consumer --max-ticks 5

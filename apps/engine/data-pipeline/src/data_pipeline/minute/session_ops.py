@@ -33,6 +33,13 @@ stop-minute-session  (EOD)       : drain 요청 → 원장 게이트 대기 → 
 게이트 → QC 까지만 한다. 게이트의 큐 깊이는 outbox 의 destination 별 NEW 수다
 (`MINUTE_SESSION_GATE_QUEUES` 에 큐 URL 대신 destination 이름을 넣는다). exit 0 이 "이제
 내려도 된다"는 신호이고, 실제로 내리는 것은 부른 쪽(cron)이다.
+
+db 모드의 stop 은 QC 뒤에 **장중 설명 분석의 잔여 일감**도 기다린다(`_wait_analysis_drain`).
+AWS 에서는 stop 이 설명 소비자를 내리지 않았고 SFN 태스크가 따로 끝까지 돌았다(ALPHA-912).
+OCI 에서는 분석이 같은 VM 에서 돌아 VM 을 내리면 함께 잘리고, 남은 요청은 다음 날 "전날 요청"
+으로 분석 없이 닫힌다. 그래서 exit 0 은 설명 큐와 접수된 분석까지 다 끝났을 때만이다.
+그때 `batch_lane_success` 에 (`minute_session_stop`, 그날 16:10 KST) 행을 쓴다 — OCI 감시가
+이 행을 보고 VM-2 를 내린다. QC 가 0 이 아니거나 상한에 걸리면 행을 쓰지 않는다.
 """
 
 from __future__ import annotations
@@ -44,7 +51,7 @@ import time
 from datetime import datetime, timezone
 from typing import NamedTuple
 
-from ..db import stable_domain_id
+from ..db import connect, stable_domain_id
 from ..ops.trading_calendar import is_trading_day
 from .jobs import DESTINATION_JOB_KINDS, JobLedger, uses_db_queue
 from .eod import qc_session_cli
@@ -70,6 +77,8 @@ ENV_CLUSTER = "MINUTE_SESSION_CLUSTER"
 ENV_SERVICES = "MINUTE_SESSION_SERVICES"
 ENV_GATE_QUEUES = "MINUTE_SESSION_GATE_QUEUES"
 ENV_DRAIN_TIMEOUT = "MINUTE_SESSION_DRAIN_TIMEOUT_SEC"
+# db 모드 전용 — 장중 설명 분석 잔여 일감을 기다리는 상한(가격·뉴스 drain 상한과 따로다).
+ENV_ANALYSIS_DRAIN_TIMEOUT = "MINUTE_SESSION_ANALYSIS_DRAIN_TIMEOUT_SEC"
 # 뉴스 세션 편입 토글(ALPHA-717) — source_group 을 주면 start 가 news_minute 세션도
 # 계획하고 stop 이 함께 드레인한다. 비우면 가격 레인만(뉴스 미편입 환경).
 ENV_NEWS_SOURCE_GROUP = "MINUTE_SESSION_NEWS_SOURCE_GROUP"
@@ -131,6 +140,17 @@ _OPTIONAL_LANES = (
 )
 
 DEFAULT_DRAIN_TIMEOUT_SEC = 1800.0
+# 분석은 건당 약 588초(analysis_autoscaling.tf 주석의 AWS 실측 — VM 에서는 재지 않았다)이고
+# 동시에 ANALYSIS_SLOTS(2~4)건만 돈다. 2시간이면 슬롯 3 기준 약 36건이 끝난다
+# (7200 ÷ 588 × 3). 마감 직전 몰림이 그보다 크면 상한에 걸려 exit 1 이다.
+DEFAULT_ANALYSIS_DRAIN_TIMEOUT_SEC = 7200.0
+# 설명 사건의 destination — 분석 소비자(edge_analysis_v2.cloud.local)가 집는 큐다.
+ANALYSIS_DESTINATION = "price-explanation-realtime"
+# db 모드 stop 이 끝까지 성공하면 `batch_lane_success` 에 남기는 행의 레인·슬롯(KST 시·분).
+# OCI 감시(infra/oci/vm1/watchdog.py)가 이 행으로 "VM-2 를 내려도 된다"를 읽는다 — 이름과
+# 슬롯 시각은 그쪽 기대 목록과 **같은 값**이어야 한다(다르면 성공해도 행이 없는 것으로 보인다).
+STOP_SUCCESS_LANE = "minute_session_stop"
+STOP_SUCCESS_SLOT_KST = (16, 10)
 POLL_INTERVAL_SEC = 15.0
 # 게이트가 비었다고 **연속으로** 이만큼 관측돼야 내린다. SQS 의 큐 깊이는 approximate 이고
 # 생산이 멈춘 뒤에도 최대 1분까지 실제와 어긋날 수 있다(GetQueueAttributes 계약) — 한 번의
@@ -223,18 +243,19 @@ def _gate_queues() -> list[str]:
     return queues
 
 
-def _drain_timeout_sec() -> float:
-    raw = os.environ.get(ENV_DRAIN_TIMEOUT, "").strip()
+def _drain_timeout_sec(env_name: str = ENV_DRAIN_TIMEOUT,
+                       default: float = DEFAULT_DRAIN_TIMEOUT_SEC) -> float:
+    raw = os.environ.get(env_name, "").strip()
     if not raw:
-        return DEFAULT_DRAIN_TIMEOUT_SEC
+        return default
     try:
         value = float(raw)
     except ValueError:
-        raise SystemExit(f"{ENV_DRAIN_TIMEOUT} 이 숫자가 아니다: {raw!r}") from None
+        raise SystemExit(f"{env_name} 이 숫자가 아니다: {raw!r}") from None
     # NaN 은 `<= 0` 도 `경과 >= nan` 도 False 라 **상한이 통째로 사라진다**(inf 도 같다).
     # 값이 있으나 마나인 상태가 가장 나쁘다 — 있다고 믿는데 안 걸린다(run.py --deadline-sec 와 같은 축).
     if not math.isfinite(value) or value <= 0:
-        raise SystemExit(f"{ENV_DRAIN_TIMEOUT} 은 0 보다 큰 유한한 값이어야 한다: {value}")
+        raise SystemExit(f"{env_name} 은 0 보다 큰 유한한 값이어야 한다: {value}")
     return value
 
 
@@ -504,6 +525,9 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
         return 2
 
     timeout_sec = _drain_timeout_sec()
+    # 분석 상한도 **게이트 전에** 해석한다 — 오타면 QC 까지 끝낸 뒤에야 죽는다.
+    analysis_timeout_sec = _drain_timeout_sec(
+        ENV_ANALYSIS_DRAIN_TIMEOUT, DEFAULT_ANALYSIS_DRAIN_TIMEOUT_SEC)
     queues = _gate_queues()
     if not ecs:
         unknown = sorted(set(queues) - set(DESTINATION_JOB_KINDS))
@@ -568,7 +592,81 @@ def stop_session_cli(settings, *, dataset: str | None, source_group: str | None)
         if workers:
             _scale(desired=0, force=False, services=workers)
     logger.info("세션 종료: sessions=%s — 게이트 전건 비었음, qc_exit=%d", session_ids, qc_exit)
+    if not ecs and not _wait_analysis_drain(jobs, timeout_sec=analysis_timeout_sec):
+        # QC 는 이미 끝났다(분 원장은 분석과 무관하게 확정된다). 다만 **내려도 된다는 신호는
+        # 주지 않는다** — VM 을 내리면 남은 분석이 잘리고 다음 날 분석 없이 닫힌다.
+        return max(qc_exit, 1)
+    if not ecs:
+        # 사람이 로그에서 찾는 줄이다. 기계가 읽는 신호는 아래 성공 행과 exit code 다.
+        logger.info("minute-session-stop: drained — 가격·뉴스 큐와 설명 분석이 모두 비었다 "
+                    "(qc_exit=%d)", qc_exit)
+        if qc_exit == 0:
+            try:
+                _record_stop_success(settings, day)
+            except Exception:
+                # 행이 곧 "내려도 된다"는 신호라, 못 썼으면 성공으로 끝내지 않는다 — 0 을 주면
+                # 감시는 행이 없다고 알리는데 이 실행은 성공으로 보여 원인이 갈린다.
+                logger.exception("stop 은 끝났는데 성공 행(%s)을 쓰지 못했다", STOP_SUCCESS_LANE)
+                return 2
     return qc_exit
+
+
+def _record_stop_success(settings, day) -> None:
+    """db 모드 stop 이 끝까지 성공했음을 `batch_lane_success` 에 남긴다(같은 슬롯 재실행은 갱신).
+
+    쓰는 조건은 호출부가 진다: 게이트가 다 비었고 QC 가 0 일 때만이다. 문장은 OCI 레인
+    스크립트(infra/oci/lib/batch.sh)가 쓰는 것과 같다.
+    """
+    hour, minute = STOP_SUCCESS_SLOT_KST
+    slot_at = datetime(day.year, day.month, day.day, hour, minute, tzinfo=KST)
+    with connect(settings.db) as conn, conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO batch_lane_success (lane, slot_at) VALUES (%s, %s) "
+            "ON CONFLICT (lane, slot_at) DO UPDATE SET finished_at = now()",
+            (STOP_SUCCESS_LANE, slot_at),
+        )
+
+
+def _analysis_pending(jobs: JobLedger) -> list[str]:
+    """아직 안 끝난 장중 설명 일감 — 비면 분석 쪽도 내려도 된다.
+
+    둘을 본다: 아직 접수 전인 설명 사건(outbox NEW)과, 접수됐지만 분석 프로세스가 안 끝난
+    요청이다. **outbox 를 먼저** 읽는다 — 접수는 요청 행을 쓴 뒤에 사건을 닫으므로, 이 순서면
+    한 건이 두 조회 사이로 빠져나가지 못한다(반대 순서면 그 틈에 0·0 으로 읽힌다).
+    """
+    events = jobs.count_new_outbox(destinations=[ANALYSIS_DESTINATION]).get(
+        ANALYSIS_DESTINATION, 0)
+    requests = jobs.count_pending_local_analyses()
+    return [f"{name}={count}" for name, count in
+            (("설명 사건(outbox NEW)", events), ("끝나지 않은 분석 요청", requests)) if count]
+
+
+def _wait_analysis_drain(jobs: JobLedger, *, timeout_sec: float) -> bool:
+    """설명 분석의 잔여 일감이 빌 때까지 기다린다. 상한 안에 비면 True.
+
+    조회가 실패하면 **비지 않은 것으로 친다**(`_queue_depths` 와 같은 축) — 모르는 것을 0 으로
+    읽으면 안 본 일감을 "끝났음"으로 인증한다. 분석 컨테이너가 죽어 있으면 줄지 않으므로
+    상한에 걸려 False 다(그게 맞다 — 사람이 봐야 한다).
+    """
+    deadline = time.monotonic() + timeout_sec
+    while True:
+        try:
+            pending = _analysis_pending(jobs)
+        except Exception:
+            logger.warning("설명 분석 잔여 조회 실패 — 비었다고 보지 않고 다시 본다", exc_info=True)
+            pending = ["조회 실패"]
+        if not pending:
+            return True
+        if time.monotonic() >= deadline:
+            logger.error(
+                "설명 분석 대기 상한(%.0fs, %s) 초과 — 남은 것: %s. exit 0 을 주지 않는다: "
+                "지금 VM 을 내리면 실행 중인 분석이 잘리고 남은 요청은 다음 날 분석 없이 닫힌다. "
+                "분석 컨테이너가 떠 있는지, ANALYSIS_SLOTS 로 감당되는 양인지 본다",
+                timeout_sec, ENV_ANALYSIS_DRAIN_TIMEOUT, "; ".join(pending),
+            )
+            return False
+        logger.info("설명 분석 대기 중 — %s", "; ".join(pending))
+        time.sleep(POLL_INTERVAL_SEC)
 
 
 def _gate_pending(ledger: MinuteLedger, jobs: JobLedger, *,

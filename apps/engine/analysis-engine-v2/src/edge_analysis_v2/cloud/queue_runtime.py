@@ -10,7 +10,6 @@ from botocore.config import Config
 
 from edge_analysis_v2.cloud.admission import WorkflowAdmission
 from edge_analysis_v2.cloud.consumer import serve
-from edge_analysis_v2.cloud.local import DESTINATION, LocalAdmission, LocalRunner, OutboxQueue
 from edge_analysis_v2.sources.database import connect_sources
 from edge_analysis_v2.sources.triggers import load_queue_event
 from edge_analysis_v2.storage.database import connect_results
@@ -47,6 +46,8 @@ def main():
             return retract_movement(connection, event)
 
     if transport == 'db':
+        # Imported here: it pulls in the worker and the model SDK, which the 512 MB SQS consumer never needs.
+        from edge_analysis_v2.cloud.local import DESTINATION, LocalAdmission, LocalRunner, OutboxQueue
         requests = RequestStore(results)
         runner = LocalRunner(results, requests, int(os.environ['ANALYSIS_SLOTS']))
         thread = Thread(target=runner.serve, args=(stop,))

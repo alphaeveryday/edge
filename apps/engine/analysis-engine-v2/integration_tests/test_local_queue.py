@@ -173,3 +173,26 @@ def test_an_event_is_admitted_once_then_run_once(database, tmp_path, monkeypatch
     with database() as c:
         assert c.execute('SELECT accepted_at IS NOT NULL, execution_arn FROM analysis_execution_requests').fetchall() == [
             (True, LOCAL + REQUEST['analysis_id'])]
+
+
+def test_pending_requests_run_oldest_first_and_only_local_ones(database, tmp_path, monkeypatch):
+    """A burst waits in line; picking the newest first would starve the first movers of the day.
+    Requests admitted through the AWS workflow share the table and are not this runner's to run."""
+    monkeypatch.setattr(local, 'ARTIFACTS', tmp_path)
+    rows = [('1'*32, LOCAL+'1'*32, '09:03', '000001'), ('2'*32, LOCAL+'2'*32, '09:01', '000002'),
+            ('3'*32, LOCAL+'3'*32, '09:02', '000003'), ('4'*32, 'arn:aws:states:x:4', '09:00', '000004')]
+    with database() as c:
+        for identity, arn, minute, etf in rows:
+            item = dict(analysis_id=identity, kind='movement', etf_code=etf, analysis_at=f'2026-12-01T{minute}:00+09:00')
+            c.execute('''INSERT INTO analysis_execution_requests(analysis_id,input_json,execution_arn,created_at)
+                VALUES (%s,%s,%s,%s)''', (identity, json.dumps(item), arn, f'2026-12-01T{minute}:00+09:00'))
+
+    class Done:
+        def poll(self):
+            return 0
+    spawned = []
+    runner = LocalRunner(database, RequestStore(database), 1, now=lambda: datetime.fromisoformat('2026-12-01T10:00:00+09:00'),
+                         spawn=lambda raw, slots: spawned.append(json.loads(raw)['analysis_id']) or Done())
+    for _ in range(6):
+        runner.tick()
+    assert spawned == ['2'*32, '3'*32, '1'*32]

@@ -118,7 +118,14 @@ API와 가격 사건이 같은 접수 함수를 사용한다. 같은 요청의 �
 | 전날(KST) 요청이 남음 | 실행하지 않고 닫음. 경고 로그에 `analysis_id` 기록 |
 | 가격 복귀 | 기존과 같이 회수 기록 후 닫음. 분석 대기열과 무관하게 즉시 처리 |
 
-- 필요한 DB 권한: `V202611271200__allow_v2_outbox_claim.sql`(writer에 outbox 배달 상태 컬럼만).
+| 장 마감 뒤 VM 정지 | `stop-minute-session`이 설명 사건과 끝나지 않은 요청이 빌 때까지 기다린 뒤에만 exit 0. 상한(기본 7,200초, `MINUTE_SESSION_ANALYSIS_DRAIN_TIMEOUT_SEC`)을 넘기면 exit 1. 성공하면 `batch_lane_success`에 (`minute_session_stop`, 그날 16:10 KST) 행을 쓰고, 감시가 그 행을 보고 VM을 내림 |
+
+- 필요한 DB 권한: `V202611271200__allow_v2_outbox_claim.sql`(writer에 outbox 배달 상태 컬럼만). 이 테이블의 소유자는 data-pipeline이고, 이 권한은 단일 writer 원칙의 예외다([implementation.md](../implementation.md) §4에 기록).
+- 자식 프로세스는 허용 목록의 환경변수만 물려받는다(`cloud/local.py` `CHILD_ENV`).
+
+**대기 시간 산식.** 분석 1건은 약 588초다(AWS 실측, `analysis_autoscaling.tf` 주석. VM에서는 재지 않았다). 대기 N건을 슬롯 S개로 비우는 데 약 N × 588 ÷ S초가 걸린다. 슬롯 3이면 30건에 약 98분, 기본 상한 7,200초 안에는 약 36건이 끝난다. 2026-11-20에는 설명 사건이 분당 최대 63건 몰렸다. 그 규모면 슬롯 2~4로는 당일 안에 못 비우며, 그때는 상한에 걸려 exit 1이 난다. 슬롯 수와 "오래된 순" 실행 순서는 첫 장중에 재고 다시 정한다.
+
+**`accepted_at`을 읽는 다른 쪽.** 운영 콘솔(`super-admin-api` `JdbcConsoleFactsRepository`의 `BOUNDARY_SQL`·`ANALYSIS_CHAIN_SQL`)은 `accepted_at`을 "실행이 시작된 시각"으로 읽는다. db 모드에서는 종료 시각이라 대기·실행 중인 요청이 "요청으로 이어지지 못함"으로, 실행 없이 닫은 전날 요청이 "요청됐는데 분석이 시작 안 됨"으로 집계된다. 콘솔은 OCI로 옮기지 않기로 해 그 쿼리는 고치지 않았다. db 모드의 DB를 콘솔로 보면 이 두 수치는 틀린다.
 - 워커는 `ANALYSIS_EXECUTION_ARN` 없이 뜬다. 실행 수 제한과 ETF별 직렬화는 워커의 세션 잠금이 한 번 더 지킨다.
 
 Refs: ALPHA-1143, ALPHA-1146
