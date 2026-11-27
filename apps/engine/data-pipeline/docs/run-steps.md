@@ -345,6 +345,8 @@ DATA_PIPELINE_DB__HOST=... DATA_PIPELINE_DB__PASSWORD=... \
 # 직접 준다. tagger_version 이 달라 백엔드를 바꾸면 그 창의 기사는 다시 태깅된다.
 # 추론 스레드는 TAGGER_THREADS(태스크 vCPU 수, terraform 이 넣는다) — Fargate 1 vCPU 는 CPU 가 2개로 보여
 # 그대로 두면 스레드끼리 다퉈 두 배 느리다(ALPHA-1449).
+# aarch64 에서는 기본 int8 엔진(x86)이 묶음을 못 읽어 qnnpack 엔진으로 돌고, tagger_version 에
+# -arm-qnnpack 이 붙는다(다른 엔진의 판정과 섞이지 않게). x86 은 엔진·버전 그대로다.
 LLM_API_KEY=... uv run --package data-pipeline python -m data_pipeline.run tag-news --input-run-id 20260701T000000Z --limit 50
 #   로컬 모델: TAGGER_BACKEND=roberta TAGGER_MODEL_DIR=<묶음 디렉터리> uv run --package data-pipeline python -m data_pipeline.run tag-news ...
 #   기간 복구: ... run tag-news --from 2026-07-01 --to 2026-07-08

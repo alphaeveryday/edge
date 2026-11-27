@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 
 from ..lake import relevance_model_prefix, tagger_model_prefix
-from .extract import ROBERTA_TAGGER_VERSION, TAGGER_BACKEND
+from .extract import ROBERTA_RUNTIME_VERSION, ROBERTA_TAGGER_VERSION, TAGGER_BACKEND
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +38,11 @@ def load_tagger(storage):
     from .roberta import RobertaTagger  # torch 는 roberta 일 때만 읽는다
 
     tagger = RobertaTagger(model_dir, threads=cpu_threads())
-    if tagger.version != ROBERTA_TAGGER_VERSION:
+    if tagger.version != ROBERTA_RUNTIME_VERSION:
         # 코드가 기대한 모델과 다른 묶음이다 — 그대로 돌면 tagger_version 이 거짓말을 한다.
+        # 양쪽 다 arm 접미사를 붙인 값이라(x86 은 접미사 없음) 묶음 이름만 비교하는 셈이다.
         raise RuntimeError(
-            f"모델 묶음 버전 불일치: 묶음={tagger.version!r} 코드={ROBERTA_TAGGER_VERSION!r}")
+            f"모델 묶음 버전 불일치: 묶음={tagger.version!r} 코드={ROBERTA_RUNTIME_VERSION!r}")
     return tagger
 
 

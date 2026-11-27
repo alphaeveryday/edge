@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import platform
 
 from .ontology import (
     DOC_CLASSES,
@@ -55,7 +56,15 @@ ROBERTA_TAGGER_VERSION = "tagging-roberta-y9-int8"
 TAGGER_BACKEND = os.environ.get("TAGGER_BACKEND", "").strip() or "llm"
 if TAGGER_BACKEND not in ("llm", "roberta"):
     raise RuntimeError(f"TAGGER_BACKEND 는 llm 또는 roberta 다: {TAGGER_BACKEND!r}")
-TAGGER_VERSION = ROBERTA_TAGGER_VERSION if TAGGER_BACKEND == "roberta" else LLM_TAGGER_VERSION
+# aarch64(OCI A1·AWS t4g)의 기본 int8 엔진(x86)은 묶음을 못 읽는다(linear_prepack 이
+# "unknown architecure" 로 죽는다) — 그래서 arm 에서는 qnnpack 엔진으로 같은 int8 가중치를 계산한다
+# (`roberta._quantized`). 엔진이 다르면 숫자가 달라질 수 있어 버전에 접미사를 붙인다 — 한 이름 아래
+# 섞이지 않게. x86 은 엔진·버전 모두 그대로다. macOS arm64(개발 환경)는 "arm64" 라 여기 안 걸린다.
+ARM = platform.machine() == "aarch64"
+ARM_VERSION_SUFFIX = "-arm-qnnpack" if ARM else ""
+# 실제로 기록되는 로컬 태거 버전 — 묶음 이름(ROBERTA_TAGGER_VERSION, 레이크 경로)에 arm 접미사를 붙인 값.
+ROBERTA_RUNTIME_VERSION = ROBERTA_TAGGER_VERSION + ARM_VERSION_SUFFIX
+TAGGER_VERSION = ROBERTA_RUNTIME_VERSION if TAGGER_BACKEND == "roberta" else LLM_TAGGER_VERSION
 
 # 이 프롬프트를 씌워도 되는 언어. 아래 `_SYSTEM` 이 한국 금융 뉴스 전용이라 ko 만이다 —
 # 다른 언어 기사에 씌우면 호출은 성공하고 status 도 ok 라 **품질만 조용히 무너진다**.
