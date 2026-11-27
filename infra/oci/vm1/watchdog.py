@@ -104,15 +104,30 @@ def check_slots(now: datetime, conf: dict) -> None:
     """빠진 슬롯을 한 통으로 알리고, 알린 슬롯을 적어 둔다(같은 슬롯을 다시 알리지 않게).
 
     메일이 실패하면 적지 않으므로 다음 실행이 다시 알린다. ponytail: DB 가 죽어 있으면 실행마다 조회 실패 메일이 간다.
+
+    휴장일 값을 읽지 못해도(OPS_KR_HOLIDAYS 없음·빈 값) 나머지 슬롯은 그대로 본다. 거래일 전용 슬롯은 거래일로 치고
+    기대한다 — 빠진 것을 놓치느니 휴장일에 한 번 헛통보하는 쪽이다. 설정 오류는 하루에 한 번만 알린다.
     """
     alerted = {tuple(line.split()) for line in STATE_FILE.read_text().splitlines()} if STATE_FILE.exists() else set()
+    calendar_errors = []
+
+    def trading_day(day: datetime) -> bool:
+        try:
+            return is_trading_day(day, conf)
+        except RuntimeError as exc:
+            calendar_errors.append(str(exc))
+            return True
+
     done = done_slots()
-    missing = [slot for slot in due_slots(now, lambda day: is_trading_day(day, conf))
-               if slot not in done and slot not in alerted]
-    if not missing:
-        return
+    missing = [slot for slot in due_slots(now, trading_day) if slot not in done and slot not in alerted]
     lines = [f"- {lane} {slot} (run_id {edge_cron.run_id(lane, datetime.fromisoformat(slot).replace(tzinfo=KST))})"
              for lane, slot in missing]
+    calendar_key = ("OPS_KR_HOLIDAYS", now.astimezone(KST).strftime("%Y-%m-%d"))
+    if calendar_errors and calendar_key not in alerted:
+        missing.append(calendar_key)
+        lines.append(f"- 휴장일 설정 오류: {calendar_errors[0]}. 거래일 전용 슬롯을 거래일로 치고 판정했다")
+    if not missing:
+        return
     edge_cron.send_mail(
         f"[watchdog] 성공 행이 없는 슬롯 {len(missing)}건",
         "기한이 지났는데 batch_lane_success 에 행이 없다. 레인이 실패했거나, 돌지 않았거나, 아직 도는 중이다.\n"
@@ -224,14 +239,22 @@ def run(argv: list[str], conf: dict, now: datetime | None = None) -> None:
         raise RuntimeError(f"모르는 명령이다: {argv} — crontab 줄을 확인한다")
 
 
+def load_conf() -> dict:
+    """감시 설정 — batch.env 에, 휴장일만 스텝 컨테이너가 읽는 값(pipeline.env)을 얹는다.
+
+    휴장일을 batch.env 에서 읽지 않는다. 두 곳에 따로 적히면 감시와 수집의 거래일 판정이 갈린다.
+    """
+    conf = edge_cron.read_conf()
+    conf.pop("OPS_KR_HOLIDAYS", None)
+    pipeline = edge_cron.read_conf("pipeline.env")
+    if "OPS_KR_HOLIDAYS" in pipeline:
+        conf["OPS_KR_HOLIDAYS"] = pipeline["OPS_KR_HOLIDAYS"]
+    return conf
+
+
 def main(argv: list[str]) -> int:
     try:
-        # 휴장일은 스텝 컨테이너가 읽는 값을 그대로 쓴다(pipeline.env). 나머지 설정은 batch.env.
-        conf = edge_cron.read_conf()
-        pipeline = edge_cron.read_conf("pipeline.env")
-        if "OPS_KR_HOLIDAYS" in pipeline:
-            conf["OPS_KR_HOLIDAYS"] = pipeline["OPS_KR_HOLIDAYS"]
-        run(argv, conf)
+        run(argv, load_conf())
     except Exception as exc:
         print(f"FAILED {' '.join(argv)}: {exc}", file=sys.stderr)
         edge_cron.send_mail(f"[watchdog] FAILED — {' '.join(argv)}", f"{type(exc).__name__}: {exc}")

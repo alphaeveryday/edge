@@ -29,8 +29,8 @@ MAX_START_DELAY = timedelta(minutes=10)
 # ponytail: 기한은 추정값이다. 첫 주 실행 시간을 보고 줄인다.
 SLOTS = (
     (1, "dividend-daily", "03:00", "*", 90),
-    # 정리는 06:50 에 끊긴다(vm1/snapshot_retention.sh) — 그 뒤 성공 행을 쓸 시간까지 준다.
-    (1, "snapshot-retention", "04:30", "*", 150),
+    # 정리는 06:15 에 끊긴다(vm1/snapshot_retention.sh) — 그 뒤 성공 행을 쓸 시간까지 준다.
+    (1, "snapshot-retention", "04:30", "*", 120),
     (1, "source-daily", "05:20", "*", 90),
     (1, "premarket", "07:00", "1-5", 90),
     (1, "investor-intraday", "09:35", "1-5", 90),
