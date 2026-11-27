@@ -17,7 +17,13 @@
 #   edge-dev-relay (outbox → SQS 발행) · dlq-reconcile 스케줄 태스크 · SQS 원큐 4종 + DLQ 4종
 #   analysis-v2 control Lambda(슬롯 예약) · 분석 소비자 오토스케일링
 #
-# 쓰는 법
+# 누가 돌리나 — 이 VM 의 cron 이다(설치: crontab infra/oci/vm2/crontab, 로그 /var/log/edge/minute-session.log)
+#   평일 08:05  session_start.sh — 거래일이면 `docker compose up -d`, 아니면 아무것도 올리지 않고 exit 0
+#   평일 16:10  session_stop.sh  — `docker compose run --rm session-stop`, 성공하면 `docker compose down`
+#   VM 자체를 켜고 끄는 것은 VM-1 감시다. 끄는 근거는 stop 이 쓰는 성공 행이다(아래).
+#   실패한 stop 은 컨테이너를 내리지 않는다 — 원인을 본 뒤 `./session_stop.sh` 를 손으로 다시 돌린다.
+#
+# 손으로 돌릴 때
 #   docker compose up -d                  # session-start 가 세션을 계획한 뒤 워커가 뜬다
 #   docker compose run --rm session-stop  # drain → 게이트 → QC → 설명 분석 대기. exit 0 이면 VM 을 내려도 된다
 #                                         # (성공하면 batch_lane_success 에 minute_session_stop 행을 쓴다)
